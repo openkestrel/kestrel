@@ -5,7 +5,7 @@
 > request lands, and the outcome round-trips to the issue it came from —
 > [`docs/acceptance-0.1.md`](docs/acceptance-0.1.md) is the acceptance run and what it found. The repo
 > holds the vocabulary in [`CONTEXT.md`](CONTEXT.md) and the direction in [`README.md`](README.md).
-> Nothing schedules more than one run in flight per workspace yet, and a trigger declared today fires
+> Nothing schedules more than one session in flight per workspace yet, and a trigger declared today fires
 > only for what happens next: a repository's existing label history opens nothing until catching one
 > up becomes a deliberate act somebody takes.
 
@@ -55,14 +55,14 @@ every read.
 | 0.2 | **kestrel works the backlog**          | many issues at once; you stop being the queue                 | scheduling                                                                                   |
 | 0.3 | **kestrel's work is joinable mid-flight** | you pick up a running workspace instead of reading a finished one | multiplayer, browser Client, queue and work visibility                                        |
 | 0.4 | **kestrel asks before it acts**        | kestrel does work you would not have let it do unsupervised   | governance, operator identity, managed Skills, MCP, Trigger inspection                      |
-| 0.5 | **kestrel runs multi-step work**       | classes of work that are a sequence, not a single run         | workflows and Campaign operations                                                             |
+| 0.5 | **kestrel runs multi-step work**       | classes of work that are a sequence, not a single session     | workflows and Campaign operations                                                             |
 | 0.6 | **kestrel meets the team where it works** | integrations return outcomes where work began               | seven external surfaces with outcomes, plus schedule                                          |
 | 0.7 | **kestrel runs where you run**         | kestrel develops itself on infrastructure that is not your laptop | pluggable storage, the rule of two, the eight targets                                    |
 | —   | **v1**                                 | the lock                                                      | —                                                                                            |
 
 ### 0.1 — kestrel opens its own PRs
 
-An inbound CloudEvent reaches the generic endpoint, a trigger matches it, a workspace opens, a run is
+An inbound CloudEvent reaches the generic endpoint, a trigger matches it, a workspace opens, a session is
 scheduled on an Instance, and a pull request lands on this repository. The class of work is issues
 labelled `ready-for-agent`: they are worked by kestrel rather than by a person in a terminal, and the
 rung closes when that is how they are worked by default. GitHub is the dogfood case, not the
@@ -78,41 +78,41 @@ Everything above this rung is addition; this one is creation.
 Some of what lands here is invisible on the day it ships and impossible to add cheaply afterwards:
 the `Organization` column on every durable record, the transcript's entry granularity and the fact
 that state is held as current values rather than replayed out of history, the `sealed` state on a
-workspace, the run-held lease, and the bounded-window-plus-paging transcript read. That last one is
-needed here rather than at `0.3`, because a resumed run reads the transcript for context, and the
+workspace, the session-held lease, and the bounded-window-plus-paging transcript read. That last one is
+needed here rather than at `0.3`, because a resumed session reads the transcript for context, and the
 need arrives before any human has ever joined a workspace. The reason this rung first gave for the read
 — compute disposable from the first commit — is history: ADR-0018 gave it up, and an Instance now
 lives until its workspace seals
 ([ADR-0018](docs/adr/0018-an-instance-lives-until-its-workspace-seals.md)). The read keeps its seat for
-a resumed run whose box is not there to resume into — one archived once its work was safely pushed,
+a resumed session whose box is not there to resume into — one archived once its work was safely pushed,
 or lost outright — where a fresh Instance is provisioned and restored from the remote, and the
-transcript is what the run reads for context. The lease is here rather than at `0.2` for a
-neighbouring reason: without one, an Instance that dies mid-run leaves its run active forever,
-holding the workspace's one active-run slot, so the workspace
-never seals — and a rung that promises an interrupted run ends with an explicit exit status cannot
-ship a workspace that wedges permanently. Also settled here by omission: what happens inside a run is
-the run's business, not the workspace's, and gets no promise and no name.
+transcript is what the session reads for context. The lease is here rather than at `0.2` for a
+neighbouring reason: without one, an Instance that dies mid-session leaves its session active forever,
+holding the workspace's one active-session slot, so the workspace
+never seals — and a rung that promises an interrupted session ends with an explicit exit status cannot
+ship a workspace that wedges permanently. Also settled here by omission: what happens inside a session is
+the session's business, not the workspace's, and gets no promise and no name.
 
 ### 0.2 — kestrel works the backlog
 
-Many issues at once, and you stop being the queue. The rung is scheduling: a ledger of queued runs
+Many issues at once, and you stop being the queue. The rung is scheduling: a ledger of queued sessions
 with dependency edges between them, claiming, at-most-once dispatch, and a deterministic FIFO ready
 order. The lease itself landed at `0.1`; what arrives here is the graph its expiry unblocks, and the
-rule that expiry fails a run rather than re-dispatching it. Workspaces also start sealing themselves
+rule that expiry fails a session rather than re-dispatching it. Workspaces also start sealing themselves
 here, on idle expiry, riding the same timer sweep that reaps leases.
 
-Durability arrives with it, because "works the backlog" is false while a run can take its own output
-down with it. An Instance now outlives its runs, and is never reaped while it holds work that exists
+Durability arrives with it, because "works the backlog" is false while a session can take its own output
+down with it. An Instance now outlives its sessions, and is never reaped while it holds work that exists
 nowhere else: the supervisor closes every turn by reporting the checkout's git state, kestrel judges
 recovery from what is committed, pushed, uncommitted and untracked — never from an agent's assertion
-— and a workspace's next run finds the same Instance and the checkout exactly as the last run left it,
+— and a workspace's next session finds the same Instance and the checkout exactly as the last session left it,
 so a follow-up can commit and push what a finished turn left behind. kestrel also declares the branch
-its runs work on, which is what makes that restore possible and, at `0.3`, the pull request learnable
+its sessions work on, which is what makes that restore possible and, at `0.3`, the pull request learnable
 ([ADR-0018](docs/adr/0018-an-instance-lives-until-its-workspace-seals.md),
 [ADR-0019](docs/adr/0019-kestrel-declares-the-branch-and-learns-the-pull-request.md)). A cap on live
 Instances at the Organization bounds what keeping the box costs.
 
-Concurrency arrives with it, and it lives **across** workspaces and never within one: at most one run
+Concurrency arrives with it, and it lives **across** workspaces and never within one: at most one session
 is active in a workspace, always. That is the project's most surprising design decision, and it is what
 lets a backlog be worked in parallel without turn-taking inside a workspace becoming a lock problem.
 
@@ -130,15 +130,15 @@ the faster ones are only faster.
 The rung is bigger than the read `0.1` built, and this is where the transcript catches up. It is
 rewritten into three kinds under one order and one cursor — shared state, narration, and detail — and
 a read names the kinds it wants, with shared state alone the page a human gets joining late. Reports
-stop being drained at run end and go up as they happen, so a workspace is readable in real time and an
+stop being drained at session end and go up as they happen, so a workspace is readable in real time and an
 agent stuck thrashing is visible while it thrashes, not after
 ([ADR-0020](docs/adr/0020-the-transcript-records-what-the-runtime-emits-in-kinds.md)).
 
-Learning the pull request lands here too, as shared state rather than run detail: the branch `0.2`
+Learning the pull request lands here too, as shared state rather than session detail: the branch `0.2`
 declared correlates the `pull_request` event the integration already delivers, so a joining human
 knows a pull request exists without the tool calls that pushed it
 ([ADR-0019](docs/adr/0019-kestrel-declares-the-branch-and-learns-the-pull-request.md)). Joining is a
-second consumer of the same bounded window and cursor a resuming run already uses. A connection is
+second consumer of the same bounded window and cursor a resuming session already uses. A connection is
 never the unit of workspace continuity — reconnecting with a cursor is the normal path rather than a
 fallback — and presence is best-effort and never gates anything, because a stale presence entry that
 could block an approval would deadlock the workspace it was meant to describe.
@@ -191,7 +191,7 @@ recorded Event without starting a Workspace or changing what will fire next. It 
 correlation, rendered Brief and the reviewed Agent, Project, model and Policy that would supply
 authority. The historical Event trace includes nonmatches, Firings and ignored evaluations, using
 the inputs and verdict recorded at the time rather than today's configuration. The Audit Record is
-searchable by time, Workspace or Run, actor, attempted operation, Policy and verdict; entries expose
+searchable by time, Workspace or Session, actor, attempted operation, Policy and verdict; entries expose
 decision inputs and the Policy snapshot and link to their causes and outcomes. Authorized readers
 can page through a stable machine-readable export, with secrets redacted from routine output. An
 authorized operator may open an interactive Instance shell under Policy, and its operations are
@@ -201,29 +201,29 @@ audited rather than bypassing the control plane.
 by Projects and Agents. kestrel stages them in each Harness's filesystem convention; the
 harness decides whether to load one or run it as a command. A repository copy wins by name unless
 Policy denies it; the effective source is visible, staging never overwrites repository files, and
-failure to stage a selected Skill fails the Run visibly. Each Run retains the exact managed versions
+failure to stage a selected Skill fails the Session visibly. Each Session retains the exact managed versions
 delivered; agent-advertised use is recorded as a claim, with no inference when the agent reports
 none. Kestrel's own MCP tools start with
 pending Events ([issue 90](https://github.com/jtmthf/kestrel/issues/90)), and external MCP servers
 can be selected from an Organization catalog by Projects and Agents. Stdio is the baseline; HTTP
 requires harness capability advertisement, SSE remains a compatibility path, and unsupported
 transport fails visibly. Kestrel mediates external tool calls through Policy and the Audit Record,
-supplying per-server, per-Run credentials without ambient harness secrets. Event data and unreviewed
+supplying per-server, per-Session credentials without ambient harness secrets. Event data and unreviewed
 repository MCP configuration cannot select tool authority.
 
 ### 0.5 — kestrel runs multi-step work
 
-Classes of work that are a sequence rather than a single run. A workflow declares a roster of agents
+Classes of work that are a sequence rather than a single session. A workflow declares a roster of agents
 that may be enqueued plus the caps and tolerances that bound one enactment of it; each firing of a
-trigger that names one begins a campaign, and the sequence is grown at runtime by runs enqueueing
+trigger that names one begins a campaign, and the sequence is grown at runtime by sessions enqueueing
 further workspaces. Campaigns carry a concurrency cap, a spend cap, and the scope a cancellation
-applies to — and cancelling terminates active runs rather than draining, because a cap that stops
+applies to — and cancelling terminates active sessions rather than draining, because a cap that stops
 only queued work does not bind.
 
 A handoff is an enqueue and never a message. There is no coordination bus: what kestrel delivers is
 ordering and once-only dispatch, the brief passes as the new workspace's first transcript entry — the
 same shape a trigger already has with an event — and artifacts pass through the workspace on the
-branch kestrel declared for the workspace, a name known before any run starts and a source of facts
+branch kestrel declared for the workspace, a name known before any session starts and a source of facts
 kestrel receives from the supervisor and the integration rather than inventing for itself, since it
 runs no git command ([ADR-0019](docs/adr/0019-kestrel-declares-the-branch-and-learns-the-pull-request.md)).
 `0.1` already writes those first entries; this rung only adds a second kind of writer.
@@ -235,7 +235,7 @@ capabilities; the ladder cannot.
 The Client makes a Campaign inspectable as a graph of child Workspaces and dependency edges, with
 status, blocked or unreachable reasons, spend and navigation into each Workspace. Authorized people
 can post follow-ups, pause and resume a Campaign, or cancel it. Pause stops new dispatch while active
-Runs finish; cancel terminates active Runs. There is no separate skip or rewire operation.
+Sessions finish; cancel terminates active Sessions. There is no separate skip or rewire operation.
 
 ### 0.6 — kestrel meets the team where it works
 
@@ -260,7 +260,7 @@ pluggable layer ships its second real implementation — the rule of two — whi
 standing the eight deployment targets up, since both are the question of whether a contract survives
 being driven twice. Multi-tenancy becomes a capability here, on the `Organization` boundary that has
 been in every record since rung one. The Environment arrives as the declaration `0.1` was always
-pointing at: an image, a size, and the setup layered over them, named once and selected per run,
+pointing at: an image, a size, and the setup layered over them, named once and selected per session,
 which retires the per-language images that carried the interim, with the archive timeout configured
 on it ([ADR-0017](docs/adr/0017-the-environment-is-declared-the-instance-is-provisioned.md)). The
 advisory idle hint arrives with it: kestrel tells a compute backend when an Instance is idle and lets

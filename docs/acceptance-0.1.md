@@ -79,17 +79,17 @@ trigger — the order above — leaves that history alone.
 ```sh
 kestrel event list --organization acme
 kestrel workspace list --organization acme
-kestrel run list --workspace <workspace>
-docker logs -f kestrel-<run>
+kestrel session list --workspace <workspace>
+docker logs -f kestrel-<session>
 ```
 
-Within a poll interval a workspace opens, a run is enqueued and dispatched into a real container, and
+Within a poll interval a workspace opens, a session is enqueued and dispatched into a real container, and
 — once the agent finishes — a pull request lands and the originating issue gets the outcome comment,
 all without anyone acting on the label a second time.
 
 ## 7. The `kill -9` test
 
-With a run active:
+With a session active:
 
 ```sh
 docker kill -s SIGKILL kestrel-kestrel-1
@@ -97,12 +97,12 @@ docker start kestrel-kestrel-1   # or wait for the compose restart policy
 kestrel workspace transcript <workspace>
 ```
 
-Restarted inside the 2-minute lease (`LEASE` in `crates/kestrel/src/work.rs`), the run reconnects on
+Restarted inside the 2-minute lease (`LEASE` in `crates/kestrel/src/work.rs`), the session reconnects on
 its own and finishes, and the transcript is unbroken across the restart — no missing or duplicated
-entries. Restarted later than that, the lease expires first and the run ends `failed: the environment
-stopped holding the run's lease out, and it expired`, which is the lease doing what it is for rather
+entries. Restarted later than that, the lease expires first and the session ends `failed: the environment
+stopped holding the session's lease out, and it expired`, which is the lease doing what it is for rather
 than a defect: an environment that outlives its control plane's absence is not left holding the
-workspace's one active-run slot forever.
+workspace's one active-session slot forever.
 
 ## What this run found
 
@@ -114,7 +114,7 @@ workspace's one active-run slot forever.
    Declaring a `ready-for-agent` trigger against this repository's real backlog on a fresh database
    fired all thirteen already-`ready-for-agent` issues at once, because trigger matching runs over
    every unmatched occurrence, not only new ones. One had already ended (failed, by a deliberate
-   `kill -9` of the run's own environment) and posted an outcome comment before this was caught and
+   `kill -9` of the session's own environment) and posted an outcome comment before this was caught and
    the trigger disabled. This run's actual demonstration used a dedicated `kestrel-acceptance-demo`
    label instead, applied to one issue only, specifically to avoid re-running this against the real
    backlog. A maintainer turning this on for real, for the actual backlog, will hit the same sweep on
@@ -125,7 +125,7 @@ workspace's one active-run slot forever.
    procedure's second `kill -9` rehearsal, the agent woke into a workspace whose transcript already
    showed its own earlier, still-open pull request, decided the remaining work was to land it, and
    merged it — nothing kestrel asked it to do. Kestrel supplies the credential and stays out of what
-   the run does with it (`ROADMAP.md`: "what happens inside a run is the run's business, not the
+   the session does with it (`ROADMAP.md`: "what happens inside a session is the session's business, not the
    workspace's"), so an operator who wants a human merge gate cannot get one from the credential: a
    required review gates only when the reviewer is a GitHub identity other than the one the token
    acts as, because GitHub refuses a pull request's author as its reviewer, and this repository's
@@ -141,14 +141,14 @@ workspace's one active-run slot forever.
   dedicated `kestrel-acceptance-demo` (the trigger matched on the latter, for the reason in finding 2).
 - Pull request [#95](https://github.com/jtmthf/kestrel/pull/95), opened by the agent with no human
   action after the label and later merged by it, closing #94.
-- `kill -9` against `kestrel-kestrel-1` mid-run, twice: restarted after the lease window (the run
-  correctly ended failed) and restarted at 13 seconds (the run finished, transcript gap-free).
+- `kill -9` against `kestrel-kestrel-1` mid-session, twice: restarted after the lease window (the session
+  correctly ended failed) and restarted at 13 seconds (the session finished, transcript gap-free).
 
 ## The expensive-to-retrofit list
 
 `ROADMAP.md`'s `0.1` section names five things as invisible on the day they ship and costly to add
 later: the `Organization` column on every durable record, the transcript's entry granularity and its
-current-values-not-replayed state, the `sealed` state on a workspace, the run-held lease, and the
+current-values-not-replayed state, the `sealed` state on a workspace, the session-held lease, and the
 bounded-window-plus-paging transcript read. All five are in place and exercised above (the lease by
 the `kill -9` test directly, the paged transcript read by `kestrel workspace transcript`, sealing by
 `0.1`'s own USAGE.md walkthrough). Nothing on that list was skipped.

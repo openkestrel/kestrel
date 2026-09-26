@@ -6,7 +6,7 @@ mod support;
 use std::time::Duration;
 
 use jiff::SignedDuration;
-use kestrel::domain::{Direction, Exit, Run, RunId, Workspace};
+use kestrel::domain::{Direction, Exit, Session, SessionId, Workspace};
 use kestrel_scripted_agent::{DEFAULT_MODEL, OTHER_MODEL};
 use serde_json::Value;
 use support::github_stub::{self, GithubStub};
@@ -128,9 +128,9 @@ async fn refused(kestrel: &Kestrel) -> String {
     }
 }
 
-/// Answering a turn never ends a Run, so one that answered is stopped, the way a person would.
-async fn ended(kestrel: &Kestrel, run: RunId) -> Run {
-    kestrel.after_one_turn(run).await
+/// Answering a turn never ends a Session, so one that answered is stopped, the way a person would.
+async fn ended(kestrel: &Kestrel, session: SessionId) -> Session {
+    kestrel.after_one_turn(session).await
 }
 
 #[tokio::test]
@@ -255,7 +255,7 @@ async fn an_open_workspaces_agent_keeps_the_harness_and_model_it_opened_with() {
     kestrel.teardown().await;
 }
 
-/// The default harness dies, so only the harness the label chose can end the Run well, and only
+/// The default harness dies, so only the harness the label chose can end the Session well, and only
 /// on the model the chosen Agent named.
 #[tokio::test]
 async fn the_work_role_runs_the_harness_and_model_a_label_chose() {
@@ -275,26 +275,26 @@ async fn the_work_role_runs_the_harness_and_model_a_label_chose() {
         .set_agent_model(organization, "codex", Some(DEFAULT_MODEL))
         .await;
 
-    let run = kestrel.runs(workspace.id).await.remove(0);
-    let run = ended(&kestrel, run.id).await;
+    let session = kestrel.sessions(workspace.id).await.remove(0);
+    let session = ended(&kestrel, session.id).await;
 
-    assert_eq!(run.exit, Some(Exit::Succeeded), "{:?}", run.exit);
-    assert_eq!(run.worked_model.as_deref(), Some(OTHER_MODEL));
+    assert_eq!(session.exit, Some(Exit::Succeeded), "{:?}", session.exit);
+    assert_eq!(session.worked_model.as_deref(), Some(OTHER_MODEL));
 
     kestrel.teardown().await;
 }
 
 #[tokio::test]
-async fn a_harness_the_work_role_cannot_spawn_fails_the_run_and_says_which() {
+async fn a_harness_the_work_role_cannot_spawn_fails_the_session_and_says_which() {
     let kestrel = Kestrel::dispatching(supervisor::binary()).await;
     an_organization(&kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "claude").await;
-    let run = kestrel.enqueue_run(workspace.id).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
 
-    let run = ended(&kestrel, run.id).await;
+    let session = ended(&kestrel, session.id).await;
 
     assert_eq!(
-        run.exit,
+        session.exit,
         Some(Exit::Failed {
             because: "this work role spawns no harness named claude".to_owned()
         })

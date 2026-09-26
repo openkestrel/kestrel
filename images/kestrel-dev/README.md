@@ -45,7 +45,7 @@ To bump `gh`, change `GH_VERSION` along with both digests:
 curl --location --silent "https://github.com/cli/cli/releases/download/v<version>/gh_<version>_linux_amd64.tar.gz" | sha256sum
 ```
 
-## Running Kestrel's Runs in it
+## Running Kestrel's Sessions in it
 
 Point the control plane's `KESTREL_IMAGE` at it, for example with a gitignored
 `compose.override.yaml`:
@@ -67,9 +67,9 @@ An Agent names its harness as `opencode`, `claude` or `codex`, and the work role
 
 Nothing in the image signs a harness or `gh` in. The home directory contains only the skeleton
 files `useradd` creates, and no variable in the image's environment names a key, token, or secret.
-Credentials come in when the Run starts ([ADR-0010](../../docs/adr/0010-a-provider-credential-crosses-the-link-at-the-spawn.md)).
+Credentials come in when the Session starts ([ADR-0010](../../docs/adr/0010-a-provider-credential-crosses-the-link-at-the-spawn.md)).
 A Subscription Profile's files, such as `.codex/auth.json`, are written beneath `/home/kestrel`
-for the length of one Run and removed when it ends
+for the length of one Session and removed when it ends
 ([ADR-0025](../../docs/adr/0025-subscription-profiles-are-personal.md)). An OpenCode Go or Zen
 subscription is a Subscription Profile variable (`OPENCODE_API_KEY`) rather than a file, and an
 opencode `auth.json` is a one-time seed into the harness's database, not a login kestrel refreshes

@@ -27,7 +27,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # One gateway, one model and one host daemon, so a Run at a time.
+      # One gateway, one model and one host daemon, so a Session at a time.
       - name: Run the suite against both agents
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
@@ -38,4 +38,4 @@ jobs:
         run: |
           echo "## What the conformance suite spent" >> "$GITHUB_STEP_SUMMARY"
           cat target/conformance-spend.md >> "$GITHUB_STEP_SUMMARY" \
-            || echo "- no run reported what it used" >> "$GITHUB_STEP_SUMMARY"
+            || echo "- no session reported what it used" >> "$GITHUB_STEP_SUMMARY"

@@ -5,7 +5,7 @@ use std::time::Duration;
 use jiff::SignedDuration;
 use kestrel::cron::Cron;
 use kestrel::domain::{
-    CorrelationMiss, Direction, Event, RunState, Schedule, TriggerState, Workspace,
+    CorrelationMiss, Direction, Event, Schedule, SessionState, TriggerState, Workspace,
 };
 use kestrel::log::{Entry, Message};
 use kestrel::trigger::Rendered;
@@ -117,7 +117,7 @@ async fn nothing_opens(kestrel: &Kestrel) {
 }
 
 #[tokio::test]
-async fn labelling_an_issue_opens_a_workspace_and_enqueues_a_run() {
+async fn labelling_an_issue_opens_a_workspace_and_enqueues_a_session() {
     let stub = GithubStub::start();
     stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
     let kestrel = Kestrel::boot().await;
@@ -130,9 +130,9 @@ async fn labelling_an_issue_opens_a_workspace_and_enqueues_a_run() {
     assert_eq!(workspace.project.name, "kestrel");
     assert_eq!(workspace.agent.name, "builder");
 
-    let runs = kestrel.runs(workspace.id).await;
-    assert_eq!(runs.len(), 1, "a firing enqueues one run");
-    assert_eq!(runs[0].state, RunState::Queued);
+    let sessions = kestrel.sessions(workspace.id).await;
+    assert_eq!(sessions.len(), 1, "a firing enqueues one session");
+    assert_eq!(sessions[0].state, SessionState::Queued);
 
     kestrel.teardown().await;
 }
@@ -238,19 +238,19 @@ async fn briefed(kestrel: &Kestrel, stub: &GithubStub) -> Workspace {
 /// What the agent was prompted with, which the echoing agent says back.
 async fn prompted(kestrel: &Kestrel, workspace: &Workspace) -> String {
     let claimed = kestrel
-        .claim_run()
+        .claim_session()
         .await
-        .expect("the firing's run should claim");
+        .expect("the firing's session should claim");
     let mut supervisor = Supervisor::provision_playing(
         &kestrel.link(),
-        claimed.run.id,
+        claimed.session.id,
         &claimed.credential,
         Script::Echoes,
     );
     supervisor.wait_until_it_says("reported connected").await;
-    kestrel.start(&claimed.run).await;
+    kestrel.start(&claimed.session).await;
     supervisor.wait_until_it_says("reported answered").await;
-    kestrel.stop_run(claimed.run.id).await;
+    kestrel.stop_session(claimed.session.id).await;
     assert!(supervisor.finishes().await.success());
 
     kestrel
@@ -515,14 +515,14 @@ async fn a_correlation_miss_opens_a_continuation_of_the_sealed_workspace() {
 
     let sealed = opened(&kestrel, 1).await.remove(0);
     let active = kestrel
-        .claim_run()
+        .claim_session()
         .await
-        .expect("the firing enqueued a run")
-        .run;
-    kestrel.complete_run(&active).await;
+        .expect("the firing enqueued a session")
+        .session;
+    kestrel.complete_session(&active).await;
     kestrel.seal_workspace(sealed.id).await;
 
-    // Scripted for the events endpoint alone: the comment the completed run posts would
+    // Scripted for the events endpoint alone: the comment the completed session posts would
     // otherwise take this response off the shared queue.
     stub.script_answer(
         "GET",
@@ -579,11 +579,11 @@ async fn an_ignoring_trigger_still_continues_a_sealed_workspace_it_correlates_to
 
     let sealed = opened(&kestrel, 1).await.remove(0);
     let active = kestrel
-        .claim_run()
+        .claim_session()
         .await
-        .expect("the firing enqueued a run")
-        .run;
-    kestrel.complete_run(&active).await;
+        .expect("the firing enqueued a session")
+        .session;
+    kestrel.complete_session(&active).await;
     kestrel.seal_workspace(sealed.id).await;
 
     stub.script_answer(
@@ -604,7 +604,7 @@ async fn an_ignoring_trigger_still_continues_a_sealed_workspace_it_correlates_to
 }
 
 #[tokio::test]
-async fn correlated_events_arriving_during_a_run_drain_into_one_entry_and_one_run() {
+async fn correlated_events_arriving_during_a_session_drain_into_one_entry_and_one_session() {
     let stub = GithubStub::start();
     stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
     let kestrel = Kestrel::boot().await;
@@ -621,10 +621,10 @@ async fn correlated_events_arriving_during_a_run_drain_into_one_entry_and_one_ru
 
     let workspace = opened(&kestrel, 1).await.remove(0);
     let active = kestrel
-        .claim_run()
+        .claim_session()
         .await
-        .expect("the firing enqueued a run")
-        .run;
+        .expect("the firing enqueued a session")
+        .session;
     stub.script(github_stub::page(&[
         github_stub::labelled(9, 43, READY),
         github_stub::labelled(8, 43, READY),
@@ -649,12 +649,12 @@ async fn correlated_events_arriving_during_a_run_drain_into_one_entry_and_one_ru
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    assert_eq!(kestrel.runs(workspace.id).await.len(), 1);
-    kestrel.complete_run(&active).await;
+    assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
+    kestrel.complete_session(&active).await;
 
-    let runs = kestrel.runs(workspace.id).await;
-    assert_eq!(runs.len(), 2);
-    assert_eq!(runs[1].state, RunState::Queued);
+    let sessions = kestrel.sessions(workspace.id).await;
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions[1].state, SessionState::Queued);
     let messages = kestrel
         .transcript(workspace.id)
         .await
@@ -1270,7 +1270,7 @@ async fn a_trigger_that_renders_no_branch_leaves_the_workspace_its_own() {
 }
 
 /// A labelled issue has no pull request, and a brief that assumes one is a failure rather
-/// than a run that starts on nothing.
+/// than a session that starts on nothing.
 #[tokio::test]
 async fn a_brief_that_cannot_render_fails_naming_the_trigger_and_the_event() {
     let stub = GithubStub::start();
@@ -1361,7 +1361,7 @@ async fn a_schedule_elapsing_opens_a_workspace_the_way_a_matched_event_does() {
             brief: "Sweep the backlog for sweep".to_owned(),
         }
     );
-    assert_eq!(kestrel.runs(workspace.id).await.len(), 1);
+    assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
 
     kestrel.teardown().await;
 }

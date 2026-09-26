@@ -299,9 +299,9 @@ async fn a_terminal_on_standard_input_is_told_what_is_being_waited_for() {
 async fn a_transcript_reaches_a_terminal_whole_however_narrow_it_is() {
     let kestrel = an_organization_holding_two_agents().await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let (run, _) = kestrel.dispatch_run(workspace.id).await;
+    let (session, _) = kestrel.dispatch_session(workspace.id).await;
     let said = "a line of what the agent had to say, and then\na second line after it";
-    kestrel.said(&run, said).await;
+    kestrel.said(&session, said).await;
 
     let read = on_a_terminal(
         &kestrel,

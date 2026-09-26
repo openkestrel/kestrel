@@ -40,7 +40,7 @@ impl Written {
         self.files.keys().map(String::as_str)
     }
 
-    /// A file the harness removed is a login it gave up, which the next Run may still need.
+    /// A file the harness removed is a login it gave up, which the next Session may still need.
     pub fn refreshed(&self) -> BTreeMap<String, String> {
         self.files
             .iter()
@@ -51,7 +51,7 @@ impl Written {
             .collect()
     }
 
-    /// An Instance outlives its Runs, so what a Run was handed leaves with it.
+    /// An Instance outlives its Sessions, so what a Session was handed leaves with it.
     pub fn remove(self) {
         for path in self.files.keys() {
             let _ = fs::remove_file(self.home.join(path));

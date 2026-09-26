@@ -4,7 +4,7 @@ use std::io::{self, Write as _};
 use std::process::{Child, Command, Stdio};
 
 use super::{Exited, Instance, Provisioned, Streaming, Supervising, Supervisor};
-use crate::domain::RunId;
+use crate::domain::SessionId;
 
 /// Where the image puts an Instance's checkouts, and so what every path an operation takes is
 /// relative to.
@@ -31,8 +31,8 @@ impl Docker {
         self
     }
 
-    pub(super) fn provision(&self, run: RunId) -> io::Result<Instance> {
-        let container = format!("kestrel-{run}");
+    pub(super) fn provision(&self, session: SessionId) -> io::Result<Instance> {
+        let container = format!("kestrel-{session}");
         let mut created = vec![
             "create".to_owned(),
             "--name".to_owned(),
@@ -144,7 +144,7 @@ impl Provisioned for Container {
         )))
     }
 
-    /// Named rather than given on the command line, so a Run's credentials are in no process
+    /// Named rather than given on the command line, so a Session's credentials are in no process
     /// listing on this machine and in nothing the container's configuration keeps.
     fn supervise(&mut self, variables: &[(&str, &str)]) -> io::Result<Supervisor> {
         let mut command = Command::new("docker");

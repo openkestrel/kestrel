@@ -4,7 +4,7 @@
     "title": "kestrel link",
     "version": "0.1.0",
     "summary": "The connection between an Environment and the control plane.",
-    "description": "The supervisor inside an Environment opens this connection outward: server-sent events down, POST up, plain HTTP with no protocol upgrade. Every Environment authenticates as the Run it is executing.",
+    "description": "The supervisor inside an Environment opens this connection outward: server-sent events down, POST up, plain HTTP with no protocol upgrade. Every Environment authenticates as the Session it is executing.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -22,18 +22,18 @@
   ],
   "security": [
     {
-      "runCredential": []
+      "sessionCredential": []
     }
   ],
   "paths": {
-    "/link/runs/{run}/credentials": {
+    "/link/sessions/{session}/credentials": {
       "get": {
         "operationId": "credentials",
-        "summary": "Take what the Run's Harness is spawned with.",
-        "description": "Answered as the Environment spawns its Harness, and asked at no other moment: the control plane decrypts them here. Every Provider Credential the Run's Organization holds, and the variables and files of the Subscription Profile its Workspace names, which no other Workspace's Run is handed. Variables reach that process's environment and nothing else; files are written beneath the agent's home for the length of the Run. The credential a Run authenticates with is invalidated when the Run ends, so an Environment that outlives its Run is refused.",
+        "summary": "Take what the Session's Harness is spawned with.",
+        "description": "Answered as the Environment spawns its Harness, and asked at no other moment: the control plane decrypts them here. Every Provider Credential the Session's Organization holds, and the variables and files of the Subscription Profile its Workspace names, which no other Workspace's Session is handed. Variables reach that process's environment and nothing else; files are written beneath the agent's home for the length of the Session. The credential a Session authenticates with is invalidated when the Session ends, so an Environment that outlives its Session is refused.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/run"
+            "$ref": "#/components/parameters/session"
           }
         ],
         "responses": {
@@ -64,10 +64,10 @@
       "patch": {
         "operationId": "refreshCredentials",
         "summary": "Hand back the files the Harness rewrote.",
-        "description": "A harness refreshes its login where it keeps it, and a refresh may revoke the login it replaced, so the Environment hands back every file it was given that changed before it reports the Run finished. Only files the Workspace's Subscription Profile already holds are taken; any other path is ignored.",
+        "description": "A harness refreshes its login where it keeps it, and a refresh may revoke the login it replaced, so the Environment hands back every file it was given that changed before it reports the Session finished. Only files the Workspace's Subscription Profile already holds are taken; any other path is ignored.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/run"
+            "$ref": "#/components/parameters/session"
           }
         ],
         "requestBody": {
@@ -105,14 +105,14 @@
         }
       }
     },
-    "/link/runs/{run}/entries": {
+    "/link/sessions/{session}/entries": {
       "get": {
         "operationId": "entries",
-        "summary": "Read one window of the Transcript of the Workspace this Run belongs to.",
+        "summary": "Read one window of the Transcript of the Workspace this Session belongs to.",
         "description": "At most one window of entries, in order, and the cursor the next read resumes from. A cursor names a position rather than a read held open, so it still walks after the control plane restarts; one that names no position in this Transcript is refused rather than silently restarting the walk.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/run"
+            "$ref": "#/components/parameters/session"
           },
           {
             "name": "cursor",
@@ -165,14 +165,14 @@
         }
       }
     },
-    "/link/runs/{run}/instructions": {
+    "/link/sessions/{session}/instructions": {
       "get": {
         "operationId": "instructions",
-        "summary": "Hold open the stream of instructions for a Run.",
-        "description": "Replays every instruction after `Last-Event-ID`, then stays open. The stream closes when the Run ends.",
+        "summary": "Hold open the stream of instructions for a Session.",
+        "description": "Replays every instruction after `Last-Event-ID`, then stays open. The stream closes when the Session ends.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/run"
+            "$ref": "#/components/parameters/session"
           },
           {
             "name": "Last-Event-ID",
@@ -212,14 +212,14 @@
         }
       }
     },
-    "/link/runs/{run}/reports": {
+    "/link/sessions/{session}/reports": {
       "post": {
         "operationId": "report",
         "summary": "Report something about an Environment to the control plane.",
-        "description": "Delivery is at-least-once: an Environment that loses the answer to a report sends it again under the same seq, and the control plane takes it once. A seq that skips one the Run has yet to report is refused.",
+        "description": "Delivery is at-least-once: an Environment that loses the answer to a report sends it again under the same seq, and the control plane takes it once. A seq that skips one the Session has yet to report is refused.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/run"
+            "$ref": "#/components/parameters/session"
           }
         ],
         "requestBody": {
@@ -257,18 +257,18 @@
   },
   "components": {
     "securitySchemes": {
-      "runCredential": {
+      "sessionCredential": {
         "type": "http",
         "scheme": "bearer",
-        "description": "The credential issued for this Run when its Environment was provisioned, and invalidated when the Run ends."
+        "description": "The credential issued for this Session when its Environment was provisioned, and invalidated when the Session ends."
       }
     },
     "parameters": {
-      "run": {
-        "name": "run",
+      "session": {
+        "name": "session",
         "in": "path",
         "required": true,
-        "description": "The Run this Environment is executing.",
+        "description": "The Session this Environment is executing.",
         "schema": {
           "type": "string",
           "format": "uuid"
@@ -289,7 +289,7 @@
     },
     "schemas": {
       "Credentials": {
-        "description": "What a Harness is spawned with to reach a model: the Provider Credentials of the Run's Organization and the Subscription Profile its Workspace names.",
+        "description": "What a Harness is spawned with to reach a model: the Provider Credentials of the Session's Organization and the Subscription Profile its Workspace names.",
         "type": "object",
         "properties": {
           "variables": {
@@ -352,7 +352,7 @@
         }
       },
       "Start": {
-        "description": "Check out, then open the Run's one agent conversation and prompt its first turn. A checkout that fails is reported as the Run finished failed, and the Run never starts.",
+        "description": "Check out, then open the Session's one agent conversation and prompt its first turn. A checkout that fails is reported as the Session finished failed, and the Session never starts.",
         "type": "object",
         "properties": {
           "kind": {
@@ -372,7 +372,7 @@
         ]
       },
       "Prompt": {
-        "description": "Prompt the next turn, in the conversation the Run's first turn opened. Sent only once the turn before it is answered.",
+        "description": "Prompt the next turn, in the conversation the Session's first turn opened. Sent only once the turn before it is answered.",
         "type": "object",
         "properties": {
           "kind": {
@@ -425,7 +425,7 @@
         ]
       },
       "Report": {
-        "description": "What an Environment tells the control plane about itself. A report that belongs to its ordered account of the Run carries a seq and is taken once; what it says about itself costs nothing to take twice.",
+        "description": "What an Environment tells the control plane about itself. A report that belongs to its ordered account of the Session carries a seq and is taken once; what it says about itself costs nothing to take twice.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/Connected"
@@ -492,7 +492,7 @@
         ]
       },
       "Heartbeat": {
-        "description": "The Environment is still alive, and holds its Run's lease out for another turn of the clock. Sent for as long as the Run lasts; when it stops, the lease expires and the Run ends failed.",
+        "description": "The Environment is still alive, and holds its Session's lease out for another turn of the clock. Sent for as long as the Session lasts; when it stops, the lease expires and the Session ends failed.",
         "type": "object",
         "properties": {
           "kind": {
@@ -523,7 +523,7 @@
         ]
       },
       "Started": {
-        "description": "The Run has started.",
+        "description": "The Session has started.",
         "type": "object",
         "properties": {
           "kind": {
@@ -539,7 +539,7 @@
         ]
       },
       "Model": {
-        "description": "Which model the Harness is on for this turn — the one the Run's Agent named, or the harness's own default when it named none. Absent for a harness that lets no client select one at all.",
+        "description": "Which model the Harness is on for this turn — the one the Session's Agent named, or the harness's own default when it named none. Absent for a harness that lets no client select one at all.",
         "type": "object",
         "properties": {
           "kind": {
@@ -559,7 +559,7 @@
         ]
       },
       "Said": {
-        "description": "What the Harness said, coalesced into one message at the end of a turn. An Agent's reasoning and its tool calls are the Run's business and are never reported.",
+        "description": "What the Harness said, coalesced into one message at the end of a turn. An Agent's reasoning and its tool calls are the Session's business and are never reported.",
         "type": "object",
         "properties": {
           "kind": {
@@ -579,7 +579,7 @@
         ]
       },
       "Used": {
-        "description": "What the Harness has spent so far. Recorded on the Run, and never in a Transcript.",
+        "description": "What the Harness has spent so far. Recorded on the Session, and never in a Transcript.",
         "type": "object",
         "properties": {
           "kind": {
@@ -599,7 +599,7 @@
         ]
       },
       "Answered": {
-        "description": "The agent answered the turn, and its conversation waits for another prompt. The Run goes on.",
+        "description": "The agent answered the turn, and its conversation waits for another prompt. The Session goes on.",
         "type": "object",
         "properties": {
           "kind": {
@@ -615,7 +615,7 @@
         ]
       },
       "CheckoutObserved": {
-        "description": "What git says of each of the Project's repositories once the agent has stopped working in it, reported before the Run finishes. The control plane judges from it whether the Instance holds work that exists nowhere else; a Run that finishes without one leaves its Instance held.",
+        "description": "What git says of each of the Project's repositories once the agent has stopped working in it, reported before the Session finishes. The control plane judges from it whether the Instance holds work that exists nowhere else; a Session that finishes without one leaves its Instance held.",
         "type": "object",
         "properties": {
           "kind": {
@@ -721,7 +721,7 @@
         ]
       },
       "Finished": {
-        "description": "The Run is over, and this is how it went: its conversation failed, or it never started. The Environment exits after saying so.",
+        "description": "The Session is over, and this is how it went: its conversation failed, or it never started. The Environment exits after saying so.",
         "type": "object",
         "properties": {
           "kind": {
@@ -747,7 +747,7 @@
         "minimum": 1
       },
       "Exit": {
-        "description": "How a Run ended.",
+        "description": "How a Session ended.",
         "type": "object",
         "properties": {
           "status": {
@@ -865,7 +865,7 @@
         ]
       },
       "Entry": {
-        "description": "What changed the Workspace's shared state. Never what happened inside a Run.",
+        "description": "What changed the Workspace's shared state. Never what happened inside a Session.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/ParticipantJoined"
@@ -874,7 +874,7 @@
             "$ref": "#/components/schemas/Brief"
           },
           {
-            "$ref": "#/components/schemas/RunStarted"
+            "$ref": "#/components/schemas/SessionStarted"
           },
           {
             "$ref": "#/components/schemas/Message"
@@ -883,7 +883,7 @@
             "$ref": "#/components/schemas/Messages"
           },
           {
-            "$ref": "#/components/schemas/RunEnded"
+            "$ref": "#/components/schemas/SessionEnded"
           },
           {
             "$ref": "#/components/schemas/InstanceReleased"
@@ -894,10 +894,10 @@
           "mapping": {
             "participant_joined": "#/components/schemas/ParticipantJoined",
             "brief": "#/components/schemas/Brief",
-            "run_started": "#/components/schemas/RunStarted",
+            "session_started": "#/components/schemas/SessionStarted",
             "said": "#/components/schemas/Message",
             "messages": "#/components/schemas/Messages",
-            "run_ended": "#/components/schemas/RunEnded",
+            "session_ended": "#/components/schemas/SessionEnded",
             "instance_released": "#/components/schemas/InstanceReleased"
           }
         }
@@ -938,21 +938,21 @@
           "brief"
         ]
       },
-      "RunStarted": {
-        "description": "A Run started on behalf of the Workspace.",
+      "SessionStarted": {
+        "description": "A Session started on behalf of the Workspace.",
         "type": "object",
         "properties": {
           "kind": {
-            "const": "run_started"
+            "const": "session_started"
           },
-          "run": {
+          "session": {
             "type": "string",
             "format": "uuid"
           }
         },
         "required": [
           "kind",
-          "run"
+          "session"
         ]
       },
       "Message": {
@@ -976,7 +976,7 @@
         ]
       },
       "Messages": {
-        "description": "Messages that arrived while a Run was active, drained as one Transcript entry.",
+        "description": "Messages that arrived while a Session was active, drained as one Transcript entry.",
         "type": "object",
         "properties": {
           "kind": {
@@ -1011,14 +1011,14 @@
           "message"
         ]
       },
-      "RunEnded": {
-        "description": "A Run ended, and how it went.",
+      "SessionEnded": {
+        "description": "A Session ended, and how it went.",
         "type": "object",
         "properties": {
           "kind": {
-            "const": "run_ended"
+            "const": "session_ended"
           },
-          "run": {
+          "session": {
             "type": "string",
             "format": "uuid"
           },
@@ -1028,7 +1028,7 @@
         },
         "required": [
           "kind",
-          "run",
+          "session",
           "exit"
         ]
       },

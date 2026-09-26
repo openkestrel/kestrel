@@ -1,5 +1,5 @@
 //! Stands in for the model a Harness is configured with: an OpenAI-compatible endpoint
-//! serving one canned turn, so a Run against a real Harness spends nothing and says the
+//! serving one canned turn, so a Session against a real Harness spends nothing and says the
 //! same thing twice running.
 //!
 //! The turn is the scripted ACP agent's, in the terms a model answers in: something said, a

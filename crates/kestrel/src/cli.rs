@@ -12,7 +12,7 @@ use crate::role::work::{Dispatch, HarnessCommand};
 
 const SUPERVISOR: &str = "kestrel-supervisor";
 const IMAGE: &str = "kestrel-env:latest";
-const DEFAULT_MAX_ACTIVE_RUNS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+const DEFAULT_MAX_ACTIVE_SESSIONS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 const ROLES: &str = "\
 Roles:
@@ -84,7 +84,7 @@ pub struct Cli {
     #[arg(long, env = "KESTREL_LINK", global = true, value_name = "URL")]
     link: Option<String>,
 
-    /// The supervisor each Run starts on its Instance, if not the one beside this binary
+    /// The supervisor each Session starts on its Instance, if not the one beside this binary
     #[arg(long, env = "KESTREL_SUPERVISOR", global = true, value_name = "PATH")]
     supervisor: Option<PathBuf>,
 
@@ -129,17 +129,18 @@ pub struct Cli {
     #[arg(long, env = "KESTREL_NETWORK", global = true, value_name = "NETWORK")]
     network: Option<String>,
 
-    /// Runs getting to or mid-turn at once; excess work waits, and zero would never make progress
+    /// Sessions getting to or mid-turn at once; excess work waits, and zero would never make
+    /// progress
     #[arg(
         long,
-        env = "KESTREL_MAX_ACTIVE_RUNS",
+        env = "KESTREL_MAX_ACTIVE_SESSIONS",
         global = true,
-        value_name = "RUNS",
-        default_value_t = DEFAULT_MAX_ACTIVE_RUNS
+        value_name = "SESSIONS",
+        default_value_t = DEFAULT_MAX_ACTIVE_SESSIONS
     )]
-    max_active_runs: NonZeroUsize,
+    max_active_sessions: NonZeroUsize,
 
-    /// A Harness whose Runs on one Subscription Profile are dispatched one at a time,
+    /// A Harness whose Sessions on one Subscription Profile are dispatched one at a time,
     /// because the login they share rotates as it refreshes; repeat, or separate with commas
     #[arg(
         long = "serialized-harness",
@@ -165,7 +166,7 @@ pub enum Command {
     /// Serve the link a supervisor dials out to, the webhooks Events arrive by, and the
     /// operator boundary Clients reach
     Serve,
-    /// Claim queued Runs and execute them
+    /// Claim queued Sessions and execute them
     Work,
 }
 
@@ -178,7 +179,7 @@ impl Cli {
     }
 
     /// The one choice between the two `Compute` drivers, made here from configuration so that
-    /// nothing that executes a Run has to make it.
+    /// nothing that executes a Session has to make it.
     pub fn dispatch(&self, bound: SocketAddr) -> Result<Dispatch> {
         Ok(Dispatch {
             link: self
@@ -199,7 +200,7 @@ impl Cli {
             },
             harnesses: self.harnesses.clone(),
             auth: self.agent_auth.clone(),
-            max_active_runs: self.max_active_runs,
+            max_active_sessions: self.max_active_sessions,
             serialized: self
                 .serialized_harnesses
                 .iter()
@@ -351,17 +352,21 @@ mod tests {
     }
 
     #[test]
-    fn two_runs_may_be_active_unless_configuration_says_otherwise() {
-        assert_eq!(dispatch(&[]).max_active_runs.get(), 2);
+    fn two_sessions_may_be_active_unless_configuration_says_otherwise() {
+        assert_eq!(dispatch(&[]).max_active_sessions.get(), 2);
         assert_eq!(
-            dispatch(&["--max-active-runs", "5"]).max_active_runs.get(),
+            dispatch(&["--max-active-sessions", "5"])
+                .max_active_sessions
+                .get(),
             5
         );
     }
 
     #[test]
-    fn an_active_run_limit_of_zero_is_rejected() {
-        assert!(Cli::try_parse_from(["kestrel-control-plane", "--max-active-runs", "0"]).is_err());
+    fn an_active_session_limit_of_zero_is_rejected() {
+        assert!(
+            Cli::try_parse_from(["kestrel-control-plane", "--max-active-sessions", "0"]).is_err()
+        );
     }
 
     #[test]

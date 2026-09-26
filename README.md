@@ -14,19 +14,19 @@ point without losing what came before.
 
 Early, and honest about it: rung `0.1` is under construction. Workspaces are durable — declare an
 organization, a project and an agent, open a workspace against them, and its state and transcript
-are still there after the process is killed. Runs execute: enqueue one and the control plane
+are still there after the process is killed. Sessions execute: enqueue one and the control plane
 provisions an isolated container, clones the project's repositories into it, and drives opencode
 there by speaking the Agent Client Protocol over the link in
 [`openapi/link.json`](openapi/link.json), which the environment dials out to, authenticating as the
-run it is executing, and reconnects to with its cursor when the control plane restarts under it.
+session it is executing, and reconnects to with its cursor when the control plane restarts under it.
 Beside the link, on a listener of its own, the control plane serves the operator boundary in
 [`openapi/operator.json`](openapi/operator.json), and it is the only way in: `kestrel`, the Client
 an operator installs, declares and lists organizations, projects and agents over it, sets and
 forgets provider credentials and the subscription profiles a workspace names, registers integrations
 and reads the events they record, and
 `kestrel workspace transcript --follow` streams a workspace's transcript over it, all from outside the
-control plane's process. What stops a run short of useful work is that
-nothing carries a task to it: every run asks its agent the same fixed question, and nothing triggers
+control plane's process. What stops a session short of useful work is that
+nothing carries a task to it: every session asks its agent the same fixed question, and nothing triggers
 or schedules one, so every workspace is opened by hand.
 [`USAGE.md`](USAGE.md) walks all of that on your own machine and says where it stops. The repo also
 holds the vocabulary, in [`CONTEXT.md`](CONTEXT.md), and the full planning trail in the issue
@@ -45,7 +45,7 @@ docker compose up
 
 One command, no kestrel configuration file, and no values for an operator to supply — kestrel
 asks for none of its own, and vendor credentials are the only thing it ever will. Three images
-come up: the control plane, the image a run executes in, and the filtered socket proxy the Docker
+come up: the control plane, the image a session executes in, and the filtered socket proxy the Docker
 daemon is reached through. The database is on a named volume, so bringing the stack down and up
 again keeps every workspace and its transcript.
 
@@ -57,7 +57,7 @@ cargo install --locked --path crates/kestrel-client
 kestrel status
 ```
 
-[`USAGE.md`](USAGE.md) walks from here to a run that has reached and left an environment.
+[`USAGE.md`](USAGE.md) walks from here to a session that has reached and left an environment.
 
 **A provider key is the one value kestrel asks for, and it is the operator's.** It is held by the
 organization, encrypted with a key kestrel generates at first boot beside its database, and reaches
@@ -82,21 +82,21 @@ carry the whole product, and they are defined precisely in [`CONTEXT.md`](CONTEX
   starts work. GitHub, Slack, Linear, generic webhook, and schedule are first-party, and every one of
   them round-trips, so the surface that started a workspace receives the result there.
 - **Workspace**: the durable, joinable thread of work. It owns its history and its participants,
-  survives restarts, and contains many runs over its life.
-- **Run**: one execution of a harness inside one environment, with a start, an end, and an
-  exit status. At most one run is active in a workspace at a time, which is what makes turn-taking a
+  survives restarts, and contains many sessions over its life.
+- **Session**: one execution of a harness inside one environment, with a start, an end, and an
+  exit status. At most one session is active in a workspace at a time, which is what makes turn-taking a
   correctness property.
-- **Environment**: the isolated compute a run executes in. Disposable, provisioned by a pluggable
-  compute backend, and destroyed when the run finishes.
+- **Environment**: the isolated compute a session executes in. Disposable, provisioned by a pluggable
+  compute backend, and destroyed when the session finishes.
 - **Workflow**: a standing declaration of a roster of agents that may be enqueued, and the caps and
-  failure tolerances that bound one enactment of it. The sequence is not declared: a run grows it at
+  failure tolerances that bound one enactment of it. The sequence is not declared: a session grows it at
   runtime by enqueueing further workspaces, and nothing outside the roster may be enqueued. One
   enactment is a campaign, which owns the workspaces enqueued under it, the concurrency and spend caps
   binding them, and the scope a cancellation applies to.
 
 Participants in a workspace are humans or agents, and the workspace makes no structural distinction
 between them: a person joining a running workspace and an agent taking a turn are the same kind of
-thing happening to the same record. That symmetry is deliberate, and it is what lets a run hand the
+thing happening to the same record. That symmetry is deliberate, and it is what lets a session hand the
 turn to a human without the workspace having to become a different object. Handing work to another
 *agent* is a different act: it enqueues a new workspace rather than taking a turn in this one.
 
@@ -149,27 +149,27 @@ the project controls. Twelve capabilities are the content of that freeze:
    expressions; their Events take the same recorded path as external Events. An Event
    supplies data, never authority.
 2. **Scheduling**: placement, concurrency limits per organization and per campaign, a spend cap on
-   every campaign, and a queue that never rejects. kestrel retries *dispatch*, never *work*: a run
-   that never started is dispatched again, a run that started and failed is never re-run, and a
-   workflow that wants the work retried enqueues a new run. Priority is excluded from v1 on purpose,
+   every campaign, and a queue that never rejects. kestrel retries *dispatch*, never *work*: a session
+   that never started is dispatched again, a session that started and failed is never re-run, and a
+   workflow that wants the work retried enqueues a new session. Priority is excluded from v1 on purpose,
    since fairness cannot be tuned without production load the project does not have yet; ready order
    is FIFO, which is an order rather than a priority. The Client shows queued work, wait reasons and
-   Campaign spend; an operator can pause a Campaign without terminating its active Runs, resume it,
-   or cancel it and terminate active Runs.
-3. **Isolated execution**: every run in its own environment, provisioned through a compute contract
+   Campaign spend; an operator can pause a Campaign without terminating its active Sessions, resume it,
+   or cancel it and terminate active Sessions.
+3. **Isolated execution**: every session in its own environment, provisioned through a compute contract
    kestrel defines rather than a layer kestrel owns. An authorized operator can inspect live files
    and unpublished work, including committed but unpushed, uncommitted and untracked changes; a
    Policy-governed interactive Instance shell is audited rather than a raw compute-backend escape.
 4. **Model choice**: any provider the configured harness supports, selectable per agent, with keys
-   held per organization and reaching an environment only when a run needs them. Uniform behavior
+   held per organization and reaching an environment only when a session needs them. Uniform behavior
    across models is not promised, and neither is model availability across harnesses: "any model" is
    scoped to whichever harness you are running, and to whether that harness lets a client select one
-   at all. A run whose agent names a model the harness cannot honour fails rather than quietly
+   at all. A session whose agent names a model the harness cannot honour fails rather than quietly
    running a different one. The Client shows the requested and effective model and explains a
    harness capability mismatch.
 5. **Persistent workspaces**: a workspace survives everything except deliberate deletion, and an
    environment survives nothing. Process restart, environment teardown, and control-plane upgrade all
-   preserve the workspace and its full transcript, and a run interrupted by a restart ends with an
+   preserve the workspace and its full transcript, and a session interrupted by a restart ends with an
    explicit exit status. Workspaces do not stay open forever: an idle one is sealed, which ends it
    without deleting it — a sealed workspace is readable and is never reopened, and work that would have
    continued it starts a new workspace that records the sealed one. Nothing expires a transcript entry
@@ -182,11 +182,11 @@ the project controls. Twelve capabilities are the content of that freeze:
    read, join and take turns in authorized Workspaces; Policy checks those operations separately.
    Presence is best-effort and never gates correctness, and sharing a link grants no authority.
 8. **Workflows**: a declared roster rather than a declared sequence, with the sequence grown at
-   runtime by runs enqueueing further workspaces against it, under a campaign's caps and failure
+   runtime by sessions enqueueing further workspaces against it, under a campaign's caps and failure
    tolerances. A handoff is an enqueue and never a message: kestrel delivers ordering and once-only
    dispatch, there is no coordination bus, and the brief passes as the new workspace's first transcript
    entry, which makes a handoff auditable and joinable by construction rather than private. Work runs
-   concurrently *across* workspaces while at most one run is ever active *within* one — Temporal, Step
+   concurrently *across* workspaces while at most one session is ever active *within* one — Temporal, Step
    Functions, Prefect and Restate all draw that line the other way, which is why it is worth stating
    rather than assuming. The Client shows a navigable Campaign graph with child Workspaces,
    dependencies, status, blocked reasons and spend; authorized people can follow up, pause, resume
@@ -207,14 +207,14 @@ the project controls. Twelve capabilities are the content of that freeze:
     Agents. kestrel stages them at the Harness's filesystem convention; the harness chooses
     when to load one or invoke it as a command. A repository Skill of the same name wins unless
     Policy denies it, and the effective source is visible without overwriting repository files. A
-    Run fails visibly if a selected Skill cannot be staged. It retains the exact managed versions
+    Session fails visibly if a selected Skill cannot be staged. It retains the exact managed versions
     delivered to it and records Skills the agent advertises using, without inventing a use claim
     when the agent reports none.
 12. **MCP extensibility**: kestrel supplies its own MCP tools and Organization-managed external MCP
     servers selected by Projects and Agents. Stdio works across supported harnesses; HTTP is used
     when the harness advertises it, with SSE compatibility where needed. Unsupported transport
     fails visibly. kestrel mediates external tool calls under Policy, records them in the Audit
-    Record, and supplies per-server, per-Run credentials without ambient secrets in the harness.
+    Record, and supplies per-server, per-Session credentials without ambient secrets in the harness.
     Event data and unreviewed repository MCP configuration cannot grant tool authority.
 
 Underneath all of it sits one pluggability rule: every pluggable layer ships at least two real
@@ -242,7 +242,7 @@ default compute pairing so that choice never lands on whoever is adopting it.
 
 - **kestrel does not write an agent loop**, and does not own a contract for one: it speaks the
   Agent Client Protocol as a client. opencode is the default, and Claude Code, Codex, Gemini CLI or
-  anything else that speaks ACP can drive a run.
+  anything else that speaks ACP can drive a session.
 - **Not a hosted SaaS**: there is no plan to run one, and the data model only avoids foreclosing it,
   which is why `Organization` is carried by every durable record from the first migration.
 - **Not a CI/CD replacement**: kestrel schedules agent work in response to events and leaves your

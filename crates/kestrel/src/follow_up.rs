@@ -1,7 +1,7 @@
 use anyhow::Result;
 use tracing::info;
 
-use crate::domain::{Event, EventRecordId, RunId, Workspace, WorkspaceId, WorkspaceState};
+use crate::domain::{Event, EventRecordId, SessionId, Workspace, WorkspaceId, WorkspaceState};
 use crate::filter::Author;
 use crate::integration::github;
 use crate::store::{Store, Tx};
@@ -11,7 +11,7 @@ const AT_A_TIME: usize = 32;
 pub struct Received {
     pub event: EventRecordId,
     pub workspace: WorkspaceId,
-    pub run: Option<RunId>,
+    pub session: Option<SessionId>,
 }
 
 pub async fn receive(store: &Store) -> Result<Vec<Received>> {
@@ -76,7 +76,7 @@ async fn receiving(store: &Store, event: &Event) -> Result<Received> {
             "a comment from an author the workspace's trigger does not authorize was not taken as input"
         );
     }
-    let run = if feeds {
+    let session = if feeds {
         crate::workspace::post_in(
             &mut tx,
             &workspace,
@@ -95,7 +95,7 @@ async fn receiving(store: &Store, event: &Event) -> Result<Received> {
     Ok(Received {
         event: event.record_id,
         workspace: workspace.id,
-        run: run.map(|run| run.id),
+        session: session.map(|session| session.id),
     })
 }
 

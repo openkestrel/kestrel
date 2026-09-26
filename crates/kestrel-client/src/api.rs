@@ -90,7 +90,7 @@ impl ControlPlane {
         let next = corrective::command(&why, organization.as_deref())
             .map(|command| {
                 let effect = if why.contains(" is still in flight ") {
-                    "\nStopping a run mid-turn marks it failed."
+                    "\nStopping a session mid-turn marks it failed."
                 } else if why.contains("'s instance ") {
                     "\nReleasing the instance discards unpublished work."
                 } else {

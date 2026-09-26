@@ -1,12 +1,12 @@
-//! A Run whose agent process is lost goes on only where the harness can load the same
+//! A Session whose agent process is lost goes on only where the harness can load the same
 //! conversation back; otherwise it fails where it can be seen, and its Workspace and checkout wait
-//! for the next Run (ADR-0024).
+//! for the next Session (ADR-0024).
 
 mod support;
 
 use std::time::Duration;
 
-use kestrel::domain::{Exit, RunState, Workspace, WorkspaceId, WorkspaceState};
+use kestrel::domain::{Exit, SessionState, Workspace, WorkspaceId, WorkspaceState};
 use kestrel::log::Entry;
 use kestrel_scripted_agent::conversed;
 use support::environment::Environment;
@@ -64,19 +64,19 @@ async fn an_agent_that_can_load_its_session_is_brought_back_into_the_same_conver
     )
     .await;
     let workspace = a_workspace(&kestrel).await;
-    let run = kestrel
+    let session = kestrel
         .post(workspace.id, "operator", "the first thing to do")
         .await;
-    kestrel.answered(run.id, 1).await;
+    kestrel.answered(session.id, 1).await;
 
     kestrel
         .post_while_busy(workspace.id, "operator", "the second thing to do")
         .await
-        .expect("a waiting run takes the message as its next prompt");
-    let answered = kestrel.answered(run.id, 2).await;
+        .expect("a waiting session takes the message as its next prompt");
+    let answered = kestrel.answered(session.id, 2).await;
 
-    assert_eq!(answered.state, RunState::Waiting, "{:?}", answered.exit);
-    assert_eq!(kestrel.runs(workspace.id).await.len(), 1);
+    assert_eq!(answered.state, SessionState::Waiting, "{:?}", answered.exit);
+    assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
     let said = said(&kestrel, workspace.id).await;
     let [first, second] = said.as_slice() else {
         panic!("the agent answered other than twice, or its replay was said again: {said:?}");
@@ -87,7 +87,7 @@ async fn an_agent_that_can_load_its_session_is_brought_back_into_the_same_conver
         "the recovered conversation does not remember the first prompt: {second}"
     );
 
-    kestrel.stop_run(run.id).await;
+    kestrel.stop_session(session.id).await;
     kestrel.teardown().await;
 }
 
@@ -104,7 +104,8 @@ fn vanishing() -> Environment {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn an_agent_lost_while_waiting_fails_the_run_and_the_next_run_takes_up_its_checkout() {
+async fn an_agent_lost_while_waiting_fails_the_session_and_the_next_session_takes_up_its_checkout()
+{
     let harness = vanishing();
     let kestrel = Kestrel::dispatching_to(
         supervisor::binary(),
@@ -116,20 +117,20 @@ async fn an_agent_lost_while_waiting_fails_the_run_and_the_next_run_takes_up_its
 
     let deadline = tokio::time::Instant::now() + PATIENCE;
     let lost = loop {
-        let run = kestrel.run(lost.id).await;
-        if run.state == RunState::Ended {
-            break run;
+        let session = kestrel.session(lost.id).await;
+        if session.state == SessionState::Ended {
+            break session;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the run {} outlived its agent's process",
+            "the session {} outlived its agent's process",
             lost.id
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
 
     let Some(Exit::Failed { because }) = &lost.exit else {
-        panic!("the run ended {:?}, and its agent vanished", lost.exit);
+        panic!("the session ended {:?}, and its agent vanished", lost.exit);
     };
     assert!(
         because.contains("process was lost") && because.contains("cannot resume"),
@@ -149,7 +150,7 @@ async fn an_agent_lost_while_waiting_fails_the_run_and_the_next_run_takes_up_its
     let deadline = tokio::time::Instant::now() + PATIENCE;
     let next = loop {
         if let Some(next) = kestrel
-            .runs(workspace.id)
+            .sessions(workspace.id)
             .await
             .into_iter()
             .find(|candidate| candidate.id != lost.id)
@@ -158,19 +159,22 @@ async fn an_agent_lost_while_waiting_fails_the_run_and_the_next_run_takes_up_its
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the next instruction never started a new run"
+            "the next instruction never started a new session"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
     kestrel.answered(next.id, 1).await;
 
-    assert_eq!(kestrel.run(next.id).await.instance, Some(instance.clone()));
+    assert_eq!(
+        kestrel.session(next.id).await.instance,
+        Some(instance.clone())
+    );
     let notes = std::fs::read_to_string(
         Environment::root_of(&instance)
             .join(repository::NAME)
             .join("notes"),
     )
-    .expect("the checkout the first run left");
+    .expect("the checkout the first session left");
     assert_eq!(notes.lines().count(), 2, "{notes}");
 
     kestrel.teardown().await;

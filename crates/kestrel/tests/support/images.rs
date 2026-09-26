@@ -9,7 +9,7 @@ pub const ENV: &str = "KESTREL_ENV_IMAGE_SOURCE";
 /// The control-plane image CI built for this change, if any.
 pub const CONTROL_PLANE: &str = "KESTREL_CONTROL_IMAGE_SOURCE";
 
-/// The image `variable` names, or `None` when this run builds its own.
+/// The image `variable` names, or `None` when this session builds its own.
 pub fn sourced(variable: &str) -> Option<String> {
     std::env::var(variable)
         .ok()

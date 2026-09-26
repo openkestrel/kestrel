@@ -1,4 +1,4 @@
-//! What an Environment says on its way through a Run, and the waiting a test does on it.
+//! What an Environment says on its way through a Session, and the waiting a test does on it.
 
 use std::io::{BufRead as _, BufReader, Read};
 use std::time::Duration;

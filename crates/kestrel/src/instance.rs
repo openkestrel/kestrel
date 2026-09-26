@@ -44,7 +44,7 @@ pub async fn admit(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Admission> 
         .await?
     {
         let candidate = tx.workspaces().get(kept.workspace).await?;
-        if workspace::unfinished_run(tx, &candidate).await?.idle()
+        if workspace::unfinished_session(tx, &candidate).await?.idle()
             && unpublished(&candidate.checkout.repositories, kept.observed.as_deref()).is_none()
         {
             tx.workspaces()
@@ -90,7 +90,7 @@ pub enum Git {
 /// A checkout nobody reported on is judged to hold work, since nothing says it does not.
 pub fn unpublished(repositories: &[String], observed: Option<&[Observed]>) -> Option<String> {
     let Some(observed) = observed else {
-        return Some("no run reported what its checkout holds".to_owned());
+        return Some("no session reported what its checkout holds".to_owned());
     };
 
     let mut held: Vec<String> = repositories
@@ -178,10 +178,10 @@ pub async fn held_by(store: &Store, workspace: WorkspaceId) -> Result<Option<Hel
     judged(&mut tx, kept).await
 }
 
-/// An Instance a run is using or about to use is not held: what it holds is not yet known.
+/// An Instance a session is using or about to use is not held: what it holds is not yet known.
 async fn judged(tx: &mut Tx<'_>, kept: Kept) -> Result<Option<Held>> {
     let workspace = tx.workspaces().get(kept.workspace).await?;
-    if workspace::unfinished_run(tx, &workspace)
+    if workspace::unfinished_session(tx, &workspace)
         .await?
         .in_flight()
         .is_some()
@@ -209,12 +209,12 @@ pub async fn release(store: &Store, id: WorkspaceId, participant: &str) -> Resul
     let Some(kept) = tx.workspaces().kept_instance(id).await? else {
         bail!("the workspace {id} has no instance to release");
     };
-    if let Some(holding) = workspace::unfinished_run(&mut tx, &workspace)
+    if let Some(holding) = workspace::unfinished_session(&mut tx, &workspace)
         .await?
         .in_flight()
     {
         bail!(
-            "the run {holding} is still in flight on the instance {}",
+            "the session {holding} is still in flight on the instance {}",
             kept.instance
         );
     }
@@ -248,7 +248,7 @@ pub(crate) async fn archive_on_seal(tx: &mut Tx<'_>, workspace: &Workspace) -> R
     if let Some(because) = unpublished(&workspace.checkout.repositories, kept.observed.as_deref()) {
         bail!(Declined::Taken(format!(
             "the workspace {}'s instance {} may hold the only copy of its work ({because}); publish \
-             it from a follow-up run, or release the instance to discard it",
+             it from a follow-up session, or release the instance to discard it",
             workspace.id, kept.instance
         )));
     }

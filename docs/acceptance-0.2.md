@@ -3,7 +3,7 @@
 The live run for `0.2`'s acceptance ticket
 ([#111](https://github.com/jtmthf/kestrel/issues/111)) proved parallel dispatch, its limit,
 non-retroactive Trigger declaration, and idle sealing. It did not close the rung: two successful
-Runs lost all of their work when their disposable Environments were reaped. That finding became
+Sessions lost all of their work when their disposable Environments were reaped. That finding became
 [#124](https://github.com/jtmthf/kestrel/issues/124) and then the durable-Instance specification
 [#125](https://github.com/jtmthf/kestrel/issues/125). The `ROADMAP.md` marker remains at `0.2` until
 that work lands and this acceptance run is repeated.
@@ -54,36 +54,36 @@ Issues [#79](https://github.com/jtmthf/kestrel/issues/79),
 [#80](https://github.com/jtmthf/kestrel/issues/80), and
 [#104](https://github.com/jtmthf/kestrel/issues/104) were unblocked and agent-ready. Their labels
 were removed, then `ready-for-agent` was added to all three in parallel. Nobody opened a Workspace,
-enqueued a Run, or directed an agent after that labelling.
+enqueued a Session, or directed an agent after that labelling.
 
 One poll recorded all three Events and opened all three Workspaces at `2026-09-10T22:10:12Z`.
 
-| Issue | Workspace | Run | First observed state |
+| Issue | Workspace | Session | First observed state |
 | --- | --- | --- | --- |
 | #80 | `01a08d5f-10fa-7410-aeb3-c0e22a67379b` | `01a08d5f-10fb-7823-ba23-ec1632dc4ea9` | active |
 | #104 | `01a08d5f-10fd-7200-b753-f78df4cb6d99` | `01a08d5f-10fd-7200-b753-f79f0c8f61ef` | active |
 | #79 | `01a08d5f-10fe-76f1-bddc-ba282e7a271b` | `01a08d5f-10ff-7962-9395-1d349e6ecb28` | queued |
 
-Docker showed exactly the two active Runs' containers. A third never appeared while both slots were
+Docker showed exactly the two active Sessions' containers. A third never appeared while both slots were
 held. When #104 ended at `22:13:48Z`, #79 became active on the next sweep while #80 remained active.
 The live run therefore exercised both sides of the limit: excess work waited, then dispatched as
 soon as capacity became available.
 
 ## 4. Outcomes
 
-All three initial Runs reported `succeeded`. #104 opened
+All three initial Sessions reported `succeeded`. #104 opened
 [PR #121](https://github.com/jtmthf/kestrel/pull/121) and its outcome returned to the issue without
-operator action. Its agent also wrote an ordinary issue comment before the Run ended; the integration
+operator action. Its agent also wrote an ordinary issue comment before the Session ended; the integration
 treated that as an operator follow-up and ran the Workspace a second time. That feedback hazard is the
 non-blocking finding [#123](https://github.com/jtmthf/kestrel/issues/123).
 
-The #79 and #80 Runs made and tested substantial repository changes, but neither committed or pushed
+The #79 and #80 Sessions made and tested substantial repository changes, but neither committed or pushed
 them. #80's final report explicitly said no commit or pull request was made because none was
 requested. Kestrel recorded success and destroyed both Environments, leaving no recoverable copy of
 either change. A process exit was successful, but the backlog issues were not durably worked.
 
 This is the blocking finding [#124](https://github.com/jtmthf/kestrel/issues/124). Its accepted design
-is [#125](https://github.com/jtmthf/kestrel/issues/125): a Workspace-owned Instance outlives its Runs,
+is [#125](https://github.com/jtmthf/kestrel/issues/125): a Workspace-owned Instance outlives its Sessions,
 the supervisor reports git state, and Kestrel never reaps an Instance holding work that exists
 nowhere else. A prompt asking an agent to commit would improve one agent's odds, but it would not
 provide the observable durability guarantee #125 requires.
@@ -99,16 +99,16 @@ The named volume and stack were left running. All three Workspaces sealed themse
 | #104 | `2026-09-10T22:48:10Z` | `2026-09-11T22:53:35Z` |
 | #79 | `2026-09-10T22:48:28Z` | `2026-09-11T22:53:35Z` |
 
-A later `ready-for-agent` Event opened a Workspace for #125. Its Run held a slot from
+A later `ready-for-agent` Event opened a Workspace for #125. Its Session held a slot from
 `2026-09-10T22:51:01Z` until its lease expired at `2026-09-11T01:12:00Z`, then that Workspace also
-sealed itself at `2026-09-12T01:12:00Z`. The failed Run is further live evidence for #125's rule
+sealed itself at `2026-09-12T01:12:00Z`. The failed Session is further live evidence for #125's rule
 that missing supervisor state must be treated as unrecoverable rather than safe to destroy.
 
 ## Result
 
 The scheduler behavior requested by #111 worked live: one labelling batch opened three Workspaces,
-two Runs overlapped under a limit of two, the queued Run took the released slot, declaration did not
+two Sessions overlapped under a limit of two, the queued Session took the released slot, declaration did not
 replay retained history, and the Workspaces later sealed themselves. The rung remains open because
-successful Runs can still destroy their only copy of completed work. After #125 lands, repeat the
+successful Sessions can still destroy their only copy of completed work. After #125 lands, repeat the
 durability portion of this run and move the `ROADMAP.md` marker to `0.3` only if several backlog
 issues leave recoverable branches or pull requests.

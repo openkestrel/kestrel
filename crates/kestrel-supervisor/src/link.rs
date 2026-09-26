@@ -7,12 +7,12 @@ use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::{Client, Response, StatusCode, header};
 use serde::{Deserialize, Serialize};
 
-pub const CREDENTIALS: &str = "/link/runs/{run}/credentials";
-pub const ENTRIES: &str = "/link/runs/{run}/entries";
-pub const INSTRUCTIONS: &str = "/link/runs/{run}/instructions";
-pub const REPORTS: &str = "/link/runs/{run}/reports";
+pub const CREDENTIALS: &str = "/link/sessions/{session}/credentials";
+pub const ENTRIES: &str = "/link/sessions/{session}/entries";
+pub const INSTRUCTIONS: &str = "/link/sessions/{session}/instructions";
+pub const REPORTS: &str = "/link/sessions/{session}/reports";
 
-/// A run reaches the link as one path segment, whatever the Environment was handed.
+/// A session reaches the link as one path segment, whatever the Environment was handed.
 const SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'_')
@@ -26,7 +26,7 @@ pub enum Instruction {
         checkout: Checkout,
         prompt: Option<String>,
     },
-    /// The next turn, in the conversation the Run's first one opened.
+    /// The next turn, in the conversation the Session's first one opened.
     Prompt {
         prompt: String,
     },
@@ -210,7 +210,7 @@ impl From<reqwest::Error> for Error {
 pub struct Link {
     client: Client,
     base: String,
-    run: String,
+    session: String,
     credential: String,
 }
 
@@ -220,11 +220,11 @@ pub struct Instructions {
 }
 
 impl Link {
-    pub fn to(base: &str, run: &str, credential: &str) -> Self {
+    pub fn to(base: &str, session: &str, credential: &str) -> Self {
         Self {
             client: Client::new(),
             base: base.to_owned(),
-            run: run.to_owned(),
+            session: session.to_owned(),
             credential: credential.to_owned(),
         }
     }
@@ -260,7 +260,7 @@ impl Link {
         let response = refuse_if_declined(response).await?;
         if !response.status().is_success() {
             return Err(Error::Lost(format!(
-                "the link answered {} to a request for this run's credentials",
+                "the link answered {} to a request for this session's credentials",
                 response.status().as_u16()
             )));
         }
@@ -280,7 +280,7 @@ impl Link {
         let response = refuse_if_declined(response).await?;
         if !response.status().is_success() {
             return Err(Error::Lost(format!(
-                "the link answered {} to the logins this run refreshed",
+                "the link answered {} to the logins this session refreshed",
                 response.status().as_u16()
             )));
         }
@@ -335,9 +335,9 @@ impl Link {
     }
 
     fn url(&self, path: &str) -> String {
-        let run = utf8_percent_encode(&self.run, SEGMENT).to_string();
+        let session = utf8_percent_encode(&self.session, SEGMENT).to_string();
 
-        format!("{}{}", self.base, path.replace("{run}", &run))
+        format!("{}{}", self.base, path.replace("{session}", &session))
     }
 }
 

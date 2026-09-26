@@ -81,46 +81,46 @@ async fn a_workspace_is_last_active_when_it_opens() {
 }
 
 #[tokio::test]
-async fn enqueueing_a_run_into_a_workspace_records_it_active() {
+async fn enqueueing_a_session_into_a_workspace_records_it_active() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
     let backdated = a_day_ago();
     kestrel.last_active(&workspace, backdated).await;
 
-    kestrel.enqueue_run(workspace.id).await;
+    kestrel.enqueue_session(workspace.id).await;
 
     assert!(
         kestrel.show_workspace(workspace.id).await.last_active_at > backdated,
-        "a workspace that took a run is still last active when it was backdated to"
+        "a workspace that took a session is still last active when it was backdated to"
     );
 
     kestrel.teardown().await;
 }
 
 #[tokio::test]
-async fn a_run_ending_records_its_workspace_active() {
+async fn a_session_ending_records_its_workspace_active() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (run, _) = kestrel.dispatch_run(workspace.id).await;
+    let (session, _) = kestrel.dispatch_session(workspace.id).await;
     let backdated = a_day_ago();
     kestrel.last_active(&workspace, backdated).await;
 
-    kestrel.complete_run(&run).await;
+    kestrel.complete_session(&session).await;
 
     assert!(
         kestrel.show_workspace(workspace.id).await.last_active_at > backdated,
-        "a workspace whose run ended is still last active when it was backdated to"
+        "a workspace whose session ended is still last active when it was backdated to"
     );
 
     kestrel.teardown().await;
 }
 
 #[tokio::test]
-async fn a_workspace_whose_runs_have_all_ended_seals_itself_once_the_window_elapses() {
+async fn a_workspace_whose_sessions_have_all_ended_seals_itself_once_the_window_elapses() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (run, _) = kestrel.dispatch_run(workspace.id).await;
-    kestrel.complete_run(&run).await;
+    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    kestrel.complete_session(&session).await;
 
     kestrel.last_active(&workspace, a_day_ago()).await;
 
@@ -143,16 +143,16 @@ async fn a_workspace_that_never_ran_anything_seals_itself_once_the_window_elapse
 }
 
 #[tokio::test]
-async fn a_workspace_with_a_run_holding_its_slot_never_seals_however_old_it_is() {
+async fn a_workspace_with_a_session_holding_its_slot_never_seals_however_old_it_is() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (run, _) = kestrel.dispatch_run(workspace.id).await;
+    let (session, _) = kestrel.dispatch_session(workspace.id).await;
 
     kestrel.last_active(&workspace, a_day_ago()).await;
 
     stays_open(&kestrel, &workspace).await;
 
-    kestrel.complete_run(&run).await;
+    kestrel.complete_session(&session).await;
     kestrel.last_active(&workspace, a_day_ago()).await;
     sealed_by_the_sweep(&kestrel, &workspace).await;
 
@@ -160,21 +160,21 @@ async fn a_workspace_with_a_run_holding_its_slot_never_seals_however_old_it_is()
 }
 
 #[tokio::test]
-async fn a_workspace_with_messages_waiting_on_a_busy_run_never_seals() {
+async fn a_workspace_with_messages_waiting_on_a_busy_session_never_seals() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (run, _) = kestrel.dispatch_run(workspace.id).await;
-    // The supervisor outlives the Run, so the messages it was too busy for are still waiting
-    // rather than having been handed to a Run of their own.
-    kestrel.supervised(&run, "a supervisor").await;
+    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    // The supervisor outlives the Session, so the messages it was too busy for are still waiting
+    // rather than having been handed to a Session of their own.
+    kestrel.supervised(&session, "a supervisor").await;
     assert!(
         kestrel
             .post_while_busy(workspace.id, "jack", "one more thing")
             .await
             .is_none(),
-        "a message posted while a run was busy enqueued a run of its own"
+        "a message posted while a session was busy enqueued a session of its own"
     );
-    kestrel.complete_run(&run).await;
+    kestrel.complete_session(&session).await;
 
     kestrel.last_active(&workspace, a_day_ago()).await;
 
@@ -187,9 +187,9 @@ async fn a_workspace_with_messages_waiting_on_a_busy_run_never_seals() {
 async fn a_workspace_the_sweep_sealed_is_readable_refuses_work_and_is_never_reopened() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (run, _) = kestrel.dispatch_run(workspace.id).await;
-    kestrel.said(&run, "what it did").await;
-    kestrel.complete_run(&run).await;
+    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    kestrel.said(&session, "what it did").await;
+    kestrel.complete_session(&session).await;
     let before = kestrel.transcript(workspace.id).await;
 
     kestrel.last_active(&workspace, a_day_ago()).await;
@@ -209,11 +209,11 @@ async fn a_workspace_the_sweep_sealed_is_readable_refuses_work_and_is_never_reop
             .collect::<Vec<_>>()
     );
     assert!(
-        kestrel.try_enqueue_run(workspace.id).await.is_err(),
-        "a workspace the sweep sealed took a new run"
+        kestrel.try_enqueue_session(workspace.id).await.is_err(),
+        "a workspace the sweep sealed took a new session"
     );
     assert!(
-        kestrel.try_start(&run).await.is_err(),
+        kestrel.try_start(&session).await.is_err(),
         "a workspace the sweep sealed took a turn"
     );
     assert!(

@@ -22,7 +22,7 @@ use crate::declaration;
 use crate::declined::Declined;
 use crate::domain::{
     self, Agent, Connection, CorrelationMiss, Direction, EventRecordId, EventRefusal, Fires,
-    Firing, Integration, Occurrence, Organization, Project, Run, Schedule, SubscriptionProfile,
+    Firing, Integration, Occurrence, Organization, Project, Schedule, Session, SubscriptionProfile,
     Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::filter::Filter;
@@ -77,9 +77,9 @@ pub const WORKSPACE_SEAL: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/seal";
 pub const WORKSPACE_INSTANCE_RELEASE: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/instance/release";
-pub const RUNS: &str = "/operator/organizations/{organization}/workspaces/{workspace}/runs";
-pub const RUN: &str = "/operator/organizations/{organization}/runs/{run}";
-pub const RUN_STOP: &str = "/operator/organizations/{organization}/runs/{run}/stop";
+pub const SESSIONS: &str = "/operator/organizations/{organization}/workspaces/{workspace}/sessions";
+pub const SESSION: &str = "/operator/organizations/{organization}/sessions/{session}";
+pub const SESSION_STOP: &str = "/operator/organizations/{organization}/sessions/{session}/stop";
 pub const TRANSCRIPT: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/transcript";
 
@@ -161,9 +161,9 @@ pub fn router(store: Store, shutdown: CancellationToken) -> Router {
         .route(WORKSPACE_MESSAGES, post(post_to_workspace))
         .route(WORKSPACE_SEAL, post(seal_workspace))
         .route(WORKSPACE_INSTANCE_RELEASE, post(release_instance))
-        .route(RUNS, get(runs).post(enqueue_run))
-        .route(RUN, get(show_run))
-        .route(RUN_STOP, post(stop_run))
+        .route(SESSIONS, get(sessions).post(enqueue_session))
+        .route(SESSION, get(show_session))
+        .route(SESSION_STOP, post(stop_session))
         .route(TRANSCRIPT, get(transcript))
         .with_state(ControlPlane { store, shutdown })
 }
@@ -205,7 +205,7 @@ struct WorkspaceMessage {
 }
 
 #[derive(Deserialize)]
-struct RunDeclaration {
+struct SessionDeclaration {
     model: Option<String>,
 }
 
@@ -305,7 +305,7 @@ struct WorkspaceRecord {
 }
 
 #[derive(Serialize)]
-struct RunRecord {
+struct SessionRecord {
     id: String,
     name: String,
     workspace: String,
@@ -433,32 +433,32 @@ impl WorkspaceRecord {
     }
 }
 
-impl RunRecord {
-    fn read(run: Run) -> Self {
+impl SessionRecord {
+    fn read(session: Session) -> Self {
         Self {
-            id: run.id.to_string(),
-            name: run.name,
-            workspace: run.workspace.to_string(),
-            state: run.state.as_str().to_owned(),
-            waiting_for: run.waiting_for,
-            exit: run.exit,
-            outcome_message: run.outcome_message,
-            instance: run.instance,
-            supervisor: run.supervisor,
-            model: run.model,
-            worked_model: run.worked_model,
-            enqueued_at: run.enqueued_at,
-            started_at: run.started_at,
-            ended_at: run.ended_at,
-            lease_expires_at: run.lease_expires_at,
-            connected_at: run.connected.as_ref().map(|connected| connected.at),
-            supervisor_version: run.connected.map(|connected| connected.version),
-            usage: run.usage,
+            id: session.id.to_string(),
+            name: session.name,
+            workspace: session.workspace.to_string(),
+            state: session.state.as_str().to_owned(),
+            waiting_for: session.waiting_for,
+            exit: session.exit,
+            outcome_message: session.outcome_message,
+            instance: session.instance,
+            supervisor: session.supervisor,
+            model: session.model,
+            worked_model: session.worked_model,
+            enqueued_at: session.enqueued_at,
+            started_at: session.started_at,
+            ended_at: session.ended_at,
+            lease_expires_at: session.lease_expires_at,
+            connected_at: session.connected.as_ref().map(|connected| connected.at),
+            supervisor_version: session.connected.map(|connected| connected.version),
+            usage: session.usage,
         }
     }
 
-    fn all(runs: Vec<Run>) -> Vec<Self> {
-        runs.into_iter().map(Self::read).collect()
+    fn all(sessions: Vec<Session>) -> Vec<Self> {
+        sessions.into_iter().map(Self::read).collect()
     }
 }
 
@@ -519,7 +519,7 @@ struct StartedRecord {
     project: start::Settled,
     agent: start::Settled,
     workspace: WorkspaceRecord,
-    run: RunRecord,
+    session: SessionRecord,
 }
 
 async fn start(
@@ -536,7 +536,7 @@ async fn start(
             project: started.project,
             agent: started.agent,
             workspace: WorkspaceRecord::read(&control_plane.store, started.workspace).await?,
-            run: RunRecord::read(started.run),
+            session: SessionRecord::read(started.session),
         }),
     ))
 }
@@ -1286,12 +1286,12 @@ enum FiredRecord {
     Opened {
         event: String,
         workspace: String,
-        run: String,
+        session: String,
     },
     Fed {
         event: String,
         workspace: String,
-        run: Option<String>,
+        session: Option<String>,
     },
     Ignored {
         event: String,
@@ -1326,20 +1326,20 @@ async fn dispatch_trigger(
         trigger::Fired::Opened {
             event,
             workspace,
-            run,
+            session,
         } => FiredRecord::Opened {
             event: event.to_string(),
             workspace: workspace.to_string(),
-            run: run.to_string(),
+            session: session.to_string(),
         },
         trigger::Fired::Fed {
             event,
             workspace,
-            run,
+            session,
         } => FiredRecord::Fed {
             event: event.to_string(),
             workspace: workspace.to_string(),
-            run: run.map(|run| run.to_string()),
+            session: session.map(|session| session.to_string()),
         },
         trigger::Fired::Ignored {
             event, correlation, ..
@@ -1585,10 +1585,10 @@ async fn post_to_workspace(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
     message: Result<Json<WorkspaceMessage>, JsonRejection>,
-) -> Result<Json<Option<RunRecord>>, Refused> {
+) -> Result<Json<Option<SessionRecord>>, Refused> {
     let Json(message) = message?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
-    let run = workspace::post(
+    let session = workspace::post(
         &control_plane.store,
         workspace.id,
         &message.participant,
@@ -1596,9 +1596,9 @@ async fn post_to_workspace(
     )
     .await
     .map_err(workspace_refusal)?;
-    let run = run.map(RunRecord::read);
+    let session = session.map(SessionRecord::read);
 
-    Ok(Json(run))
+    Ok(Json(session))
 }
 
 async fn seal_workspace(
@@ -1615,26 +1615,26 @@ async fn seal_workspace(
     ))
 }
 
-async fn runs(
+async fn sessions(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
-) -> Result<Json<Vec<RunRecord>>, Refused> {
+) -> Result<Json<Vec<SessionRecord>>, Refused> {
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
-    let runs = work::runs(&control_plane.store, workspace.id)
+    let sessions = work::sessions(&control_plane.store, workspace.id)
         .await
         .map_err(workspace_refusal)?;
 
-    Ok(Json(RunRecord::all(runs)))
+    Ok(Json(SessionRecord::all(sessions)))
 }
 
-async fn enqueue_run(
+async fn enqueue_session(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
-    declaration: Result<Json<RunDeclaration>, JsonRejection>,
-) -> Result<(StatusCode, Json<RunRecord>), Refused> {
+    declaration: Result<Json<SessionDeclaration>, JsonRejection>,
+) -> Result<(StatusCode, Json<SessionRecord>), Refused> {
     let Json(declaration) = declaration?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
-    let run = work::enqueue(
+    let session = work::enqueue(
         &control_plane.store,
         workspace.id,
         declaration.model.as_deref(),
@@ -1642,32 +1642,32 @@ async fn enqueue_run(
     .await
     .map_err(workspace_refusal)?;
 
-    Ok((StatusCode::CREATED, Json(RunRecord::read(run))))
+    Ok((StatusCode::CREATED, Json(SessionRecord::read(session))))
 }
 
-async fn show_run(
+async fn show_session(
     State(control_plane): State<ControlPlane>,
-    Path((organization, run)): Path<(String, String)>,
-) -> Result<Json<RunRecord>, Refused> {
-    let run = work::resolve_run(&control_plane.store, &organization, &run).await?;
+    Path((organization, session)): Path<(String, String)>,
+) -> Result<Json<SessionRecord>, Refused> {
+    let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
 
-    Ok(Json(RunRecord::read(run)))
+    Ok(Json(SessionRecord::read(session)))
 }
 
-async fn stop_run(
+async fn stop_session(
     State(control_plane): State<ControlPlane>,
-    Path((organization, run)): Path<(String, String)>,
-) -> Result<Json<RunRecord>, Refused> {
-    let run = work::resolve_run(&control_plane.store, &organization, &run).await?;
-    work::stop(&control_plane.store, run.id)
+    Path((organization, session)): Path<(String, String)>,
+) -> Result<Json<SessionRecord>, Refused> {
+    let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
+    work::stop(&control_plane.store, session.id)
         .await
         .map_err(|error| match error.to_string() {
             ended if ended.ends_with("has already ended") => Refused::Conflict(ended),
             _ => error.into(),
         })?;
-    let run = work::run(&control_plane.store, run.id).await?;
+    let session = work::session(&control_plane.store, session.id).await?;
 
-    Ok(Json(RunRecord::read(run)))
+    Ok(Json(SessionRecord::read(session)))
 }
 
 async fn resolved(
@@ -1688,7 +1688,7 @@ fn workspace_refusal(error: anyhow::Error) -> Refused {
     {
         return Refused::NotFound(message);
     }
-    if message.contains("already has the run")
+    if message.contains("already has the session")
         || message.contains("still in flight")
         || message.contains("already sealed")
     {

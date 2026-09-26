@@ -10,7 +10,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::domain::{Exit, RunId};
+use crate::domain::{Exit, SessionId};
 use crate::follow_up;
 use crate::integration::delivery;
 use crate::integration::github::Github;
@@ -69,7 +69,7 @@ async fn following_up(
                     info!(
                         event = %follow_up.event,
                         workspace = %follow_up.workspace,
-                        run = ?follow_up.run,
+                        session = ?follow_up.session,
                         "a follow-up was received"
                     );
                 }
@@ -126,8 +126,8 @@ async fn sweeping_leases(store: &Store, shutdown: &CancellationToken) -> Result<
         // are still there to be found on the next sweep.
         match sweep(store).await {
             Ok(expired) => {
-                for (run, exit) in expired {
-                    info!(%run, %exit, "a lease expired");
+                for (session, exit) in expired {
+                    info!(%session, %exit, "a lease expired");
                 }
             }
             Err(error) => warn!(%error, "a sweep found nothing it could do"),
@@ -152,10 +152,10 @@ async fn polling(store: &Store, github: &Github, shutdown: &CancellationToken) -
     Ok(())
 }
 
-/// A sweep of its own rather than the tail of the transaction that ends a Run: what a Run
+/// A sweep of its own rather than the tail of the transaction that ends a Session: what a Session
 /// ended as is durable the moment it ends, and saying so out loud is a request to somebody
 /// else's system that may be refused, deferred and asked again without any of that reaching
-/// the Run.
+/// the Session.
 async fn delivering(store: &Store, github: &Github, shutdown: &CancellationToken) -> Result<()> {
     while !shutdown.is_cancelled() {
         match deliver(store, github).await {
@@ -185,13 +185,13 @@ async fn firing(
                         trigger::Fired::Opened {
                             event,
                             workspace,
-                            run,
-                        } => info!(%event, %workspace, %run, "a trigger fired"),
+                            session,
+                        } => info!(%event, %workspace, %session, "a trigger fired"),
                         trigger::Fired::Fed {
                             event,
                             workspace,
-                            run,
-                        } => info!(%event, %workspace, ?run, "a trigger fed a workspace"),
+                            session,
+                        } => info!(%event, %workspace, ?session, "a trigger fed a workspace"),
                         trigger::Fired::Ignored {
                             event,
                             trigger,
@@ -248,20 +248,20 @@ async fn tick_or_woken(shutdown: &CancellationToken, woken: &mut watch::Receiver
     }
 }
 
-/// Every Run found is ended in the transaction that found it, so a heartbeat racing the sweep
-/// either got there first — and its Run is not in this read — or waits for the write lock and
-/// finds a Run that has ended. A lease that expires fails its Run and never re-dispatches it:
-/// kestrel retries dispatch, never work.
-async fn sweep(store: &Store) -> Result<Vec<(RunId, Exit)>> {
+/// Every Session found is ended in the transaction that found it, so a heartbeat racing the sweep
+/// either got there first — and its Session is not in this read — or waits for the write lock and
+/// finds a Session that has ended. A lease that expires fails its Session and never re-dispatches
+/// it: kestrel retries dispatch, never work.
+async fn sweep(store: &Store) -> Result<Vec<(SessionId, Exit)>> {
     let mut tx = store.begin().await?;
     let mut expired = Vec::new();
 
-    for run in tx.workspaces().expired_leases(Timestamp::now()).await? {
+    for session in tx.workspaces().expired_leases(Timestamp::now()).await? {
         let exit = Exit::Failed {
-            because: "the supervisor stopped holding the run's lease out, and it expired"
+            because: "the supervisor stopped holding the session's lease out, and it expired"
                 .to_owned(),
         };
-        expired.push((run.id, work::ending(&mut tx, &run, exit).await?));
+        expired.push((session.id, work::ending(&mut tx, &session, exit).await?));
     }
     tx.commit().await?;
 
@@ -277,10 +277,10 @@ async fn deliver(store: &Store, github: &Github) -> Result<()> {
     for delivery in due {
         if let Some(comment) = delivery::deliver(store, github, &delivery).await? {
             info!(
-                run = %delivery.run,
+                session = %delivery.session,
                 turn = delivery.turn,
                 comment,
-                "what a run said reached the issue it came from"
+                "what a session said reached the issue it came from"
             );
         }
     }

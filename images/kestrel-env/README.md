@@ -1,6 +1,6 @@
 # `kestrel-env`
 
-The base image a **Run** executes in. Its Dockerfile is here so the image is derivable rather than
+The base image a **Session** executes in. Its Dockerfile is here so the image is derivable rather than
 opaque ([ADR-0002](../../docs/adr/0002-two-deployables-the-environment-dials-out.md)).
 
 It carries three things: the **supervisor**, **opencode**, and **git**. Nothing else.
@@ -44,25 +44,25 @@ that causes it. The opencode binary is nearly all of the size.
 
 ## Running one by hand
 
-A Run's supervisor is the image's entrypoint, and it needs the control plane's address, the Run it is
-executing, that Run's credential, and the command to spawn as the harness.
+A Session's supervisor is the image's entrypoint, and it needs the control plane's address, the Session it is
+executing, that Session's credential, and the command to spawn as the harness.
 
 ```sh
 docker run --rm \
   --add-host host.docker.internal:host-gateway \
   --env KESTREL_LINK=http://host.docker.internal:7717 \
-  --env KESTREL_RUN=<run> \
-  --env KESTREL_RUN_CREDENTIAL=<credential> \
+  --env KESTREL_SESSION=<session> \
+  --env KESTREL_SESSION_CREDENTIAL=<credential> \
   --env KESTREL_HARNESS_COMMAND='opencode acp --print-logs' \
   --env KESTREL_AGENT_MODEL=<model, as the harness advertises it> \
   kestrel-env
 ```
 
-`KESTREL_AGENT_MODEL` is the model the Run's Agent named, set over ACP once the session is open; an
+`KESTREL_AGENT_MODEL` is the model the Session's Agent named, set over ACP once the ACP session is open; an
 empty one leaves the harness on its own default. `KESTREL_AGENT_AUTH` names the ACP authentication
 method to log the agent in with, for a harness that will not open a session until something has.
 
-**No provider key is among them.** The **Provider Credentials** the Run's Organization holds arrive
+**No provider key is among them.** The **Provider Credentials** the Session's Organization holds arrive
 over the link as the supervisor spawns the agent, and reach that process's environment and nothing
 else ([ADR-0010](../../docs/adr/0010-a-provider-credential-crosses-the-link-at-the-spawn.md)). An
 Environment run by hand this way reaches whatever the operator's own shell put in it, which is the
@@ -76,9 +76,9 @@ checked out side by side. An ACP session's working directory is the checkout of 
 outside has to land owned by that user, and a derived image that installs packages needs `USER root`
 first.
 
-**Killing the supervisor ends the Run.** The agent is the supervisor's child over stdio, so nothing
+**Killing the supervisor ends the Session.** The agent is the supervisor's child over stdio, so nothing
 in the image restarts one — the entrypoint is the supervisor itself, with no init or wrapper around
-it. A supervisor that dies takes its Run with it: the lease expires unheld, and the Run ends failed
+it. A supervisor that dies takes its Session with it: the lease expires unheld, and the Session ends failed
 with an explicit exit status. That is the trade ADR-0007 records, and `crates/kestrel/tests/image.rs`
 holds it to it.
 

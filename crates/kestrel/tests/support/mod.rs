@@ -1,6 +1,6 @@
 //! The primary test seam (0.1/03): boot a complete control plane in-process against a fresh
 //! temporary SQLite file, drive it through the same paths a person would use, and tear it
-//! down. Assertions live in the language of Workspaces, Runs and Transcripts; `Store` and `Log`
+//! down. Assertions live in the language of Workspaces, Sessions and Transcripts; `Store` and `Log`
 //! stay behind `Kestrel`, never reached for directly.
 
 // Every integration-test binary compiles all of this; a helper one of them does not reach for
@@ -43,8 +43,8 @@ use kestrel::agent;
 use kestrel::compute::{Docker, Driver, LocalExec};
 use kestrel::domain::{
     Agent, CorrelationMiss, Direction, Event, EventRecordId, Exit, Fires, Integration, Occurrence,
-    Organization, Project, Run, RunId, RunState, Schedule, SubscriptionProfile, Templates, Trigger,
-    Turn, Workspace, WorkspaceId,
+    Organization, Project, Schedule, Session, SessionId, SessionState, SubscriptionProfile,
+    Templates, Trigger, Turn, Workspace, WorkspaceId,
 };
 use kestrel::instance;
 use kestrel::integration::{self, Connecting, Registration};
@@ -69,7 +69,7 @@ const PATIENCE: std::time::Duration = std::time::Duration::from_secs(30);
 /// Distinctive enough that a test can assert it is nowhere it should not be.
 pub const TOKEN: &str = "ghp_kestrel_should_never_say_this_out_loud";
 
-/// The Provider Credential every fixture holds: a Run reaches no model without one, and the
+/// The Provider Credential every fixture holds: a Session reaches no model without one, and the
 /// scripted agent's `Confides` script says it can see this one.
 pub const PROVIDER_KEY: &str = "SCRIPTED_API_KEY";
 pub const A_PROVIDER_KEY: &str = "a-provider-key";
@@ -112,12 +112,12 @@ pub struct Kestrel {
 pub struct Provisions {
     driver: Driver,
     harnesses: Vec<HarnessCommand>,
-    max_active_runs: NonZeroUsize,
+    max_active_sessions: NonZeroUsize,
 }
 
 /// The harness an Agent names unless a test says otherwise, spawned as whatever the test plays.
 pub const HARNESS: &str = "opencode";
-/// The harness whose Runs on one Subscription Profile the work role dispatches one at a time.
+/// The harness whose Sessions on one Subscription Profile the work role dispatches one at a time.
 pub const SERIALIZED: &str = "codex";
 
 fn spawning(harnesses: &[(&str, &str)]) -> Vec<HarnessCommand> {
@@ -140,7 +140,7 @@ pub struct Stopped {
 
 impl Kestrel {
     /// Boots with no supervisor to provision an Environment with, so the work role claims
-    /// nothing and a test is the only thing dispatching the Runs it opens.
+    /// nothing and a test is the only thing dispatching the Sessions it opens.
     pub async fn boot() -> Self {
         Self::booted(None).await
     }
@@ -188,7 +188,7 @@ impl Kestrel {
         Self::booted(Some(Provisions {
             driver: Driver::LocalExec(LocalExec::running(supervisor)),
             harnesses: spawning(harnesses),
-            max_active_runs: NonZeroUsize::new(maximum).expect("at least one active run"),
+            max_active_sessions: NonZeroUsize::new(maximum).expect("at least one active session"),
         }))
         .await
     }
@@ -209,7 +209,7 @@ impl Kestrel {
             Some(Provisions {
                 driver: Driver::Docker(Docker::provisioning_from(image)),
                 harnesses: spawning(harnesses),
-                max_active_runs: NonZeroUsize::new(2).unwrap(),
+                max_active_sessions: NonZeroUsize::new(2).unwrap(),
             }),
         )
         .await
@@ -250,7 +250,7 @@ impl Kestrel {
             driver: provisions.driver,
             harnesses: provisions.harnesses,
             auth: None,
-            max_active_runs: provisions.max_active_runs,
+            max_active_sessions: provisions.max_active_sessions,
             serialized: vec![SERIALIZED.to_owned()],
         });
         let roles = tokio::spawn(all_in_one.run(dispatch, shutdown.clone()));
@@ -864,7 +864,7 @@ impl Kestrel {
             .expect("the profiles should list")
     }
 
-    /// What the next Run spawned with the profile would be handed.
+    /// What the next Session spawned with the profile would be handed.
     pub async fn profile_contents(&self, profile: &SubscriptionProfile) -> Contents {
         profile::contents(&self.store, profile)
             .await
@@ -1035,15 +1035,15 @@ impl Kestrel {
         workspace::transcript(&self.store, id, from, window).await
     }
 
-    pub async fn said(&self, run: &Run, message: &str) {
-        self.try_said(run, message)
+    pub async fn said(&self, session: &Session, message: &str) {
+        self.try_said(session, message)
             .await
             .expect("the message should reach the transcript");
     }
 
-    pub async fn try_said(&self, run: &Run, message: &str) -> anyhow::Result<()> {
+    pub async fn try_said(&self, session: &Session, message: &str) -> anyhow::Result<()> {
         let mut tx = self.store.begin().await.expect("a transaction");
-        let workspace = tx.workspaces().get(run.workspace).await?;
+        let workspace = tx.workspaces().get(session.workspace).await?;
         tx.log()
             .append(
                 &workspace,
@@ -1056,10 +1056,10 @@ impl Kestrel {
         tx.commit().await
     }
 
-    pub async fn post(&self, id: WorkspaceId, participant: &str, message: &str) -> Run {
+    pub async fn post(&self, id: WorkspaceId, participant: &str, message: &str) -> Session {
         self.post_while_busy(id, participant, message)
             .await
-            .expect("an idle workspace should enqueue a run")
+            .expect("an idle workspace should enqueue a session")
     }
 
     pub async fn post_while_busy(
@@ -1067,7 +1067,7 @@ impl Kestrel {
         id: WorkspaceId,
         participant: &str,
         message: &str,
-    ) -> Option<Run> {
+    ) -> Option<Session> {
         workspace::post(&self.store, id, participant, message)
             .await
             .expect("the message should post")
@@ -1087,195 +1087,205 @@ impl Kestrel {
         pending
     }
 
-    pub async fn enqueue_run(&self, workspace: WorkspaceId) -> Run {
-        self.try_enqueue_run(workspace)
+    pub async fn enqueue_session(&self, workspace: WorkspaceId) -> Session {
+        self.try_enqueue_session(workspace)
             .await
-            .expect("the run should enqueue")
+            .expect("the session should enqueue")
     }
 
-    pub async fn try_enqueue_run(&self, workspace: WorkspaceId) -> anyhow::Result<Run> {
+    pub async fn try_enqueue_session(&self, workspace: WorkspaceId) -> anyhow::Result<Session> {
         work::enqueue(&self.store, workspace, None).await
     }
 
-    pub async fn enqueue_run_naming(&self, workspace: WorkspaceId, model: Option<&str>) -> Run {
-        self.try_enqueue_run_naming(workspace, model)
-            .await
-            .expect("the run should enqueue")
-    }
-
-    pub async fn try_enqueue_run_naming(
+    pub async fn enqueue_session_naming(
         &self,
         workspace: WorkspaceId,
         model: Option<&str>,
-    ) -> anyhow::Result<Run> {
+    ) -> Session {
+        self.try_enqueue_session_naming(workspace, model)
+            .await
+            .expect("the session should enqueue")
+    }
+
+    pub async fn try_enqueue_session_naming(
+        &self,
+        workspace: WorkspaceId,
+        model: Option<&str>,
+    ) -> anyhow::Result<Session> {
         work::enqueue(&self.store, workspace, model).await
     }
 
     /// Claims what it enqueued, standing in for the work role a `boot`ed fixture leaves idle.
-    pub async fn dispatch_run(&self, workspace: WorkspaceId) -> (Run, Secret) {
-        self.enqueue_run(workspace).await;
+    pub async fn dispatch_session(&self, workspace: WorkspaceId) -> (Session, Secret) {
+        self.enqueue_session(workspace).await;
         let claimed = self
-            .claim_run()
+            .claim_session()
             .await
-            .expect("a run was just enqueued to claim");
+            .expect("a session was just enqueued to claim");
 
-        (claimed.run, claimed.credential)
+        (claimed.session, claimed.credential)
     }
 
-    pub async fn claim_run(&self) -> Option<Claimed> {
+    pub async fn claim_session(&self) -> Option<Claimed> {
         work::claim(&self.store, &[SERIALIZED.to_owned()])
             .await
             .expect("the claim should ask")
     }
 
-    pub async fn occupy_run(&self) -> Option<Claimed> {
+    pub async fn occupy_session(&self) -> Option<Claimed> {
         match work::occupy(&self.store, 2, &[SERIALIZED.to_owned()])
             .await
             .expect("the occupancy should ask")
         {
             Some(work::Occupied::Claimed(claimed)) => Some(claimed),
-            Some(work::Occupied::Resumed(_)) => panic!("no run should resume"),
+            Some(work::Occupied::Resumed(_)) => panic!("no session should resume"),
             None => None,
         }
     }
 
-    /// Prompts a waiting Run with what is held for it, the way the work role's sweep does.
+    /// Prompts a waiting Session with what is held for it, the way the work role's sweep does.
     pub async fn prompt_waiting(&self) {
         work::occupy(&self.store, 1, &[SERIALIZED.to_owned()])
             .await
             .expect("the occupancy should ask");
     }
 
-    pub async fn block_run(&self, run: &Run, blocker: &Run) {
+    pub async fn block_session(&self, session: &Session, blocker: &Session) {
         let mut tx = self.store.begin().await.expect("a transaction");
         tx.workspaces()
-            .declare_blocked(run, blocker)
+            .declare_blocked(session, blocker)
             .await
-            .expect("the run should be declared blocked");
+            .expect("the session should be declared blocked");
         tx.commit().await.expect("the declaration should commit");
     }
 
-    pub async fn run(&self, id: RunId) -> Run {
-        work::run(&self.store, id)
+    pub async fn session(&self, id: SessionId) -> Session {
+        work::session(&self.store, id)
             .await
-            .expect("the run should show")
+            .expect("the session should show")
     }
 
-    pub async fn runs(&self, workspace: WorkspaceId) -> Vec<Run> {
-        work::runs(&self.store, workspace)
+    pub async fn sessions(&self, workspace: WorkspaceId) -> Vec<Session> {
+        work::sessions(&self.store, workspace)
             .await
-            .expect("the runs should list")
+            .expect("the sessions should list")
     }
 
-    pub async fn turns(&self, run: RunId) -> Vec<Turn> {
-        work::turns(&self.store, run)
+    pub async fn turns(&self, session: SessionId) -> Vec<Turn> {
+        work::turns(&self.store, session)
             .await
-            .expect("the run's turns should read")
+            .expect("the session's turns should read")
     }
 
-    pub async fn stop_run(&self, run: RunId) -> Exit {
-        self.try_stop_run(run).await.expect("the run should stop")
+    pub async fn stop_session(&self, session: SessionId) -> Exit {
+        self.try_stop_session(session)
+            .await
+            .expect("the session should stop")
     }
 
-    pub async fn try_stop_run(&self, run: RunId) -> anyhow::Result<Exit> {
-        work::stop(&self.store, run).await
+    pub async fn try_stop_session(&self, session: SessionId) -> anyhow::Result<Exit> {
+        work::stop(&self.store, session).await
     }
 
-    pub async fn answered(&self, run: RunId, count: usize) -> Run {
-        self.answered_within(run, count, PATIENCE).await
+    pub async fn answered(&self, session: SessionId, count: usize) -> Session {
+        self.answered_within(session, count, PATIENCE).await
     }
 
-    /// Once `count` of the Run's turns are answered, or once it has ended short of them.
+    /// Once `count` of the Session's turns are answered, or once it has ended short of them.
     pub async fn answered_within(
         &self,
-        run: RunId,
+        session: SessionId,
         count: usize,
         patience: std::time::Duration,
-    ) -> Run {
+    ) -> Session {
         let deadline = tokio::time::Instant::now() + patience;
 
         loop {
             let answered = self
-                .turns(run)
+                .turns(session)
                 .await
                 .iter()
                 .filter(|turn| turn.answered_at.is_some())
                 .count();
-            let run = self.run(run).await;
-            if answered >= count || run.state == RunState::Ended {
-                return run;
+            let session = self.session(session).await;
+            if answered >= count || session.state == SessionState::Ended {
+                return session;
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
-                "the run {} is {} with {answered} of {count} turns answered",
-                run.id,
-                run.state
+                "the session {} is {} with {answered} of {count} turns answered",
+                session.id,
+                session.state
             );
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     }
 
-    /// A Run whose first turn is over has ended either way: by that turn, or stopped after it
+    /// A Session whose first turn is over has ended either way: by that turn, or stopped after it
     /// the way an operator would, because answering never ends one (ADR-0024).
-    pub async fn after_one_turn(&self, run: RunId) -> Run {
-        self.after_one_turn_within(run, PATIENCE).await
+    pub async fn after_one_turn(&self, session: SessionId) -> Session {
+        self.after_one_turn_within(session, PATIENCE).await
     }
 
-    pub async fn after_one_turn_within(&self, run: RunId, patience: std::time::Duration) -> Run {
-        let answered = self.answered_within(run, 1, patience).await;
-        if answered.state != RunState::Ended {
-            self.try_stop_run(run)
+    pub async fn after_one_turn_within(
+        &self,
+        session: SessionId,
+        patience: std::time::Duration,
+    ) -> Session {
+        let answered = self.answered_within(session, 1, patience).await;
+        if answered.state != SessionState::Ended {
+            self.try_stop_session(session)
                 .await
-                .expect("a waiting run should stop");
+                .expect("a waiting session should stop");
         }
 
-        self.run(run).await
+        self.session(session).await
     }
 
-    pub async fn complete_run(&self, run: &Run) {
-        work::complete(&self.store, run)
+    pub async fn complete_session(&self, session: &Session) {
+        work::complete(&self.store, session)
             .await
-            .expect("the run should end");
+            .expect("the session should end");
     }
 
-    pub async fn fail_run(&self, run: &Run, because: &str) {
-        work::fail(&self.store, run, because)
+    pub async fn fail_session(&self, session: &Session, because: &str) {
+        work::fail(&self.store, session, because)
             .await
-            .expect("the run should end");
+            .expect("the session should end");
     }
 
-    /// The `ended`/NULL row migration 0003 leaves behind for every Run predating kestrel
-    /// scheduling. `end_run` always records an exit, so nothing reachable through the store
+    /// The `ended`/NULL row migration 0003 leaves behind for every Session predating kestrel
+    /// scheduling. `end_session` always records an exit, so nothing reachable through the store
     /// produces one.
-    pub async fn end_run_without_an_exit(&self, run: &Run) {
+    pub async fn end_session_without_an_exit(&self, session: &Session) {
         let pool = database(self.data_dir()).await;
 
-        sqlx::query("UPDATE run SET state = 'ended', ended_at = ?, exit = NULL WHERE id = ?")
+        sqlx::query("UPDATE session SET state = 'ended', ended_at = ?, exit = NULL WHERE id = ?")
             .bind(jiff::Timestamp::now().to_string())
-            .bind(run.id.to_string())
+            .bind(session.id.to_string())
             .execute(&pool)
             .await
-            .expect("the run should end without an exit");
+            .expect("the session should end without an exit");
 
         pool.close().await;
     }
 
-    pub async fn supervised(&self, run: &Run, supervisor: &str) {
-        work::supervised(&self.store, run, supervisor)
+    pub async fn supervised(&self, session: &Session, supervisor: &str) {
+        work::supervised(&self.store, session, supervisor)
             .await
             .expect("the supervisor should be recorded");
     }
 
-    pub async fn executes_on(&self, run: &Run, instance: &str) {
-        work::executes_on(&self.store, run, instance)
+    pub async fn executes_on(&self, session: &Session, instance: &str) {
+        work::executes_on(&self.store, session, instance)
             .await
             .expect("the instance should be recorded");
     }
 
-    pub async fn report_checkout(&self, run: &Run, repositories: Vec<instance::Observed>) {
+    pub async fn report_checkout(&self, session: &Session, repositories: Vec<instance::Observed>) {
         work::report(
             &self.store,
-            run,
+            session,
             work::Reported {
                 seq: Some(1),
                 report: work::Report::Checkout { repositories },
@@ -1297,28 +1307,28 @@ impl Kestrel {
             .expect("the instance should be recorded archived");
     }
 
-    pub async fn supervisors_to_stop(&self) -> Vec<(Run, String)> {
+    pub async fn supervisors_to_stop(&self) -> Vec<(Session, String)> {
         work::supervisors_to_stop(&self.store)
             .await
-            .expect("ended runs' supervisors should read")
+            .expect("ended sessions' supervisors should read")
     }
 
-    pub async fn supervisor_gone(&self, run: &Run) {
-        work::supervisor_gone(&self.store, run)
+    pub async fn supervisor_gone(&self, session: &Session) {
+        work::supervisor_gone(&self.store, session)
             .await
             .expect("the supervisor should be gone");
     }
 
     /// The claimant records a supervisor gone some time after its container exits, and until
-    /// then the Workspace still counts the ended Run as holding it.
-    pub async fn supervisor_recorded_gone(&self, run: &Run) {
+    /// then the Workspace still counts the ended Session as holding it.
+    pub async fn supervisor_recorded_gone(&self, session: &Session) {
         let deadline = tokio::time::Instant::now() + PATIENCE;
 
         loop {
             let mut tx = self.store.begin().await.expect("a transaction");
             let gone = tx
                 .workspaces()
-                .supervisor_is_gone(run)
+                .supervisor_is_gone(session)
                 .await
                 .expect("the supervisor's state should read");
             drop(tx);
@@ -1327,8 +1337,8 @@ impl Kestrel {
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
-                "the supervisor of run {} was never recorded gone",
-                run.id
+                "the supervisor of session {} was never recorded gone",
+                session.id
             );
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
@@ -1340,34 +1350,36 @@ impl Kestrel {
             .expect("the workspace's instance should read")
     }
 
-    pub async fn instruct(&self, run: &Run, instruction: Instruction) {
-        self.try_instruct(run, instruction)
+    pub async fn instruct(&self, session: &Session, instruction: Instruction) {
+        self.try_instruct(session, instruction)
             .await
             .expect("the instruction should send");
     }
 
     pub async fn try_instruct(
         &self,
-        run: &Run,
+        session: &Session,
         instruction: Instruction,
     ) -> anyhow::Result<link::SentInstruction> {
-        link::instruct(&self.store, run, instruction).await
+        link::instruct(&self.store, session, instruction).await
     }
 
-    pub async fn start(&self, run: &Run) {
-        self.try_start(run).await.expect("the run should start");
+    pub async fn start(&self, session: &Session) {
+        self.try_start(session)
+            .await
+            .expect("the session should start");
     }
 
-    pub async fn try_start(&self, run: &Run) -> anyhow::Result<link::SentInstruction> {
-        link::start(&self.store, run).await
+    pub async fn try_start(&self, session: &Session) -> anyhow::Result<link::SentInstruction> {
+        link::start(&self.store, session).await
     }
 
     /// A lease that is up when the caller says rather than when a real one would be. The only
     /// way to watch a sweep without waiting a whole lease out.
-    pub async fn lease_until(&self, run: &Run, expires_at: Timestamp) {
+    pub async fn lease_until(&self, session: &Session, expires_at: Timestamp) {
         let mut tx = self.store.begin().await.expect("a transaction");
         tx.workspaces()
-            .hold_lease(run, expires_at)
+            .hold_lease(session, expires_at)
             .await
             .expect("the lease should hold");
         tx.commit().await.expect("the lease should commit");
@@ -1394,13 +1406,13 @@ impl Kestrel {
         tx.commit().await.expect("the record should commit");
     }
 
-    /// A second credential for the same Run, with an expiry the caller chooses. The only way
+    /// A second credential for the same Session, with an expiry the caller chooses. The only way
     /// to hold an expired one without waiting out a real credential's life.
-    pub async fn issue_credential(&self, run: &Run, expires_at: Timestamp) -> Secret {
+    pub async fn issue_credential(&self, session: &Session, expires_at: Timestamp) -> Secret {
         let secret = Secret::mint();
         let mut tx = self.store.begin().await.expect("a transaction");
         tx.workspaces()
-            .issue_credential(run, &secret.digest(), expires_at)
+            .issue_credential(session, &secret.digest(), expires_at)
             .await
             .expect("the credential should issue");
         tx.commit().await.expect("the credential should commit");
@@ -1449,7 +1461,7 @@ async fn database(data_dir: &Path) -> sqlx::SqlitePool {
         .expect("the database should open")
 }
 
-/// An Instance outlives every Run on it and nothing here seals a Workspace into releasing one,
+/// An Instance outlives every Session on it and nothing here seals a Workspace into releasing one,
 /// so a test's Instances go with the test.
 async fn destroy_instances(data_dir: &Path, provisions: Option<&Provisions>) {
     let Some(provisions) = provisions else {
@@ -1457,7 +1469,7 @@ async fn destroy_instances(data_dir: &Path, provisions: Option<&Provisions>) {
     };
     let pool = database(data_dir).await;
     let instances: Vec<String> =
-        sqlx::query_scalar("SELECT DISTINCT instance FROM run WHERE instance IS NOT NULL")
+        sqlx::query_scalar("SELECT DISTINCT instance FROM session WHERE instance IS NOT NULL")
             .fetch_all(&pool)
             .await
             .expect("the instances should read");
@@ -1473,23 +1485,25 @@ impl Stopped {
         Kestrel::boot_against(self.data_dir, self.bound, self.environment).await
     }
 
-    pub async fn run(&self, id: RunId) -> Run {
+    pub async fn session(&self, id: SessionId) -> Session {
         let store = Store::open(self.data_dir.path())
             .await
             .expect("the database should still be there");
 
-        work::run(&store, id).await.expect("the run should show")
+        work::session(&store, id)
+            .await
+            .expect("the session should show")
     }
 
     /// A due time set while nothing is keeping time, so what fires it afterwards is a control
     /// plane that could only have read it back.
-    pub async fn lease_until(&self, run: &Run, expires_at: Timestamp) {
+    pub async fn lease_until(&self, session: &Session, expires_at: Timestamp) {
         let store = Store::open(self.data_dir.path())
             .await
             .expect("the database should still be there");
         let mut tx = store.begin().await.expect("a transaction");
         tx.workspaces()
-            .hold_lease(run, expires_at)
+            .hold_lease(session, expires_at)
             .await
             .expect("the lease should hold");
         tx.commit().await.expect("the lease should commit");
@@ -1497,11 +1511,11 @@ impl Stopped {
 
     /// Reaches the durable record while nothing is serving it, which is the only way to make
     /// an instruction that an Environment provably could not have been handed as it was sent.
-    pub async fn instruct(&self, run: &Run, instruction: Instruction) {
+    pub async fn instruct(&self, session: &Session, instruction: Instruction) {
         let store = Store::open(self.data_dir.path())
             .await
             .expect("the database should still be there");
-        link::instruct(&store, run, instruction)
+        link::instruct(&store, session, instruction)
             .await
             .expect("the instruction should send");
     }

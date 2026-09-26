@@ -4,4 +4,4 @@ ALTER TABLE workspace ADD COLUMN continues TEXT REFERENCES workspace (id);
 
 CREATE INDEX workspace_continued_by ON workspace (continues) WHERE continues IS NOT NULL;
 
-CREATE INDEX run_holding_a_slot ON run (workspace_id, state);
+CREATE INDEX session_holding_a_slot ON session (workspace_id, state);

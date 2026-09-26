@@ -94,7 +94,7 @@ impl Stub {
     fn link(&self) -> Link {
         Link::to(
             &format!("http://127.0.0.1:{}", self.port),
-            "a-run",
+            "a-session",
             "a-credential",
         )
     }
@@ -201,7 +201,7 @@ fn everything_it_reports() -> Vec<(Option<i64>, Report)> {
 }
 
 #[tokio::test]
-async fn opening_the_stream_presents_the_runs_credential() {
+async fn opening_the_stream_presents_the_sessions_credential() {
     let stub = Stub::streaming("");
 
     stub.link()
@@ -210,7 +210,7 @@ async fn opening_the_stream_presents_the_runs_credential() {
         .expect("the stream should open");
 
     let asked = stub.asked();
-    assert_eq!(asked[0].path, "/link/runs/a-run/instructions");
+    assert_eq!(asked[0].path, "/link/sessions/a-session/instructions");
     assert_eq!(
         asked[0].headers.get("authorization").map(String::as_str),
         Some("Bearer a-credential")
@@ -286,7 +286,7 @@ async fn a_report_the_link_would_not_take_is_not_something_to_send_again() {
     let stub = Stub::answering(
         400,
         "application/json",
-        "{\"message\":\"the report 2 skips one this run has yet to report\"}",
+        "{\"message\":\"the report 2 skips one this session has yet to report\"}",
     );
 
     assert!(matches!(
@@ -296,7 +296,7 @@ async fn a_report_the_link_would_not_take_is_not_something_to_send_again() {
 }
 
 #[tokio::test]
-async fn reporting_posts_to_the_runs_reports() {
+async fn reporting_posts_to_the_sessions_reports() {
     let stub = Stub::answering(202, "application/json", "");
 
     stub.link()
@@ -304,11 +304,11 @@ async fn reporting_posts_to_the_runs_reports() {
         .await
         .expect("the report should be accepted");
 
-    assert_eq!(stub.asked()[0].path, "/link/runs/a-run/reports");
+    assert_eq!(stub.asked()[0].path, "/link/sessions/a-session/reports");
 }
 
 #[tokio::test]
-async fn a_run_id_the_environment_was_handed_cannot_rewrite_the_path_it_dials() {
+async fn a_session_id_the_environment_was_handed_cannot_rewrite_the_path_it_dials() {
     let stub = Stub::streaming("");
 
     Link::to(
@@ -322,7 +322,7 @@ async fn a_run_id_the_environment_was_handed_cannot_rewrite_the_path_it_dials() 
 
     assert_eq!(
         stub.asked()[0].path,
-        "/link/runs/..%2F..%2Felsewhere/instructions"
+        "/link/sessions/..%2F..%2Felsewhere/instructions"
     );
 }
 
@@ -355,7 +355,7 @@ async fn a_character_split_across_two_chunks_survives_the_stream() {
         + 1;
 
     let base = stream_in_two_writes(&frame[..split], &frame[split..]);
-    let mut instructions = Link::to(&base, "a-run", "a-credential")
+    let mut instructions = Link::to(&base, "a-session", "a-credential")
         .open(None)
         .await
         .expect("the stream should open");

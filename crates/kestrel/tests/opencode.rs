@@ -12,7 +12,7 @@ mod support;
 use std::time::Duration;
 
 use kestrel::compute::{Docker, Driver, Instance, Supervisor};
-use kestrel::domain::{Exit, Run, RunId, Workspace};
+use kestrel::domain::{Exit, Session, SessionId, Workspace};
 use kestrel::link::credential::Secret;
 use serde_json::json;
 use support::Kestrel;
@@ -29,14 +29,14 @@ const HARNESS: &str = "opencode acp";
 /// this Instance is configured with, and the one model in it.
 const MODEL: &str = "kestrel-test/canned";
 /// opencode fixes its model catalog at the first model it sees, and its built-in models are ready
-/// before a configured provider's, so an empty snapshot leaves only the model this Run named.
+/// before a configured provider's, so an empty snapshot leaves only the model this Session named.
 const MODEL_SNAPSHOT: &str = "/workspace/models.json";
 
-/// A Run, the Instance executing it, and what the supervisor on it says. Provisioned through
+/// A Session, the Instance executing it, and what the supervisor on it says. Provisioned through
 /// the `Compute` port rather than through the work role, because the model the Harness is
 /// pointed at is this test's and has to reach the Instance before the turn starts.
 struct Driven {
-    run: Run,
+    session: Session,
     instance: Instance,
     supervisor: Supervisor,
     diagnostics: Diagnostics,
@@ -45,16 +45,16 @@ struct Driven {
 impl Driven {
     async fn in_an_environment(kestrel: &Kestrel, model: &Model) -> Self {
         let workspace = a_workspace(kestrel).await;
-        let (run, credential) = kestrel.dispatch_run(workspace.id).await;
+        let (session, credential) = kestrel.dispatch_session(workspace.id).await;
         let (instance, supervisor, diagnostics) = provisioned(
             kestrel,
-            run.id,
+            session.id,
             &credential,
             workspace.agent.model.as_deref().unwrap_or_default(),
         );
 
         let mut driven = Self {
-            run,
+            session,
             instance,
             supervisor,
             diagnostics,
@@ -71,7 +71,7 @@ impl Driven {
             .instance
             .write_file("models.json", b"{}")
             .expect("the harness's model snapshot should be written");
-        kestrel.start(&driven.run).await;
+        kestrel.start(&driven.session).await;
 
         driven
     }
@@ -107,18 +107,18 @@ impl Driven {
 
 fn provisioned(
     kestrel: &Kestrel,
-    run: RunId,
+    session: SessionId,
     credential: &Secret,
     model: &str,
 ) -> (Instance, Supervisor, Diagnostics) {
     let mut instance = Driver::Docker(Docker::provisioning_from(image::built()))
-        .provision(run)
+        .provision(session)
         .expect("the instance should provision");
     let mut supervisor = instance
         .supervise(&[
             ("KESTREL_LINK", &kestrel.link_from_an_environment()),
-            ("KESTREL_RUN", &run.to_string()),
-            ("KESTREL_RUN_CREDENTIAL", credential.as_str()),
+            ("KESTREL_SESSION", &session.to_string()),
+            ("KESTREL_SESSION_CREDENTIAL", credential.as_str()),
             ("KESTREL_HARNESS_COMMAND", HARNESS),
             ("KESTREL_AGENT_MODEL", model),
             ("OPENCODE_MODELS_PATH", MODEL_SNAPSHOT),
@@ -165,9 +165,9 @@ async fn a_workspace(kestrel: &Kestrel) -> Workspace {
     kestrel.open_workspace("acme", "kestrel", "builder").await
 }
 
-/// Answering a turn never ends a Run, so one that answered is stopped, the way a person would.
-async fn ended(kestrel: &Kestrel, run: RunId) -> Run {
-    kestrel.after_one_turn_within(run, PATIENCE).await
+/// Answering a turn never ends a Session, so one that answered is stopped, the way a person would.
+async fn ended(kestrel: &Kestrel, session: SessionId) -> Session {
+    kestrel.after_one_turn_within(session, PATIENCE).await
 }
 
 /// The supervisor says how it answered a permission request only once the turn is over, so
@@ -195,12 +195,12 @@ async fn transcript(kestrel: &Kestrel, workspace: &Workspace) -> Vec<String> {
 
 #[tokio::test]
 #[ignore = "builds and runs the kestrel-env image"]
-async fn a_run_drives_the_harness_through_a_turn_and_ends_with_an_exit_status() {
+async fn a_session_drives_the_harness_through_a_turn_and_ends_with_an_exit_status() {
     let kestrel = Kestrel::boot_reachable_from_an_environment().await;
     let model = Model::serving();
     let mut driven = Driven::in_an_environment(&kestrel, &model).await;
 
-    let ended = ended(&kestrel, driven.run.id).await;
+    let ended = ended(&kestrel, driven.session.id).await;
 
     driven.diagnostics.drain();
     assert_eq!(
@@ -211,11 +211,11 @@ async fn a_run_drives_the_harness_through_a_turn_and_ends_with_an_exit_status() 
     );
     assert!(
         !model.asked().is_empty(),
-        "the run ended without the harness having reached a model at all"
+        "the session ended without the harness having reached a model at all"
     );
     assert!(
         driven.diagnostics.said(&format!("on the model {MODEL}")),
-        "the run never set the model its agent named. the supervisor said:\n{}",
+        "the session never set the model its agent named. the supervisor said:\n{}",
         driven.diagnostics.everything_it_said()
     );
 
@@ -225,13 +225,13 @@ async fn a_run_drives_the_harness_through_a_turn_and_ends_with_an_exit_status() 
 
 #[tokio::test]
 #[ignore = "builds and runs the kestrel-env image"]
-async fn what_the_agent_says_reaches_the_transcript_and_what_it_does_inside_the_run_does_not() {
+async fn what_the_agent_says_reaches_the_transcript_and_what_it_does_inside_the_session_does_not() {
     let kestrel = Kestrel::boot_reachable_from_an_environment().await;
     let model = Model::serving();
     let mut driven = Driven::in_an_environment(&kestrel, &model).await;
-    let workspace = kestrel.show_workspace(driven.run.workspace).await;
+    let workspace = kestrel.show_workspace(driven.session.workspace).await;
 
-    ended(&kestrel, driven.run.id).await;
+    ended(&kestrel, driven.session.id).await;
     driven.diagnostics.drain();
 
     let transcript = transcript(&kestrel, &workspace).await;
@@ -250,10 +250,10 @@ async fn what_the_agent_says_reaches_the_transcript_and_what_it_does_inside_the_
     );
 
     let transcript = transcript.join("\n");
-    for inside_the_run in ["call-1", "shell", MARK] {
+    for inside_the_session in ["call-1", "shell", MARK] {
         assert!(
-            !transcript.contains(inside_the_run),
-            "the transcript carries {inside_the_run}, which happened inside the run:\n{transcript}"
+            !transcript.contains(inside_the_session),
+            "the transcript carries {inside_the_session}, which happened inside the session:\n{transcript}"
         );
     }
 
@@ -269,13 +269,13 @@ async fn a_permission_request_is_answered_and_the_harness_proceeds() {
     let kestrel = Kestrel::boot_reachable_from_an_environment().await;
     let model = Model::serving();
     let mut driven = Driven::in_an_environment(&kestrel, &model).await;
-    let workspace = kestrel.show_workspace(driven.run.workspace).await;
+    let workspace = kestrel.show_workspace(driven.session.workspace).await;
 
     driven
         .diagnostics
         .wait_until_it_says("allowed once  tool call call-1")
         .await;
-    let ended = ended(&kestrel, driven.run.id).await;
+    let ended = ended(&kestrel, driven.session.id).await;
 
     assert_eq!(ended.exit, Some(Exit::Succeeded));
     assert!(
@@ -292,7 +292,7 @@ async fn a_permission_request_is_answered_and_the_harness_proceeds() {
 
 #[tokio::test]
 #[ignore = "builds and runs the kestrel-env image"]
-async fn a_harness_that_dies_mid_run_ends_the_run_with_an_exit_status() {
+async fn a_harness_that_dies_mid_session_ends_the_session_with_an_exit_status() {
     let kestrel = Kestrel::boot_reachable_from_an_environment().await;
     let model = Model::dawdling();
     let mut driven = Driven::in_an_environment(&kestrel, &model).await;
@@ -303,14 +303,14 @@ async fn a_harness_that_dies_mid_run_ends_the_run_with_an_exit_status() {
     working_at_a_turn(&model, 2).await;
     driven.kill_the_harness();
 
-    let ended = ended(&kestrel, driven.run.id).await;
+    let ended = ended(&kestrel, driven.session.id).await;
     let Some(Exit::Failed { because }) = &ended.exit else {
         panic!(
-            "the run ended {:?}, and its harness was killed mid-turn",
+            "the session ended {:?}, and its harness was killed mid-turn",
             ended.exit
         );
     };
-    assert!(!because.is_empty(), "the run failed without saying why");
+    assert!(!because.is_empty(), "the session failed without saying why");
 
     driven.destroy();
     kestrel.teardown().await;

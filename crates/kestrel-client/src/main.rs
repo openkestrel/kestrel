@@ -72,7 +72,7 @@ struct Client {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Go from whatever the control plane holds to a Run carrying a Brief, declaring what is
+    /// Go from whatever the control plane holds to a Session carrying a Brief, declaring what is
     /// missing from what this clone says, and explaining every value before applying it
     Start(Start),
     /// Preview and apply one Project, Agent and Trigger declaration document
@@ -86,7 +86,7 @@ enum Command {
     /// Declare and list Agents
     #[command(subcommand)]
     Agent(AgentCommand),
-    /// Hold, list and forget the Provider Credentials an Organization's Runs reach a model with
+    /// Hold, list and forget the Provider Credentials an Organization's Sessions reach a model with
     #[command(subcommand)]
     Credential(CredentialCommand),
     /// Declare Subscription Profiles, and hold, list and forget the logins in them
@@ -104,14 +104,14 @@ enum Command {
     /// Read Workspaces
     #[command(subcommand)]
     Workspace(WorkspaceCommand),
-    /// Show, enqueue, list and stop Runs
+    /// Show, enqueue, list and stop Sessions
     #[command(subcommand)]
-    Run(RunCommand),
+    Session(SessionCommand),
     /// List the Instances held for work that exists nowhere else, and release them
     #[command(subcommand)]
     Instance(InstanceCommand),
     /// Print the resolved scope, where each value came from, what exists in it, and what to
-    /// run next
+    /// session next
     Status,
     /// Print every exit code, what it means, and when a script should branch on it
     ExitCodes,
@@ -173,7 +173,7 @@ impl Command {
             | Command::Integration(_)
             | Command::Trigger(_)
             | Command::Workspace(_)
-            | Command::Run(_)
+            | Command::Session(_)
             | Command::Instance(_)
             | Command::Status => true,
             Command::Organization(_) | Command::ExitCodes => false,
@@ -238,7 +238,7 @@ struct ProfileEntry {
     /// An environment variable the Harness is spawned with
     #[arg(long, value_name = "NAME")]
     variable: Option<String>,
-    /// A file beneath the agent's home, handed back after each Run so a refreshed login
+    /// A file beneath the agent's home, handed back after each Session so a refreshed login
     /// persists
     #[arg(long, value_name = "PATH")]
     file: Option<String>,
@@ -392,7 +392,7 @@ enum TriggerCommand {
         /// Another Agent an agent:<name> label may choose instead; repeat for many
         #[arg(long = "allow", value_name = "AGENT")]
         allows: Vec<String>,
-        /// The Subscription Profile a firing's Runs use
+        /// The Subscription Profile a firing's Sessions use
         #[arg(long)]
         profile: Option<String>,
     },
@@ -498,7 +498,7 @@ enum AgentCommand {
         #[arg(long)]
         model: Option<String>,
     },
-    /// Change the model an Agent works with, leaving every Run in flight on the one it has
+    /// Change the model an Agent works with, leaving every Session in flight on the one it has
     Model {
         /// The name it is referred to by
         name: String,
@@ -536,7 +536,7 @@ enum WorkspaceCommand {
         /// The Agent that participates in it
         #[arg(long)]
         agent: String,
-        /// The Subscription Profile its Runs use
+        /// The Subscription Profile its Sessions use
         #[arg(long)]
         profile: Option<String>,
         /// The branch its work happens on
@@ -555,7 +555,7 @@ enum WorkspaceCommand {
         /// `latest`
         workspace: String,
     },
-    /// Add a participant's message; starts a Run or queues its next Turn
+    /// Add a participant's message; starts a Session or queues its next Turn
     Post {
         /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
         /// `latest`
@@ -588,8 +588,8 @@ enum WorkspaceCommand {
 }
 
 #[derive(Debug, Subcommand)]
-enum RunCommand {
-    /// Enqueue a Run in a Workspace, for the work role to claim and dispatch
+enum SessionCommand {
+    /// Enqueue a Session in a Workspace, for the work role to claim and dispatch
     Enqueue {
         /// The Workspace it executes on behalf of, by generated name, identifier, any
         /// unambiguous prefix of its identifier, or `latest`
@@ -599,24 +599,24 @@ enum RunCommand {
         #[arg(long)]
         model: Option<String>,
     },
-    /// List every Run in a Workspace
+    /// List every Session in a Workspace
     List {
-        /// The Workspace the Runs execute on behalf of, by generated name, identifier, any
+        /// The Workspace the Sessions execute on behalf of, by generated name, identifier, any
         /// unambiguous prefix of its identifier, or `latest`
         #[arg(long)]
         workspace: String,
     },
-    /// Show a Run
+    /// Show a Session
     Show {
         /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
         /// `latest`
-        run: String,
+        session: String,
     },
-    /// End a Run: it succeeds between turns, and fails mid-turn or before it started
+    /// End a Session: it succeeds between turns, and fails mid-turn or before it started
     Stop {
         /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
         /// `latest`
-        run: String,
+        session: String,
     },
 }
 
@@ -1161,7 +1161,7 @@ async fn run() -> Result<()> {
                 )
                 .await?;
             if answer.is_null() {
-                eprintln!("queued as the next turn of the run already in flight");
+                eprintln!("queued as the next turn of the session already in flight");
             }
             show(&presentation, &view::DECLARED, &answer)?;
         }
@@ -1203,7 +1203,7 @@ async fn run() -> Result<()> {
                 eprintln!("cursor  {cursor}");
             }
         }
-        Command::Run(RunCommand::Enqueue { workspace, model }) => {
+        Command::Session(SessionCommand::Enqueue { workspace, model }) => {
             let organization = scoping.resolve().await?.organization;
             show(
                 &presentation,
@@ -1214,44 +1214,44 @@ async fn run() -> Result<()> {
                         &organization,
                         "workspaces",
                         &workspace,
-                        "runs",
+                        "sessions",
                     ],
                     &json!({ "model": model }),
                 )
                 .await?,
             )?;
         }
-        Command::Run(RunCommand::List { workspace }) => {
+        Command::Session(SessionCommand::List { workspace }) => {
             let organization = scoping.resolve().await?.organization;
             show(
                 &presentation,
-                &view::RUNS,
+                &view::SESSIONS,
                 &api.get(&[
                     "organizations",
                     &organization,
                     "workspaces",
                     &workspace,
-                    "runs",
+                    "sessions",
                 ])
                 .await?,
             )?;
         }
-        Command::Run(RunCommand::Show { run }) => {
+        Command::Session(SessionCommand::Show { session }) => {
             let organization = scoping.resolve().await?.organization;
             show(
                 &presentation,
-                &view::RUN,
-                &api.get(&["organizations", &organization, "runs", &run])
+                &view::SESSION,
+                &api.get(&["organizations", &organization, "sessions", &session])
                     .await?,
             )?;
         }
-        Command::Run(RunCommand::Stop { run }) => {
+        Command::Session(SessionCommand::Stop { session }) => {
             let organization = scoping.resolve().await?.organization;
             show(
                 &presentation,
                 &view::STOPPED,
                 &api.post(
-                    &["organizations", &organization, "runs", &run, "stop"],
+                    &["organizations", &organization, "sessions", &session, "stop"],
                     &json!({}),
                 )
                 .await?,
@@ -1401,8 +1401,8 @@ async fn started(
             "agent": started["agent"]["name"],
             "workspace": started["workspace"]["name"],
             "workspace_id": started["workspace"]["id"],
-            "run": started["run"]["name"],
-            "run_id": started["run"]["id"],
+            "session": started["session"]["name"],
+            "session_id": started["session"]["id"],
         }),
     )
 }
@@ -1478,12 +1478,12 @@ fn explain_invalid_subcommand(error: &clap::Error, args: &[String]) -> Option<St
     let noun = args
         .windows(2)
         .rev()
-        .find(|pair| (pair[0] == "workspace" || pair[0] == "run") && pair[1] == *guessed)?[0]
+        .find(|pair| (pair[0] == "workspace" || pair[0] == "session") && pair[1] == *guessed)?[0]
         .as_str();
     let correct = match (noun, guessed.as_str()) {
         ("workspace", "create" | "new" | "start" | "begin") => Some("open"),
         ("workspace", "close" | "stop" | "end" | "finish") => Some("seal"),
-        ("run", "start" | "create" | "launch" | "execute" | "queue") => Some("enqueue"),
+        ("session", "start" | "create" | "launch" | "execute" | "queue") => Some("enqueue"),
         _ => None,
     }
     .map(str::to_owned)
@@ -1511,15 +1511,21 @@ mod parser_tests {
 
     #[test]
     fn an_organization_named_workspace_does_not_change_the_guessed_noun() {
-        let arguments = ["--organization", "workspace", "run", "start"];
+        let arguments = ["--organization", "workspace", "session", "start"];
         let error = Client::command()
             .try_get_matches_from(["kestrel"].into_iter().chain(arguments))
-            .expect_err("start is not a run verb");
+            .expect_err("start is not a session verb");
         let arguments = arguments.map(str::to_owned);
-        let explanation = explain_invalid_subcommand(&error, &arguments).expect("run help");
+        let explanation = explain_invalid_subcommand(&error, &arguments).expect("session help");
 
-        assert!(explanation.contains("kestrel run enqueue"), "{explanation}");
-        assert!(explanation.contains("Accepted run verbs:"), "{explanation}");
+        assert!(
+            explanation.contains("kestrel session enqueue"),
+            "{explanation}"
+        );
+        assert!(
+            explanation.contains("Accepted session verbs:"),
+            "{explanation}"
+        );
     }
 
     #[test]

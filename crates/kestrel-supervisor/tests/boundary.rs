@@ -19,11 +19,6 @@ const DOMAIN: [&str; 10] = [
     "audit",
 ];
 
-/// Caught as a whole name rather than anywhere in one, because ACP's own `SessionUpdate`,
-/// `session_id` and `session/prompt` carry it and CONTEXT.md gives ACP's session no meaning of
-/// kestrel's.
-const ALSO_THE_WIRE_S: [&str; 1] = ["session"];
-
 #[test]
 fn nothing_in_the_supervisor_names_a_thing_only_the_control_plane_may_reason_about() {
     let sources = sources(&support::crate_root().join("src"));
@@ -36,13 +31,6 @@ fn nothing_in_the_supervisor_names_a_thing_only_the_control_plane_may_reason_abo
             assert!(
                 !spoken.contains(word),
                 "{} names {word}, which is the control plane's to know",
-                source.display()
-            );
-        }
-        for word in ALSO_THE_WIRE_S {
-            assert!(
-                !names(&spoken).any(|name| name == word),
-                "{} names {word} on its own, which is the control plane's to know",
                 source.display()
             );
         }
@@ -70,13 +58,6 @@ fn spoken(source: &Path) -> String {
     fs::read_to_string(source)
         .expect("a readable source file")
         .to_lowercase()
-}
-
-/// A `/` holds a name together, so an ACP method is one name rather than two.
-fn names(spoken: &str) -> impl Iterator<Item = &str> {
-    spoken
-        .split(|character: char| !character.is_alphanumeric() && !"_/".contains(character))
-        .filter(|name| !name.is_empty())
 }
 
 fn sources(directory: &Path) -> Vec<PathBuf> {

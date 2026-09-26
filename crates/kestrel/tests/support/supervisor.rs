@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use kestrel::compute::{Driver, Exited, Instance, LocalExec, Supervisor as Supervising};
-use kestrel::domain::RunId;
+use kestrel::domain::SessionId;
 use kestrel::link::credential::Secret;
 
 use super::diagnostics::Diagnostics;
@@ -31,35 +31,35 @@ pub struct Supervisor {
 }
 
 impl Supervisor {
-    pub fn provision(link: &str, run: RunId, credential: &Secret) -> Self {
-        Self::provision_playing(link, run, credential, scripted_agent::Script::Speaks)
+    pub fn provision(link: &str, session: SessionId, credential: &Secret) -> Self {
+        Self::provision_playing(link, session, credential, scripted_agent::Script::Speaks)
     }
 
     pub fn provision_playing(
         link: &str,
-        run: RunId,
+        session: SessionId,
         credential: &Secret,
         script: scripted_agent::Script,
     ) -> Self {
-        Self::provision_selecting(link, run, credential, script, "")
+        Self::provision_selecting(link, session, credential, script, "")
     }
 
     pub fn provision_selecting(
         link: &str,
-        run: RunId,
+        session: SessionId,
         credential: &Secret,
         script: scripted_agent::Script,
         model: &str,
     ) -> Self {
         let harness = scripted_agent::playing(script);
         let mut instance = driver()
-            .provision(run)
+            .provision(session)
             .expect("the instance should provision");
         let mut supervising = instance
             .supervise(&[
                 ("KESTREL_LINK", link),
-                ("KESTREL_RUN", &run.to_string()),
-                ("KESTREL_RUN_CREDENTIAL", credential.as_str()),
+                ("KESTREL_SESSION", &session.to_string()),
+                ("KESTREL_SESSION_CREDENTIAL", credential.as_str()),
                 ("KESTREL_HARNESS_COMMAND", &harness),
                 ("KESTREL_AGENT_MODEL", model),
             ])

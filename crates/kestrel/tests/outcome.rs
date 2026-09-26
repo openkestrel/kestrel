@@ -1,14 +1,14 @@
-//! The Integration's outbound direction (0.1/22). A Run that ends leaves one comment on the
+//! The Integration's outbound direction (0.1/22). A Session that ends leaves one comment on the
 //! issue that started it, carrying the exit status and what the Agent said last; exactly one,
 //! however the control plane was interrupted, and a delivery that cannot be made changes
-//! nothing about how the Run went.
+//! nothing about how the Session went.
 
 mod support;
 
 use std::time::Duration;
 
 use jiff::SignedDuration;
-use kestrel::domain::{Direction, Exit, Run, Workspace};
+use kestrel::domain::{Direction, Exit, Session, Workspace};
 use support::Kestrel;
 use support::github_stub::{self, GithubStub, RecordedRequest, ScriptedResponse};
 
@@ -62,19 +62,20 @@ async fn watching(kestrel: &Kestrel, stub: &GithubStub, carries: &[Direction]) {
         .await;
 }
 
-/// The Workspace a label opened, with its queued Run claimed the way a work role would claim it.
-async fn working(kestrel: &Kestrel) -> (Workspace, Run) {
+/// The Workspace a label opened, with its queued Session claimed the way a work role would claim
+/// it.
+async fn working(kestrel: &Kestrel) -> (Workspace, Session) {
     let deadline = tokio::time::Instant::now() + PATIENCE;
 
     loop {
         if let Some(workspace) = kestrel.workspaces("acme").await.into_iter().next()
-            && let Some(claimed) = kestrel.claim_run().await
+            && let Some(claimed) = kestrel.claim_session().await
         {
-            return (workspace, claimed.run);
+            return (workspace, claimed.session);
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "no workspace was ever opened with a run to claim in it"
+            "no workspace was ever opened with a session to claim in it"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -126,29 +127,32 @@ fn labelled(stub: &GithubStub) {
 }
 
 #[tokio::test]
-async fn a_run_that_completes_says_so_on_the_issue_that_started_it() {
+async fn a_session_that_completes_says_so_on_the_issue_that_started_it() {
     let stub = GithubStub::start();
     labelled(&stub);
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
 
-    let (workspace, run) = working(&kestrel).await;
+    let (workspace, session) = working(&kestrel).await;
     kestrel
-        .said(&run, "Opened https://github.com/jtmthf/kestrel/pull/92.")
+        .said(
+            &session,
+            "Opened https://github.com/jtmthf/kestrel/pull/92.",
+        )
         .await;
-    kestrel.complete_run(&run).await;
+    kestrel.complete_session(&session).await;
 
     let comment = commented(&stub).await;
     let body = said(&comment);
 
-    assert!(body.contains("run succeeded"), "{body}");
+    assert!(body.contains("session succeeded"), "{body}");
     assert!(
         body.contains("> Opened https://github.com/jtmthf/kestrel/pull/92."),
         "the agent's last message is where a link to its pull request lives: {body}"
     );
     assert!(body.contains(&workspace.id.to_string()), "{body}");
-    assert!(body.contains(&run.id.to_string()), "{body}");
+    assert!(body.contains(&session.id.to_string()), "{body}");
 
     kestrel.teardown().await;
 }
@@ -162,8 +166,8 @@ async fn the_comment_is_posted_with_the_integrations_credential() {
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
 
-    let (_, run) = working(&kestrel).await;
-    kestrel.complete_run(&run).await;
+    let (_, session) = working(&kestrel).await;
+    kestrel.complete_session(&session).await;
 
     let comment = commented(&stub).await;
 
@@ -181,21 +185,21 @@ async fn the_comment_is_posted_with_the_integrations_credential() {
 }
 
 #[tokio::test]
-async fn a_run_that_fails_says_that_it_failed_and_why() {
+async fn a_session_that_fails_says_that_it_failed_and_why() {
     let stub = GithubStub::start();
     labelled(&stub);
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
 
-    let (_, run) = working(&kestrel).await;
+    let (_, session) = working(&kestrel).await;
     kestrel
-        .fail_run(&run, "the environment could not be provisioned")
+        .fail_session(&session, "the environment could not be provisioned")
         .await;
 
     let body = said(&commented(&stub).await);
 
-    assert!(body.contains("run failed"), "{body}");
+    assert!(body.contains("session failed"), "{body}");
     assert!(
         body.contains("the environment could not be provisioned"),
         "{body}"
@@ -205,22 +209,22 @@ async fn a_run_that_fails_says_that_it_failed_and_why() {
 }
 
 #[tokio::test]
-async fn one_run_leaves_exactly_one_comment() {
+async fn one_session_leaves_exactly_one_comment() {
     let stub = GithubStub::start();
     labelled(&stub);
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
 
-    let (_, run) = working(&kestrel).await;
-    kestrel.complete_run(&run).await;
+    let (_, session) = working(&kestrel).await;
+    kestrel.complete_session(&session).await;
     commented(&stub).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     assert_eq!(
         comments_on_the_issue(&stub).len(),
         1,
-        "one run said itself out loud more than once"
+        "one session said itself out loud more than once"
     );
 
     kestrel.teardown().await;
@@ -237,8 +241,8 @@ async fn a_comment_that_landed_while_the_control_plane_died_is_not_posted_twice(
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
 
-    let (_, run) = working(&kestrel).await;
-    kestrel.complete_run(&run).await;
+    let (_, session) = working(&kestrel).await;
+    kestrel.complete_session(&session).await;
     let landed = said(&commented(&stub).await);
 
     let kestrel = kestrel.kill_and_restart().await;
@@ -258,10 +262,10 @@ async fn a_comment_that_landed_while_the_control_plane_died_is_not_posted_twice(
     kestrel.teardown().await;
 }
 
-/// A refusal is not a failure of the work: the Run's exit status was decided before anything
+/// A refusal is not a failure of the work: the Session's exit status was decided before anything
 /// was said, and the delivery is tried again rather than given up on.
 #[tokio::test]
-async fn a_comment_that_is_refused_is_tried_again_and_leaves_the_run_as_it_was() {
+async fn a_comment_that_is_refused_is_tried_again_and_leaves_the_session_as_it_was() {
     let stub = GithubStub::start();
     labelled(&stub);
     stub.script_answer("POST", COMMENTS, ScriptedResponse::answering(500));
@@ -270,8 +274,8 @@ async fn a_comment_that_is_refused_is_tried_again_and_leaves_the_run_as_it_was()
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
 
-    let (_, run) = working(&kestrel).await;
-    kestrel.complete_run(&run).await;
+    let (_, session) = working(&kestrel).await;
+    kestrel.complete_session(&session).await;
 
     let deadline = tokio::time::Instant::now() + PATIENCE;
     while comments_on_the_issue(&stub).len() < 2 {
@@ -283,9 +287,9 @@ async fn a_comment_that_is_refused_is_tried_again_and_leaves_the_run_as_it_was()
     }
 
     assert_eq!(
-        kestrel.run(run.id).await.exit,
+        kestrel.session(session.id).await.exit,
         Some(Exit::Succeeded),
-        "a comment that could not be posted changed how the run ended"
+        "a comment that could not be posted changed how the session ended"
     );
 
     kestrel.teardown().await;
@@ -298,8 +302,8 @@ async fn a_workspace_no_event_started_says_nothing_and_that_is_not_an_error() {
     watching(&kestrel, &stub, BOTH).await;
 
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let (run, _) = kestrel.dispatch_run(workspace.id).await;
-    kestrel.complete_run(&run).await;
+    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    kestrel.complete_session(&session).await;
 
     nothing_is_said(&stub).await;
 
@@ -307,25 +311,27 @@ async fn a_workspace_no_event_started_says_nothing_and_that_is_not_an_error() {
 }
 
 #[tokio::test]
-async fn a_later_runs_outcome_does_not_reuse_an_earlier_runs_message() {
+async fn a_later_sessions_outcome_does_not_reuse_an_earlier_sessions_message() {
     let stub = GithubStub::start();
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
 
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let (first, _) = kestrel.dispatch_run(workspace.id).await;
+    let (first, _) = kestrel.dispatch_session(workspace.id).await;
     kestrel
         .said(&first, "The first investigation finished.")
         .await;
-    kestrel.complete_run(&first).await;
+    kestrel.complete_session(&first).await;
     assert_eq!(
-        kestrel.run(first.id).await.outcome_message.as_deref(),
+        kestrel.session(first.id).await.outcome_message.as_deref(),
         Some("The first investigation finished.")
     );
 
-    let second = kestrel.enqueue_run(workspace.id).await;
-    kestrel.fail_run(&second, "the environment stopped").await;
-    let ended = kestrel.run(second.id).await;
+    let second = kestrel.enqueue_session(workspace.id).await;
+    kestrel
+        .fail_session(&second, "the environment stopped")
+        .await;
+    let ended = kestrel.session(second.id).await;
     assert_eq!(
         ended.exit,
         Some(Exit::Failed {
@@ -345,8 +351,8 @@ async fn an_integration_that_carries_only_inbound_says_nothing() {
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, INBOUND).await;
 
-    let (_, run) = working(&kestrel).await;
-    kestrel.complete_run(&run).await;
+    let (_, session) = working(&kestrel).await;
+    kestrel.complete_session(&session).await;
 
     nothing_is_said(&stub).await;
 

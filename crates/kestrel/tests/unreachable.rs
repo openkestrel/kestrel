@@ -1,4 +1,4 @@
-//! A queued Run whose declared tolerance can no longer be met becomes unreachable: terminal,
+//! A queued Session whose declared tolerance can no longer be met becomes unreachable: terminal,
 //! never claimed, and never carrying an exit status, because nothing failed. Tolerance defaults
 //! to all-must-succeed, so one blocker failing is enough, however many others there are or were
 //! still waiting behind it.
@@ -8,7 +8,7 @@ mod support;
 use std::time::Duration;
 
 use jiff::Timestamp;
-use kestrel::domain::{Run, RunState, Workspace};
+use kestrel::domain::{Session, SessionState, Workspace};
 use support::Kestrel;
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
@@ -28,30 +28,30 @@ async fn a_workspace(kestrel: &Kestrel) -> Workspace {
     kestrel.open_workspace("acme", "kestrel", "builder").await
 }
 
-async fn a_dependent_blocked_on_an_active_run(kestrel: &Kestrel) -> (Run, Run) {
+async fn a_dependent_blocked_on_an_active_session(kestrel: &Kestrel) -> (Session, Session) {
     let workspace = a_workspace(kestrel).await;
-    let (blocker, _) = kestrel.dispatch_run(workspace.id).await;
+    let (blocker, _) = kestrel.dispatch_session(workspace.id).await;
     let waiting = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let dependent = kestrel.enqueue_run(waiting.id).await;
-    kestrel.block_run(&dependent, &blocker).await;
+    let dependent = kestrel.enqueue_session(waiting.id).await;
+    kestrel.block_session(&dependent, &blocker).await;
 
     (blocker, dependent)
 }
 
 #[tokio::test]
-async fn a_run_blocked_on_a_failed_blocker_becomes_unreachable() {
+async fn a_session_blocked_on_a_failed_blocker_becomes_unreachable() {
     let kestrel = Kestrel::boot().await;
-    let (blocker, dependent) = a_dependent_blocked_on_an_active_run(&kestrel).await;
+    let (blocker, dependent) = a_dependent_blocked_on_an_active_session(&kestrel).await;
 
     kestrel
-        .fail_run(&blocker, "the agent could not open a pull request")
+        .fail_session(&blocker, "the agent could not open a pull request")
         .await;
 
-    let dependent = kestrel.run(dependent.id).await;
-    assert_eq!(dependent.state, RunState::Unreachable);
+    let dependent = kestrel.session(dependent.id).await;
+    assert_eq!(dependent.state, SessionState::Unreachable);
     assert!(
         dependent.exit.is_none(),
-        "an unreachable run carried an exit status, and nothing failed"
+        "an unreachable session carried an exit status, and nothing failed"
     );
 
     kestrel.teardown().await;
@@ -61,24 +61,27 @@ async fn a_run_blocked_on_a_failed_blocker_becomes_unreachable() {
 async fn one_blocker_failing_is_enough_however_many_others_have_not_resolved() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (succeeds, _) = kestrel.dispatch_run(workspace.id).await;
+    let (succeeds, _) = kestrel.dispatch_session(workspace.id).await;
     let elsewhere = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let (fails, _) = kestrel.dispatch_run(elsewhere.id).await;
+    let (fails, _) = kestrel.dispatch_session(elsewhere.id).await;
     let waiting = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let dependent = kestrel.enqueue_run(waiting.id).await;
-    kestrel.block_run(&dependent, &succeeds).await;
-    kestrel.block_run(&dependent, &fails).await;
+    let dependent = kestrel.enqueue_session(waiting.id).await;
+    kestrel.block_session(&dependent, &succeeds).await;
+    kestrel.block_session(&dependent, &fails).await;
 
-    kestrel.complete_run(&succeeds).await;
-    assert_eq!(kestrel.run(dependent.id).await.state, RunState::Queued);
+    kestrel.complete_session(&succeeds).await;
+    assert_eq!(
+        kestrel.session(dependent.id).await.state,
+        SessionState::Queued
+    );
 
     kestrel
-        .fail_run(&fails, "the agent could not open a pull request")
+        .fail_session(&fails, "the agent could not open a pull request")
         .await;
 
     assert_eq!(
-        kestrel.run(dependent.id).await.state,
-        RunState::Unreachable,
+        kestrel.session(dependent.id).await.state,
+        SessionState::Unreachable,
         "a dependent with one blocker still to resolve became unreachable once another failed"
     );
 
@@ -86,26 +89,29 @@ async fn one_blocker_failing_is_enough_however_many_others_have_not_resolved() {
 }
 
 #[tokio::test]
-async fn an_unreachable_run_is_never_claimed_and_never_becomes_claimable_again() {
+async fn an_unreachable_session_is_never_claimed_and_never_becomes_claimable_again() {
     let kestrel = Kestrel::boot().await;
-    let (blocker, dependent) = a_dependent_blocked_on_an_active_run(&kestrel).await;
+    let (blocker, dependent) = a_dependent_blocked_on_an_active_session(&kestrel).await;
     kestrel
-        .fail_run(&blocker, "the agent could not open a pull request")
+        .fail_session(&blocker, "the agent could not open a pull request")
         .await;
-    assert_eq!(kestrel.run(dependent.id).await.state, RunState::Unreachable);
+    assert_eq!(
+        kestrel.session(dependent.id).await.state,
+        SessionState::Unreachable
+    );
 
     for _ in 0..3 {
         assert!(
-            kestrel.claim_run().await.is_none(),
-            "an unreachable run was claimed"
+            kestrel.claim_session().await.is_none(),
+            "an unreachable session was claimed"
         );
     }
 
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert_eq!(
-        kestrel.run(dependent.id).await.state,
-        RunState::Unreachable,
-        "an unreachable run left its terminal state on its own"
+        kestrel.session(dependent.id).await.state,
+        SessionState::Unreachable,
+        "an unreachable session left its terminal state on its own"
     );
 
     kestrel.teardown().await;
@@ -114,14 +120,14 @@ async fn an_unreachable_run_is_never_claimed_and_never_becomes_claimable_again()
 #[tokio::test]
 async fn a_blocker_failed_by_its_lease_expiring_makes_its_dependent_unreachable() {
     let kestrel = Kestrel::boot().await;
-    let (blocker, dependent) = a_dependent_blocked_on_an_active_run(&kestrel).await;
+    let (blocker, dependent) = a_dependent_blocked_on_an_active_session(&kestrel).await;
 
     kestrel.lease_until(&blocker, Timestamp::now()).await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let dependent = kestrel.run(dependent.id).await;
-        if dependent.state == RunState::Unreachable {
+        let dependent = kestrel.session(dependent.id).await;
+        if dependent.state == SessionState::Unreachable {
             break;
         }
         assert!(
@@ -136,22 +142,25 @@ async fn a_blocker_failed_by_its_lease_expiring_makes_its_dependent_unreachable(
 }
 
 #[tokio::test]
-async fn a_run_blocked_on_a_run_that_just_turned_unreachable_is_unreachable_too() {
+async fn a_session_blocked_on_a_session_that_just_turned_unreachable_is_unreachable_too() {
     let kestrel = Kestrel::boot().await;
-    let (blocker, first) = a_dependent_blocked_on_an_active_run(&kestrel).await;
+    let (blocker, first) = a_dependent_blocked_on_an_active_session(&kestrel).await;
     let waiting = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let second = kestrel.enqueue_run(waiting.id).await;
-    kestrel.block_run(&second, &first).await;
+    let second = kestrel.enqueue_session(waiting.id).await;
+    kestrel.block_session(&second, &first).await;
 
     kestrel
-        .fail_run(&blocker, "the agent could not open a pull request")
+        .fail_session(&blocker, "the agent could not open a pull request")
         .await;
 
-    assert_eq!(kestrel.run(first.id).await.state, RunState::Unreachable);
     assert_eq!(
-        kestrel.run(second.id).await.state,
-        RunState::Unreachable,
-        "a run blocked on one that turned unreachable never turned unreachable itself"
+        kestrel.session(first.id).await.state,
+        SessionState::Unreachable
+    );
+    assert_eq!(
+        kestrel.session(second.id).await.state,
+        SessionState::Unreachable,
+        "a session blocked on one that turned unreachable never turned unreachable itself"
     );
 
     kestrel.teardown().await;

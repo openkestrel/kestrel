@@ -1,5 +1,5 @@
 //! A local-exec supervisor as a test sees it: one a test scripts instead of the real one, the
-//! process tree behind a supervisor a Run recorded, and the directory a local Instance is.
+//! process tree behind a supervisor a Session recorded, and the directory a local Instance is.
 
 use std::fs;
 use std::path::{Path, PathBuf};

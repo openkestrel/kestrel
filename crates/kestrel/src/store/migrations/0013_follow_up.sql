@@ -2,9 +2,9 @@ ALTER TABLE integration ADD COLUMN comments_polled_through INTEGER;
 
 ALTER TABLE event ADD COLUMN message TEXT;
 
-ALTER TABLE run ADD COLUMN supervisor_state TEXT NOT NULL DEFAULT 'absent'
+ALTER TABLE session ADD COLUMN supervisor_state TEXT NOT NULL DEFAULT 'absent'
     CHECK (supervisor_state IN ('absent', 'present', 'gone'));
-ALTER TABLE run ADD COLUMN supervisor TEXT;
+ALTER TABLE session ADD COLUMN supervisor TEXT;
 
 CREATE TABLE pending_message (
     workspace_id TEXT NOT NULL REFERENCES workspace (id),
