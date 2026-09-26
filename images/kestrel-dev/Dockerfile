@@ -60,5 +60,7 @@ COPY --from=rust --chown=kestrel:kestrel /usr/local/cargo /usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
+# Codex runs each command in a login shell, whose /etc/profile resets PATH without cargo.
+RUN echo 'export PATH=/usr/local/cargo/bin:$PATH' > /etc/profile.d/cargo.sh
 
 USER kestrel
