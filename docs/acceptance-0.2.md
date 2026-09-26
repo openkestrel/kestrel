@@ -112,3 +112,81 @@ replay retained history, and the Workspaces later sealed themselves. The rung re
 successful Sessions can still destroy their only copy of completed work. After #125 lands, repeat the
 durability portion of this run and move the `ROADMAP.md` marker to `0.3` only if several backlog
 issues leave recoverable branches or pull requests.
+
+## Follow-up attempt: three harnesses and unpublished work
+
+On 25–26 September 2026, the acceptance gate in [#186](https://github.com/jtmthf/kestrel/issues/186)
+was exercised against a pre-existing local Compose stack. This was a second attempt, not a replacement
+for the September 10 run above. The stack held an `acme` Organization, a `kestrel` Workspace against
+this repository, and OpenCode, Codex, and Claude Agents. Private Subscription Profiles were declared
+for the operator's own logins. Their values are absent from this record.
+
+The stack's running control-plane container was four days old, exposed no host operator port, and its
+`organization declare` command had no live-Instance limit option although this checkout's Client
+does. Its exact source revision was not established. The Sessions below checked out `9a5358d`, but
+the running control plane cannot be claimed as a build of that revision. This limits what this
+attempt can establish about the current code.
+
+| Check | Live observation |
+| --- | --- |
+| Codex subscription persistence | The opt-in `codex_answers_on_a_chatgpt_login_before_and_after_a_restart` smoke passed: two real model answers on a personal ChatGPT login, separated by control-plane and Instance replacement. |
+| Codex skill-led, non-PR work | Session `01a0dbc5-bf63-7791-95b2-a9e529769c59` opened Run `01a0dbc5-eb2c-7d02-8ccb-36feb996fd82` on `gpt-6-astra`. Its first instruction named the repository's `diagnosing-bugs` skill and asked for a diagnosis of profile-dependent model selection. The first Turn answered without a code change; an operator follow-up about Cargo's absolute path resumed the **same Run ID**. Codex reproduced the defect through the real library and finished the diagnosis; the Run ended succeeded. |
+| OpenCode build and test | Session `01a0dbc3-bc2a-7110-be4a-dea0306af70b` used the default `opencode/big-pickle` model. It reported `cargo check --locked --workspace --all-targets` exit 0, one focused `continuity.rs` test passed, and `cargo clippy --locked --workspace --all-targets -- -D warnings` exit 0, all in a clean checkout. This Run does not count as subscription-backed access. |
+| OpenCode Go subscription work | Session `01a0dbcb-427b-7f22-a8e9-71adcf42b70c` fixed `opencode-go/glm-5.3` and the private Go profile. Run `01a0dbcb-6622-7991-bf42-2a9522e3fb9a` completed a non-PR acceptance review and reported `cargo fmt --all -- --check` exit 0 in the checkout. It ended succeeded. |
+| Claude | Session `01a0dbc4-0051-7d63-95e5-9df1cfa89ada` failed first with `Authentication required` using the local login file. A retry with the same login's OAuth access token failed with HTTP 401: the token had expired. A direct local Claude call also reported that the OAuth session could not refresh. The operator is renewing the personal login. No successful Claude task is yet recorded. |
+| Active-run limit | While the Codex and OpenCode Go Runs were active, the OpenCode durability Run `01a0dbcb-d5f2-72f0-8423-d5e6bf6220e0` stayed queued and began only after a slot was released. |
+| Unpublished work through failure | The durability Run created only `ACCEPTANCE-CANARY.txt`, untracked and unpushed, with the 29-byte contents `acceptance canary 2026-09-25\n`. Kestrel's Instance list named that one untracked file as the reason to retain `docker/kestrel-01a0dbc3-ddff-7690-bd6b-4f1d5dc2ef40`. Stopping the Run mid-turn recorded a failure. Follow-up Run `01a0dbcd-54df-7212-9c3f-0b973d160ca1` reused the same Instance and verified the file's exact contents and untracked state. |
+
+The first OpenCode Session could not switch to Go after it opened: the model is fixed for a Session.
+Before its profile-backed Run, the Organization's cached OpenCode model list contained only free
+models, and `agent model builder --model opencode-go/glm-5.3` was refused. The profile-backed Run
+refreshed the list, after which selection succeeded for the new Go Session. Codex reproduced the
+profile-insensitive validation with a temporary database and tests. This non-blocking finding is
+filed as [#294](https://github.com/jtmthf/kestrel/issues/294).
+
+### Current-checkout stack
+
+To remove the version ambiguity above, three images were built from this checkout and started as
+an isolated Compose project, `kestrel-acceptance-186`, with its own data volume and link network.
+Its operator boundary was published at `127.0.0.1:7728`; the pre-existing stack and its retained
+canary were left intact. This project declared a one-Instance limit and an OpenCode Go Agent using
+the operator's private Go profile.
+
+Session `01a0dbd4-01d8-71f3-b36f-a6bc011936da` created one untracked, unpushed file,
+`ACCEPTANCE-CANARY-186.txt`, containing `current build canary\n` (21 bytes; its first report
+miscounted the length). Kestrel listed the untracked file as the reason for retaining Instance
+`docker/kestrel-01a0dbd4-2e31-7b63-9344-8a1cd291dd11`.
+
+While that Instance was held, Codex Session `01a0dbd5-0374-78e1-84a0-ed255d47ed6a` queued Run
+`01a0dbd5-2e29-7410-b44c-23f40f03ff95`. Its reported wait reason was: "the organization acme
+has reached its limit of 1 live Instance; none idle is known recoverable". The OpenCode Session
+continued on its existing Instance under the same cap and checked the canary unchanged. An operator
+then stopped Run `01a0dbd7-3c91-7db0-8221-212bcffa96a5` mid-turn; it failed explicitly, and
+Kestrel kept the Instance because no Run had reported a recoverable checkout after that failure.
+Follow-up Run `01a0dbd7-e62f-7b72-8e38-7b273d76c771` reused that same Instance and verified
+the file's exact contents and untracked state. The canary was deliberately removed only after this
+verification, so a clean Instance could be reclaimed for queued work.
+
+The cleanup Turn did report a clean checkout and an answer, but its supervisor then exited with
+code 137 before its final report. Kestrel marked that Run failed, archived the now recoverable
+Instance, and admitted the queued Codex Run. No unpublished work was lost; the unexplained
+false-negative Run outcome is filed as [#295](https://github.com/jtmthf/kestrel/issues/295).
+The queued Codex Run `01a0dbd5-2e29-7410-b44c-23f40f03ff95` then completed a non-PR review of
+the capacity logic on the personal ChatGPT login and ended succeeded.
+
+For a literal skill-led Brief, a dispatch-only `skill-led-review` Trigger with the Codex profile
+was explicitly dispatched on [#294](https://github.com/jtmthf/kestrel/issues/294). Session
+`01a0dbdc-5731-7e13-b2e6-22738e8563aa` begins with a `brief` transcript entry naming
+`.agents/skills/diagnosing-bugs/SKILL.md`; its Run is `01a0dbdc-5732-7021-ab57-d7cbc14d6d8b`.
+The Brief asks for a non-PR diagnosis on a real Kestrel issue.
+
+The GitHub Integration recorded #294's `needs-triage` label Event before the `history-check`
+Trigger was declared against that label. No Session opened for it during the observation window;
+the Trigger was then disabled. The earlier September 10 run remains the stronger historical-label
+check because it also watched a full poll interval with multiple old ready-for-agent Events.
+
+The earlier run remains the live evidence for simultaneous issue labelling and 24-hour idle
+sealing. This attempt adds two-harness subscription-backed work, same-Run follow-up, a skill-led
+non-PR task, build and test, and current-build failure and cap survival of unpublished work. It has
+**not** established a completed Claude task or several newly worked backlog issues leaving
+recoverable branches or pull requests. The `ROADMAP.md` marker therefore remains at `0.2`.

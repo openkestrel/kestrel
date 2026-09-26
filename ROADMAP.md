@@ -5,9 +5,10 @@
 > request lands, and the outcome round-trips to the issue it came from —
 > [`docs/acceptance-0.1.md`](docs/acceptance-0.1.md) is the acceptance run and what it found. The repo
 > holds the vocabulary in [`CONTEXT.md`](CONTEXT.md) and the direction in [`README.md`](README.md).
-> Nothing schedules more than one session in flight per workspace yet, and a trigger declared today fires
-> only for what happens next: a repository's existing label history opens nothing until catching one
-> up becomes a deliberate act somebody takes.
+> Sessions now work in parallel across Workspaces, while each Workspace has at most one unfinished
+> Session and can continue it through multiple Turns. Declaring a Trigger does not replay Events already
+> recorded; working existing repository history takes a deliberate dispatch. The `0.2` acceptance record
+> is [`docs/acceptance-0.2.md`](docs/acceptance-0.2.md); its remaining gate keeps this marker at `0.2`.
 
 Seven rungs from an empty repository to v1, and no dates. Each is a `0.N` release, and each is named
 by a class of kestrel's own work rather than by a feature list, because the ladder is walked by
