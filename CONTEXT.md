@@ -79,6 +79,11 @@ organization. A session mid-turn, trailing, or blocked on an approval, occupies 
 waiting session does not, and neither does an unbriefed one.
 _Avoid_: slot (alone), capacity, concurrency
 
+**Interruption**:
+Ending a session's active turn at a person's request, keeping the session and its conversation. It
+names who interrupted and does not make them a participant.
+_Avoid_: cancel, abort, stop
+
 **Unpublished Work**:
 Checkout changes or commits that exist only on an instance and cannot be recovered from a remote
 repository. Its presence says nothing about whether a session succeeded or the requested work is
@@ -375,8 +380,10 @@ words from drifting.
   session.
 - A turn answering does not make its session **waiting** while work its agent started still runs:
   the session is **trailing**, keeps its active-work slot, and its instance is never reclaimed.
-- A turn in which the agent produced no message, narration or detail **fails** its session: a
-  prompt that never became work is not an answer.
+- A turn that **ended on its own** with no message, narration or detail **fails** its session: a
+  prompt that never became work is not an answer. An interrupted turn never fails its session.
+- Messages posted during a turn **wait** as workspace state, editable by their author, and drain
+  into **one** turn when it ends; the transcript records them only when taken.
 - A session's agent conversation is rooted in the checkout of the **first** repository its
   workspace fixed; the workspace's other repositories sit beside it.
 - What a harness writes as diagnostics reaches the **operator**, never the transcript: it is not the
