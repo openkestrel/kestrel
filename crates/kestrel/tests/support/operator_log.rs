@@ -1,13 +1,13 @@
 use std::io;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use kestrel::domain::RunId;
+use kestrel::domain::SessionId;
 
 #[derive(Clone, Default)]
 pub struct OperatorLog(Arc<Mutex<Vec<u8>>>);
 
 /// One per test binary, because a tracing subscriber is global: every test in it shares it, and
-/// reads only the lines that name its own Run.
+/// reads only the lines that name its own Session.
 pub fn capturing() -> &'static OperatorLog {
     static LOG: OnceLock<OperatorLog> = OnceLock::new();
 
@@ -25,12 +25,12 @@ pub fn capturing() -> &'static OperatorLog {
 }
 
 impl OperatorLog {
-    pub fn about(&self, run: RunId) -> Vec<String> {
-        let run = run.to_string();
+    pub fn about(&self, session: SessionId) -> Vec<String> {
+        let session = session.to_string();
 
         String::from_utf8_lossy(&self.0.lock().expect("the log should not be poisoned"))
             .lines()
-            .filter(|line| line.contains(&run))
+            .filter(|line| line.contains(&session))
             .map(str::to_owned)
             .collect()
     }

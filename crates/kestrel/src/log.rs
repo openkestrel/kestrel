@@ -6,9 +6,9 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqliteConnection};
 
-use crate::domain::{Exit, RunId, Workspace, WorkspaceId, WorkspaceState};
+use crate::domain::{Exit, SessionId, Workspace, WorkspaceId, WorkspaceState};
 
-/// What changed a Workspace's shared state. Never what happened inside a Run.
+/// What changed a Workspace's shared state. Never what happened inside a Session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Entry {
@@ -19,8 +19,8 @@ pub enum Entry {
         trigger: Option<String>,
         brief: String,
     },
-    RunStarted {
-        run: RunId,
+    SessionStarted {
+        session: SessionId,
     },
     Said {
         participant: String,
@@ -29,8 +29,8 @@ pub enum Entry {
     Messages {
         messages: Vec<Message>,
     },
-    RunEnded {
-        run: RunId,
+    SessionEnded {
+        session: SessionId,
         exit: Exit,
     },
     InstanceReleased {
@@ -54,7 +54,7 @@ impl fmt::Display for Entry {
                 trigger: None,
                 brief,
             } => write!(f, "brief  {brief}"),
-            Entry::RunStarted { run } => write!(f, "run started  {run}"),
+            Entry::SessionStarted { session } => write!(f, "session started  {session}"),
             Entry::Said {
                 participant,
                 message,
@@ -68,7 +68,7 @@ impl fmt::Display for Entry {
                     .collect::<Vec<_>>()
                     .join("  ")
             ),
-            Entry::RunEnded { run, exit } => write!(f, "run ended  {run}  {exit}"),
+            Entry::SessionEnded { session, exit } => write!(f, "session ended  {session}  {exit}"),
             Entry::InstanceReleased {
                 participant,
                 instance,
@@ -146,7 +146,7 @@ impl<'a> Log<'a> {
         })
     }
 
-    pub async fn last_said_for_run(&mut self, workspace: &Workspace) -> Result<Option<String>> {
+    pub async fn last_said_for_session(&mut self, workspace: &Workspace) -> Result<Option<String>> {
         let latest = sqlx::query(
             "SELECT body
              FROM transcript_entry
@@ -154,7 +154,7 @@ impl<'a> Log<'a> {
                AND json_extract(body, '$.participant') = ?
                AND seq > COALESCE((
                    SELECT MAX(seq) FROM transcript_entry
-                   WHERE workspace_id = ? AND json_extract(body, '$.kind') = 'run_ended'
+                   WHERE workspace_id = ? AND json_extract(body, '$.kind') = 'session_ended'
                ), 0)
              ORDER BY seq DESC
              LIMIT 1",
@@ -215,14 +215,14 @@ impl<'a> Log<'a> {
         Ok(said)
     }
 
-    /// The Brief, if nobody has said anything since it: participants joining and Runs starting
+    /// The Brief, if nobody has said anything since it: participants joining and Sessions starting
     /// are not something said.
     pub async fn unfollowed_brief(&mut self, workspace: &Workspace) -> Result<Option<String>> {
         let said = sqlx::query(
             "SELECT body
              FROM transcript_entry
              WHERE workspace_id = ?
-               AND json_extract(body, '$.kind') NOT IN ('participant_joined', 'run_started')
+               AND json_extract(body, '$.kind') NOT IN ('participant_joined', 'session_started')
              ORDER BY seq
              LIMIT 2",
         )

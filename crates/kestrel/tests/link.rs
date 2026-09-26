@@ -8,7 +8,7 @@ use std::fs;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
-use kestrel::domain::{Exit, Run, RunId};
+use kestrel::domain::{Exit, Session, SessionId};
 use kestrel::link::credential::Secret;
 use kestrel::link::{self, Instruction};
 use kestrel::log::{Entry, Message};
@@ -22,10 +22,10 @@ use support::supervisor::Supervisor;
 const PATIENCE: Duration = Duration::from_secs(30);
 const LONG_ENOUGH_TO_BE_SURE: Duration = Duration::from_millis(500);
 
-async fn a_run(kestrel: &Kestrel) -> (Run, Secret) {
+async fn a_session(kestrel: &Kestrel) -> (Session, Secret) {
     declared(kestrel).await;
 
-    another_run(kestrel).await
+    another_session(kestrel).await
 }
 
 async fn declared(kestrel: &Kestrel) {
@@ -43,24 +43,24 @@ async fn declared(kestrel: &Kestrel) {
         .await;
 }
 
-/// A second Workspace, because at 0.1 nothing yet stops two Runs being live in one.
-async fn another_run(kestrel: &Kestrel) -> (Run, Secret) {
+/// A second Workspace, because at 0.1 nothing yet stops two Sessions being live in one.
+async fn another_session(kestrel: &Kestrel) -> (Session, Secret) {
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
 
-    kestrel.dispatch_run(workspace.id).await
+    kestrel.dispatch_session(workspace.id).await
 }
 
 #[tokio::test]
 async fn an_environment_dials_out_and_the_control_plane_knows_it_is_connected() {
     let kestrel = Kestrel::boot().await;
-    let (run, credential) = a_run(&kestrel).await;
+    let (session, credential) = a_session(&kestrel).await;
 
-    assert!(kestrel.run(run.id).await.connected.is_none());
-    let mut supervisor = Supervisor::provision(&kestrel.link(), run.id, &credential);
+    assert!(kestrel.session(session.id).await.connected.is_none());
+    let mut supervisor = Supervisor::provision(&kestrel.link(), session.id, &credential);
     supervisor.wait_until_it_says("reported connected").await;
 
     let connected = kestrel
-        .run(run.id)
+        .session(session.id)
         .await
         .connected
         .expect("the control plane should know an environment is on the link");
@@ -76,9 +76,9 @@ async fn an_environment_dials_out_and_the_control_plane_knows_it_is_connected() 
 #[tokio::test]
 async fn an_environment_holds_the_stream_open_until_the_control_plane_tells_it_to_stop() {
     let kestrel = Kestrel::boot().await;
-    let (run, credential) = a_run(&kestrel).await;
+    let (session, credential) = a_session(&kestrel).await;
 
-    let mut supervisor = Supervisor::provision(&kestrel.link(), run.id, &credential);
+    let mut supervisor = Supervisor::provision(&kestrel.link(), session.id, &credential);
     supervisor.wait_until_it_says("link open").await;
     assert!(
         supervisor.is_still_running(LONG_ENOUGH_TO_BE_SURE).await,
@@ -86,7 +86,7 @@ async fn an_environment_holds_the_stream_open_until_the_control_plane_tells_it_t
         supervisor.everything_it_said()
     );
 
-    kestrel.instruct(&run, Instruction::Stop).await;
+    kestrel.instruct(&session, Instruction::Stop).await;
 
     let status = supervisor.exits().await;
     assert!(
@@ -102,14 +102,14 @@ async fn an_environment_holds_the_stream_open_until_the_control_plane_tells_it_t
 #[tokio::test]
 async fn a_supervisor_that_loses_the_stream_comes_back_and_is_handed_what_it_missed() {
     let kestrel = Kestrel::boot().await;
-    let (run, credential) = a_run(&kestrel).await;
+    let (session, credential) = a_session(&kestrel).await;
 
-    let mut supervisor = Supervisor::provision(&kestrel.link(), run.id, &credential);
+    let mut supervisor = Supervisor::provision(&kestrel.link(), session.id, &credential);
     supervisor.wait_until_it_says("reported connected").await;
 
     let stopped = kestrel.kill().await;
     supervisor.wait_until_it_says("lost the link").await;
-    stopped.instruct(&run, Instruction::Stop).await;
+    stopped.instruct(&session, Instruction::Stop).await;
     let kestrel = stopped.restart().await;
 
     let status = supervisor.exits().await;
@@ -130,18 +130,18 @@ async fn a_supervisor_that_loses_the_stream_comes_back_and_is_handed_what_it_mis
 #[tokio::test]
 async fn a_reconnect_carrying_a_cursor_is_not_handed_what_it_already_had() {
     let kestrel = Kestrel::boot().await;
-    let (run, credential) = a_run(&kestrel).await;
-    kestrel.instruct(&run, Instruction::Stop).await;
+    let (session, credential) = a_session(&kestrel).await;
+    kestrel.instruct(&session, Instruction::Stop).await;
 
     let link = Link::to(&kestrel.link());
-    let mut first = link.open(run.id, &credential, None).await;
+    let mut first = link.open(session.id, &credential, None).await;
     let Next::Event(delivered) = first.next_within(PATIENCE).await else {
         panic!("the stream never delivered the instruction that was waiting on it");
     };
     assert_eq!(delivered.id.as_deref(), Some("1"));
     assert_eq!(delivered.name.as_deref(), Some("stop"));
 
-    let mut again = link.open(run.id, &credential, Some(1)).await;
+    let mut again = link.open(session.id, &credential, Some(1)).await;
 
     assert!(
         matches!(again.next_within(LONG_ENOUGH_TO_BE_SURE).await, Next::Quiet),
@@ -154,16 +154,16 @@ async fn a_reconnect_carrying_a_cursor_is_not_handed_what_it_already_had() {
 #[tokio::test]
 async fn the_link_refuses_an_environment_presenting_no_credential() {
     let kestrel = Kestrel::boot().await;
-    let (run, _) = a_run(&kestrel).await;
+    let (session, _) = a_session(&kestrel).await;
     let link = Link::to(&kestrel.link());
 
     assert_eq!(
-        link.instructions(run.id, None, None).await.status(),
+        link.instructions(session.id, None, None).await.status(),
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
         link.report(
-            run.id,
+            session.id,
             None,
             &Reported {
                 seq: None,
@@ -183,13 +183,13 @@ async fn the_link_refuses_an_environment_presenting_no_credential() {
 #[tokio::test]
 async fn the_link_refuses_an_environment_presenting_an_expired_credential() {
     let kestrel = Kestrel::boot().await;
-    let (run, _) = a_run(&kestrel).await;
+    let (session, _) = a_session(&kestrel).await;
     let expired = kestrel
-        .issue_credential(&run, Timestamp::now() - SignedDuration::from_secs(1))
+        .issue_credential(&session, Timestamp::now() - SignedDuration::from_secs(1))
         .await;
 
     let refused = Link::to(&kestrel.link())
-        .instructions(run.id, Some(&expired), None)
+        .instructions(session.id, Some(&expired), None)
         .await;
 
     assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
@@ -198,13 +198,13 @@ async fn the_link_refuses_an_environment_presenting_an_expired_credential() {
 }
 
 #[tokio::test]
-async fn the_link_refuses_an_environment_presenting_a_credential_belonging_to_another_run() {
+async fn the_link_refuses_an_environment_presenting_a_credential_belonging_to_another_session() {
     let kestrel = Kestrel::boot().await;
-    let (run, _) = a_run(&kestrel).await;
-    let (_, another) = another_run(&kestrel).await;
+    let (session, _) = a_session(&kestrel).await;
+    let (_, another) = another_session(&kestrel).await;
 
     let refused = Link::to(&kestrel.link())
-        .instructions(run.id, Some(&another), None)
+        .instructions(session.id, Some(&another), None)
         .await;
 
     assert_eq!(refused.status(), StatusCode::FORBIDDEN);
@@ -213,21 +213,21 @@ async fn the_link_refuses_an_environment_presenting_a_credential_belonging_to_an
 }
 
 #[tokio::test]
-async fn a_credential_stops_working_when_its_run_ends() {
+async fn a_credential_stops_working_when_its_session_ends() {
     let kestrel = Kestrel::boot().await;
-    let (run, credential) = a_run(&kestrel).await;
+    let (session, credential) = a_session(&kestrel).await;
     let link = Link::to(&kestrel.link());
     assert_eq!(
-        link.instructions(run.id, Some(&credential), None)
+        link.instructions(session.id, Some(&credential), None)
             .await
             .status(),
         StatusCode::OK
     );
 
-    kestrel.complete_run(&run).await;
+    kestrel.complete_session(&session).await;
 
     assert_eq!(
-        link.instructions(run.id, Some(&credential), None)
+        link.instructions(session.id, Some(&credential), None)
             .await
             .status(),
         StatusCode::UNAUTHORIZED
@@ -237,12 +237,12 @@ async fn a_credential_stops_working_when_its_run_ends() {
 }
 
 #[tokio::test]
-async fn the_link_has_nothing_to_say_about_a_run_it_has_never_heard_of() {
+async fn the_link_has_nothing_to_say_about_a_session_it_has_never_heard_of() {
     let kestrel = Kestrel::boot().await;
-    let (_, credential) = a_run(&kestrel).await;
+    let (_, credential) = a_session(&kestrel).await;
 
     let refused = Link::to(&kestrel.link())
-        .instructions_for("not-a-run", Some(&credential), None)
+        .instructions_for("not-a-session", Some(&credential), None)
         .await;
 
     assert_eq!(refused.status(), StatusCode::NOT_FOUND);
@@ -253,10 +253,10 @@ async fn the_link_has_nothing_to_say_about_a_run_it_has_never_heard_of() {
 #[tokio::test]
 async fn the_link_is_plain_http_with_no_protocol_upgrade() {
     let kestrel = Kestrel::boot().await;
-    let (run, credential) = a_run(&kestrel).await;
+    let (session, credential) = a_session(&kestrel).await;
 
     let stream = Link::to(&kestrel.link())
-        .instructions(run.id, Some(&credential), None)
+        .instructions(session.id, Some(&credential), None)
         .await;
 
     assert_eq!(stream.status(), StatusCode::OK);
@@ -375,9 +375,9 @@ async fn the_link_takes_every_report_the_published_openapi_document_describes() 
     declared(&kestrel).await;
 
     for kind in described {
-        let (run, credential) = another_run(&kestrel).await;
+        let (session, credential) = another_session(&kestrel).await;
         assert_eq!(
-            link.report_body(run.id, Some(&credential), &bodies[&kind])
+            link.report_body(session.id, Some(&credential), &bodies[&kind])
                 .await
                 .status(),
             StatusCode::ACCEPTED,
@@ -405,13 +405,18 @@ fn reports_the_document_describes() -> Vec<String> {
 }
 
 /// As a supervisor seeding a cold Environment walks it.
-async fn paged(link: &Link, run: &Run, credential: &Secret, window: usize) -> Vec<i64> {
+async fn paged(link: &Link, session: &Session, credential: &Secret, window: usize) -> Vec<i64> {
     let mut walked = Vec::new();
     let mut cursor: Option<String> = None;
 
     loop {
         let response = link
-            .entries(run.id, Some(credential), cursor.as_deref(), Some(window))
+            .entries(
+                session.id,
+                Some(credential),
+                cursor.as_deref(),
+                Some(window),
+            )
             .await;
         assert_eq!(response.status(), StatusCode::OK);
 
@@ -433,16 +438,16 @@ async fn paged(link: &Link, run: &Run, credential: &Secret, window: usize) -> Ve
 }
 
 #[tokio::test]
-async fn an_environment_reads_the_transcript_of_the_workspace_its_run_belongs_to_in_windows() {
+async fn an_environment_reads_the_transcript_of_the_workspace_its_session_belongs_to_in_windows() {
     let kestrel = Kestrel::boot().await;
-    let (run, credential) = a_run(&kestrel).await;
+    let (session, credential) = a_session(&kestrel).await;
     for message in 1..=4 {
-        kestrel.said(&run, &format!("message {message}")).await;
+        kestrel.said(&session, &format!("message {message}")).await;
     }
     let link = Link::to(&kestrel.link());
 
     let first: serde_json::Value = link
-        .entries(run.id, Some(&credential), None, Some(2))
+        .entries(session.id, Some(&credential), None, Some(2))
         .await
         .json()
         .await
@@ -453,7 +458,7 @@ async fn an_environment_reads_the_transcript_of_the_workspace_its_run_belongs_to
     assert_eq!(first["more"], true);
     assert!(first["cursor"].is_string());
     assert_eq!(
-        paged(&link, &run, &credential, 2).await,
+        paged(&link, &session, &credential, 2).await,
         (1..=5).collect::<Vec<_>>()
     );
 
@@ -463,12 +468,12 @@ async fn an_environment_reads_the_transcript_of_the_workspace_its_run_belongs_to
 #[tokio::test]
 async fn the_link_refuses_a_cursor_that_names_no_position_in_the_transcript() {
     let kestrel = Kestrel::boot().await;
-    let (run, credential) = a_run(&kestrel).await;
+    let (session, credential) = a_session(&kestrel).await;
     let link = Link::to(&kestrel.link());
 
-    for cursor in ["halfway-through", &format!("{}:99", run.workspace)] {
+    for cursor in ["halfway-through", &format!("{}:99", session.workspace)] {
         assert_eq!(
-            link.entries(run.id, Some(&credential), Some(cursor), None)
+            link.entries(session.id, Some(&credential), Some(cursor), None)
                 .await
                 .status(),
             StatusCode::BAD_REQUEST,
@@ -482,11 +487,11 @@ async fn the_link_refuses_a_cursor_that_names_no_position_in_the_transcript() {
 #[tokio::test]
 async fn the_link_refuses_a_window_wider_than_one_read_may_return() {
     let kestrel = Kestrel::boot().await;
-    let (run, credential) = a_run(&kestrel).await;
+    let (session, credential) = a_session(&kestrel).await;
     let link = Link::to(&kestrel.link());
 
     assert_eq!(
-        link.entries(run.id, Some(&credential), None, Some(5_000))
+        link.entries(session.id, Some(&credential), None, Some(5_000))
             .await
             .status(),
         StatusCode::BAD_REQUEST
@@ -498,11 +503,11 @@ async fn the_link_refuses_a_window_wider_than_one_read_may_return() {
 #[tokio::test]
 async fn the_link_refuses_a_transcript_read_from_an_environment_presenting_no_credential() {
     let kestrel = Kestrel::boot().await;
-    let (run, _) = a_run(&kestrel).await;
+    let (session, _) = a_session(&kestrel).await;
     let link = Link::to(&kestrel.link());
 
     assert_eq!(
-        link.entries(run.id, None, None, None).await.status(),
+        link.entries(session.id, None, None, None).await.status(),
         StatusCode::UNAUTHORIZED
     );
 
@@ -526,8 +531,8 @@ fn the_published_openapi_document_describes_every_transcript_entry_the_link_serv
             trigger: Some("ready".to_owned()),
             brief: "/implement https://github.com/jtmthf/kestrel/issues/174".to_owned(),
         },
-        Entry::RunStarted {
-            run: RunId::generate(),
+        Entry::SessionStarted {
+            session: SessionId::generate(),
         },
         Entry::Said {
             participant: "builder".to_owned(),
@@ -539,8 +544,8 @@ fn the_published_openapi_document_describes_every_transcript_entry_the_link_serv
                 message: "what arrived while it worked".to_owned(),
             }],
         },
-        Entry::RunEnded {
-            run: RunId::generate(),
+        Entry::SessionEnded {
+            session: SessionId::generate(),
             exit: Exit::Succeeded,
         },
         Entry::InstanceReleased {

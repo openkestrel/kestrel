@@ -6,7 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use kestrel::domain::RunId;
+use kestrel::domain::SessionId;
 use kestrel::link::credential::Secret;
 
 use super::diagnostics::Diagnostics;
@@ -138,7 +138,7 @@ pub fn development() -> &'static str {
     &tags().development
 }
 
-/// The container behind an Instance a Run recorded.
+/// The container behind an Instance a Session recorded.
 pub struct Container(String);
 
 impl Container {
@@ -162,7 +162,7 @@ impl Container {
         .out
     }
 
-    /// An Instance outlives its Workspace's Runs, so a test that provisions one removes it.
+    /// An Instance outlives its Workspace's Sessions, so a test that provisions one removes it.
     pub fn destroy(&self) {
         docker::ran(&["rm", "--force", "--volumes", &self.0]);
     }
@@ -237,9 +237,9 @@ pub struct Environment {
 }
 
 impl Environment {
-    pub fn provision(link: &str, run: RunId, credential: &Secret) -> Self {
+    pub fn provision(link: &str, session: SessionId, credential: &Secret) -> Self {
         let image = built();
-        let name = format!("kestrel-env-{run}");
+        let name = format!("kestrel-env-{session}");
         removed(&name);
 
         let mut running = Command::new("docker")
@@ -252,9 +252,9 @@ impl Environment {
                 "--env",
                 &format!("KESTREL_LINK={link}"),
                 "--env",
-                &format!("KESTREL_RUN={run}"),
+                &format!("KESTREL_SESSION={session}"),
                 "--env",
-                &format!("KESTREL_RUN_CREDENTIAL={}", credential.as_str()),
+                &format!("KESTREL_SESSION_CREDENTIAL={}", credential.as_str()),
                 "--env",
                 "KESTREL_HARNESS_COMMAND=opencode acp",
                 image,

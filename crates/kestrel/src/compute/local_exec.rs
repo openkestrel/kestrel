@@ -1,5 +1,5 @@
 //! The escape hatch that exists whether or not it is planned (ADR-0005), and the Instance the
-//! primary test seam provisions: a directory, and a supervisor process per Run inside it.
+//! primary test seam provisions: a directory, and a supervisor process per Session inside it.
 
 use std::fs;
 use std::io;
@@ -10,7 +10,7 @@ use std::process::{Child, Command, Stdio};
 use std::os::unix::process::CommandExt as _;
 
 use super::{Exited, Instance, Provisioned, Streaming, Supervising, Supervisor};
-use crate::domain::RunId;
+use crate::domain::SessionId;
 
 #[derive(Debug, Clone)]
 pub struct LocalExec {
@@ -24,8 +24,8 @@ impl LocalExec {
         }
     }
 
-    pub(super) fn provision(&self, run: RunId) -> io::Result<Instance> {
-        let name = format!("kestrel-{run}");
+    pub(super) fn provision(&self, session: SessionId) -> io::Result<Instance> {
+        let name = format!("kestrel-{session}");
         fs::create_dir_all(within(&name))?;
         fs::create_dir_all(home(&name))?;
 
@@ -267,7 +267,7 @@ mod tests {
 
     fn provisioned(driver: &Driver) -> Instance {
         driver
-            .provision(RunId::generate())
+            .provision(SessionId::generate())
             .expect("the instance should provision")
     }
 
@@ -333,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn what_a_run_wrote_outlives_its_supervisor_and_goes_with_the_instance() {
+    fn what_a_session_wrote_outlives_its_supervisor_and_goes_with_the_instance() {
         let scripts = TempDir::new().expect("a temporary directory");
         let driver = driver(&scripts, "echo what an agent left behind > left");
         let mut instance = provisioned(&driver);

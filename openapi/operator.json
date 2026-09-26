@@ -95,8 +95,8 @@
     "/operator/starts": {
       "post": {
         "operationId": "start",
-        "summary": "Take a control plane from whatever it holds to a Run carrying a Brief, in one step.",
-        "description": "Declares the Organization, Project and Agent the plan names where they do not exist, holds the Provider Credentials it carries, opens a Workspace with the Brief, and enqueues its Run, all in one transaction: a refused plan leaves nothing behind. A start never changes a declaration that exists, and refuses one that would.",
+        "summary": "Take a control plane from whatever it holds to a Session carrying a Brief, in one step.",
+        "description": "Declares the Organization, Project and Agent the plan names where they do not exist, holds the Provider Credentials it carries, opens a Workspace with the Brief, and enqueues its Session, all in one transaction: a refused plan leaves nothing behind. A start never changes a declaration that exists, and refuses one that would.",
         "requestBody": {
           "required": true,
           "content": {
@@ -107,7 +107,7 @@
         },
         "responses": {
           "201": {
-            "description": "What the plan settled on, and the Workspace and Run it reached.",
+            "description": "What the plan settled on, and the Workspace and Session it reached.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/Started" }
@@ -259,7 +259,7 @@
       "post": {
         "operationId": "declareAgent",
         "summary": "Declare an Agent.",
-        "description": "Desired state: an Agent by this name that already exists keeps its identity and takes on the harness and model declared, so a declaration naming no model leaves it naming none. A named model is taken at its word: what a harness offers is only learned from a Run, and a Subscription Profile added since can widen it. A Run already in flight keeps the model it was dispatched with.",
+        "description": "Desired state: an Agent by this name that already exists keeps its identity and takes on the harness and model declared, so a declaration naming no model leaves it naming none. A named model is taken at its word: what a harness offers is only learned from a Session, and a Subscription Profile added since can widen it. A Session already in flight keeps the model it was dispatched with.",
         "parameters": [
           {
             "name": "organization",
@@ -321,14 +321,14 @@
       "put": {
         "operationId": "setAgentModel",
         "summary": "Change the model an Agent works with.",
-        "description": "Every Run already in flight keeps the model it was dispatched with.",
+        "description": "Every Session already in flight keeps the model it was dispatched with.",
         "parameters": [
           { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
           { "name": "agent", "in": "path", "required": true, "schema": { "type": "string" } }
         ],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgentModel" } } } },
         "responses": {
-          "200": { "description": "The Agent, working with the model it names from its next Run on.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Agent" } } } },
+          "200": { "description": "The Agent, working with the model it names from its next Session on.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Agent" } } } },
           "400": { "$ref": "#/components/responses/Refused" },
           "404": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
@@ -585,7 +585,7 @@
       "post": {
         "operationId": "declareSubscriptionProfile",
         "summary": "Declare a Subscription Profile.",
-        "description": "A person's login to a subscribed Harness. It reaches only the Runs of Workspaces that name it. A profile by this name that already exists is answered as it is; one that belongs to someone else is refused with 409, because a profile never changes hands.",
+        "description": "A person's login to a subscribed Harness. It reaches only the Sessions of Workspaces that name it. A profile by this name that already exists is answered as it is; one that belongs to someone else is refused with 409, because a profile never changes hands.",
         "parameters": [
           {
             "name": "organization",
@@ -650,7 +650,7 @@
       "put": {
         "operationId": "holdSubscriptionProfileVariable",
         "summary": "Hold a variable in a Subscription Profile.",
-        "description": "Replaces whatever the profile held as this variable. It is put into the Harness's environment as the Run is spawned. It is encrypted at rest and never answered back.",
+        "description": "Replaces whatever the profile held as this variable. It is put into the Harness's environment as the Session is spawned. It is encrypted at rest and never answered back.",
         "parameters": [
           {
             "name": "organization",
@@ -767,7 +767,7 @@
       "put": {
         "operationId": "holdSubscriptionProfileFile",
         "summary": "Hold a file in a Subscription Profile.",
-        "description": "Replaces whatever the profile held as this file. It is written beneath the agent's home as the Run is spawned, read back as the Run ends, and held again if the harness rewrote it, so a refreshed login persists; the secret is the file's contents, byte for byte. It is encrypted at rest and never answered back.",
+        "description": "Replaces whatever the profile held as this file. It is written beneath the agent's home as the Session is spawned, read back as the Session ends, and held again if the harness rewrote it, so a refreshed login persists; the secret is the file's contents, byte for byte. It is encrypted at rest and never answered back.",
         "parameters": [
           {
             "name": "organization",
@@ -1160,7 +1160,7 @@
         ],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkspaceMessage" } } } },
         "responses": {
-          "200": { "description": "The Run the message started or continued, or null when it was queued behind an active turn.", "content": { "application/json": { "schema": { "anyOf": [{ "$ref": "#/components/schemas/Run" }, { "type": "null" }] } } } },
+          "200": { "description": "The Session the message started or continued, or null when it was queued behind an active turn.", "content": { "application/json": { "schema": { "anyOf": [{ "$ref": "#/components/schemas/Session" }, { "type": "null" }] } } } },
           "400": { "$ref": "#/components/responses/Refused" },
           "404": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
@@ -1206,33 +1206,33 @@
         }
       }
     },
-    "/operator/organizations/{organization}/workspaces/{workspace}/runs": {
+    "/operator/organizations/{organization}/workspaces/{workspace}/sessions": {
       "get": {
-        "operationId": "listRuns",
-        "summary": "List a Workspace's Runs.",
+        "operationId": "listSessions",
+        "summary": "List a Workspace's Sessions.",
         "description": "A Workspace is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
         "parameters": [
           { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
           { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } }
         ],
         "responses": {
-          "200": { "description": "Every Run, ordered by when it was enqueued.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Run" } } } } },
+          "200": { "description": "Every Session, ordered by when it was enqueued.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Session" } } } } },
           "404": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
           "503": { "$ref": "#/components/responses/Refused" }
         }
       },
       "post": {
-        "operationId": "enqueueRun",
-        "summary": "Enqueue a Run in a Workspace.",
+        "operationId": "enqueueSession",
+        "summary": "Enqueue a Session in a Workspace.",
         "description": "A Workspace is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
         "parameters": [
           { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
           { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } }
         ],
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RunDeclaration" } } } },
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SessionDeclaration" } } } },
         "responses": {
-          "201": { "description": "The queued Run.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Run" } } } },
+          "201": { "description": "The queued Session.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
           "400": { "$ref": "#/components/responses/Refused" },
           "404": { "$ref": "#/components/responses/Refused" },
           "409": { "$ref": "#/components/responses/Refused" },
@@ -1241,34 +1241,34 @@
         }
       }
     },
-    "/operator/organizations/{organization}/runs/{run}": {
+    "/operator/organizations/{organization}/sessions/{session}": {
       "get": {
-        "operationId": "showRun",
-        "summary": "Show a Run.",
-        "description": "A Run is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+        "operationId": "showSession",
+        "summary": "Show a Session.",
+        "description": "A Session is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
         "parameters": [
           { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
-          { "name": "run", "in": "path", "required": true, "schema": { "type": "string" } }
+          { "name": "session", "in": "path", "required": true, "schema": { "type": "string" } }
         ],
         "responses": {
-          "200": { "description": "The Run.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Run" } } } },
+          "200": { "description": "The Session.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
           "404": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
           "503": { "$ref": "#/components/responses/Refused" }
         }
       }
     },
-    "/operator/organizations/{organization}/runs/{run}/stop": {
+    "/operator/organizations/{organization}/sessions/{session}/stop": {
       "post": {
-        "operationId": "stopRun",
-        "summary": "End a Run.",
-        "description": "A Run is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+        "operationId": "stopSession",
+        "summary": "End a Session.",
+        "description": "A Session is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
         "parameters": [
           { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
-          { "name": "run", "in": "path", "required": true, "schema": { "type": "string" } }
+          { "name": "session", "in": "path", "required": true, "schema": { "type": "string" } }
         ],
         "responses": {
-          "200": { "description": "The ended Run: succeeded between turns, failed mid-turn or before it started.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Run" } } } },
+          "200": { "description": "The ended Session: succeeded between turns, failed mid-turn or before it started.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
           "404": { "$ref": "#/components/responses/Refused" },
           "409": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
@@ -1707,9 +1707,9 @@
           "project": { "$ref": "#/components/schemas/Settled" },
           "agent": { "$ref": "#/components/schemas/Settled" },
           "workspace": { "$ref": "#/components/schemas/Workspace" },
-          "run": { "$ref": "#/components/schemas/Run" }
+          "session": { "$ref": "#/components/schemas/Session" }
         },
-        "required": ["organization", "project", "agent", "workspace", "run"]
+        "required": ["organization", "project", "agent", "workspace", "session"]
       },
       "DeclarationDocument": {
         "type": "object",
@@ -1920,8 +1920,8 @@
       },
       "Fired": {
         "oneOf": [
-          { "type": "object", "properties": { "outcome": { "const": "opened" }, "event": { "type": "string", "format": "uuid" }, "workspace": { "type": "string", "format": "uuid" }, "run": { "type": "string", "format": "uuid" } }, "required": ["outcome", "event", "workspace", "run"] },
-          { "type": "object", "properties": { "outcome": { "const": "fed" }, "event": { "type": "string", "format": "uuid" }, "workspace": { "type": "string", "format": "uuid" }, "run": { "type": ["string", "null"], "format": "uuid" } }, "required": ["outcome", "event", "workspace", "run"] },
+          { "type": "object", "properties": { "outcome": { "const": "opened" }, "event": { "type": "string", "format": "uuid" }, "workspace": { "type": "string", "format": "uuid" }, "session": { "type": "string", "format": "uuid" } }, "required": ["outcome", "event", "workspace", "session"] },
+          { "type": "object", "properties": { "outcome": { "const": "fed" }, "event": { "type": "string", "format": "uuid" }, "workspace": { "type": "string", "format": "uuid" }, "session": { "type": ["string", "null"], "format": "uuid" } }, "required": ["outcome", "event", "workspace", "session"] },
           { "type": "object", "properties": { "outcome": { "const": "ignored" }, "event": { "type": "string", "format": "uuid" }, "correlation": { "type": "string" } }, "required": ["outcome", "event", "correlation"] }
         ]
       },
@@ -1979,7 +1979,7 @@
           "agent": { "type": "string" },
           "profile": { "type": ["string", "null"] },
           "checkout": { "$ref": "#/components/schemas/Checkout" },
-          "instance": { "type": ["string", "null"], "description": "The Instance its Runs execute on, while one is kept." },
+          "instance": { "type": ["string", "null"], "description": "The Instance its Sessions execute on, while one is kept." },
           "held": { "type": ["string", "null"], "description": "Why its Instance is held for work that exists nowhere else, if it is." },
           "correlation": { "type": ["string", "null"] },
           "state": { "type": "string", "enum": ["open", "sealed"] },
@@ -2001,13 +2001,13 @@
         },
         "required": ["repositories", "base", "branch"]
       },
-      "RunDeclaration": {
+      "SessionDeclaration": {
         "type": "object",
         "properties": {
           "model": { "type": ["string", "null"] }
         }
       },
-      "Run": {
+      "Session": {
         "type": "object",
         "properties": {
           "id": { "type": "string", "format": "uuid" },
@@ -2068,7 +2068,7 @@
         ]
       },
       "ProviderCredential": {
-        "description": "A credential as everything but the Run that carries it sees it.",
+        "description": "A credential as everything but the Session that carries it sees it.",
         "type": "object",
         "properties": {
           "variable": {
@@ -2123,7 +2123,7 @@
         ]
       },
       "SubscriptionProfileLogin": {
-        "description": "A login as everything but the Run that carries it sees it.",
+        "description": "A login as everything but the Session that carries it sees it.",
         "type": "object",
         "properties": {
           "kind": {
@@ -2140,7 +2140,7 @@
           "set_at": {
             "type": "string",
             "format": "date-time",
-            "description": "When it was last held, whether by a person or by a Run handing back a refreshed login."
+            "description": "When it was last held, whether by a person or by a Session handing back a refreshed login."
           }
         },
         "required": [
@@ -2537,7 +2537,7 @@
             "$ref": "#/components/schemas/Brief"
           },
           {
-            "$ref": "#/components/schemas/RunStarted"
+            "$ref": "#/components/schemas/SessionStarted"
           },
           {
             "$ref": "#/components/schemas/Message"
@@ -2546,7 +2546,7 @@
             "$ref": "#/components/schemas/Messages"
           },
           {
-            "$ref": "#/components/schemas/RunEnded"
+            "$ref": "#/components/schemas/SessionEnded"
           },
           {
             "$ref": "#/components/schemas/InstanceReleased"
@@ -2557,10 +2557,10 @@
           "mapping": {
             "participant_joined": "#/components/schemas/ParticipantJoined",
             "brief": "#/components/schemas/Brief",
-            "run_started": "#/components/schemas/RunStarted",
+            "session_started": "#/components/schemas/SessionStarted",
             "said": "#/components/schemas/Message",
             "messages": "#/components/schemas/Messages",
-            "run_ended": "#/components/schemas/RunEnded",
+            "session_ended": "#/components/schemas/SessionEnded",
             "instance_released": "#/components/schemas/InstanceReleased"
           }
         }
@@ -2605,21 +2605,21 @@
           "brief"
         ]
       },
-      "RunStarted": {
-        "description": "A Run started on behalf of the Workspace.",
+      "SessionStarted": {
+        "description": "A Session started on behalf of the Workspace.",
         "type": "object",
         "properties": {
           "kind": {
-            "const": "run_started"
+            "const": "session_started"
           },
-          "run": {
+          "session": {
             "type": "string",
             "format": "uuid"
           }
         },
         "required": [
           "kind",
-          "run"
+          "session"
         ]
       },
       "Message": {
@@ -2643,7 +2643,7 @@
         ]
       },
       "Messages": {
-        "description": "Messages that arrived while a Run was active, drained as one Transcript entry.",
+        "description": "Messages that arrived while a Session was active, drained as one Transcript entry.",
         "type": "object",
         "properties": {
           "kind": {
@@ -2678,14 +2678,14 @@
           "message"
         ]
       },
-      "RunEnded": {
-        "description": "A Run ended, and how it went.",
+      "SessionEnded": {
+        "description": "A Session ended, and how it went.",
         "type": "object",
         "properties": {
           "kind": {
-            "const": "run_ended"
+            "const": "session_ended"
           },
-          "run": {
+          "session": {
             "type": "string",
             "format": "uuid"
           },
@@ -2695,12 +2695,12 @@
         },
         "required": [
           "kind",
-          "run",
+          "session",
           "exit"
         ]
       },
       "Exit": {
-        "description": "How a Run ended.",
+        "description": "How a Session ended.",
         "type": "object",
         "properties": {
           "status": {

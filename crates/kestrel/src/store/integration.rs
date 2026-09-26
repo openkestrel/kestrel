@@ -6,8 +6,8 @@ use sqlx::{Row, SqliteConnection};
 use crate::declined::Declined;
 use crate::domain::{
     Connection, Delivery, Direction, Event, EventRecordId, EventRefusal, GithubConnection,
-    Integration, IntegrationId, IntegrationKind, Occurrence, Organization, OrganizationId, Run,
-    RunId, Workspace,
+    Integration, IntegrationId, IntegrationKind, Occurrence, Organization, OrganizationId, Session,
+    SessionId, Workspace,
 };
 use crate::integration::credential::Token;
 use crate::integration::github;
@@ -472,11 +472,11 @@ impl<'a> Integrations<'a> {
     }
 
     /// Due the moment it is recorded, and recorded in the transaction that answered the Turn or
-    /// ended the Run, so what kestrel said has a delivery waiting and what it did not say has
+    /// ended the Session, so what kestrel said has a delivery waiting and what it did not say has
     /// nothing to withdraw.
     pub async fn record_delivery(
         &mut self,
-        run: &Run,
+        session: &Session,
         integration: &Integration,
         event: &Event,
         turn: Option<i64>,
@@ -494,14 +494,14 @@ impl<'a> Integrations<'a> {
 
         sqlx::query(
             "INSERT INTO delivery
-                 (run_id, turn, organization_id, integration_id, event_record_id, subject, body, turn_messages,
+                 (session_id, turn, organization_id, integration_id, event_record_id, subject, body, turn_messages,
                   due_at, recorded_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT (run_id, turn) DO NOTHING",
+             ON CONFLICT (session_id, turn) DO NOTHING",
         )
-        .bind(run.id.to_string())
+        .bind(session.id.to_string())
         .bind(turn.unwrap_or(0))
-        .bind(run.organization.to_string())
+        .bind(session.organization.to_string())
         .bind(integration.id.to_string())
         .bind(event.record_id.to_string())
         .bind(subject)
@@ -511,17 +511,18 @@ impl<'a> Integrations<'a> {
         .bind(Timestamp::now().to_string())
         .execute(&mut *self.connection)
         .await
-        .with_context(|| format!("recording what to say back about the run {}", run.id))?;
+        .with_context(|| format!("recording what to say back about the session {}", session.id))?;
 
         Ok(())
     }
 
-    pub async fn turn_responses(&mut self, run: RunId) -> Result<Vec<Vec<String>>> {
-        let rows = sqlx::query("SELECT turn_messages FROM delivery WHERE run_id = ? AND turn > 0")
-            .bind(run.to_string())
-            .fetch_all(&mut *self.connection)
-            .await
-            .with_context(|| format!("reading what run {run} has said back"))?;
+    pub async fn turn_responses(&mut self, session: SessionId) -> Result<Vec<Vec<String>>> {
+        let rows =
+            sqlx::query("SELECT turn_messages FROM delivery WHERE session_id = ? AND turn > 0")
+                .bind(session.to_string())
+                .fetch_all(&mut *self.connection)
+                .await
+                .with_context(|| format!("reading what session {session} has said back"))?;
 
         rows.iter()
             .map(|row| Ok(serde_json::from_str(row.get("turn_messages"))?))
@@ -530,7 +531,7 @@ impl<'a> Integrations<'a> {
 
     pub async fn deliveries_due(&mut self, at: Timestamp) -> Result<Vec<Delivery>> {
         sqlx::query(
-            "SELECT run_id, turn, organization_id, integration_id, event_record_id, subject, body,
+            "SELECT session_id, turn, organization_id, integration_id, event_record_id, subject, body,
                     attempted_at
              FROM delivery
              WHERE due_at <= ?
@@ -548,13 +549,18 @@ impl<'a> Integrations<'a> {
     /// Committed before the request goes out rather than after it comes back: what this
     /// records is that a comment may now exist, which is true from the moment kestrel asks.
     pub async fn attempting_delivery(&mut self, delivery: &Delivery, at: Timestamp) -> Result<()> {
-        sqlx::query("UPDATE delivery SET attempted_at = ? WHERE run_id = ? AND turn = ?")
+        sqlx::query("UPDATE delivery SET attempted_at = ? WHERE session_id = ? AND turn = ?")
             .bind(at.to_string())
-            .bind(delivery.run.to_string())
+            .bind(delivery.session.to_string())
             .bind(delivery.turn.unwrap_or(0))
             .execute(&mut *self.connection)
             .await
-            .with_context(|| format!("recording an attempt at what run {} said", delivery.run))?;
+            .with_context(|| {
+                format!(
+                    "recording an attempt at what session {} said",
+                    delivery.session
+                )
+            })?;
 
         Ok(())
     }
@@ -562,15 +568,20 @@ impl<'a> Integrations<'a> {
     pub async fn delivery_delivered(&mut self, delivery: &Delivery, to: &str) -> Result<()> {
         sqlx::query(
             "UPDATE delivery SET delivered_at = ?, delivered_to = ?, due_at = NULL
-             WHERE run_id = ? AND turn = ?",
+             WHERE session_id = ? AND turn = ?",
         )
         .bind(Timestamp::now().to_string())
         .bind(to)
-        .bind(delivery.run.to_string())
+        .bind(delivery.session.to_string())
         .bind(delivery.turn.unwrap_or(0))
         .execute(&mut *self.connection)
         .await
-        .with_context(|| format!("recording what run {} said as delivered", delivery.run))?;
+        .with_context(|| {
+            format!(
+                "recording what session {} said as delivered",
+                delivery.session
+            )
+        })?;
 
         Ok(())
     }
@@ -580,13 +591,13 @@ impl<'a> Integrations<'a> {
         delivery: &Delivery,
         due_again_at: Timestamp,
     ) -> Result<()> {
-        sqlx::query("UPDATE delivery SET due_at = ? WHERE run_id = ? AND turn = ?")
+        sqlx::query("UPDATE delivery SET due_at = ? WHERE session_id = ? AND turn = ?")
             .bind(due(due_again_at))
-            .bind(delivery.run.to_string())
+            .bind(delivery.session.to_string())
             .bind(delivery.turn.unwrap_or(0))
             .execute(&mut *self.connection)
             .await
-            .with_context(|| format!("deferring what run {} said", delivery.run))?;
+            .with_context(|| format!("deferring what session {} said", delivery.session))?;
 
         Ok(())
     }
@@ -735,7 +746,7 @@ fn event(row: &SqliteRow) -> Result<Event> {
 
 fn delivery(row: &SqliteRow) -> Result<Delivery> {
     Ok(Delivery {
-        run: row.get::<String, _>("run_id").parse()?,
+        session: row.get::<String, _>("session_id").parse()?,
         turn: match row.get::<i64, _>("turn") {
             0 => None,
             turn => Some(turn),

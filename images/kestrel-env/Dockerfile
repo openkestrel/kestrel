@@ -57,6 +57,6 @@ ENV HOME=/home/kestrel \
 USER kestrel
 WORKDIR /workspace
 
-# The Run's process, not a process that starts the Run's process: nothing here outlives the
+# The Session's process, not a process that starts the Session's process: nothing here outlives the
 # supervisor to restart it (ADR-0007).
 ENTRYPOINT ["kestrel-supervisor"]

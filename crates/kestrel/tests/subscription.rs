@@ -10,7 +10,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use kestrel::domain::{Exit, Run, RunState, Workspace};
+use kestrel::domain::{Exit, Session, SessionState, Workspace};
 use kestrel::log;
 use kestrel::profile::{Contents, Entry};
 use support::Kestrel;
@@ -125,9 +125,9 @@ async fn smoke(subject: Subject) {
 
     let first = attempt(&kestrel, &subject, Round::BeforeTheRestart).await;
     let (kestrel, second) = match &first {
-        Ok(run) => {
+        Ok(session) => {
             let kestrel = kestrel.kill_and_restart().await;
-            if let Some(instance) = &run.instance {
+            if let Some(instance) = &session.instance {
                 Container::named(instance).destroy();
             }
             let second = attempt(&kestrel, &subject, Round::AfterTheRestart).await;
@@ -180,29 +180,29 @@ async fn declared(kestrel: &Kestrel, subject: &Subject) {
     }
 }
 
-async fn attempt(kestrel: &Kestrel, subject: &Subject, round: Round) -> Result<Run, Failure> {
+async fn attempt(kestrel: &Kestrel, subject: &Subject, round: Round) -> Result<Session, Failure> {
     let workspace = kestrel
         .open_workspace_with(ORGANIZATION, PROJECT, AGENT, PROFILE)
         .await;
-    let run = kestrel.post(workspace.id, "operator", PROMPT).await;
-    let (run, answered) = settled(kestrel, run).await;
+    let session = kestrel.post(workspace.id, "operator", PROMPT).await;
+    let (session, answered) = settled(kestrel, session).await;
     let said = said_by_the_agent(kestrel, &workspace).await;
-    if run.state != RunState::Ended {
-        kestrel.stop_run(run.id).await;
+    if session.state != SessionState::Ended {
+        kestrel.stop_session(session.id).await;
     }
 
-    let failed = match &run.exit {
+    let failed = match &session.exit {
         Some(Exit::Failed { because }) => Some(because.clone()),
         _ => None,
     };
     if answered && failed.is_none() && said.to_lowercase().contains(ANSWER) {
-        return Ok(run);
+        return Ok(session);
     }
 
     let evidence = format!(
         "{}\nthe agent said: {said}",
         match (&failed, answered) {
-            (Some(because), _) => format!("the run failed: {because}"),
+            (Some(because), _) => format!("the session failed: {because}"),
             (None, true) => format!("the agent answered without {ANSWER:?}"),
             (None, false) => format!("the agent had not answered within {PATIENCE:?}"),
         }
@@ -216,18 +216,21 @@ async fn attempt(kestrel: &Kestrel, subject: &Subject, round: Round) -> Result<R
 }
 
 /// Waited for without panicking, because a smoke that times out still hands its login back.
-async fn settled(kestrel: &Kestrel, run: Run) -> (Run, bool) {
+async fn settled(kestrel: &Kestrel, session: Session) -> (Session, bool) {
     let deadline = tokio::time::Instant::now() + PATIENCE;
 
     loop {
         let answered = kestrel
-            .turns(run.id)
+            .turns(session.id)
             .await
             .iter()
             .any(|turn| turn.answered_at.is_some());
-        let run = kestrel.run(run.id).await;
-        if answered || run.state == RunState::Ended || tokio::time::Instant::now() >= deadline {
-            return (run, answered);
+        let session = kestrel.session(session.id).await;
+        if answered
+            || session.state == SessionState::Ended
+            || tokio::time::Instant::now() >= deadline
+        {
+            return (session, answered);
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -414,7 +417,7 @@ fn diagnosed(round: Round, answered: bool, evidence: &str) -> Problem {
     }
 }
 
-/// A run id holds `401` as readily as a status line does.
+/// A session id holds `401` as readily as a status line does.
 fn mentions(text: &str, phrase: &str) -> bool {
     let bounded = |c: Option<char>| c.is_none_or(|c| !c.is_alphanumeric());
 
@@ -530,7 +533,7 @@ fn identifiers_are_not_status_codes() {
         diagnosed(
             Round::BeforeTheRestart,
             true,
-            "the run 01a0acf7-3f4d-7952-a4a0-f401a181b089 answered pelican"
+            "the session 01a0acf7-3f4d-7952-a4a0-f401a181b089 answered pelican"
         ),
         Problem::Unclassified
     );

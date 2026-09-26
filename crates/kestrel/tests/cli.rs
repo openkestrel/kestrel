@@ -158,7 +158,7 @@ impl Booted {
             .expect("the control plane should be waitable");
     }
 
-    /// Signalled rather than killed, so the work role sees a stopped Run's supervisor off the
+    /// Signalled rather than killed, so the work role sees a stopped Session's supervisor off the
     /// link before it goes.
     fn terminated(mut self) {
         #[allow(unsafe_code)]
@@ -236,28 +236,41 @@ fn a_free_port() -> String {
     format!("127.0.0.1:{port}")
 }
 
-const RUN: &str = "id,state,exit,instance,worked_model";
+const SESSION: &str = "id,state,exit,instance,worked_model";
 
-fn runs(kestrel: &Booted, workspace: &str) -> Vec<Value> {
-    kestrel.records(&["run", "list", "--workspace", workspace, "--json", RUN])
+fn sessions(kestrel: &Booted, workspace: &str) -> Vec<Value> {
+    kestrel.records(&[
+        "session",
+        "list",
+        "--workspace",
+        workspace,
+        "--json",
+        SESSION,
+    ])
 }
 
-/// Answering a turn never ends a Run, so one waiting is stopped the way a person would.
+/// Answering a turn never ends a Session, so one waiting is stopped the way a person would.
 fn dispatched(kestrel: &Booted, workspace: &str) -> Vec<Value> {
     let deadline = Instant::now() + PATIENCE;
 
     loop {
-        let listed = runs(kestrel, workspace);
-        if listed.iter().all(|run| !run["exit"]["status"].is_null()) {
+        let listed = sessions(kestrel, workspace);
+        if listed
+            .iter()
+            .all(|session| !session["exit"]["status"].is_null())
+        {
             return listed;
         }
-        for waiting in listed.iter().filter(|run| run["state"] == "waiting") {
-            let run = waiting["id"].as_str().expect("a run's identifier");
-            kestrel.run(&["run", "stop", run]);
+        for waiting in listed
+            .iter()
+            .filter(|session| session["state"] == "waiting")
+        {
+            let session = waiting["id"].as_str().expect("a session's identifier");
+            kestrel.run(&["session", "stop", session]);
         }
         assert!(
             Instant::now() < deadline,
-            "no run in the workspace {workspace} ended. the last listing was:\n{listed:?}"
+            "no session in the workspace {workspace} ended. the last listing was:\n{listed:?}"
         );
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -299,7 +312,7 @@ fn opened(kestrel: &Booted) -> String {
 }
 
 /// Each entry as `seq kind …`, without the moment it was appended, which is different every
-/// run.
+/// session.
 fn transcribed(kestrel: &Booted, workspace: &str) -> Vec<String> {
     kestrel
         .records(&["workspace", "transcript", workspace, "--json", "seq,entry"])
@@ -308,9 +321,12 @@ fn transcribed(kestrel: &Booted, workspace: &str) -> Vec<String> {
             let entry = &recorded["entry"];
             let said = match entry["kind"].as_str().expect("an entry kind") {
                 "participant_joined" => format!("participant joined {}", entry["participant"]),
-                "run_started" => format!("run started {}", entry["run"]),
+                "session_started" => format!("session started {}", entry["session"]),
                 "said" => format!("said {} {}", entry["participant"], entry["message"]),
-                "run_ended" => format!("run ended {} {}", entry["run"], entry["exit"]["status"]),
+                "session_ended" => format!(
+                    "session ended {} {}",
+                    entry["session"], entry["exit"]["status"]
+                ),
                 "instance_released" => format!(
                     "instance released {} {}",
                     entry["participant"], entry["instance"]
@@ -405,7 +421,7 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
     let booted = kestrel.boot();
     declared(&booted);
     let workspace = opened(&booted);
-    booted.run(&["run", "enqueue", "--workspace", &workspace]);
+    booted.run(&["session", "enqueue", "--workspace", &workspace]);
     dispatched(&booted, &workspace);
 
     let shown = booted.record(&["workspace", "show", &workspace, "--json", "instance,held"]);
@@ -440,22 +456,22 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
 }
 
 #[test]
-fn a_run_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
+fn a_session_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
     let kestrel = Kestrel::new();
     let booted = kestrel.boot();
     declared(&booted);
     let workspace = opened(&booted);
-    let run = booted.run(&["run", "enqueue", "--workspace", &workspace]);
+    let session = booted.run(&["session", "enqueue", "--workspace", &workspace]);
 
     let listed = dispatched(&booted, &workspace);
 
-    assert_eq!(listed[0]["id"], run);
+    assert_eq!(listed[0]["id"], session);
     assert_eq!(listed[0]["exit"]["status"], "succeeded");
     assert!(
         listed[0]["instance"]
             .as_str()
             .is_some_and(|instance| instance.starts_with("local-exec/")),
-        "the run does not list the instance it executed on: {listed:?}"
+        "the session does not list the instance it executed on: {listed:?}"
     );
     assert_eq!(
         listed[0]["worked_model"],
@@ -463,7 +479,7 @@ fn a_run_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
     );
     assert!(
         booted
-            .refused(&["run", "stop", &run])
+            .refused(&["session", "stop", &session])
             .contains("has already ended"),
     );
 }
@@ -478,15 +494,15 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
     let killed = kestrel.booting(&listen, Script::Lingers, "info");
     declared(&killed);
     let workspace = opened(&killed);
-    let run = killed.run(&["run", "enqueue", "--workspace", &workspace]);
-    // The transcript says the Run started only once the supervisor holds the Start instruction,
+    let session = killed.run(&["session", "enqueue", "--workspace", &workspace]);
+    // The transcript says the Session started only once the supervisor holds the Start instruction,
     // which is the first moment a restart has anything to recover; an instance alone is not.
     killed.until(
         &["workspace", "transcript", &workspace, "--json", "seq,entry"],
         |transcribed| {
             transcribed
                 .iter()
-                .any(|recorded| recorded["entry"]["kind"] == "run_started")
+                .any(|recorded| recorded["entry"]["kind"] == "session_started")
         },
         "started its turn",
     );
@@ -494,16 +510,23 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
 
     let restarted = kestrel.booting(&listen, Script::Lingers, "info");
     restarted.until(
-        &["run", "list", "--workspace", &workspace, "--json", RUN],
+        &[
+            "session",
+            "list",
+            "--workspace",
+            &workspace,
+            "--json",
+            SESSION,
+        ],
         |listed| {
             listed
                 .iter()
-                .any(|run| run["state"] == "waiting" || !run["exit"].is_null())
+                .any(|session| session["state"] == "waiting" || !session["exit"].is_null())
         },
         "answered its turn",
     );
-    restarted.run(&["run", "stop", &run]);
-    let listed = runs(&restarted, &workspace);
+    restarted.run(&["session", "stop", &session]);
+    let listed = sessions(&restarted, &workspace);
     let transcript = transcribed(&restarted, &workspace);
     // The supervisor belongs to the control plane that was killed, so this one cannot wait it off
     // the link on the way down; it leaves within a poll of the stop reaching it.
@@ -512,16 +535,16 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
 
     assert_eq!(
         listed[0]["exit"]["status"], "succeeded",
-        "the run's turn was not answered after the restart: {listed:?}"
+        "the session's turn was not answered after the restart: {listed:?}"
     );
     assert_eq!(
         transcript,
         vec![
             "1 participant joined builder".to_owned(),
-            format!("2 run started {run}"),
+            format!("2 session started {session}"),
             "3 said builder half of one message, and the other half".to_owned(),
             "4 said builder a second message".to_owned(),
-            format!("5 run ended {run} succeeded"),
+            format!("5 session ended {session} succeeded"),
         ]
     );
 }
@@ -711,7 +734,7 @@ fn a_dispatch_starts_a_triggers_work_on_the_issue_it_names() {
         "--instruction",
         "/tdd the parser",
         "--json",
-        "outcome,workspace,run",
+        "outcome,workspace,session",
     ]);
 
     assert_eq!(

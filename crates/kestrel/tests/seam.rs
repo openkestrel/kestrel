@@ -3,7 +3,7 @@
 
 mod support;
 
-use kestrel::domain::{Run, Workspace, WorkspaceState};
+use kestrel::domain::{Session, Workspace, WorkspaceState};
 use kestrel::log::{Cursor, Unreadable, Window};
 use support::Kestrel;
 
@@ -192,16 +192,16 @@ async fn two_kestrels_running_at_once_do_not_share_state() {
 }
 
 /// One entry for the Agent joining, and one for each thing it said.
-async fn a_transcript_of(kestrel: &Kestrel, said: usize) -> (Workspace, Run) {
+async fn a_transcript_of(kestrel: &Kestrel, said: usize) -> (Workspace, Session) {
     declare_fixture(kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let (run, _) = kestrel.dispatch_run(workspace.id).await;
+    let (session, _) = kestrel.dispatch_session(workspace.id).await;
 
     for message in 1..=said {
-        kestrel.said(&run, &format!("message {message}")).await;
+        kestrel.said(&session, &format!("message {message}")).await;
     }
 
-    (workspace, run)
+    (workspace, session)
 }
 
 fn two() -> Window {
@@ -269,7 +269,7 @@ async fn a_cursor_still_walks_the_transcript_after_the_control_plane_restarts() 
 #[tokio::test]
 async fn entries_appended_part_way_through_a_walk_land_after_what_was_already_walked() {
     let kestrel = Kestrel::boot().await;
-    let (workspace, run) = a_transcript_of(&kestrel, 3).await;
+    let (workspace, session) = a_transcript_of(&kestrel, 3).await;
     let held = kestrel
         .page(workspace.id, None, two())
         .await
@@ -277,7 +277,7 @@ async fn entries_appended_part_way_through_a_walk_land_after_what_was_already_wa
         .cursor;
 
     kestrel
-        .said(&run, "said while the read was in flight")
+        .said(&session, "said while the read was in flight")
         .await;
 
     assert_eq!(walked(&kestrel, &workspace, held).await, vec![3, 4, 5]);

@@ -7,7 +7,7 @@ mod support;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
-use kestrel::domain::{Exit, Run, RunState, Workspace, WorkspaceState};
+use kestrel::domain::{Exit, Session, SessionState, Workspace, WorkspaceState};
 use support::Kestrel;
 use support::environment::Environment;
 use support::repository;
@@ -67,25 +67,25 @@ async fn dispatching_to(harness: &Environment) -> Kestrel {
 }
 
 /// Ended, and with its supervisor gone, so nothing but what its checkout holds keeps its Workspace.
-/// A Run that answers rather than failing waits between turns until something stops it (ADR-0024),
-/// so this stops it itself once it has answered, the way a person or a seal would.
-async fn over(kestrel: &Kestrel, workspace: &Workspace) -> Run {
-    let run = kestrel.enqueue_run(workspace.id).await;
-    let answered = kestrel.answered(run.id, 1).await;
-    if answered.state != RunState::Ended {
-        kestrel.stop_run(run.id).await;
+/// A Session that answers rather than failing waits between turns until something stops it
+/// (ADR-0024), so this stops it itself once it has answered, the way a person or a seal would.
+async fn over(kestrel: &Kestrel, workspace: &Workspace) -> Session {
+    let session = kestrel.enqueue_session(workspace.id).await;
+    let answered = kestrel.answered(session.id, 1).await;
+    if answered.state != SessionState::Ended {
+        kestrel.stop_session(session.id).await;
     }
 
     let deadline = tokio::time::Instant::now() + PATIENCE;
     loop {
-        let ended = kestrel.run(run.id).await;
-        if ended.state == RunState::Ended && kestrel.supervisors_to_stop().await.is_empty() {
+        let ended = kestrel.session(session.id).await;
+        if ended.state == SessionState::Ended && kestrel.supervisors_to_stop().await.is_empty() {
             return ended;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the run {} is {} and never finished",
-            run.id,
+            "the session {} is {} and never finished",
+            session.id,
             ended.state
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -134,9 +134,9 @@ async fn clean_research_work_seals_when_idle_and_its_instance_is_archived() {
     );
     let kestrel = dispatching_to(&harness).await;
     let workspace = a_workspace(&kestrel).await;
-    let run = over(&kestrel, &workspace).await;
-    assert_eq!(run.exit, Some(Exit::Succeeded));
-    let instance = run.instance.expect("an instance");
+    let session = over(&kestrel, &workspace).await;
+    assert_eq!(session.exit, Some(Exit::Succeeded));
+    let instance = session.instance.expect("an instance");
     assert!(kestrel.held_instances("acme").await.is_empty());
 
     kestrel.last_active(&workspace, a_day_ago()).await;
@@ -161,12 +161,12 @@ async fn a_pushed_checkout_is_archived_when_its_workspace_seals() {
     ));
     let kestrel = dispatching_to(&harness).await;
     let workspace = a_workspace(&kestrel).await;
-    let run = over(&kestrel, &workspace).await;
-    assert_eq!(run.exit, Some(Exit::Succeeded));
+    let session = over(&kestrel, &workspace).await;
+    assert_eq!(session.exit, Some(Exit::Succeeded));
 
     kestrel.seal_workspace(workspace.id).await;
 
-    archived(&run.instance.expect("an instance")).await;
+    archived(&session.instance.expect("an instance")).await;
 
     kestrel.teardown().await;
 }
@@ -181,9 +181,9 @@ async fn unpublished_work_outlasts_the_idle_window_held_with_a_reason_until_rele
     ));
     let kestrel = dispatching_to(&harness).await;
     let workspace = a_workspace(&kestrel).await;
-    let run = over(&kestrel, &workspace).await;
-    assert_eq!(run.exit, Some(Exit::Succeeded));
-    let instance = run.instance.expect("an instance");
+    let session = over(&kestrel, &workspace).await;
+    assert_eq!(session.exit, Some(Exit::Succeeded));
+    let instance = session.instance.expect("an instance");
 
     kestrel.last_active(&workspace, a_day_ago()).await;
     stays_open(&kestrel, &workspace).await;
@@ -239,13 +239,13 @@ async fn unpublished_work_outlasts_the_idle_window_held_with_a_reason_until_rele
 
 #[cfg(unix)]
 #[tokio::test]
-async fn a_run_that_fails_without_reporting_its_checkout_holds_its_instance() {
+async fn a_session_that_fails_without_reporting_its_checkout_holds_its_instance() {
     let environment = Environment::executing("exit 3");
     let kestrel = Kestrel::dispatching(environment.path()).await;
     let workspace = a_workspace(&kestrel).await;
-    let run = over(&kestrel, &workspace).await;
-    assert!(matches!(run.exit, Some(Exit::Failed { .. })));
-    let instance = run.instance.expect("an instance");
+    let session = over(&kestrel, &workspace).await;
+    assert!(matches!(session.exit, Some(Exit::Failed { .. })));
+    let instance = session.instance.expect("an instance");
 
     kestrel.last_active(&workspace, a_day_ago()).await;
     stays_open(&kestrel, &workspace).await;
@@ -253,7 +253,10 @@ async fn a_run_that_fails_without_reporting_its_checkout_holds_its_instance() {
     let held = kestrel.held_instances("acme").await;
     assert_eq!(held.len(), 1);
     assert_eq!(held[0].instance, instance);
-    assert_eq!(held[0].because, "no run reported what its checkout holds");
+    assert_eq!(
+        held[0].because,
+        "no session reported what its checkout holds"
+    );
     kestrel
         .try_seal_workspace(workspace.id)
         .await
@@ -280,13 +283,13 @@ async fn a_workspace_with_no_instance_has_nothing_to_release() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn a_waiting_run_ends_when_its_clean_workspace_seals_idle() {
+async fn a_waiting_session_ends_when_its_clean_workspace_seals_idle() {
     let harness = working("true");
     let kestrel = dispatching_to(&harness).await;
     let workspace = a_workspace(&kestrel).await;
-    let run = kestrel.enqueue_run(workspace.id).await;
-    let waiting = kestrel.answered(run.id, 1).await;
-    assert_eq!(waiting.state, RunState::Waiting);
+    let session = kestrel.enqueue_session(workspace.id).await;
+    let waiting = kestrel.answered(session.id, 1).await;
+    assert_eq!(waiting.state, SessionState::Waiting);
 
     kestrel.last_active(&workspace, a_day_ago()).await;
 
@@ -295,7 +298,10 @@ async fn a_waiting_run_ends_when_its_clean_workspace_seals_idle() {
         kestrel.show_workspace(workspace_id).await.state == WorkspaceState::Sealed
     })
     .await;
-    assert_eq!(kestrel.run(run.id).await.exit, Some(Exit::Succeeded));
+    assert_eq!(
+        kestrel.session(session.id).await.exit,
+        Some(Exit::Succeeded)
+    );
     archived(&waiting.instance.expect("an instance")).await;
 
     kestrel.teardown().await;
@@ -303,17 +309,20 @@ async fn a_waiting_run_ends_when_its_clean_workspace_seals_idle() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn a_waiting_run_over_unpublished_work_outlasts_the_idle_window() {
+async fn a_waiting_session_over_unpublished_work_outlasts_the_idle_window() {
     let harness = working("echo untracked > kestrel/untracked");
     let kestrel = dispatching_to(&harness).await;
     let workspace = a_workspace(&kestrel).await;
-    let run = kestrel.enqueue_run(workspace.id).await;
-    let waiting = kestrel.answered(run.id, 1).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+    let waiting = kestrel.answered(session.id, 1).await;
 
     kestrel.last_active(&workspace, a_day_ago()).await;
     stays_open(&kestrel, &workspace).await;
 
-    assert_eq!(kestrel.run(run.id).await.state, RunState::Waiting);
+    assert_eq!(
+        kestrel.session(session.id).await.state,
+        SessionState::Waiting
+    );
     let held = kestrel.held_instances("acme").await;
     assert_eq!(held.len(), 1);
     assert_eq!(held[0].instance, waiting.instance.expect("an instance"));
@@ -323,6 +332,6 @@ async fn a_waiting_run_over_unpublished_work_outlasts_the_idle_window() {
         held[0].because
     );
 
-    kestrel.stop_run(run.id).await;
+    kestrel.stop_session(session.id).await;
     kestrel.teardown().await;
 }

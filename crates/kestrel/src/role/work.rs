@@ -11,7 +11,7 @@ use tracing::{info, warn};
 
 use crate::cli::Role;
 use crate::compute::{Driver, Exited, Instance, Supervisor};
-use crate::domain::{Exit, Run, RunId, Workspace};
+use crate::domain::{Exit, Session, SessionId, Workspace};
 use crate::instance;
 use crate::link;
 use crate::profile;
@@ -21,7 +21,7 @@ use crate::timer;
 use crate::work::{self, Claimed, Occupied};
 use crate::workspace;
 
-/// Nothing subscribes to `Fanout` at 0.1 (ADR-0005), so a queued Run is found by asking
+/// Nothing subscribes to `Fanout` at 0.1 (ADR-0005), so a queued Session is found by asking
 /// `Store` again rather than by being told.
 const POLL: Duration = Duration::from_millis(100);
 const LEAVING: SignedDuration = SignedDuration::from_secs(3);
@@ -32,7 +32,7 @@ pub struct Dispatch {
     pub driver: Driver,
     pub harnesses: Vec<HarnessCommand>,
     pub auth: Option<String>,
-    pub max_active_runs: NonZeroUsize,
+    pub max_active_sessions: NonZeroUsize,
     pub serialized: Vec<String>,
 }
 
@@ -72,14 +72,14 @@ impl Dispatch {
     }
 }
 
-/// What ended the attending, rather than how the Run went.
+/// What ended the attending, rather than how the Session went.
 enum Ended {
     Supervisor(Exited),
-    TheRun(Exit),
+    TheSession(Exit),
     ControlPlane,
 }
 
-/// The wheel keeps time whether or not this role has anywhere to dispatch a Run, because a
+/// The wheel keeps time whether or not this role has anywhere to dispatch a Session, because a
 /// lease left unswept wedges a Workspace no matter who was going to execute it.
 pub async fn run(
     store: Store,
@@ -91,8 +91,8 @@ pub async fn run(
 
     tokio::try_join!(
         timer::sweeping(&store, &wake, &shutdown),
-        // A work role with nowhere to run a Run claims none: claiming one it cannot dispatch
-        // would spend the Run's one dispatch on nothing.
+        // A work role with nowhere to run a Session claims none: claiming one it cannot dispatch
+        // would spend the Session's one dispatch on nothing.
         async {
             match &dispatch {
                 Some(dispatch) => dispatching(&store, dispatch, &shutdown).await,
@@ -118,7 +118,13 @@ async fn dispatching(
     while !shutdown.is_cancelled() {
         stop_left_behind(store, &dispatch.driver).await?;
         archive(store, &dispatch.driver).await?;
-        match work::occupy(store, dispatch.max_active_runs.get(), &dispatch.serialized).await? {
+        match work::occupy(
+            store,
+            dispatch.max_active_sessions.get(),
+            &dispatch.serialized,
+        )
+        .await?
+        {
             Some(Occupied::Claimed(claimed)) => {
                 let store = store.clone();
                 let dispatch = dispatch.clone();
@@ -126,8 +132,8 @@ async fn dispatching(
                 active.spawn(async move { execute(&store, &dispatch, claimed, &shutdown).await });
                 continue;
             }
-            Some(Occupied::Resumed(run)) => {
-                info!(run = %run.id, "a waiting run was prompted with what was held for it");
+            Some(Occupied::Resumed(session)) => {
+                info!(session = %session.id, "a waiting session was prompted with what was held for it");
                 continue;
             }
             None => {}
@@ -135,8 +141,8 @@ async fn dispatching(
 
         tokio::select! {
             finished = active.join_next(), if !active.is_empty() => {
-                finished.expect("an active run")
-                    .context("a run's execution task failed")??;
+                finished.expect("an active session")
+                    .context("a session's execution task failed")??;
             }
             () = tokio::time::sleep(POLL) => {}
             () = shutdown.cancelled() => {}
@@ -144,7 +150,7 @@ async fn dispatching(
     }
 
     while let Some(finished) = active.join_next().await {
-        finished.context("a run's execution task failed")??;
+        finished.context("a session's execution task failed")??;
     }
 
     Ok(())
@@ -153,16 +159,19 @@ async fn dispatching(
 async fn execute(
     store: &Store,
     dispatch: &Dispatch,
-    Claimed { run, credential }: Claimed,
+    Claimed {
+        session,
+        credential,
+    }: Claimed,
     shutdown: &CancellationToken,
 ) -> Result<()> {
-    let workspace = match workspace::show(store, run.workspace).await {
+    let workspace = match workspace::show(store, session.workspace).await {
         Ok(workspace) => workspace,
         Err(error) => {
             work::fail(
                 store,
-                &run,
-                &format!("the run's workspace could not be read: {error}"),
+                &session,
+                &format!("the session's workspace could not be read: {error}"),
             )
             .await?;
             return Ok(());
@@ -170,29 +179,29 @@ async fn execute(
     };
 
     if let Err(error) = a_way_to_reach_a_model(store, dispatch, &workspace).await {
-        work::fail(store, &run, &error.to_string()).await?;
+        work::fail(store, &session, &error.to_string()).await?;
         return Ok(());
     }
     let command = match dispatch.spawns(&workspace.agent.harness) {
         Ok(command) => command,
         Err(error) => {
-            work::fail(store, &run, &error.to_string()).await?;
+            work::fail(store, &session, &error.to_string()).await?;
             return Ok(());
         }
     };
 
-    let Some(mut instance) = instance(store, dispatch, &run, &workspace).await? else {
+    let Some(mut instance) = instance(store, dispatch, &session, &workspace).await? else {
         return Ok(());
     };
-    work::executes_on(store, &run, instance.name()).await?;
+    work::executes_on(store, &session, instance.name()).await?;
 
     // Committed before the supervisor is spawned, so one that outlives this process fetches its
-    // Start on reconnect rather than holding the lease out forever on a Run that cannot begin.
-    if let Err(error) = link::start(store, &run).await {
+    // Start on reconnect rather than holding the lease out forever on a Session that cannot begin.
+    if let Err(error) = link::start(store, &session).await {
         work::fail(
             store,
-            &run,
-            &format!("the run could not be started: {error}"),
+            &session,
+            &format!("the session could not be started: {error}"),
         )
         .await?;
         return Ok(());
@@ -200,8 +209,8 @@ async fn execute(
 
     let mut supervisor = match instance.supervise(&[
         ("KESTREL_LINK", dispatch.link.as_str()),
-        ("KESTREL_RUN", &run.id.to_string()),
-        ("KESTREL_RUN_CREDENTIAL", credential.as_str()),
+        ("KESTREL_SESSION", &session.id.to_string()),
+        ("KESTREL_SESSION_CREDENTIAL", credential.as_str()),
         ("KESTREL_HARNESS_COMMAND", command),
         (
             "KESTREL_AGENT_AUTH",
@@ -209,7 +218,8 @@ async fn execute(
         ),
         (
             "KESTREL_AGENT_MODEL",
-            run.model
+            session
+                .model
                 .as_deref()
                 .or(workspace.agent.model.as_deref())
                 .unwrap_or_default(),
@@ -219,7 +229,7 @@ async fn execute(
         Err(error) => {
             work::fail(
                 store,
-                &run,
+                &session,
                 &format!(
                     "the supervisor could not be started on the instance {}: {error}",
                     instance.name()
@@ -229,35 +239,35 @@ async fn execute(
             return Ok(());
         }
     };
-    work::supervised(store, &run, supervisor.name()).await?;
+    work::supervised(store, &session, supervisor.name()).await?;
     if let Some(out) = supervisor.take_stdout() {
-        relay(run.id, out);
+        relay(session.id, out);
     }
     if let Some(err) = supervisor.take_stderr() {
-        relay(run.id, err);
+        relay(session.id, err);
     }
 
-    let exit = start(store, &run, supervisor, shutdown).await?;
-    info!(run = %run.id, %exit, "a run ended");
+    let exit = start(store, &session, supervisor, shutdown).await?;
+    info!(session = %session.id, %exit, "a session ended");
 
     Ok(())
 }
 
-/// The Workspace's own Instance, or a fresh one for a Workspace that has none. `None` once the Run
-/// has been ended for want of one.
+/// The Workspace's own Instance, or a fresh one for a Workspace that has none. `None` once the
+/// Session has been ended for want of one.
 async fn instance(
     store: &Store,
     dispatch: &Dispatch,
-    run: &Run,
+    session: &Session,
     workspace: &Workspace,
 ) -> Result<Option<Instance>> {
     let Some(kept) = work::instance(store, workspace.id).await? else {
-        return match dispatch.driver.provision(run.id) {
+        return match dispatch.driver.provision(session.id) {
             Ok(instance) => Ok(Some(instance)),
             Err(error) => {
                 work::fail(
                     store,
-                    run,
+                    session,
                     &format!("the instance could not be provisioned: {error}"),
                 )
                 .await?;
@@ -271,18 +281,18 @@ async fn instance(
         Ok(None) => {
             let because = format!(
                 "the instance {kept} this workspace's work was on is gone, and whatever it held \
-                 that was never pushed went with it; the workspace's next run starts on a fresh \
+                 that was never pushed went with it; the workspace's next session starts on a fresh \
                  instance from the branch {} as the remote has it",
                 workspace.checkout.branch
             );
-            work::instance_lost(store, run, &because).await?;
+            work::instance_lost(store, session, &because).await?;
             Ok(None)
         }
         // Not forgotten: a daemon that cannot answer has not lost what the Instance holds.
         Err(error) => {
             work::fail(
                 store,
-                run,
+                session,
                 &format!("the instance {kept} could not be resumed: {error}"),
             )
             .await?;
@@ -292,17 +302,17 @@ async fn instance(
 }
 
 /// A supervisor blocks once a pipe nobody reads is full, so what it says is read as it says it.
-fn relay(run: RunId, said: impl Read + Send + 'static) {
+fn relay(session: SessionId, said: impl Read + Send + 'static) {
     std::thread::spawn(move || {
         for line in BufReader::new(said).lines().map_while(Result::ok) {
-            info!(run = %run, "{line}");
+            info!(session = %session, "{line}");
         }
     });
 }
 
 async fn stop_left_behind(store: &Store, driver: &Driver) -> Result<()> {
-    for (run, supervisor) in work::supervisors_to_stop(store).await? {
-        if run
+    for (session, supervisor) in work::supervisors_to_stop(store).await? {
+        if session
             .ended_at
             .is_some_and(|ended| Timestamp::now().duration_since(ended) < LEAVING)
         {
@@ -310,10 +320,10 @@ async fn stop_left_behind(store: &Store, driver: &Driver) -> Result<()> {
         }
         match driver.stop_named(&supervisor) {
             Ok(()) => {
-                work::supervisor_gone(store, &run).await?;
+                work::supervisor_gone(store, &session).await?;
             }
             Err(error) => {
-                warn!(run = %run.id, %error, "an ended run's supervisor resisted being stopped");
+                warn!(session = %session.id, %error, "an ended session's supervisor resisted being stopped");
             }
         }
     }
@@ -336,7 +346,7 @@ async fn archive(store: &Store, driver: &Driver) -> Result<()> {
 }
 
 /// A Harness reaches a model with the Workspace's Subscription Profile, a Provider
-/// Credential its Organization holds, or an ACP login kestrel was configured with. A Run with
+/// Credential its Organization holds, or an ACP login kestrel was configured with. A Session with
 /// none of them fails here rather than inside an Instance provisioned to find that out.
 async fn a_way_to_reach_a_model(
     store: &Store,
@@ -358,7 +368,7 @@ async fn a_way_to_reach_a_model(
     }
 
     bail!(
-        "the organization {} holds no provider credential, and this run's harness was \
+        "the organization {} holds no provider credential, and this session's harness was \
          given no other way to reach a model",
         workspace.organization.name
     )
@@ -366,29 +376,29 @@ async fn a_way_to_reach_a_model(
 
 async fn start(
     store: &Store,
-    run: &Run,
+    session: &Session,
     mut supervisor: Supervisor,
     shutdown: &CancellationToken,
 ) -> Result<Exit> {
-    info!(run = %run.id, supervisor = supervisor.name(), "a run's supervisor started");
+    info!(session = %session.id, supervisor = supervisor.name(), "a session's supervisor started");
 
-    let ended = attend(store, run, &mut supervisor, shutdown).await;
+    let ended = attend(store, session, &mut supervisor, shutdown).await;
 
     let exit = match ended? {
-        Ended::TheRun(exit) => {
+        Ended::TheSession(exit) => {
             left_the_link(&mut supervisor).await;
             exit
         }
         Ended::Supervisor(exited) => {
             let unreported =
-                format!("the supervisor exited {exited} without reporting how the run went");
-            work::fail(store, run, &unreported).await?
+                format!("the supervisor exited {exited} without reporting how the session went");
+            work::fail(store, session, &unreported).await?
         }
         Ended::ControlPlane => {
             work::fail(
                 store,
-                run,
-                "the control plane stopped while this run was in flight",
+                session,
+                "the control plane stopped while this session was in flight",
             )
             .await?
         }
@@ -396,15 +406,15 @@ async fn start(
 
     match supervisor.stop() {
         Ok(()) => {
-            work::supervisor_gone(store, run).await?;
+            work::supervisor_gone(store, session).await?;
         }
-        Err(error) => warn!(run = %run.id, %error, "a supervisor resisted being stopped"),
+        Err(error) => warn!(session = %session.id, %error, "a supervisor resisted being stopped"),
     }
 
     Ok(exit)
 }
 
-/// A Run stopped or sealed tells its supervisor to leave, and one that does closes its agent
+/// A Session stopped or sealed tells its supervisor to leave, and one that does closes its agent
 /// conversation on the way out; killed first, it would leave the agent's own process group
 /// running.
 async fn left_the_link(supervisor: &mut Supervisor) {
@@ -419,12 +429,12 @@ async fn left_the_link(supervisor: &mut Supervisor) {
 }
 
 /// The supervisor reports its own outcome over the link, so what this waits for is the
-/// supervisor being gone. It stops for a Run that ended some other way too — a lease the
-/// supervisor stopped holding out — because a supervisor that outlives its Run would otherwise
+/// supervisor being gone. It stops for a Session that ended some other way too — a lease the
+/// supervisor stopped holding out — because a supervisor that outlives its Session would otherwise
 /// hold this role's one dispatch forever.
 async fn attend(
     store: &Store,
-    run: &Run,
+    session: &Session,
     supervisor: &mut Supervisor,
     shutdown: &CancellationToken,
 ) -> Result<Ended> {
@@ -432,14 +442,14 @@ async fn attend(
         match supervisor.status() {
             Ok(Some(exited)) => return Ok(Ended::Supervisor(exited)),
             Ok(None) => {}
-            // A daemon that cannot answer is not a supervisor that is gone. The Run's lease
+            // A daemon that cannot answer is not a supervisor that is gone. The Session's lease
             // ends it if this never clears.
             Err(error) => {
-                warn!(run = %run.id, %error, "a supervisor could not be asked how it is")
+                warn!(session = %session.id, %error, "a supervisor could not be asked how it is")
             }
         }
-        if let Some(exit) = work::run(store, run.id).await?.exit {
-            return Ok(Ended::TheRun(exit));
+        if let Some(exit) = work::session(store, session.id).await?.exit {
+            return Ok(Ended::TheSession(exit));
         }
 
         tokio::select! {

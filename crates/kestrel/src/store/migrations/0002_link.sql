@@ -1,4 +1,4 @@
-CREATE TABLE run (
+CREATE TABLE session (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     organization_id TEXT NOT NULL REFERENCES organization (id),
@@ -10,9 +10,9 @@ CREATE TABLE run (
     UNIQUE (organization_id, name)
 ) STRICT;
 
-CREATE TABLE run_credential (
+CREATE TABLE session_credential (
     token_hash TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL REFERENCES run (id),
+    session_id TEXT NOT NULL REFERENCES session (id),
     organization_id TEXT NOT NULL REFERENCES organization (id),
     issued_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
@@ -20,10 +20,10 @@ CREATE TABLE run_credential (
 ) STRICT;
 
 CREATE TABLE link_instruction (
-    run_id TEXT NOT NULL REFERENCES run (id),
+    session_id TEXT NOT NULL REFERENCES session (id),
     organization_id TEXT NOT NULL REFERENCES organization (id),
     seq INTEGER NOT NULL,
     body TEXT NOT NULL,
     sent_at TEXT NOT NULL,
-    PRIMARY KEY (run_id, seq)
+    PRIMARY KEY (session_id, seq)
 ) STRICT;

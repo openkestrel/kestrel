@@ -1,4 +1,4 @@
-//! A repository a Project can name that is on this machine rather than on a forge, so a Run
+//! A repository a Project can name that is on this machine rather than on a forge, so a Session
 //! that checks out its Project's repositories reaches nothing over the network.
 
 use std::path::Path;

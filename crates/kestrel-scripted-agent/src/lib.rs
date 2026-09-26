@@ -49,12 +49,12 @@ pub enum Script {
     Decides,
     /// Will not open a session for a client that has not logged in.
     Insists,
-    /// Works at a turn that never ends, so nothing the agent does is what ends the Run.
+    /// Works at a turn that never ends, so nothing the agent does is what ends the Session.
     Dawdles,
     /// Writes to stderr as it works at a turn that never ends.
     Mutters,
     /// Speaks, but takes long enough over the turn that the control plane can be killed and
-    /// restarted while the Run is still in flight.
+    /// restarted while the Session is still in flight.
     Lingers,
     /// Says the directory its session was opened against, and nothing else.
     Locates,

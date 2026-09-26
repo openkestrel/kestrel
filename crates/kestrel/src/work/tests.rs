@@ -1,13 +1,13 @@
 use tempfile::TempDir;
 
 use super::*;
-use crate::domain::RunState;
+use crate::domain::SessionState;
 use crate::log::Window;
 use crate::workspace;
 
 struct Fixture {
     store: Store,
-    run: Run,
+    session: Session,
     data_dir: TempDir,
 }
 
@@ -35,11 +35,11 @@ impl Fixture {
             .await
             .unwrap();
         enqueue(&store, workspace.id, None).await.unwrap();
-        let run = claim(&store, &[]).await.unwrap().unwrap().run;
+        let session = claim(&store, &[]).await.unwrap().unwrap().session;
 
         Self {
             store,
-            run,
+            session,
             data_dir,
         }
     }
@@ -47,7 +47,7 @@ impl Fixture {
     async fn report(&self, seq: Option<i64>, reported: Report) -> Result<(), ReportRefused> {
         report(
             &self.store,
-            &self.run,
+            &self.session,
             Reported {
                 seq,
                 report: reported,
@@ -57,7 +57,7 @@ impl Fixture {
     }
 
     async fn entries(&self) -> Vec<Entry> {
-        workspace::transcript(&self.store, self.run.workspace, None, Window::DEFAULT)
+        workspace::transcript(&self.store, self.session.workspace, None, Window::DEFAULT)
             .await
             .unwrap()
             .entries
@@ -76,7 +76,7 @@ fn usage() -> Usage {
 }
 
 #[tokio::test]
-async fn a_waiting_codex_run_yields_its_profile_and_resumes_when_free() {
+async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     let data_dir = TempDir::new().unwrap();
     let store = Store::open(data_dir.path()).await.unwrap();
     let mut tx = store.begin().await.unwrap();
@@ -123,15 +123,15 @@ async fn a_waiting_codex_run_yields_its_profile_and_resumes_when_free() {
     .await
     .unwrap();
     let first_queued = enqueue(&store, first.id, None).await.unwrap();
-    let first_run = match occupy(&store, 1, &["codex".to_owned()]).await.unwrap() {
-        Some(Occupied::Claimed(claimed)) => claimed.run,
-        _ => panic!("the first run should claim"),
+    let first_session = match occupy(&store, 1, &["codex".to_owned()]).await.unwrap() {
+        Some(Occupied::Claimed(claimed)) => claimed.session,
+        _ => panic!("the first session should claim"),
     };
-    assert_eq!(first_run.id, first_queued.id);
-    link::start(&store, &first_run).await.unwrap();
+    assert_eq!(first_session.id, first_queued.id);
+    link::start(&store, &first_session).await.unwrap();
     report(
         &store,
-        &first_run,
+        &first_session,
         Reported {
             seq: Some(1),
             report: Report::Answered,
@@ -140,16 +140,16 @@ async fn a_waiting_codex_run_yields_its_profile_and_resumes_when_free() {
     .await
     .unwrap();
     assert_eq!(
-        run(&store, first_run.id).await.unwrap().state,
-        RunState::Waiting
+        session(&store, first_session.id).await.unwrap().state,
+        SessionState::Waiting
     );
 
     let second_queued = enqueue(&store, second.id, None).await.unwrap();
-    let second_run = match occupy(&store, 1, &["codex".to_owned()]).await.unwrap() {
-        Some(Occupied::Claimed(claimed)) => claimed.run,
-        _ => panic!("the waiting run should leave its slot and profile available"),
+    let second_session = match occupy(&store, 1, &["codex".to_owned()]).await.unwrap() {
+        Some(Occupied::Claimed(claimed)) => claimed.session,
+        _ => panic!("the waiting session should leave its slot and profile available"),
     };
-    assert_eq!(second_run.id, second_queued.id);
+    assert_eq!(second_session.id, second_queued.id);
 
     workspace::post(&store, first.id, "operator", "continue")
         .await
@@ -179,15 +179,15 @@ async fn a_waiting_codex_run_yields_its_profile_and_resumes_when_free() {
     .await
     .unwrap();
     let alex_queued = enqueue(&store, alex.id, None).await.unwrap();
-    let alex_run = match occupy(&store, 2, &["codex".to_owned()]).await.unwrap() {
-        Some(Occupied::Claimed(claimed)) => claimed.run,
+    let alex_session = match occupy(&store, 2, &["codex".to_owned()]).await.unwrap() {
+        Some(Occupied::Claimed(claimed)) => claimed.session,
         _ => panic!("another profile should be able to claim while Jack is busy"),
     };
-    assert_eq!(alex_run.id, alex_queued.id);
-    link::start(&store, &alex_run).await.unwrap();
+    assert_eq!(alex_session.id, alex_queued.id);
+    link::start(&store, &alex_session).await.unwrap();
     report(
         &store,
-        &alex_run,
+        &alex_session,
         Reported {
             seq: Some(1),
             report: Report::Answered,
@@ -199,13 +199,13 @@ async fn a_waiting_codex_run_yields_its_profile_and_resumes_when_free() {
         .await
         .unwrap();
     match occupy(&store, 2, &["codex".to_owned()]).await.unwrap() {
-        Some(Occupied::Resumed(run)) => assert_eq!(run.id, alex_run.id),
+        Some(Occupied::Resumed(session)) => assert_eq!(session.id, alex_session.id),
         _ => panic!("an eligible held prompt should pass the blocked one"),
     }
 
-    complete(&store, &second_run).await.unwrap();
+    complete(&store, &second_session).await.unwrap();
     match occupy(&store, 2, &["codex".to_owned()]).await.unwrap() {
-        Some(Occupied::Resumed(run)) => assert_eq!(run.id, first_run.id),
+        Some(Occupied::Resumed(session)) => assert_eq!(session.id, first_session.id),
         _ => panic!("the held prompt should resume after the profile is free"),
     }
     assert_eq!(
@@ -214,7 +214,7 @@ async fn a_waiting_codex_run_yields_its_profile_and_resumes_when_free() {
             .await
             .unwrap()
             .workspaces()
-            .turns(first_run.id)
+            .turns(first_session.id)
             .await
             .unwrap()
             .len(),
@@ -223,7 +223,7 @@ async fn a_waiting_codex_run_yields_its_profile_and_resumes_when_free() {
 }
 
 #[tokio::test]
-async fn reports_record_the_run_and_its_transcript_together() {
+async fn reports_record_the_session_and_its_transcript_together() {
     let fixture = Fixture::new().await;
     fixture.report(Some(1), Report::Started).await.unwrap();
     fixture
@@ -258,8 +258,8 @@ async fn reports_record_the_run_and_its_transcript_together() {
         .await
         .unwrap();
 
-    let recorded = run(&fixture.store, fixture.run.id).await.unwrap();
-    assert_eq!(recorded.state, RunState::Ended);
+    let recorded = session(&fixture.store, fixture.session.id).await.unwrap();
+    assert_eq!(recorded.state, SessionState::Ended);
     assert_eq!(recorded.exit, Some(Exit::Succeeded));
     assert!(recorded.started_at.is_some());
     assert!(recorded.ended_at.is_some());
@@ -271,15 +271,15 @@ async fn reports_record_the_run_and_its_transcript_together() {
             Entry::ParticipantJoined {
                 participant: "builder".to_owned()
             },
-            Entry::RunStarted {
-                run: fixture.run.id
+            Entry::SessionStarted {
+                session: fixture.session.id
             },
             Entry::Said {
                 participant: "builder".to_owned(),
                 message: "done".to_owned()
             },
-            Entry::RunEnded {
-                run: fixture.run.id,
+            Entry::SessionEnded {
+                session: fixture.session.id,
                 exit: Exit::Succeeded
             },
         ]
@@ -356,15 +356,15 @@ async fn numbered_reports_refuse_missing_and_invalid_numbers_without_effects() {
         }
     }
 
-    let recorded = run(&fixture.store, fixture.run.id).await.unwrap();
-    assert_eq!(recorded.state, RunState::Working);
+    let recorded = session(&fixture.store, fixture.session.id).await.unwrap();
+    assert_eq!(recorded.state, SessionState::Working);
     assert!(recorded.started_at.is_none());
     assert!(recorded.worked_model.is_none());
     assert!(recorded.usage.is_none());
     assert_eq!(fixture.entries().await, before);
     fixture.report(Some(1), Report::Started).await.unwrap();
     assert!(
-        run(&fixture.store, fixture.run.id)
+        session(&fixture.store, fixture.session.id)
             .await
             .unwrap()
             .started_at
@@ -379,7 +379,7 @@ async fn connection_and_heartbeat_reports_ignore_numbers_and_do_not_consume_them
         let mut tx = fixture.store.begin().await.unwrap();
         tx.workspaces()
             .hold_lease(
-                &fixture.run,
+                &fixture.session,
                 Timestamp::now() - SignedDuration::from_secs(1),
             )
             .await
@@ -396,7 +396,7 @@ async fn connection_and_heartbeat_reports_ignore_numbers_and_do_not_consume_them
             .unwrap();
         let before = Timestamp::now();
         fixture.report(seq, Report::Heartbeat).await.unwrap();
-        let recorded = run(&fixture.store, fixture.run.id).await.unwrap();
+        let recorded = session(&fixture.store, fixture.session.id).await.unwrap();
         assert_eq!(recorded.connected.unwrap().version, "test-version");
         assert!(recorded.lease_expires_at.unwrap() > before);
     }
@@ -426,10 +426,10 @@ async fn what_a_harness_writes_to_stderr_never_enters_the_transcript_or_takes_a_
 }
 
 #[tokio::test]
-async fn a_failed_append_rolls_back_the_run_change_and_report_acceptance() {
+async fn a_failed_append_rolls_back_the_session_change_and_report_acceptance() {
     let fixture = Fixture::new().await;
-    complete(&fixture.store, &fixture.run).await.unwrap();
-    workspace::seal(&fixture.store, fixture.run.workspace)
+    complete(&fixture.store, &fixture.session).await.unwrap();
+    workspace::seal(&fixture.store, fixture.session.workspace)
         .await
         .unwrap();
     let before = fixture.entries().await;
@@ -438,7 +438,7 @@ async fn a_failed_append_rolls_back_the_run_change_and_report_acceptance() {
     assert!(matches!(refused, ReportRefused::Unavailable(_)));
     assert!(refused.to_string().contains("sealed"));
     assert!(
-        run(&fixture.store, fixture.run.id)
+        session(&fixture.store, fixture.session.id)
             .await
             .unwrap()
             .started_at
@@ -451,7 +451,10 @@ async fn a_failed_append_rolls_back_the_run_change_and_report_acceptance() {
         .await
         .unwrap();
     assert_eq!(
-        run(&fixture.store, fixture.run.id).await.unwrap().usage,
+        session(&fixture.store, fixture.session.id)
+            .await
+            .unwrap()
+            .usage,
         Some(usage())
     );
 }
@@ -459,7 +462,7 @@ async fn a_failed_append_rolls_back_the_run_change_and_report_acceptance() {
 #[tokio::test]
 async fn a_finished_report_keeps_the_exit_that_already_stands() {
     let fixture = Fixture::new().await;
-    let failed = fail(&fixture.store, &fixture.run, "lease expired")
+    let failed = fail(&fixture.store, &fixture.session, "lease expired")
         .await
         .unwrap();
     let before = fixture.entries().await;
@@ -475,7 +478,10 @@ async fn a_finished_report_keeps_the_exit_that_already_stands() {
         .unwrap();
 
     assert_eq!(
-        run(&fixture.store, fixture.run.id).await.unwrap().exit,
+        session(&fixture.store, fixture.session.id)
+            .await
+            .unwrap()
+            .exit,
         Some(failed)
     );
     assert_eq!(fixture.entries().await, before);

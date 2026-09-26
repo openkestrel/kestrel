@@ -10,7 +10,7 @@ use std::process::{Child, ChildStderr, ChildStdout, ExitStatus};
 pub use docker::Docker;
 pub use local_exec::LocalExec;
 
-use crate::domain::RunId;
+use crate::domain::SessionId;
 
 /// What a driver does once it has provisioned, and the whole of it. An inbound address would
 /// split the eight deployment targets, so no driver offers one.
@@ -27,8 +27,8 @@ pub trait Supervising: Send {
     fn stop(&mut self) -> io::Result<()>;
 }
 
-/// The sixth operation, and the only place either driver is named: which one executes a Run is
-/// read from configuration once, never decided where a Run is executed.
+/// The sixth operation, and the only place either driver is named: which one executes a Session is
+/// read from configuration once, never decided where a Session is executed.
 #[derive(Debug, Clone)]
 pub enum Driver {
     Docker(Docker),
@@ -36,10 +36,10 @@ pub enum Driver {
 }
 
 impl Driver {
-    pub fn provision(&self, run: RunId) -> io::Result<Instance> {
+    pub fn provision(&self, session: SessionId) -> io::Result<Instance> {
         match self {
-            Driver::Docker(docker) => docker.provision(run),
-            Driver::LocalExec(local_exec) => local_exec.provision(run),
+            Driver::Docker(docker) => docker.provision(session),
+            Driver::LocalExec(local_exec) => local_exec.provision(session),
         }
     }
 
@@ -67,14 +67,15 @@ impl Driver {
     }
 }
 
-/// Outlives this handle: dropping one leaves the Instance where it is, for the next Run to resume.
+/// Outlives this handle: dropping one leaves the Instance where it is, for the next Session to
+/// resume.
 pub struct Instance {
     name: String,
     provisioned: Box<dyn Provisioned>,
 }
 
 impl Instance {
-    /// `<driver>/<instance>`, which is what a Run records having executed on.
+    /// `<driver>/<instance>`, which is what a Session records having executed on.
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -92,7 +93,7 @@ impl Instance {
         self.provisioned.write_file(path, contents)
     }
 
-    /// Starts one Run's supervisor, which alone is handed that Run's credentials.
+    /// Starts one Session's supervisor, which alone is handed that Session's credentials.
     pub fn supervise(&mut self, variables: &[(&str, &str)]) -> io::Result<Supervisor> {
         self.provisioned.supervise(variables)
     }
@@ -129,7 +130,8 @@ impl Supervisor {
         self.supervising.status()
     }
 
-    /// Takes every process the Run started with it, so none is left for the next Run to find.
+    /// Takes every process the Session started with it, so none is left for the next Session to
+    /// find.
     pub fn stop(mut self) -> io::Result<()> {
         let stopped = self.supervising.stop();
         self.stopped = true;

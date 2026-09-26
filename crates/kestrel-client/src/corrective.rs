@@ -22,17 +22,19 @@ pub fn command(message: &str, organization: Option<&str>) -> Option<String> {
         .and_then(|rest| rest.split_once(" holds no provider credential named "))
     {
         Some(format!("kestrel credential set {}", quoted(variable)))
-    } else if message.contains("already has the run ") || message.contains(" is still in flight ") {
-        let run = message
-            .split("the run ")
+    } else if message.contains("already has the session ")
+        || message.contains(" is still in flight ")
+    {
+        let session = message
+            .split("the session ")
             .nth(1)?
             .split_whitespace()
             .next()?;
-        Some(format!("kestrel run stop {}", quoted(run)))
+        Some(format!("kestrel session stop {}", quoted(session)))
     } else if let Some(rest) = message.strip_prefix("the workspace ") {
         if let Some((workspace, _)) = rest.split_once(" is open, and work continues") {
             Some(format!(
-                "kestrel run enqueue --workspace {}",
+                "kestrel session enqueue --workspace {}",
                 quoted(workspace)
             ))
         } else if let Some((workspace, _)) = rest.split_once("'s instance ") {

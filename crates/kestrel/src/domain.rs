@@ -44,7 +44,7 @@ identifiers!(
     ProjectId,
     AgentId,
     WorkspaceId,
-    RunId,
+    SessionId,
     IntegrationId,
     EventRecordId,
     TriggerId,
@@ -238,11 +238,11 @@ pub struct EventRefusal {
 }
 
 /// Something kestrel says back on the surface that started the Workspace: a completed Turn's
-/// response, or the Run's own final Outcome. Posted once however many attempts that takes.
-/// `turn` is the Turn's seq, or `None` for the Run's own outcome.
+/// response, or the Session's own final Outcome. Posted once however many attempts that takes.
+/// `turn` is the Turn's seq, or `None` for the Session's own outcome.
 #[derive(Debug, Clone)]
 pub struct Delivery {
-    pub run: RunId,
+    pub session: SessionId,
     pub turn: Option<i64>,
     pub organization: OrganizationId,
     pub integration: IntegrationId,
@@ -523,18 +523,18 @@ impl Workspace {
 }
 
 #[derive(Debug, Clone)]
-pub struct Run {
-    pub id: RunId,
+pub struct Session {
+    pub id: SessionId,
     pub name: String,
     pub organization: OrganizationId,
     pub workspace: WorkspaceId,
-    pub state: RunState,
+    pub state: SessionState,
     pub waiting_for: Option<String>,
     pub exit: Option<Exit>,
     pub outcome_message: Option<String>,
     pub instance: Option<String>,
     pub supervisor: Option<String>,
-    /// What this Run names, or none for its Agent's or Harness's default.
+    /// What this Session names, or none for its Agent's or Harness's default.
     pub model: Option<String>,
     /// What the Harness reported it worked on.
     pub worked_model: Option<String>,
@@ -553,7 +553,7 @@ pub struct Turn {
     pub answered_at: Option<Timestamp>,
 }
 
-/// What the Harness has spent on behalf of a Run, cumulative rather than per turn.
+/// What the Harness has spent on behalf of a Session, cumulative rather than per turn.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Usage {
     pub context_used: u64,
@@ -578,60 +578,60 @@ impl fmt::Display for Usage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RunState {
+pub enum SessionState {
     Queued,
     Working,
     Waiting,
     Ended,
-    /// Terminal like `Ended`, but with no exit status: a queued Run whose declared tolerance
+    /// Terminal like `Ended`, but with no exit status: a queued Session whose declared tolerance
     /// can no longer be met never ran, so nothing failed.
     Unreachable,
 }
 
-impl RunState {
-    pub const LIVE: [RunState; 2] = [RunState::Working, RunState::Waiting];
+impl SessionState {
+    pub const LIVE: [SessionState; 2] = [SessionState::Working, SessionState::Waiting];
 
     pub const fn as_str(self) -> &'static str {
         match self {
-            RunState::Queued => "queued",
-            RunState::Working => "working",
-            RunState::Waiting => "waiting",
-            RunState::Ended => "ended",
-            RunState::Unreachable => "unreachable",
+            SessionState::Queued => "queued",
+            SessionState::Working => "working",
+            SessionState::Waiting => "waiting",
+            SessionState::Ended => "ended",
+            SessionState::Unreachable => "unreachable",
         }
     }
 
-    /// `None` once the Run has ended: there is nothing left to stop.
+    /// `None` once the Session has ended: there is nothing left to stop.
     pub fn stop_exit(self) -> Option<Exit> {
         match self {
-            RunState::Ended | RunState::Unreachable => None,
-            RunState::Queued => Some(Exit::Failed {
+            SessionState::Ended | SessionState::Unreachable => None,
+            SessionState::Queued => Some(Exit::Failed {
                 because: "it was stopped before it started".into(),
             }),
-            RunState::Working => Some(Exit::Failed {
+            SessionState::Working => Some(Exit::Failed {
                 because: "it was stopped mid-turn, before its agent answered".into(),
             }),
-            RunState::Waiting => Some(Exit::Succeeded),
+            SessionState::Waiting => Some(Exit::Succeeded),
         }
     }
 }
 
-impl FromStr for RunState {
+impl FromStr for SessionState {
     type Err = anyhow::Error;
 
     fn from_str(state: &str) -> Result<Self> {
         match state {
-            "queued" => Ok(RunState::Queued),
-            "working" => Ok(RunState::Working),
-            "waiting" => Ok(RunState::Waiting),
-            "ended" => Ok(RunState::Ended),
-            "unreachable" => Ok(RunState::Unreachable),
-            other => bail!("{other} is not a state a run can be in"),
+            "queued" => Ok(SessionState::Queued),
+            "working" => Ok(SessionState::Working),
+            "waiting" => Ok(SessionState::Waiting),
+            "ended" => Ok(SessionState::Ended),
+            "unreachable" => Ok(SessionState::Unreachable),
+            other => bail!("{other} is not a state a session can be in"),
         }
     }
 }
 
-impl fmt::Display for RunState {
+impl fmt::Display for SessionState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
@@ -665,7 +665,7 @@ impl Exit {
             "failed" => Ok(Exit::Failed {
                 because: because.unwrap_or_default(),
             }),
-            other => bail!("{other} is not an exit status a run can end with"),
+            other => bail!("{other} is not an exit status a session can end with"),
         }
     }
 }
@@ -723,17 +723,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stopping_succeeds_only_a_waiting_run() {
+    fn stopping_succeeds_only_a_waiting_session() {
         assert!(matches!(
-            RunState::Queued.stop_exit(),
+            SessionState::Queued.stop_exit(),
             Some(Exit::Failed { .. })
         ));
         assert!(matches!(
-            RunState::Working.stop_exit(),
+            SessionState::Working.stop_exit(),
             Some(Exit::Failed { .. })
         ));
-        assert_eq!(RunState::Waiting.stop_exit(), Some(Exit::Succeeded));
-        assert_eq!(RunState::Ended.stop_exit(), None);
-        assert_eq!(RunState::Unreachable.stop_exit(), None);
+        assert_eq!(SessionState::Waiting.stop_exit(), Some(Exit::Succeeded));
+        assert_eq!(SessionState::Ended.stop_exit(), None);
+        assert_eq!(SessionState::Unreachable.stop_exit(), None);
     }
 }

@@ -1,4 +1,4 @@
-//! The Integration's outbound direction: a completed Turn's response, and a Run's own final
+//! The Integration's outbound direction: a completed Turn's response, and a Session's own final
 //! Outcome when it adds something the Turn responses did not, said back where the work came
 //! from (ADR-0024). kestrel relays what its Agent said and reasons about no git of its own, so
 //! the pull request a comment points at is there because the Agent named it.
@@ -7,17 +7,17 @@ use anyhow::Result;
 use jiff::Timestamp;
 use tracing::warn;
 
-use crate::domain::{Delivery, Direction, Event, Exit, Integration, Run, RunId, Workspace};
+use crate::domain::{Delivery, Direction, Event, Exit, Integration, Session, SessionId, Workspace};
 use crate::integration::back_off;
 use crate::integration::github::{Github, MARKER, Refused};
 use crate::store::{Store, Tx};
 
-/// Invisible where GitHub renders it, and the whole of how a delivery that never learned
-/// whether its comment landed recognises its own. The Turn names which of a Run's messages it is.
-fn marker(run: RunId, turn: Option<i64>) -> String {
+/// Invisible where GitHub renders it, and the whole of how a delivery that never learned whether
+/// its comment landed recognises its own. The Turn names which of a Session's messages it is.
+fn marker(session: SessionId, turn: Option<i64>) -> String {
     match turn {
-        Some(turn) => format!("{MARKER}{run} turn {turn} -->"),
-        None => format!("{MARKER}{run} -->"),
+        Some(turn) => format!("{MARKER}{session} turn {turn} -->"),
+        None => format!("{MARKER}{session} -->"),
     }
 }
 
@@ -48,7 +48,7 @@ async fn surface(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Option<(Integ
 /// to be posted. A Turn that produced no message has nothing to say and records nothing.
 pub(crate) async fn record_turn(
     tx: &mut Tx<'_>,
-    run: &Run,
+    session: &Session,
     workspace: &Workspace,
     turn: i64,
     said: &[String],
@@ -57,21 +57,25 @@ pub(crate) async fn record_turn(
         return Ok(());
     };
 
-    let body = format!("{}\n\n{}\n", said.join("\n\n"), marker(run.id, Some(turn)));
+    let body = format!(
+        "{}\n\n{}\n",
+        said.join("\n\n"),
+        marker(session.id, Some(turn))
+    );
     tx.integrations()
-        .record_delivery(run, &integration, &event, Some(turn), &body, Some(said))
+        .record_delivery(session, &integration, &event, Some(turn), &body, Some(said))
         .await
 }
 
 pub(crate) async fn record_outcome(
     tx: &mut Tx<'_>,
-    run: &Run,
+    session: &Session,
     workspace: &Workspace,
     exit: &Exit,
     said: Option<&str>,
 ) -> Result<()> {
     if matches!(exit, Exit::Succeeded) {
-        let responses = tx.integrations().turn_responses(run.id).await?;
+        let responses = tx.integrations().turn_responses(session.id).await?;
         if !responses.is_empty()
             && said.is_none_or(|said| {
                 responses.iter().any(|messages| {
@@ -86,10 +90,10 @@ pub(crate) async fn record_outcome(
         return Ok(());
     };
 
-    let body = body(workspace, run, exit, said);
+    let body = body(workspace, session, exit, said);
 
     tx.integrations()
-        .record_delivery(run, &integration, &event, None, &body, None)
+        .record_delivery(session, &integration, &event, None, &body, None)
         .await
 }
 
@@ -105,7 +109,7 @@ pub async fn deliver(
         let mut tx = store.begin().await?;
         tx.integrations().with_id(delivery.integration).await?
     };
-    let marker = marker(delivery.run, delivery.turn);
+    let marker = marker(delivery.session, delivery.turn);
 
     // An earlier attempt went out and never came back, so a comment may already be there.
     if let Some(attempted_at) = delivery.attempted_at {
@@ -149,11 +153,11 @@ async fn deferred(
     refused: &Refused,
 ) -> Result<Option<String>> {
     warn!(
-        run = %delivery.run,
+        session = %delivery.session,
         turn = delivery.turn,
         integration = integration.name,
         because = %refused,
-        "what a run said could not be said back on the issue it came from"
+        "what a session said could not be said back on the issue it came from"
     );
 
     let mut tx = store.begin().await?;
@@ -165,8 +169,8 @@ async fn deferred(
     Ok(None)
 }
 
-fn body(workspace: &Workspace, run: &Run, exit: &Exit, said: Option<&str>) -> String {
-    let mut body = format!("**kestrel** — run {exit}\n");
+fn body(workspace: &Workspace, session: &Session, exit: &Exit, said: Option<&str>) -> String {
+    let mut body = format!("**kestrel** — session {exit}\n");
 
     if let Some(message) = said.map(str::trim).filter(|said| !said.is_empty()) {
         body.push('\n');
@@ -179,10 +183,10 @@ fn body(workspace: &Workspace, run: &Run, exit: &Exit, said: Option<&str>) -> St
     }
 
     body.push_str(&format!(
-        "\nWorkspace `{}` · run `{}`\n{}\n",
+        "\nWorkspace `{}` · session `{}`\n{}\n",
         workspace.id,
-        run.id,
-        marker(run.id, None)
+        session.id,
+        marker(session.id, None)
     ));
 
     body
@@ -194,7 +198,7 @@ mod tests {
 
     use super::*;
     use crate::domain::{
-        Agent, AgentId, Checkout, Organization, OrganizationId, Project, ProjectId, RunState,
+        Agent, AgentId, Checkout, Organization, OrganizationId, Project, ProjectId, SessionState,
         WorkspaceId, WorkspaceState,
     };
 
@@ -239,13 +243,13 @@ mod tests {
         }
     }
 
-    fn a_run(workspace: &Workspace) -> Run {
-        Run {
-            id: RunId::generate(),
+    fn a_session(workspace: &Workspace) -> Session {
+        Session {
+            id: SessionId::generate(),
             name: "quiet-river".to_owned(),
             organization: workspace.organization.id,
             workspace: workspace.id,
-            state: RunState::Ended,
+            state: SessionState::Ended,
             waiting_for: None,
             exit: None,
             outcome_message: None,
@@ -265,56 +269,59 @@ mod tests {
     #[test]
     fn what_the_agent_said_last_is_quoted_under_the_exit_status() {
         let workspace = a_workspace();
-        let run = a_run(&workspace);
+        let session = a_session(&workspace);
 
         let body = body(
             &workspace,
-            &run,
+            &session,
             &Exit::Succeeded,
             Some("Opened https://github.com/jtmthf/kestrel/pull/92.\n\nIt has a test."),
         );
 
-        assert!(body.starts_with("**kestrel** — run succeeded\n"));
+        assert!(body.starts_with("**kestrel** — session succeeded\n"));
         assert!(body.contains(
             "> Opened https://github.com/jtmthf/kestrel/pull/92.\n>\n> It has a test.\n"
         ));
         assert!(body.contains(&workspace.id.to_string()));
-        assert!(body.ends_with(&format!("{}\n", marker(run.id, None))));
+        assert!(body.ends_with(&format!("{}\n", marker(session.id, None))));
     }
 
     #[test]
-    fn a_run_that_failed_says_so_and_says_why() {
+    fn a_session_that_failed_says_so_and_says_why() {
         let workspace = a_workspace();
-        let run = a_run(&workspace);
+        let session = a_session(&workspace);
 
         let body = body(
             &workspace,
-            &run,
+            &session,
             &Exit::Failed {
                 because: "the environment could not be provisioned".to_owned(),
             },
             None,
         );
 
-        assert!(body.contains("run failed: the environment could not be provisioned"));
+        assert!(body.contains("session failed: the environment could not be provisioned"));
     }
 
     #[test]
     fn an_agent_that_said_nothing_leaves_no_empty_quote() {
         let workspace = a_workspace();
-        let run = a_run(&workspace);
+        let session = a_session(&workspace);
 
-        let body = body(&workspace, &run, &Exit::Succeeded, Some("   "));
+        let body = body(&workspace, &session, &Exit::Succeeded, Some("   "));
 
         assert!(!body.lines().any(|line| line.starts_with('>')));
     }
 
     #[test]
-    fn a_turns_marker_names_the_run_and_the_turn() {
-        let run = RunId::generate();
+    fn a_turns_marker_names_the_session_and_the_turn() {
+        let session = SessionId::generate();
 
-        assert_eq!(marker(run, Some(3)), format!("{MARKER}{run} turn 3 -->"));
-        assert_eq!(marker(run, None), format!("{MARKER}{run} -->"));
-        assert_ne!(marker(run, Some(1)), marker(run, Some(2)));
+        assert_eq!(
+            marker(session, Some(3)),
+            format!("{MARKER}{session} turn 3 -->")
+        );
+        assert_eq!(marker(session, None), format!("{MARKER}{session} -->"));
+        assert_ne!(marker(session, Some(1)), marker(session, Some(2)));
     }
 }

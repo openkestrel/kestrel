@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use kestrel::domain::RunId;
+use kestrel::domain::SessionId;
 use kestrel::link::credential::Secret;
 use kestrel::work::Reported;
 use reqwest::{Client, Response, StatusCode, header};
@@ -41,23 +41,24 @@ impl Link {
 
     pub async fn instructions(
         &self,
-        run: RunId,
+        session: SessionId,
         credential: Option<&Secret>,
         cursor: Option<i64>,
     ) -> Response {
-        self.instructions_for(&run.to_string(), credential, cursor)
+        self.instructions_for(&session.to_string(), credential, cursor)
             .await
     }
 
     pub async fn instructions_for(
         &self,
-        run: &str,
+        session: &str,
         credential: Option<&Secret>,
         cursor: Option<i64>,
     ) -> Response {
-        let mut request = self
-            .client
-            .get(format!("{}/link/runs/{run}/instructions", self.base));
+        let mut request = self.client.get(format!(
+            "{}/link/sessions/{session}/instructions",
+            self.base
+        ));
         if let Some(credential) = credential {
             request = request.bearer_auth(credential.as_str());
         }
@@ -68,8 +69,13 @@ impl Link {
         request.send().await.expect("the link should answer")
     }
 
-    pub async fn open(&self, run: RunId, credential: &Secret, cursor: Option<i64>) -> Events {
-        let response = self.instructions(run, Some(credential), cursor).await;
+    pub async fn open(
+        &self,
+        session: SessionId,
+        credential: &Secret,
+        cursor: Option<i64>,
+    ) -> Events {
+        let response = self.instructions(session, Some(credential), cursor).await;
         assert_eq!(
             response.status(),
             StatusCode::OK,
@@ -93,7 +99,7 @@ impl Link {
     /// was handed it would give it back.
     pub async fn entries(
         &self,
-        run: RunId,
+        session: SessionId,
         credential: Option<&Secret>,
         cursor: Option<&str>,
         window: Option<usize>,
@@ -108,9 +114,10 @@ impl Link {
             false => format!("?{}", asked.join("&")),
         };
 
-        let mut request = self
-            .client
-            .get(format!("{}/link/runs/{run}/entries{query}", self.base));
+        let mut request = self.client.get(format!(
+            "{}/link/sessions/{session}/entries{query}",
+            self.base
+        ));
         if let Some(credential) = credential {
             request = request.bearer_auth(credential.as_str());
         }
@@ -118,10 +125,10 @@ impl Link {
         request.send().await.expect("the link should answer")
     }
 
-    pub async fn credentials(&self, run: RunId, credential: Option<&Secret>) -> Response {
+    pub async fn credentials(&self, session: SessionId, credential: Option<&Secret>) -> Response {
         let mut request = self
             .client
-            .get(format!("{}/link/runs/{run}/credentials", self.base));
+            .get(format!("{}/link/sessions/{session}/credentials", self.base));
         if let Some(credential) = credential {
             request = request.bearer_auth(credential.as_str());
         }
@@ -131,7 +138,7 @@ impl Link {
 
     pub async fn refresh(
         &self,
-        run: RunId,
+        session: SessionId,
         credential: &Secret,
         files: &[(&str, &str)],
     ) -> Response {
@@ -141,7 +148,7 @@ impl Link {
             .collect();
 
         self.client
-            .patch(format!("{}/link/runs/{run}/credentials", self.base))
+            .patch(format!("{}/link/sessions/{session}/credentials", self.base))
             .bearer_auth(credential.as_str())
             .json(&serde_json::json!({ "files": files }))
             .send()
@@ -151,12 +158,12 @@ impl Link {
 
     pub async fn report(
         &self,
-        run: RunId,
+        session: SessionId,
         credential: Option<&Secret>,
         reported: &Reported,
     ) -> Response {
         self.report_body(
-            run,
+            session,
             credential,
             &serde_json::to_value(reported).expect("a report"),
         )
@@ -167,13 +174,13 @@ impl Link {
     /// hold the link to what `openapi/link.json` says it accepts.
     pub async fn report_body(
         &self,
-        run: RunId,
+        session: SessionId,
         credential: Option<&Secret>,
         body: &serde_json::Value,
     ) -> Response {
         let mut request = self
             .client
-            .post(format!("{}/link/runs/{run}/reports", self.base))
+            .post(format!("{}/link/sessions/{session}/reports", self.base))
             .json(body);
         if let Some(credential) = credential {
             request = request.bearer_auth(credential.as_str());

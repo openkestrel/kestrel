@@ -1,6 +1,6 @@
 mod support;
 
-use kestrel::domain::{Exit, RunId, WorkspaceId};
+use kestrel::domain::{Exit, SessionId, WorkspaceId};
 use kestrel::log::Entry;
 use serde_json::Value;
 use support::client::{Finished, Invocation, Shown, ran_by, ran_on_a_terminal_by};
@@ -8,7 +8,7 @@ use support::scripted_agent::{self, Script};
 use support::{A_PROVIDER_KEY, Kestrel, PROVIDER_KEY, repository, supervisor};
 
 const BRIEF: &str = "Make the README say what kestrel is";
-const STARTED: &str = "organization,project,agent,workspace,workspace_id,run,run_id";
+const STARTED: &str = "organization,project,agent,workspace,workspace_id,session,session_id";
 const QUESTION: &str = "apply this plan?";
 
 fn in_a_fresh_clone() -> Invocation {
@@ -83,7 +83,8 @@ async fn declared(kestrel: &Kestrel) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn one_command_takes_a_fresh_clone_and_an_empty_control_plane_to_a_run_carrying_its_brief() {
+async fn one_command_takes_a_fresh_clone_and_an_empty_control_plane_to_a_session_carrying_its_brief()
+ {
     let kestrel = Kestrel::dispatching_to(
         supervisor::binary(),
         &scripted_agent::playing(Script::Echoes),
@@ -114,12 +115,12 @@ async fn one_command_takes_a_fresh_clone_and_an_empty_control_plane_to_a_run_car
         .as_str()
         .and_then(|id| id.parse().ok())
         .expect("a workspace identifier");
-    let run: RunId = started["run_id"]
+    let session: SessionId = started["session_id"]
         .as_str()
         .and_then(|id| id.parse().ok())
-        .expect("a run identifier");
+        .expect("a session identifier");
 
-    let ended = kestrel.after_one_turn(run).await;
+    let ended = kestrel.after_one_turn(session).await;
     assert_eq!(ended.exit, Some(Exit::Succeeded));
     let transcript = kestrel.transcript(workspace).await;
     assert_eq!(

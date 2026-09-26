@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use jiff::Timestamp;
 use sha2::{Digest as _, Sha256};
 
-use crate::domain::{OrganizationId, RunId};
+use crate::domain::{OrganizationId, SessionId};
 
 /// The credential as the supervisor presents it. Never stored: `Store` keeps only its digest,
 /// so a copy of the database is not a set of usable credentials.
@@ -40,7 +40,7 @@ fn hex(bytes: &[u8]) -> String {
 
 #[derive(Debug, Clone)]
 pub struct Credential {
-    pub run: RunId,
+    pub session: SessionId,
     pub organization: OrganizationId,
     pub expires_at: Timestamp,
     pub invalidated_at: Option<Timestamp>,
@@ -72,7 +72,7 @@ mod tests {
     #[test]
     fn an_invalidated_credential_is_not_live_however_far_off_its_expiry_is() {
         let credential = Credential {
-            run: RunId::generate(),
+            session: SessionId::generate(),
             organization: OrganizationId::generate(),
             expires_at: Timestamp::MAX,
             invalidated_at: Some(Timestamp::now()),
@@ -85,7 +85,7 @@ mod tests {
     fn a_credential_is_not_live_once_its_expiry_has_passed() {
         let expires_at = Timestamp::now();
         let credential = Credential {
-            run: RunId::generate(),
+            session: SessionId::generate(),
             organization: OrganizationId::generate(),
             expires_at,
             invalidated_at: None,

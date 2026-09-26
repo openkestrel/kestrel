@@ -108,7 +108,7 @@ fn the_operator_boundary_is_published_on_the_hosts_loopback_and_probed_over_http
 
 /// Rendered the way this checkout's suite runs it, every resource the control plane addresses
 /// — the project, the volume it keeps its database on, the link network it hands the daemon,
-/// and the image a Run executes in — is one of this checkout's.
+/// and the image a Session executes in — is one of this checkout's.
 #[test]
 #[ignore = "renders the compose file with docker"]
 fn a_checkout_namespaces_every_resource_its_stack_runs() {
@@ -161,7 +161,7 @@ fn the_suite_namespace_is_stable_for_one_checkout_and_distinct_for_another() {
 
 #[test]
 #[ignore = "builds the images the compose file names"]
-fn the_stack_is_the_control_plane_the_filter_and_the_image_a_run_executes_in() {
+fn the_stack_is_the_control_plane_the_filter_and_the_image_a_session_executes_in() {
     let namespace = compose::namespace_for(&docker::repository());
     let mut images = compose::built()
         .iter()
@@ -256,23 +256,23 @@ fn an_operation_outside_the_filter_is_refused_and_the_refusal_says_what_it_was()
     );
 }
 
-/// Every request the driver makes goes through the filter, so a Run that reaches an Instance
-/// and leaves no supervisor behind is the whole list a Run makes exercised. The Instance is
+/// Every request the driver makes goes through the filter, so a Session that reaches an Instance
+/// and leaves no supervisor behind is the whole list a Session makes exercised. The Instance is
 /// provisioned from this checkout's own image onto this checkout's own link network, so it
 /// can neither find another checkout's control plane nor be found by it.
 #[tokio::test]
 #[ignore = "builds images and brings a stack up"]
-async fn a_run_provisions_an_instance_and_stops_its_supervisor_through_the_filter() {
+async fn a_session_provisions_an_instance_and_stops_its_supervisor_through_the_filter() {
     let stack = Stack::up();
     let namespace = compose::namespace_for(&docker::repository());
     let workspace = a_workspace(&stack);
-    let run = stack.ran(&["run", "enqueue", "--workspace", &workspace]);
+    let session = stack.ran(&["session", "enqueue", "--workspace", &workspace]);
 
-    let instance = compose::until("the run to reach an instance", || {
-        listed(&stack, &run).instance
+    let instance = compose::until("the session to reach an instance", || {
+        listed(&stack, &session).instance
     });
     let container = Container::named(&instance);
-    assert_eq!(instance, format!("docker/kestrel-{run}"));
+    assert_eq!(instance, format!("docker/kestrel-{session}"));
     assert!(
         container.networks().contains(&namespace.link),
         "the instance is on {}, not the checkout's link network {}",
@@ -290,20 +290,20 @@ async fn a_run_provisions_an_instance_and_stops_its_supervisor_through_the_filte
             .then_some(())
     });
 
-    // The credential this stack holds reaches no provider, so what ends this Run is the control
+    // The credential this stack holds reaches no provider, so what ends this Session is the control
     // plane stopping under it rather than anything the agent did.
     stack.comes_back();
 
-    let went = listed(&stack, &run).exit;
+    let went = listed(&stack, &session).exit;
     assert_eq!(went["status"], "failed");
     assert_eq!(
         went["because"],
-        "the control plane stopped while this run was in flight"
+        "the control plane stopped while this session was in flight"
     );
     let left = container.processes();
     assert!(
         !left.contains("kestrel-supervisor"),
-        "the run left its supervisor on its instance: {left}"
+        "the session left its supervisor on its instance: {left}"
     );
     container.destroy();
 }
@@ -334,8 +334,8 @@ fn the_stack_comes_back_up_with_every_workspace_it_had() {
 
 /// The commands `USAGE.md` walks a reader through, run by the installed Client against the
 /// port the stack publishes, minus the two its neighbours already cover:
-/// `a_run_provisions_an_instance_and_stops_its_supervisor_through_the_filter` covers enqueueing
-/// a Run, and `the_stack_comes_back_up_with_every_workspace_it_had` covers surviving a restart.
+/// `a_session_provisions_an_instance_and_stops_its_supervisor_through_the_filter` covers enqueueing
+/// a Session, and `the_stack_comes_back_up_with_every_workspace_it_had` covers surviving a restart.
 #[test]
 #[ignore = "builds images and brings a stack up"]
 fn the_commands_usage_documents_are_the_commands_that_work() {
@@ -396,9 +396,9 @@ fn a_workspace(stack: &Stack) -> String {
         "--branch",
         "main",
     ]);
-    // The Agent names no model, so the harness's own default is what a Run would get.
+    // The Agent names no model, so the harness's own default is what a Session would get.
     stack.ran(&["agent", "declare", "builder"]);
-    // A Run reaches no model without one. This value reaches no provider either, which is why
+    // A Session reaches no model without one. This value reaches no provider either, which is why
     // nothing here gets further than an Environment.
     stack.ran_given(
         &["credential", "set", "OPENCODE_API_KEY"],
@@ -420,10 +420,10 @@ struct Listed {
     exit: Value,
 }
 
-fn listed(stack: &Stack, run: &str) -> Listed {
-    let shown = stack.ran(&["run", "show", run, "--json", "instance,exit"]);
-    let shown: Value =
-        serde_json::from_str(&shown).unwrap_or_else(|error| panic!("{shown} is no run: {error}"));
+fn listed(stack: &Stack, session: &str) -> Listed {
+    let shown = stack.ran(&["session", "show", session, "--json", "instance,exit"]);
+    let shown: Value = serde_json::from_str(&shown)
+        .unwrap_or_else(|error| panic!("{shown} is no session: {error}"));
 
     Listed {
         instance: shown["instance"].as_str().map(str::to_owned),

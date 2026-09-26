@@ -1,7 +1,7 @@
 mod support;
 
 use jiff::{SignedDuration, Timestamp};
-use kestrel::domain::{RunState, Workspace};
+use kestrel::domain::{SessionState, Workspace};
 use kestrel::instance::{Git, Observed};
 use support::Kestrel;
 use support::repository;
@@ -52,18 +52,18 @@ async fn workspaces(kestrel: &Kestrel, maximum: usize) -> (Workspace, Workspace,
     )
 }
 
-async fn complete_clean_runs(kestrel: &Kestrel, workspaces: &[(&Workspace, &str)]) {
+async fn complete_clean_sessions(kestrel: &Kestrel, workspaces: &[(&Workspace, &str)]) {
     for (workspace, instance) in workspaces {
-        let queued = kestrel.enqueue_run(workspace.id).await;
-        let run = kestrel
-            .occupy_run()
+        let queued = kestrel.enqueue_session(workspace.id).await;
+        let session = kestrel
+            .occupy_session()
             .await
-            .expect("the run should claim")
-            .run;
-        assert_eq!(run.id, queued.id);
-        kestrel.executes_on(&run, instance).await;
-        kestrel.report_checkout(&run, clean_checkout()).await;
-        kestrel.complete_run(&run).await;
+            .expect("the session should claim")
+            .session;
+        assert_eq!(session.id, queued.id);
+        kestrel.executes_on(&session, instance).await;
+        kestrel.report_checkout(&session, clean_checkout()).await;
+        kestrel.complete_session(&session).await;
     }
 }
 
@@ -71,16 +71,19 @@ async fn complete_clean_runs(kestrel: &Kestrel, workspaces: &[(&Workspace, &str)
 async fn an_active_instance_counts_toward_the_organization_limit() {
     let kestrel = Kestrel::boot().await;
     let (active, waiting, _) = workspaces(&kestrel, 1).await;
-    let first = kestrel.enqueue_run(active.id).await;
-    let claimed = kestrel.occupy_run().await.expect("the run should claim");
-    assert_eq!(claimed.run.id, first.id);
-    kestrel.executes_on(&claimed.run, "active").await;
+    let first = kestrel.enqueue_session(active.id).await;
+    let claimed = kestrel
+        .occupy_session()
+        .await
+        .expect("the session should claim");
+    assert_eq!(claimed.session.id, first.id);
+    kestrel.executes_on(&claimed.session, "active").await;
 
-    let second = kestrel.enqueue_run(waiting.id).await;
-    assert!(kestrel.occupy_run().await.is_none());
-    let second = kestrel.run(second.id).await;
+    let second = kestrel.enqueue_session(waiting.id).await;
+    assert!(kestrel.occupy_session().await.is_none());
+    let second = kestrel.session(second.id).await;
 
-    assert_eq!(second.state, RunState::Queued);
+    assert_eq!(second.state, SessionState::Queued);
     assert!(second.waiting_for.is_some());
 
     kestrel.teardown().await;
@@ -91,21 +94,24 @@ async fn reclaiming_for_new_work_does_not_delay_a_follow_up_that_already_has_an_
     let kestrel = Kestrel::boot().await;
     let (oldest, existing, arriving) = workspaces(&kestrel, 2).await;
 
-    complete_clean_runs(&kestrel, &[(&oldest, "oldest"), (&existing, "existing")]).await;
+    complete_clean_sessions(&kestrel, &[(&oldest, "oldest"), (&existing, "existing")]).await;
     kestrel
         .last_active(&oldest, Timestamp::now() - SignedDuration::from_hours(1))
         .await;
 
-    let new_run = kestrel.enqueue_run(arriving.id).await;
-    let follow_up = kestrel.enqueue_run(existing.id).await;
+    let new_session = kestrel.enqueue_session(arriving.id).await;
+    let follow_up = kestrel.enqueue_session(existing.id).await;
 
     assert_eq!(
-        kestrel.occupy_run().await.map(|claimed| claimed.run.id),
+        kestrel
+            .occupy_session()
+            .await
+            .map(|claimed| claimed.session.id),
         Some(follow_up.id)
     );
-    let new_run = kestrel.run(new_run.id).await;
-    assert_eq!(new_run.state, RunState::Queued);
-    assert!(new_run.waiting_for.is_some());
+    let new_session = kestrel.session(new_session.id).await;
+    assert_eq!(new_session.state, SessionState::Queued);
+    assert!(new_session.waiting_for.is_some());
     assert_eq!(kestrel.instance(oldest.id).await, None);
 
     kestrel.teardown().await;
@@ -116,10 +122,13 @@ async fn a_held_instance_blocks_new_work_but_not_its_workspaces_follow_up() {
     let kestrel = Kestrel::boot().await;
     let (existing, new, _) = workspaces(&kestrel, 1).await;
 
-    let first = kestrel.enqueue_run(existing.id).await;
-    let claimed = kestrel.occupy_run().await.expect("the run should claim");
-    assert_eq!(claimed.run.id, first.id);
-    let first = claimed.run;
+    let first = kestrel.enqueue_session(existing.id).await;
+    let claimed = kestrel
+        .occupy_session()
+        .await
+        .expect("the session should claim");
+    assert_eq!(claimed.session.id, first.id);
+    let first = claimed.session;
     kestrel.executes_on(&first, "held").await;
     let mut held = clean_checkout();
     held[0].git = Git::Read {
@@ -130,25 +139,28 @@ async fn a_held_instance_blocks_new_work_but_not_its_workspaces_follow_up() {
         unpushed: 0,
     };
     kestrel.report_checkout(&first, held).await;
-    kestrel.complete_run(&first).await;
+    kestrel.complete_session(&first).await;
 
-    let blocked = kestrel.enqueue_run(new.id).await;
-    assert!(kestrel.occupy_run().await.is_none());
-    let blocked = kestrel.run(blocked.id).await;
-    assert_eq!(blocked.state, RunState::Queued);
+    let blocked = kestrel.enqueue_session(new.id).await;
+    assert!(kestrel.occupy_session().await.is_none());
+    let blocked = kestrel.session(blocked.id).await;
+    assert_eq!(blocked.state, SessionState::Queued);
     assert!(blocked.waiting_for.as_deref().is_some_and(|reason| {
         reason.contains("limit of 1 live Instance")
             && reason.contains("none idle is known recoverable")
     }));
 
-    let follow_up = kestrel.enqueue_run(existing.id).await;
+    let follow_up = kestrel.enqueue_session(existing.id).await;
     let claimed = kestrel
-        .occupy_run()
+        .occupy_session()
         .await
         .expect("the follow-up should claim");
-    assert_eq!(claimed.run.id, follow_up.id);
+    assert_eq!(claimed.session.id, follow_up.id);
     assert_eq!(kestrel.instance(existing.id).await.as_deref(), Some("held"));
-    assert_eq!(kestrel.run(blocked.id).await.state, RunState::Queued);
+    assert_eq!(
+        kestrel.session(blocked.id).await.state,
+        SessionState::Queued
+    );
 
     kestrel.teardown().await;
 }
@@ -158,7 +170,7 @@ async fn the_longest_idle_recoverable_instance_is_archived_to_admit_new_work() {
     let kestrel = Kestrel::boot().await;
     let (oldest, newer, arriving) = workspaces(&kestrel, 2).await;
 
-    complete_clean_runs(&kestrel, &[(&oldest, "oldest"), (&newer, "newer")]).await;
+    complete_clean_sessions(&kestrel, &[(&oldest, "oldest"), (&newer, "newer")]).await;
     kestrel
         .last_active(&oldest, Timestamp::now() - SignedDuration::from_hours(2))
         .await;
@@ -166,8 +178,8 @@ async fn the_longest_idle_recoverable_instance_is_archived_to_admit_new_work() {
         .last_active(&newer, Timestamp::now() - SignedDuration::from_hours(1))
         .await;
 
-    let third = kestrel.enqueue_run(arriving.id).await;
-    assert!(kestrel.occupy_run().await.is_none());
+    let third = kestrel.enqueue_session(arriving.id).await;
+    assert!(kestrel.occupy_session().await.is_none());
 
     assert_eq!(kestrel.instances_to_archive().await, ["oldest"]);
     assert_eq!(kestrel.instance(oldest.id).await, None);
@@ -175,10 +187,10 @@ async fn the_longest_idle_recoverable_instance_is_archived_to_admit_new_work() {
 
     kestrel.instance_archived("oldest").await;
     let claimed = kestrel
-        .occupy_run()
+        .occupy_session()
         .await
-        .expect("the new run should claim after archival");
-    assert_eq!(claimed.run.id, third.id);
+        .expect("the new session should claim after archival");
+    assert_eq!(claimed.session.id, third.id);
 
     kestrel.teardown().await;
 }

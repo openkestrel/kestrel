@@ -387,7 +387,7 @@ pub fn plan(
         }
         (_, []) => inferred(
             Vec::new(),
-            "none is held, so a Run reaches a model only through a harness logged in otherwise",
+            "none is held, so a Session reaches a model only through a harness logged in otherwise",
         ),
         (_, held) => inferred(
             held.to_vec(),
@@ -529,7 +529,7 @@ impl Plan {
             }));
         }
         applying.push(format!(
-            "open a Workspace in {project} carrying the Brief, and enqueue a Run of {agent} to \
+            "open a Workspace in {project} carrying the Brief, and enqueue a Session of {agent} to \
              work on it"
         ));
 
@@ -718,7 +718,7 @@ mod tests {
                 (
                     "credentials",
                     "none".to_owned(),
-                    "none is held, so a Run reaches a model only through a harness logged in \
+                    "none is held, so a Session reaches a model only through a harness logged in \
                      otherwise",
                 ),
             ]
@@ -920,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn applying_a_plan_to_nothing_declares_everything_before_the_run() {
+    fn applying_a_plan_to_nothing_declares_everything_before_the_session() {
         let plan = planned(
             Given {
                 credentials: vec!["ANTHROPIC_API_KEY".to_owned()],
@@ -939,7 +939,7 @@ mod tests {
                 "declare the Agent opencode, an actor driven by the Harness opencode \
                  with its default model",
                 "hold ANTHROPIC_API_KEY as a Provider Credential of acme",
-                "open a Workspace in widgets carrying the Brief, and enqueue a Run of opencode \
+                "open a Workspace in widgets carrying the Brief, and enqueue a Session of opencode \
                  to work on it",
             ]
         );
@@ -968,7 +968,7 @@ mod tests {
         assert_eq!(
             plan.applying(&existing),
             [
-                "open a Workspace in widgets carrying the Brief, and enqueue a Run of builder to \
+                "open a Workspace in widgets carrying the Brief, and enqueue a Session of builder to \
               work on it"
             ]
         );

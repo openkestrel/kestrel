@@ -202,7 +202,7 @@ impl<'a> Profiles<'a> {
         Ok(contents)
     }
 
-    /// Only files the profile already holds, so what a Run hands back can refresh a login and
+    /// Only files the profile already holds, so what a Session hands back can refresh a login and
     /// never add one.
     pub async fn refresh_files(
         &mut self,

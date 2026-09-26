@@ -10,7 +10,7 @@ pub mod apply;
 
 use crate::domain::{
     Agent, CorrelationMiss, DisableReason, Event, EventRecordId, Fires, Firing, FiringBudget,
-    Integration, Occurrence, Organization, RunId, Schedule, Templates, Trigger, TriggerId,
+    Integration, Occurrence, Organization, Schedule, SessionId, Templates, Trigger, TriggerId,
     TriggerState, WorkspaceId,
 };
 use crate::fanout::{self, Change};
@@ -90,12 +90,12 @@ pub enum Fired {
     Opened {
         event: EventRecordId,
         workspace: WorkspaceId,
-        run: RunId,
+        session: SessionId,
     },
     Fed {
         event: EventRecordId,
         workspace: WorkspaceId,
-        run: Option<RunId>,
+        session: Option<SessionId>,
     },
     Ignored {
         event: EventRecordId,
@@ -716,7 +716,7 @@ async fn dispatched(
     ))
 }
 
-/// An opening firing atomically commits its Workspace, first entry, Run and record, so a retry
+/// An opening firing atomically commits its Workspace, first entry, Session and record, so a retry
 /// never opens its work twice.
 async fn firing(
     mut tx: Tx<'_>,
@@ -845,7 +845,7 @@ async fn firing(
         )
         .await?;
 
-    let run = tx.workspaces().enqueue_run(&workspace, None).await?;
+    let session = tx.workspaces().enqueue_session(&workspace, None).await?;
     tx.triggers()
         .record_opened_firing(trigger, event, &workspace, worked_ahead.as_deref())
         .await?;
@@ -860,7 +860,7 @@ async fn firing(
     Ok(Fired::Opened {
         event: event.record_id,
         workspace: workspace.id,
-        run: run.id,
+        session: session.id,
     })
 }
 
@@ -872,7 +872,7 @@ async fn fed(
     holding: WorkspaceId,
 ) -> Result<Fired> {
     let workspace = tx.workspaces().get(holding).await?;
-    let run = workspace::post_in(&mut tx, &workspace, &trigger.name, &rendered.brief).await?;
+    let session = workspace::post_in(&mut tx, &workspace, &trigger.name, &rendered.brief).await?;
     tx.triggers()
         .record_fed_firing(trigger, event, &workspace)
         .await?;
@@ -881,7 +881,7 @@ async fn fed(
     Ok(Fired::Fed {
         event: event.record_id,
         workspace: workspace.id,
-        run: run.map(|run| run.id),
+        session: session.map(|session| session.id),
     })
 }
 

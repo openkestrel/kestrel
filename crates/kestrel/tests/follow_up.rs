@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use jiff::SignedDuration;
 use kestrel::domain::{
-    Connection, Direction, GithubConnection, Integration, IntegrationId, OrganizationId, RunState,
+    Connection, Direction, GithubConnection, Integration, IntegrationId, OrganizationId,
+    SessionState,
 };
 use kestrel::integration::credential::Token;
 use kestrel::integration::github::Github;
@@ -77,10 +78,10 @@ async fn workspaces(kestrel: &Kestrel, count: usize) -> Vec<kestrel::domain::Wor
     }
 }
 
-async fn runs(kestrel: &Kestrel, workspace: kestrel::domain::WorkspaceId, count: usize) {
+async fn sessions(kestrel: &Kestrel, workspace: kestrel::domain::WorkspaceId, count: usize) {
     let deadline = tokio::time::Instant::now() + PATIENCE;
     loop {
-        if kestrel.runs(workspace).await.len() == count {
+        if kestrel.sessions(workspace).await.len() == count {
             return;
         }
         assert!(tokio::time::Instant::now() < deadline);
@@ -133,16 +134,16 @@ async fn pending_arrived(kestrel: &Kestrel, workspace: kestrel::domain::Workspac
 }
 
 #[tokio::test]
-async fn posting_a_message_into_an_idle_workspace_enqueues_its_next_run() {
+async fn posting_a_message_into_an_idle_workspace_enqueues_its_next_session() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
 
-    let run = kestrel
+    let session = kestrel
         .post(workspace.id, "operator", "please add the missing test")
         .await;
 
-    assert_eq!(run.workspace, workspace.id);
-    assert_eq!(run.state, RunState::Queued);
+    assert_eq!(session.workspace, workspace.id);
+    assert_eq!(session.state, SessionState::Queued);
     assert!(
         kestrel
             .transcript(workspace.id)
@@ -161,10 +162,10 @@ async fn posting_a_message_into_an_idle_workspace_enqueues_its_next_run() {
 }
 
 #[tokio::test]
-async fn a_message_arriving_during_a_run_waits_for_that_run_to_end() {
+async fn a_message_arriving_during_a_session_waits_for_that_session_to_end() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (active, _) = kestrel.dispatch_run(workspace.id).await;
+    let (active, _) = kestrel.dispatch_session(workspace.id).await;
 
     assert!(
         kestrel
@@ -178,7 +179,7 @@ async fn a_message_arriving_during_a_run_waits_for_that_run_to_end() {
             .await
             .is_none()
     );
-    assert_eq!(kestrel.runs(workspace.id).await.len(), 1);
+    assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
     assert!(
         !kestrel
             .transcript(workspace.id)
@@ -189,11 +190,11 @@ async fn a_message_arriving_during_a_run_waits_for_that_run_to_end() {
             })
     );
 
-    kestrel.complete_run(&active).await;
+    kestrel.complete_session(&active).await;
 
-    let runs = kestrel.runs(workspace.id).await;
-    assert_eq!(runs.len(), 2);
-    assert_eq!(runs[1].state, RunState::Queued);
+    let sessions = kestrel.sessions(workspace.id).await;
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions[1].state, SessionState::Queued);
     let messages = kestrel
         .transcript(workspace.id)
         .await
@@ -224,7 +225,7 @@ async fn a_message_arriving_during_a_run_waits_for_that_run_to_end() {
 async fn cleanup_left_by_a_stopped_worker_is_found_before_the_workspace_continues() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (active, _) = kestrel.dispatch_run(workspace.id).await;
+    let (active, _) = kestrel.dispatch_session(workspace.id).await;
     kestrel.supervised(&active, "local-exec/2147483647").await;
     assert!(
         kestrel
@@ -233,22 +234,22 @@ async fn cleanup_left_by_a_stopped_worker_is_found_before_the_workspace_continue
             .is_none()
     );
 
-    kestrel.complete_run(&active).await;
-    assert_eq!(kestrel.runs(workspace.id).await.len(), 1);
+    kestrel.complete_session(&active).await;
+    assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
     let reapable = kestrel.supervisors_to_stop().await;
     assert_eq!(reapable.len(), 1);
     assert_eq!(reapable[0].0.id, active.id);
 
     kestrel.supervisor_gone(&active).await;
-    assert_eq!(kestrel.runs(workspace.id).await.len(), 2);
+    assert_eq!(kestrel.sessions(workspace.id).await.len(), 2);
     kestrel.teardown().await;
 }
 
 #[tokio::test]
-async fn a_cold_run_is_seeded_with_every_page_of_earlier_context() {
+async fn a_cold_session_is_seeded_with_every_page_of_earlier_context() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (first, _) = kestrel.dispatch_run(workspace.id).await;
+    let (first, _) = kestrel.dispatch_session(workspace.id).await;
 
     for index in 0..105 {
         let message = match index {
@@ -258,15 +259,15 @@ async fn a_cold_run_is_seeded_with_every_page_of_earlier_context() {
         };
         kestrel.said(&first, &message).await;
     }
-    kestrel.complete_run(&first).await;
+    kestrel.complete_session(&first).await;
     let second = kestrel
         .post(workspace.id, "operator", "please continue")
         .await;
     let claimed = kestrel
-        .claim_run()
+        .claim_session()
         .await
-        .expect("the second run should claim");
-    assert_eq!(claimed.run.id, second.id);
+        .expect("the second session should claim");
+    assert_eq!(claimed.session.id, second.id);
 
     let mut supervisor = Supervisor::provision_playing(
         &kestrel.link(),
@@ -277,7 +278,7 @@ async fn a_cold_run_is_seeded_with_every_page_of_earlier_context() {
     supervisor.wait_until_it_says("reported connected").await;
     kestrel.start(&second).await;
     supervisor.wait_until_it_says("reported answered").await;
-    kestrel.stop_run(second.id).await;
+    kestrel.stop_session(second.id).await;
 
     assert!(
         kestrel
@@ -297,7 +298,8 @@ async fn a_cold_run_is_seeded_with_every_page_of_earlier_context() {
 }
 
 #[tokio::test]
-async fn the_second_run_starts_a_fresh_supervisor_on_the_same_instance_after_the_first_is_gone() {
+async fn the_second_session_starts_a_fresh_supervisor_on_the_same_instance_after_the_first_is_gone()
+{
     let kestrel = Kestrel::dispatching_to(
         support::supervisor::binary(),
         &support::scripted_agent::playing(Script::Lingers),
@@ -317,8 +319,8 @@ async fn the_second_run_starts_a_fresh_supervisor_on_the_same_instance_after_the
 
     let first = kestrel.post(workspace.id, "operator", FIRST_MEMORY).await;
     kestrel.answered(first.id, 1).await;
-    kestrel.stop_run(first.id).await;
-    let first = kestrel.run(first.id).await;
+    kestrel.stop_session(first.id).await;
+    let first = kestrel.session(first.id).await;
     let first_supervisor = first.supervisor.as_deref().expect("a supervisor");
     support::environment::Environment::named(first_supervisor)
         .is_gone()
@@ -327,12 +329,12 @@ async fn the_second_run_starts_a_fresh_supervisor_on_the_same_instance_after_the
 
     let second = kestrel.post(workspace.id, "operator", LAST_MEMORY).await;
     kestrel.answered(second.id, 1).await;
-    let second = kestrel.run(second.id).await;
+    let second = kestrel.session(second.id).await;
     let second_supervisor = second.supervisor.as_deref().expect("a supervisor");
 
     assert_ne!(first_supervisor, second_supervisor);
     assert_eq!(first.instance, second.instance);
-    kestrel.stop_run(second.id).await;
+    kestrel.stop_session(second.id).await;
     support::environment::Environment::named(second_supervisor)
         .is_gone()
         .await;
@@ -341,7 +343,7 @@ async fn the_second_run_starts_a_fresh_supervisor_on_the_same_instance_after_the
 }
 
 #[tokio::test]
-async fn a_github_comment_enqueues_a_second_run_in_the_originating_workspace() {
+async fn a_github_comment_enqueues_a_second_session_in_the_originating_workspace() {
     let stub = GithubStub::start();
     stub.script(github_stub::page(&[github_stub::labelled(
         7,
@@ -352,10 +354,10 @@ async fn a_github_comment_enqueues_a_second_run_in_the_originating_workspace() {
     watching(&kestrel, &stub).await;
     let workspace = workspaces(&kestrel, 1).await.remove(0);
     let first = kestrel
-        .claim_run()
+        .claim_session()
         .await
-        .expect("the first run should claim")
-        .run;
+        .expect("the first session should claim")
+        .session;
 
     let comments_before = stub
         .requests()
@@ -375,16 +377,16 @@ async fn a_github_comment_enqueues_a_second_run_in_the_originating_workspace() {
     requested(&stub, COMMENTS, comments_before).await;
     pending_arrived(&kestrel, workspace.id).await;
     assert_eq!(
-        kestrel.runs(workspace.id).await.len(),
+        kestrel.sessions(workspace.id).await.len(),
         1,
-        "the comment started a concurrent run"
+        "the comment started a concurrent session"
     );
     assert!(!kestrel.transcript(workspace.id).await.iter().any(|recorded| {
         matches!(&recorded.entry, Entry::Said { message, .. } if message == "please add the missing test")
     }));
 
-    kestrel.complete_run(&first).await;
-    runs(&kestrel, workspace.id, 2).await;
+    kestrel.complete_session(&first).await;
+    sessions(&kestrel, workspace.id, 2).await;
 
     assert_eq!(kestrel.workspaces("acme").await.len(), 1);
     assert!(
@@ -419,10 +421,10 @@ async fn comments_arriving_during_a_turn_wait_in_order_with_their_authors() {
     watching(&kestrel, &stub).await;
     let workspace = workspaces(&kestrel, 1).await.remove(0);
     let first = kestrel
-        .claim_run()
+        .claim_session()
         .await
-        .expect("the first run should claim")
-        .run;
+        .expect("the first session should claim")
+        .session;
 
     let comments_before = stub
         .requests()
@@ -440,11 +442,11 @@ async fn comments_arriving_during_a_turn_wait_in_order_with_their_authors() {
     requested(&stub, COMMENTS, comments_before).await;
     pending_arrived(&kestrel, workspace.id).await;
     // Both comments are one poll's, and each is received in its own transaction; let the sweep
-    // finish holding the second before the run ends.
+    // finish holding the second before the session ends.
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    kestrel.complete_run(&first).await;
-    runs(&kestrel, workspace.id, 2).await;
+    kestrel.complete_session(&first).await;
+    sessions(&kestrel, workspace.id, 2).await;
 
     assert!(
         kestrel
@@ -487,7 +489,7 @@ async fn a_comment_polled_with_its_origin_waits_for_the_workspace_to_open() {
     let workspace = workspaces(&kestrel, 1).await.remove(0);
     message_arrived(&kestrel, workspace.id, "picked up together").await;
 
-    assert_eq!(kestrel.runs(workspace.id).await.len(), 1);
+    assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
     kestrel.teardown().await;
 }
 
@@ -588,11 +590,11 @@ async fn a_comment_on_a_sealed_workspace_feeds_the_open_one_holding_its_correlat
     watching_correlated(&kestrel, &stub, "the release").await;
     let sealed = workspaces(&kestrel, 1).await.remove(0);
     let first = kestrel
-        .claim_run()
+        .claim_session()
         .await
-        .expect("the first run should claim")
-        .run;
-    kestrel.complete_run(&first).await;
+        .expect("the first session should claim")
+        .session;
+    kestrel.complete_session(&first).await;
     kestrel.seal_workspace(sealed.id).await;
 
     stub.script_answer(
@@ -671,7 +673,7 @@ fn the_command(stub: &GithubStub) {
     );
 }
 
-/// Scripted only once the run is already active, so a remark is judged against an open run
+/// Scripted only once the session is already active, so a remark is judged against an open session
 /// rather than taken as its first prompt.
 fn a_remark_from(stub: &GithubStub, author: &str, remark: &str) {
     stub.script_answer(
@@ -712,26 +714,26 @@ async fn a_remark_from_a_stranger_does_not_feed_an_open_workspace() {
     let kestrel = Kestrel::boot().await;
     watching_a_named_actor(&kestrel, &stub).await;
     let workspace = workspaces(&kestrel, 1).await.remove(0);
-    let run = kestrel
-        .claim_run()
+    let session = kestrel
+        .claim_session()
         .await
-        .expect("the command should have opened a run")
-        .run;
+        .expect("the command should have opened a session")
+        .session;
     a_remark_from(&stub, "a-stranger", "please also change the parser");
 
     the_remark_was_recorded(&kestrel, "please also change the parser").await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(
         !kestrel.has_pending_messages(workspace.id).await,
-        "a stranger's remark was held as input to the run"
+        "a stranger's remark was held as input to the session"
     );
 
-    kestrel.complete_run(&run).await;
+    kestrel.complete_session(&session).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert_eq!(
-        kestrel.runs(workspace.id).await.len(),
+        kestrel.sessions(workspace.id).await.len(),
         1,
-        "a stranger's remark started a run"
+        "a stranger's remark started a session"
     );
 
     kestrel.teardown().await;
@@ -744,16 +746,16 @@ async fn a_remark_from_the_trigger_actor_feeds_an_open_workspace() {
     let kestrel = Kestrel::boot().await;
     watching_a_named_actor(&kestrel, &stub).await;
     let workspace = workspaces(&kestrel, 1).await.remove(0);
-    let run = kestrel
-        .claim_run()
+    let session = kestrel
+        .claim_session()
         .await
-        .expect("the command should have opened a run")
-        .run;
+        .expect("the command should have opened a session")
+        .session;
     a_remark_from(&stub, MAINTAINER, "please also change the parser");
 
     pending_arrived(&kestrel, workspace.id).await;
-    kestrel.complete_run(&run).await;
-    runs(&kestrel, workspace.id, 2).await;
+    kestrel.complete_session(&session).await;
+    sessions(&kestrel, workspace.id, 2).await;
 
     assert!(
         kestrel
@@ -788,9 +790,9 @@ async fn a_comment_kestrel_left_is_never_heard_as_input() {
     watching_a_named_actor(&kestrel, &stub).await;
     let workspace = workspaces(&kestrel, 1).await.remove(0);
     kestrel
-        .claim_run()
+        .claim_session()
         .await
-        .expect("the command should have opened a run");
+        .expect("the command should have opened a session");
 
     stub.script_answer(
         "GET",
@@ -799,7 +801,7 @@ async fn a_comment_kestrel_left_is_never_heard_as_input() {
             11,
             ISSUE,
             MAINTAINER,
-            "what kestrel said\n\n<!-- kestrel run 01a0 turn 1 -->",
+            "what kestrel said\n\n<!-- kestrel session 01a0 turn 1 -->",
         )]),
     );
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -808,7 +810,7 @@ async fn a_comment_kestrel_left_is_never_heard_as_input() {
         !kestrel.has_pending_messages(workspace.id).await,
         "kestrel heard its own comment as input"
     );
-    assert_eq!(kestrel.runs(workspace.id).await.len(), 1);
+    assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
 
     kestrel.teardown().await;
 }

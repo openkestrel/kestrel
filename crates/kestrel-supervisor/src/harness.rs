@@ -27,10 +27,10 @@ use tokio::task::JoinHandle;
 use crate::link::{Cost, Usage};
 use crate::permission::{self, Subject};
 
-/// Nothing on the link carries work for a Run, so every Run asks the same thing.
+/// Nothing on the link carries work for a Session, so every Session asks the same thing.
 const PROMPT: &str = "Do the work this environment was provisioned for.";
 
-/// What this Environment was configured to drive, what the Run asks of it, and where what the
+/// What this Environment was configured to drive, what the Session asks of it, and where what the
 /// agent writes to stderr goes. Which Harness is on the other end is the configuration's
 /// business, never this module's.
 #[derive(Debug, Clone)]
@@ -38,7 +38,7 @@ pub struct Harness {
     pub command: String,
     /// The ACP authentication method to log the agent in with, for an agent that requires one.
     pub auth: Option<String>,
-    /// The model the Run named, if it named one.
+    /// The model the Session named, if it named one.
     pub model: Option<String>,
     pub stderr: mpsc::UnboundedSender<String>,
 }
@@ -57,13 +57,13 @@ pub struct Worked {
     pub failed: Option<String>,
 }
 
-/// Which model the agent works the turn on — the one its Run named, or the one the harness
+/// Which model the agent works the turn on — the one its Session named, or the one the harness
 /// defaults to when it named none.
 pub struct On {
     pub model: String,
 }
 
-/// What to ask the agent to set, and what it is on once it has. Nothing is set for a Run
+/// What to ask the agent to set, and what it is on once it has. Nothing is set for a Session
 /// that named no model: the agent is already on the default it advertised.
 struct Selects {
     id: Option<SessionConfigId>,
@@ -73,8 +73,8 @@ struct Selects {
 /// Long enough for an agent between turns to see its connection close; one mid-turn is cut off.
 const CLOSING: Duration = Duration::from_millis(500);
 
-/// One ACP conversation for the whole Run, held apart from the link so that losing the link loses
-/// nothing of it (ADR-0024). Dropping it kills the agent.
+/// One ACP conversation for the whole Session, held apart from the link so that losing the link
+/// loses nothing of it (ADR-0024). Dropping it kills the agent.
 pub struct Conversation {
     prompts: mpsc::UnboundedSender<String>,
     turns: mpsc::UnboundedReceiver<Worked>,
@@ -608,8 +608,8 @@ fn offered(methods: &[AuthMethod]) -> String {
 }
 
 /// Config options are optional and every agent ships a default (ADR-0007), so an agent may
-/// offer no model to select. One whose Run named a model then fails rather than quietly
-/// running on something else; one whose Run named none runs on a model nobody can name.
+/// offer no model to select. One whose Session named a model then fails rather than quietly
+/// running on something else; one whose Session named none runs on a model nobody can name.
 fn selects_the_model(
     offered: &[SessionConfigOption],
     named: Option<&str>,
@@ -625,7 +625,7 @@ fn selects_the_model(
     let Some((id, select)) = selectable else {
         return match named {
             Some(model) => Err(Error::internal_error().data(format!(
-                "this agent lets no client select a model, and this run named {model}"
+                "this agent lets no client select a model, and this session named {model}"
             ))),
             None => Ok(None),
         };
@@ -644,7 +644,7 @@ fn selects_the_model(
     };
     if !offered.iter().any(|value| value == model) {
         return Err(Error::internal_error().data(format!(
-            "this agent does not offer the model {model}, which this run named"
+            "this agent does not offer the model {model}, which this session named"
         )));
     }
 
@@ -698,7 +698,8 @@ fn stopped_short(stop: StopReason) -> Option<String> {
     Some(because)
 }
 
-/// An Agent's reasoning, its plan and its tool calls are the Run's business, and are dropped here.
+/// An Agent's reasoning, its plan and its tool calls are the Session's business, and are dropped
+/// here.
 #[derive(Default)]
 struct Heard {
     open: Option<Message>,
@@ -947,7 +948,7 @@ mod tests {
     }
 
     #[test]
-    fn the_model_a_run_named_is_set_through_the_option_the_agent_categorized_as_one() {
+    fn the_model_a_session_named_is_set_through_the_option_the_agent_categorized_as_one() {
         let selects = selects_the_model(&models(&["fast", "thorough"]), Some("thorough"))
             .expect("the model should be selectable")
             .expect("an agent that offers a model");
@@ -957,7 +958,7 @@ mod tests {
     }
 
     #[test]
-    fn a_run_that_named_no_model_sets_nothing_and_is_on_what_the_agent_already_was() {
+    fn a_session_that_named_no_model_sets_nothing_and_is_on_what_the_agent_already_was() {
         let selects = selects_the_model(&models(&["fast", "thorough"]), None)
             .expect("naming no model should not fail")
             .expect("an agent that offers a model");
@@ -980,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_that_lets_no_client_select_a_model_fails_a_run_that_named_one() {
+    fn an_agent_that_lets_no_client_select_a_model_fails_a_session_that_named_one() {
         let refused = selects_the_model(&[], Some("thorough"))
             .err()
             .expect("an agent with no model to select");
@@ -993,7 +994,7 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_that_lets_no_client_select_a_model_works_a_run_that_named_none() {
+    fn an_agent_that_lets_no_client_select_a_model_works_a_session_that_named_none() {
         assert!(
             selects_the_model(&[], None)
                 .expect("naming no model should not fail")

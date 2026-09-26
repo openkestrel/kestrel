@@ -7,9 +7,9 @@
 use kestrel::compute::Instance;
 use serde_json::json;
 
-/// The work every conformance Run is provisioned for. An agent reads it as the instructions
-/// its checkout came with, which is the only lever a Run has over what an agent does: nothing
-/// on the link carries work at 0.1, so every Run's prompt is the same sentence.
+/// The work every conformance Session is provisioned for. An agent reads it as the instructions
+/// its checkout came with, which is the only lever a Session has over what an agent does: nothing
+/// on the link carries work at 0.1, so every Session's prompt is the same sentence.
 const AGENTS_MD: &str = "\
 # The work
 
@@ -21,7 +21,7 @@ exactly: the work is done.
 /// an agent that was answered and went on.
 pub const DONE: &str = "the work is done";
 
-/// The model both agents are pointed at: free on the gateway, so a run's spend is bounded at
+/// The model both agents are pointed at: free on the gateway, so a session's spend is bounded at
 /// nothing, and served over the one wire API both lineages can speak.
 const MODEL: &str = "muse-spark-1.3-contributor-free";
 const GATEWAY: &str = "https://opencode.ai/zen/v1";
@@ -36,8 +36,8 @@ pub enum Lineage {
 }
 
 impl Lineage {
-    /// The gateway key, from the environment the suite was started in. A conformance run that
-    /// cannot reach a model is a run that proves nothing, so this is loud rather than skipped.
+    /// The gateway key, from the environment the suite was started in. A conformance session that
+    /// cannot reach a model is a session that proves nothing, so this is loud rather than skipped.
     pub fn key() -> String {
         std::env::var(KEY).unwrap_or_else(|_| {
             panic!("the conformance suite runs against a real model: set {KEY}")
@@ -86,7 +86,7 @@ impl Lineage {
         }
     }
 
-    /// What the agent's own process is called, for the Run that has it killed mid-turn.
+    /// What the agent's own process is called, for the Session that has it killed mid-turn.
     pub const fn process(self) -> &'static str {
         match self {
             Lineage::Native => "opencode",
@@ -120,7 +120,7 @@ impl Lineage {
         }
     }
 
-    /// Written into the Instance before the Run is told to start. The Agent's model is not
+    /// Written into the Instance before the Session is told to start. The Agent's model is not
     /// among it: that reaches the harness over ACP, which is the point of setting it.
     pub fn configure(self, instance: &mut Instance) {
         instance

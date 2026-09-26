@@ -102,7 +102,7 @@ fn an_invalid_invocation_is_usage() {
 }
 
 #[test]
-fn guessed_workspace_and_run_verbs_explain_the_domain_verbs_without_running_them() {
+fn guessed_workspace_and_session_verbs_explain_the_domain_verbs_without_running_them() {
     for (args, suggested, verbs) in [
         (
             &["workspace", "create"][..],
@@ -115,13 +115,13 @@ fn guessed_workspace_and_run_verbs_explain_the_domain_verbs_without_running_them
             "open, list, show, post, seal, transcript",
         ),
         (
-            &["run", "start"],
-            "run enqueue",
+            &["session", "start"],
+            "session enqueue",
             "enqueue, list, show, stop",
         ),
         (
-            &["run", "enqueu"],
-            "run enqueue",
+            &["session", "enqueu"],
+            "session enqueue",
             "enqueue, list, show, stop",
         ),
         (
@@ -237,7 +237,7 @@ async fn corrective_command_names_the_unencoded_organization() {
 }
 
 #[tokio::test]
-async fn a_run_in_the_workspace_names_the_run_to_stop_and_stays_rejected() {
+async fn a_session_in_the_workspace_names_the_session_to_stop_and_stays_rejected() {
     let kestrel = an_organization().await;
     let organization = kestrel.organizations().await.remove(0);
     let project = kestrel
@@ -254,10 +254,15 @@ async fn a_run_in_the_workspace_names_the_run_to_stop_and_stays_rejected() {
     let workspace = kestrel
         .open_workspace("acme", &project.name, &agent.name)
         .await;
-    let run = kestrel.enqueue_run(workspace.id).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
     let finished = ran_by(
         &kestrel,
-        &["run", "enqueue", "--workspace", &workspace.id.to_string()],
+        &[
+            "session",
+            "enqueue",
+            "--workspace",
+            &workspace.id.to_string(),
+        ],
         Invocation::default(),
     )
     .await;
@@ -266,7 +271,7 @@ async fn a_run_in_the_workspace_names_the_run_to_stop_and_stays_rejected() {
     assert!(
         finished
             .err
-            .contains(&format!("kestrel run stop {}", run.id)),
+            .contains(&format!("kestrel session stop {}", session.id)),
         "{}",
         finished.err
     );

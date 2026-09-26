@@ -1,12 +1,12 @@
-//! What a Run says back: each completed Turn's response reaches the issue the work came from,
-//! promptly and once, and the Run's own ending is said only when it adds something (ADR-0024).
+//! What a Session says back: each completed Turn's response reaches the issue the work came from,
+//! promptly and once, and the Session's own ending is said only when it adds something (ADR-0024).
 
 mod support;
 
 use std::time::Duration;
 
 use jiff::SignedDuration;
-use kestrel::domain::{Direction, Exit, Run, RunState, Workspace, WorkspaceId};
+use kestrel::domain::{Direction, Exit, Session, SessionState, Workspace, WorkspaceId};
 use kestrel::link::credential::Secret;
 use kestrel::work::{Report, Reported};
 use support::HARNESS;
@@ -115,28 +115,28 @@ async fn a_workspace_from_the_issue(kestrel: &Kestrel, stub: &GithubStub) -> Wor
     workspaces(kestrel, 1).await.remove(0)
 }
 
-/// A Run claimed the way a work role claims it, with its first Turn prompted.
-async fn a_working_run(kestrel: &Kestrel, workspace: WorkspaceId) -> (Run, Secret) {
+/// A Session claimed the way a work role claims it, with its first Turn prompted.
+async fn a_working_session(kestrel: &Kestrel, workspace: WorkspaceId) -> (Session, Secret) {
     let deadline = tokio::time::Instant::now() + PATIENCE;
     loop {
-        if kestrel.runs(workspace).await.len() == 1
-            && let Some(claimed) = kestrel.claim_run().await
+        if kestrel.sessions(workspace).await.len() == 1
+            && let Some(claimed) = kestrel.claim_session().await
         {
-            kestrel.start(&claimed.run).await;
-            return (claimed.run, claimed.credential);
+            kestrel.start(&claimed.session).await;
+            return (claimed.session, claimed.credential);
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the workspace never had a run to claim"
+            "the workspace never had a session to claim"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
-async fn report(link: &Link, run: &Run, credential: &Secret, seq: i64, report: Report) {
+async fn report(link: &Link, session: &Session, credential: &Secret, seq: i64, report: Report) {
     let answered = link
         .report(
-            run.id,
+            session.id,
             Some(credential),
             &Reported {
                 seq: Some(seq),
@@ -152,18 +152,18 @@ async fn report(link: &Link, run: &Run, credential: &Secret, seq: i64, report: R
 }
 
 #[tokio::test]
-async fn a_turns_response_reaches_the_issue_before_the_run_ends() {
+async fn a_turns_response_reaches_the_issue_before_the_session_ends() {
     let stub = GithubStub::start();
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
-    let (run, credential) = a_working_run(&kestrel, workspace.id).await;
+    let (session, credential) = a_working_session(&kestrel, workspace.id).await;
     let link = Link::to(&kestrel.link());
 
-    report(&link, &run, &credential, 1, Report::Started).await;
+    report(&link, &session, &credential, 1, Report::Started).await;
     report(
         &link,
-        &run,
+        &session,
         &credential,
         2,
         Report::Said {
@@ -171,19 +171,22 @@ async fn a_turns_response_reaches_the_issue_before_the_run_ends() {
         },
     )
     .await;
-    report(&link, &run, &credential, 3, Report::Answered).await;
+    report(&link, &session, &credential, 3, Report::Answered).await;
 
     let bodies = replies(&stub, 1).await;
     assert!(bodies[0].contains("the first answer"), "{}", bodies[0]);
     assert!(
-        bodies[0].contains(&format!("run {} turn 1 -->", run.id)),
+        bodies[0].contains(&format!("session {} turn 1 -->", session.id)),
         "the reply does not carry this turn's marker: {}",
         bodies[0]
     );
-    assert_eq!(kestrel.run(run.id).await.state, RunState::Waiting);
+    assert_eq!(
+        kestrel.session(session.id).await.state,
+        SessionState::Waiting
+    );
 
-    kestrel.stop_run(run.id).await;
-    let ended = kestrel.run(run.id).await;
+    kestrel.stop_session(session.id).await;
+    let ended = kestrel.session(session.id).await;
     assert_eq!(ended.exit, Some(Exit::Succeeded));
     assert_eq!(ended.outcome_message.as_deref(), Some("the first answer"));
     nothing_more_is_said(&stub, 1).await;
@@ -197,14 +200,14 @@ async fn a_final_message_repeating_a_combined_turn_response_is_not_posted_again(
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
-    let (run, credential) = a_working_run(&kestrel, workspace.id).await;
+    let (session, credential) = a_working_session(&kestrel, workspace.id).await;
     let link = Link::to(&kestrel.link());
 
-    report(&link, &run, &credential, 1, Report::Started).await;
+    report(&link, &session, &credential, 1, Report::Started).await;
     for (seq, message) in [(2, "The investigation is complete."), (3, "CI is green.")] {
         report(
             &link,
-            &run,
+            &session,
             &credential,
             seq,
             Report::Said {
@@ -213,11 +216,11 @@ async fn a_final_message_repeating_a_combined_turn_response_is_not_posted_again(
         )
         .await;
     }
-    report(&link, &run, &credential, 4, Report::Answered).await;
+    report(&link, &session, &credential, 4, Report::Answered).await;
     replies(&stub, 1).await;
     report(
         &link,
-        &run,
+        &session,
         &credential,
         5,
         Report::Said {
@@ -227,7 +230,7 @@ async fn a_final_message_repeating_a_combined_turn_response_is_not_posted_again(
     .await;
     report(
         &link,
-        &run,
+        &session,
         &credential,
         6,
         Report::Finished {
@@ -236,7 +239,10 @@ async fn a_final_message_repeating_a_combined_turn_response_is_not_posted_again(
     )
     .await;
 
-    assert_eq!(kestrel.run(run.id).await.exit, Some(Exit::Succeeded));
+    assert_eq!(
+        kestrel.session(session.id).await.exit,
+        Some(Exit::Succeeded)
+    );
     nothing_more_is_said(&stub, 1).await;
     kestrel.teardown().await;
 }
@@ -247,13 +253,13 @@ async fn new_final_information_after_a_turn_is_saved_and_reported_once() {
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
-    let (run, credential) = a_working_run(&kestrel, workspace.id).await;
+    let (session, credential) = a_working_session(&kestrel, workspace.id).await;
     let link = Link::to(&kestrel.link());
 
-    report(&link, &run, &credential, 1, Report::Started).await;
+    report(&link, &session, &credential, 1, Report::Started).await;
     report(
         &link,
-        &run,
+        &session,
         &credential,
         2,
         Report::Said {
@@ -261,12 +267,12 @@ async fn new_final_information_after_a_turn_is_saved_and_reported_once() {
         },
     )
     .await;
-    report(&link, &run, &credential, 3, Report::Answered).await;
+    report(&link, &session, &credential, 3, Report::Answered).await;
     replies(&stub, 1).await;
 
     report(
         &link,
-        &run,
+        &session,
         &credential,
         4,
         Report::Said {
@@ -276,7 +282,7 @@ async fn new_final_information_after_a_turn_is_saved_and_reported_once() {
     .await;
     report(
         &link,
-        &run,
+        &session,
         &credential,
         5,
         Report::Finished {
@@ -285,7 +291,7 @@ async fn new_final_information_after_a_turn_is_saved_and_reported_once() {
     )
     .await;
 
-    let ended = kestrel.run(run.id).await;
+    let ended = kestrel.session(session.id).await;
     assert_eq!(ended.exit, Some(Exit::Succeeded));
     assert_eq!(
         ended.outcome_message.as_deref(),
@@ -293,9 +299,9 @@ async fn new_final_information_after_a_turn_is_saved_and_reported_once() {
     );
     let bodies = replies(&stub, 2).await;
     assert!(bodies[1].contains("The follow-up found a regression."));
-    kestrel.complete_run(&run).await;
+    kestrel.complete_session(&session).await;
     assert_eq!(
-        kestrel.run(run.id).await.outcome_message.as_deref(),
+        kestrel.session(session.id).await.outcome_message.as_deref(),
         Some("The follow-up found a regression.")
     );
     nothing_more_is_said(&stub, 2).await;
@@ -304,18 +310,18 @@ async fn new_final_information_after_a_turn_is_saved_and_reported_once() {
 }
 
 #[tokio::test]
-async fn each_turn_of_one_run_says_its_own_response_once() {
+async fn each_turn_of_one_session_says_its_own_response_once() {
     let stub = GithubStub::start();
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
-    let (run, credential) = a_working_run(&kestrel, workspace.id).await;
+    let (session, credential) = a_working_session(&kestrel, workspace.id).await;
     let link = Link::to(&kestrel.link());
 
-    report(&link, &run, &credential, 1, Report::Started).await;
+    report(&link, &session, &credential, 1, Report::Started).await;
     report(
         &link,
-        &run,
+        &session,
         &credential,
         2,
         Report::Said {
@@ -323,20 +329,20 @@ async fn each_turn_of_one_run_says_its_own_response_once() {
         },
     )
     .await;
-    report(&link, &run, &credential, 3, Report::Answered).await;
+    report(&link, &session, &credential, 3, Report::Answered).await;
     let bodies = replies(&stub, 1).await;
     assert!(bodies[0].contains("the first answer"), "{}", bodies[0]);
 
-    // The next Turn waits on the Run holding no slot, so the work role prompts it with what
+    // The next Turn waits on the Session holding no slot, so the work role prompts it with what
     // arrived in between.
     kestrel
         .post_while_busy(workspace.id, "operator", "the second thing to do")
         .await
-        .expect("a waiting run takes the next prompt");
+        .expect("a waiting session takes the next prompt");
     kestrel.prompt_waiting().await;
     report(
         &link,
-        &run,
+        &session,
         &credential,
         4,
         Report::Said {
@@ -344,7 +350,7 @@ async fn each_turn_of_one_run_says_its_own_response_once() {
         },
     )
     .await;
-    report(&link, &run, &credential, 5, Report::Answered).await;
+    report(&link, &session, &credential, 5, Report::Answered).await;
 
     let bodies = replies(&stub, 2).await;
     assert!(bodies[1].contains("the second answer"), "{}", bodies[1]);
@@ -353,14 +359,14 @@ async fn each_turn_of_one_run_says_its_own_response_once() {
         "the second turn said the first's words: {bodies:?}"
     );
     assert_eq!(
-        kestrel.turns(run.id).await.len(),
+        kestrel.turns(session.id).await.len(),
         2,
         "a turn was prompted more than once"
     );
 
     report(
         &link,
-        &run,
+        &session,
         &credential,
         6,
         Report::Said {
@@ -370,7 +376,7 @@ async fn each_turn_of_one_run_says_its_own_response_once() {
     .await;
     report(
         &link,
-        &run,
+        &session,
         &credential,
         7,
         Report::Finished {
@@ -384,18 +390,18 @@ async fn each_turn_of_one_run_says_its_own_response_once() {
 }
 
 #[tokio::test]
-async fn a_run_that_answered_no_turn_still_says_how_it_ended() {
+async fn a_session_that_answered_no_turn_still_says_how_it_ended() {
     let stub = GithubStub::start();
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
-    let (run, credential) = a_working_run(&kestrel, workspace.id).await;
+    let (session, credential) = a_working_session(&kestrel, workspace.id).await;
     let link = Link::to(&kestrel.link());
 
-    report(&link, &run, &credential, 1, Report::Started).await;
+    report(&link, &session, &credential, 1, Report::Started).await;
     report(
         &link,
-        &run,
+        &session,
         &credential,
         2,
         Report::Finished {
@@ -405,31 +411,31 @@ async fn a_run_that_answered_no_turn_still_says_how_it_ended() {
     .await;
 
     let bodies = replies(&stub, 1).await;
-    assert!(bodies[0].contains("run succeeded"), "{}", bodies[0]);
+    assert!(bodies[0].contains("session succeeded"), "{}", bodies[0]);
     assert!(
-        bodies[0].contains(&format!("run {} -->", run.id)),
-        "the outcome does not carry the run's marker: {}",
+        bodies[0].contains(&format!("session {} -->", session.id)),
+        "the outcome does not carry the session's marker: {}",
         bodies[0]
     );
 
     kestrel.teardown().await;
 }
 
-/// A Turn that fails the Run still posts the Turn it already answered, and the failure is said
+/// A Turn that fails the Session still posts the Turn it already answered, and the failure is said
 /// because the exit status is information the responses did not carry.
 #[tokio::test]
-async fn a_failed_run_posts_its_turns_response_and_then_the_failure() {
+async fn a_failed_session_posts_its_turns_response_and_then_the_failure() {
     let stub = GithubStub::start();
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
-    let (run, credential) = a_working_run(&kestrel, workspace.id).await;
+    let (session, credential) = a_working_session(&kestrel, workspace.id).await;
     let link = Link::to(&kestrel.link());
 
-    report(&link, &run, &credential, 1, Report::Started).await;
+    report(&link, &session, &credential, 1, Report::Started).await;
     report(
         &link,
-        &run,
+        &session,
         &credential,
         2,
         Report::Said {
@@ -437,12 +443,12 @@ async fn a_failed_run_posts_its_turns_response_and_then_the_failure() {
         },
     )
     .await;
-    report(&link, &run, &credential, 3, Report::Answered).await;
+    report(&link, &session, &credential, 3, Report::Answered).await;
     replies(&stub, 1).await;
 
     report(
         &link,
-        &run,
+        &session,
         &credential,
         4,
         Report::Finished {
@@ -454,7 +460,7 @@ async fn a_failed_run_posts_its_turns_response_and_then_the_failure() {
     .await;
 
     let bodies = replies(&stub, 2).await;
-    assert!(bodies[1].contains("run failed"), "{}", bodies[1]);
+    assert!(bodies[1].contains("session failed"), "{}", bodies[1]);
     assert!(
         bodies[1].contains("the agent answered the prompt with nothing"),
         "{}",
@@ -470,13 +476,13 @@ async fn a_turn_response_that_landed_while_the_control_plane_died_is_not_posted_
     stub.script_answer("POST", COMMENTS, ScriptedResponse::answering(502));
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
-    let (run, credential) = a_working_run(&kestrel, workspace.id).await;
+    let (session, credential) = a_working_session(&kestrel, workspace.id).await;
     let link = Link::to(&kestrel.link());
 
-    report(&link, &run, &credential, 1, Report::Started).await;
+    report(&link, &session, &credential, 1, Report::Started).await;
     report(
         &link,
-        &run,
+        &session,
         &credential,
         2,
         Report::Said {
@@ -484,7 +490,7 @@ async fn a_turn_response_that_landed_while_the_control_plane_died_is_not_posted_
         },
     )
     .await;
-    report(&link, &run, &credential, 3, Report::Answered).await;
+    report(&link, &session, &credential, 3, Report::Answered).await;
     let landed = replies(&stub, 1).await.remove(0);
     assert!(landed.contains("the answer that landed"), "{landed}");
 

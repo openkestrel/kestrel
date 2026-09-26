@@ -429,7 +429,7 @@ fn models(current: impl Into<SessionConfigValueId>) -> SessionConfigOption {
     .category(SessionConfigOptionCategory::Model)
 }
 
-/// Refuses to go on unless the client allows the call once, which is what makes a Run that
+/// Refuses to go on unless the client allows the call once, which is what makes a Session that
 /// succeeded evidence that the round-trip completed.
 async fn permission_to_use_a_tool(connection: &ConnectionTo<Client>) -> Result<()> {
     let outcome = connection

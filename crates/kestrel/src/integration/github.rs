@@ -48,7 +48,7 @@ pub const MENTION: &str = "@kestrel";
 const AGENT: &str = "agent=";
 
 /// Every outcome comment carries it, so kestrel never hears its own comment as a follow-up.
-pub const MARKER: &str = "<!-- kestrel run ";
+pub const MARKER: &str = "<!-- kestrel session ";
 
 const VERSION: &str = "2022-11-28";
 const PER_PAGE: usize = 100;
@@ -921,7 +921,7 @@ mod tests {
     fn a_comment_kestrel_left_is_not_heard_back() {
         let payload = serde_json::json!({
             "action": "created",
-            "comment": { "id": 99, "body": "done\n<!-- kestrel run 1 -->" },
+            "comment": { "id": 99, "body": "done\n<!-- kestrel session 1 -->" },
             "issue": { "number": 43 }
         });
 

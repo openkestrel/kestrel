@@ -55,7 +55,7 @@ struct Attending {
     conversation: Option<Conversation>,
     finished: bool,
     taken: i64,
-    /// Handed back before anything is said, because saying the Run finished ends it and with it
+    /// Handed back before anything is said, because saying the Session finished ends it and with it
     /// this Environment's right to hand anything back.
     refreshed: BTreeMap<String, String>,
     written: Option<login::Written>,
@@ -66,8 +66,9 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
     diagnostics.info("supervisor started");
 
     let Some(link) = dialled(variables) else {
-        diagnostics
-            .info("no link to dial: set KESTREL_LINK, KESTREL_RUN and KESTREL_RUN_CREDENTIAL");
+        diagnostics.info(
+            "no link to dial: set KESTREL_LINK, KESTREL_SESSION and KESTREL_SESSION_CREDENTIAL",
+        );
         return 1;
     };
     let link = Arc::new(link);
@@ -221,9 +222,9 @@ async fn attend(
                 ));
 
                 match delivered.instruction {
-                    // Stopped is told after the run has already ended, its credential invalidated
-                    // with it, so whatever a turn last refreshed was already handed back before
-                    // this arrived; only the local copy is left to clean up.
+                    // Stopped is told after the session has already ended, its credential
+                    // invalidated with it, so whatever a turn last refreshed was already handed
+                    // back before this arrived; only the local copy is left to clean up.
                     Instruction::Stop => {
                         if let Some(written) = attending.written.take() {
                             written.remove();
@@ -250,7 +251,7 @@ async fn attend(
                     }
                     Instruction::Prompt { prompt } => match &attending.conversation {
                         Some(conversation) => conversation.prompt(prompt),
-                        None => diagnostics.info("prompted before the run started"),
+                        None => diagnostics.info("prompted before the session started"),
                     },
                     Instruction::Start { .. } | Instruction::Unrecognized => {}
                 }
@@ -263,8 +264,8 @@ async fn attend(
                     diagnostics.info(&format!("allowed once  {subject}"));
                 }
                 // Handed back after every turn, not only a finishing one: a login the harness
-                // rotates mid-conversation is refreshed while the run's credential still lets it
-                // through, not saved up for a Stop that arrives once that credential is gone.
+                // rotates mid-conversation is refreshed while the session's credential still lets
+                // it through, not saved up for a Stop that arrives once that credential is gone.
                 if let Some(written) = &attending.written {
                     attending.refreshed = written.refreshed();
                 }
@@ -275,7 +276,7 @@ async fn attend(
                         written.remove();
                     }
                 }
-                // Reported after every turn, not only a finishing one: a Run waiting between
+                // Reported after every turn, not only a finishing one: a Session waiting between
                 // turns may be stopped at any moment, and what it last observed is what decides
                 // whether its Instance is held.
                 let observed = match &attending.checkout {
@@ -346,7 +347,7 @@ fn written(
     }
     let Some(home) = home else {
         return Err(
-            "the run's subscription profile holds files, and this environment has no home to \
+            "the session's subscription profile holds files, and this environment has no home to \
              put them in"
                 .to_owned(),
         );
@@ -422,10 +423,10 @@ fn everything_left_to_say(
 
 fn dialled(variables: &BTreeMap<String, String>) -> Option<Link> {
     let base = set(variables, "KESTREL_LINK")?;
-    let run = set(variables, "KESTREL_RUN")?;
-    let credential = set(variables, "KESTREL_RUN_CREDENTIAL")?;
+    let session = set(variables, "KESTREL_SESSION")?;
+    let credential = set(variables, "KESTREL_SESSION_CREDENTIAL")?;
 
-    Some(Link::to(base, run, credential))
+    Some(Link::to(base, session, credential))
 }
 
 fn set<'a>(variables: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
@@ -501,8 +502,8 @@ mod tests {
             &diagnostics,
             &variables(&[
                 ("KESTREL_LINK", ""),
-                ("KESTREL_RUN", "01999cf2-0000-7000-8000-000000000000"),
-                ("KESTREL_RUN_CREDENTIAL", "a-credential"),
+                ("KESTREL_SESSION", "01999cf2-0000-7000-8000-000000000000"),
+                ("KESTREL_SESSION_CREDENTIAL", "a-credential"),
             ]),
         )
         .await;
@@ -519,7 +520,7 @@ mod tests {
             &diagnostics,
             &variables(&[
                 ("KESTREL_LINK", "http://127.0.0.1:1"),
-                ("KESTREL_RUN", "01999cf2-0000-7000-8000-000000000000"),
+                ("KESTREL_SESSION", "01999cf2-0000-7000-8000-000000000000"),
             ]),
         )
         .await;

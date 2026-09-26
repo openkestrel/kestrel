@@ -55,7 +55,7 @@ fn no_sql_is_issued_from_anywhere_but_store_and_log() {
     }
 }
 
-/// `Compute` is the one port with two drivers (ADR-0005), and which one executes a Run is
+/// `Compute` is the one port with two drivers (ADR-0005), and which one executes a Session is
 /// configuration: a role that named one would be a second place to decide it.
 #[test]
 fn no_role_names_a_compute_driver() {
@@ -64,7 +64,7 @@ fn no_role_names_a_compute_driver() {
         for driver in ["Docker", "LocalExec"] {
             assert!(
                 !source.contains(driver),
-                "{} names the {driver} driver; which one a Run executes in is configuration",
+                "{} names the {driver} driver; which one a Session executes in is configuration",
                 file.display()
             );
         }

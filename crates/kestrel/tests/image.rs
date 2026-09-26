@@ -1,4 +1,4 @@
-//! The `kestrel-env` image: the base image a Run executes in, and an Environment provisioned
+//! The `kestrel-env` image: the base image a Session executes in, and an Environment provisioned
 //! from it, dialling out to a control plane on this machine.
 //!
 //! Every test here builds and runs the image, which a `cargo test` has no business doing on
@@ -10,7 +10,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
-use kestrel::domain::{Exit, Run, RunId, RunState, Workspace};
+use kestrel::domain::{Exit, Session, SessionId, SessionState, Workspace};
 use kestrel::link::credential::Secret;
 use support::Kestrel;
 use support::image::{self, Environment};
@@ -126,13 +126,13 @@ fn the_supervisor_is_what_the_image_starts_with_nothing_wrapped_around_it() {
 async fn an_environment_the_image_provisions_dials_out_and_the_control_plane_knows_it_is_connected()
 {
     let kestrel = Kestrel::boot_reachable_from_an_environment().await;
-    let (run, credential) = a_run(&kestrel).await;
+    let (session, credential) = a_session(&kestrel).await;
 
-    let mut environment = an_environment(&kestrel, run.id, &credential);
+    let mut environment = an_environment(&kestrel, session.id, &credential);
     environment.wait_until_it_says("reported connected").await;
 
     let connected = kestrel
-        .run(run.id)
+        .session(session.id)
         .await
         .connected
         .expect("the control plane should know an environment is on the link");
@@ -147,11 +147,11 @@ async fn an_environment_the_image_provisions_dials_out_and_the_control_plane_kno
 
 #[tokio::test]
 #[ignore = "builds and runs the kestrel-env image"]
-async fn killing_the_supervisor_in_the_environment_ends_the_run_and_nothing_restarts_it() {
+async fn killing_the_supervisor_in_the_environment_ends_the_session_and_nothing_restarts_it() {
     let kestrel = Kestrel::boot_reachable_from_an_environment().await;
-    let (run, credential) = a_run(&kestrel).await;
+    let (session, credential) = a_session(&kestrel).await;
 
-    let mut environment = an_environment(&kestrel, run.id, &credential);
+    let mut environment = an_environment(&kestrel, session.id, &credential);
     environment.wait_until_it_says("reported connected").await;
 
     environment.kill_the_supervisor();
@@ -165,23 +165,23 @@ async fn killing_the_supervisor_in_the_environment_ends_the_run_and_nothing_rest
     assert_eq!(
         environment.state(),
         "exited",
-        "something brought the supervisor back under its Run"
+        "something brought the supervisor back under its Session"
     );
 
-    kestrel.lease_until(&run, a_moment_ago()).await;
-    let ended = until(&kestrel, run.id, "ended", |run| {
-        run.state == RunState::Ended
+    kestrel.lease_until(&session, a_moment_ago()).await;
+    let ended = until(&kestrel, session.id, "ended", |session| {
+        session.state == SessionState::Ended
     })
     .await;
     let Some(Exit::Failed { because }) = ended.exit else {
         panic!(
-            "the run ended {:?}, and the supervisor holding its lease out was killed",
+            "the session ended {:?}, and the supervisor holding its lease out was killed",
             ended.exit
         );
     };
     assert!(
         because.contains("lease"),
-        "a run whose supervisor was killed fails by its lease: {because}"
+        "a session whose supervisor was killed fails by its lease: {because}"
     );
 
     environment.destroy();
@@ -201,14 +201,14 @@ fn anything_named(names: &[&str]) -> String {
     image::running(&sweep).out
 }
 
-fn an_environment(kestrel: &Kestrel, run: RunId, credential: &Secret) -> Environment {
-    Environment::provision(&kestrel.link_from_an_environment(), run, credential)
+fn an_environment(kestrel: &Kestrel, session: SessionId, credential: &Secret) -> Environment {
+    Environment::provision(&kestrel.link_from_an_environment(), session, credential)
 }
 
-async fn a_run(kestrel: &Kestrel) -> (Run, Secret) {
+async fn a_session(kestrel: &Kestrel) -> (Session, Secret) {
     let workspace = a_workspace(kestrel).await;
 
-    kestrel.dispatch_run(workspace.id).await
+    kestrel.dispatch_session(workspace.id).await
 }
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
@@ -228,20 +228,25 @@ async fn a_workspace(kestrel: &Kestrel) -> Workspace {
     kestrel.open_workspace("acme", "kestrel", "builder").await
 }
 
-async fn until(kestrel: &Kestrel, run: RunId, what: &str, ready: impl Fn(&Run) -> bool) -> Run {
+async fn until(
+    kestrel: &Kestrel,
+    session: SessionId,
+    what: &str,
+    ready: impl Fn(&Session) -> bool,
+) -> Session {
     let deadline = tokio::time::Instant::now() + PATIENCE;
 
     loop {
-        let run = kestrel.run(run).await;
-        if ready(&run) {
-            return run;
+        let session = kestrel.session(session).await;
+        if ready(&session) {
+            return session;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the run {} is {} with the exit status {:?}, and never {what}",
-            run.id,
-            run.state,
-            run.exit
+            "the session {} is {} with the exit status {:?}, and never {what}",
+            session.id,
+            session.state,
+            session.exit
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }

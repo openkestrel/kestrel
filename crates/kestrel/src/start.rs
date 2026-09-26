@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::declaration::{self, sharing_a_directory};
 use crate::declined::Declined;
-use crate::domain::{Run, Workspace};
+use crate::domain::{Session, Workspace};
 use crate::fanout::{self, Change};
 use crate::log::Entry;
 use crate::provider;
@@ -33,7 +33,7 @@ pub struct Started {
     pub project: Settled,
     pub agent: Settled,
     pub workspace: Workspace,
-    pub run: Run,
+    pub session: Session,
 }
 
 #[derive(Serialize)]
@@ -152,7 +152,7 @@ pub async fn start(store: &Store, plan: &Plan) -> Result<Started> {
             },
         )
         .await?;
-    let run = tx.workspaces().enqueue_run(&workspace, None).await?;
+    let session = tx.workspaces().enqueue_session(&workspace, None).await?;
     tx.commit().await?;
     fanout::publish(Change::WorkspaceOpened(&workspace));
 
@@ -170,7 +170,7 @@ pub async fn start(store: &Store, plan: &Plan) -> Result<Started> {
             created: agent.created,
         },
         workspace,
-        run,
+        session,
     })
 }
 

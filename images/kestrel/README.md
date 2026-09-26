@@ -77,7 +77,7 @@ makes and refuses the rest
 
 ```sh
 docker run --rm … ghcr.io/openkestrel/kestrel serve  # the operator boundary, the link and the webhooks
-docker run --rm … ghcr.io/openkestrel/kestrel work   # claim queued Runs and execute them
+docker run --rm … ghcr.io/openkestrel/kestrel work   # claim queued Sessions and execute them
 ```
 
 Those are the only two. Anything an operator asks for goes through the `kestrel` Client to `serve`,

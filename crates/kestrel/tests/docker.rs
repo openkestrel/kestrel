@@ -1,4 +1,4 @@
-//! The Docker `Compute` driver: the Run the primary test seam already drives, executed in a
+//! The Docker `Compute` driver: the Session the primary test seam already drives, executed in a
 //! real container provisioned from the `kestrel-env` image.
 //!
 //! Every test here builds and runs images, which a `cargo test` has no business doing on its
@@ -9,7 +9,7 @@ mod support;
 use std::time::Duration;
 
 use kestrel::compute::{Docker, Driver};
-use kestrel::domain::{Exit, Run, RunId, Workspace, WorkspaceId};
+use kestrel::domain::{Exit, Session, SessionId, Workspace, WorkspaceId};
 use support::Kestrel;
 use support::image::{self, Container};
 use support::scripted_agent::{self, Script};
@@ -53,31 +53,36 @@ async fn a_workspace(kestrel: &Kestrel) -> Workspace {
     kestrel.open_workspace("acme", "kestrel", "builder").await
 }
 
-async fn until(kestrel: &Kestrel, run: RunId, what: &str, ready: impl Fn(&Run) -> bool) -> Run {
+async fn until(
+    kestrel: &Kestrel,
+    session: SessionId,
+    what: &str,
+    ready: impl Fn(&Session) -> bool,
+) -> Session {
     let deadline = tokio::time::Instant::now() + PATIENCE;
 
     loop {
-        let run = kestrel.run(run).await;
-        if ready(&run) {
-            return run;
+        let session = kestrel.session(session).await;
+        if ready(&session) {
+            return session;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the run {} is {} with the exit status {:?}, and never {what}",
-            run.id,
-            run.state,
-            run.exit
+            "the session {} is {} with the exit status {:?}, and never {what}",
+            session.id,
+            session.state,
+            session.exit
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
-/// Answering a turn never ends a Run, so one that answered is stopped, the way a person would.
-async fn ended(kestrel: &Kestrel, run: RunId) -> Run {
-    kestrel.after_one_turn_within(run, PATIENCE).await
+/// Answering a turn never ends a Session, so one that answered is stopped, the way a person would.
+async fn ended(kestrel: &Kestrel, session: SessionId) -> Session {
+    kestrel.after_one_turn_within(session, PATIENCE).await
 }
 
-/// A stopped Run's exit is recorded before its supervisor has actually left (ADR-0024), so its
+/// A stopped Session's exit is recorded before its supervisor has actually left (ADR-0024), so its
 /// container is given a moment to catch up before this looks for what it left behind.
 async fn without_its_processes(container: &Container) -> String {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -93,23 +98,26 @@ async fn without_its_processes(container: &Container) -> String {
     }
 }
 
-async fn started(kestrel: &Kestrel, run: RunId) -> Run {
-    until(kestrel, run, "started", |run| run.started_at.is_some()).await
+async fn started(kestrel: &Kestrel, session: SessionId) -> Session {
+    until(kestrel, session, "started", |session| {
+        session.started_at.is_some()
+    })
+    .await
 }
 
-/// A Run's exit is recorded as soon as it is decided, before its supervisor is confirmed gone;
+/// A Session's exit is recorded as soon as it is decided, before its supervisor is confirmed gone;
 /// a workspace does not free its slot until that confirmation lands, which for a dead container
-/// can take a reconciliation pass rather than the commit that ended the Run (ADR-0002).
-async fn enqueue_when_free(kestrel: &Kestrel, workspace: WorkspaceId) -> Run {
+/// can take a reconciliation pass rather than the commit that ended the Session (ADR-0002).
+async fn enqueue_when_free(kestrel: &Kestrel, workspace: WorkspaceId) -> Session {
     let deadline = tokio::time::Instant::now() + PATIENCE;
 
     loop {
-        match kestrel.try_enqueue_run(workspace).await {
-            Ok(run) => return run,
+        match kestrel.try_enqueue_session(workspace).await {
+            Ok(session) => return session,
             Err(error) => {
                 assert!(
                     tokio::time::Instant::now() < deadline,
-                    "the run should enqueue: {error}"
+                    "the session should enqueue: {error}"
                 );
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
@@ -117,16 +125,16 @@ async fn enqueue_when_free(kestrel: &Kestrel, workspace: WorkspaceId) -> Run {
     }
 }
 
-/// The Run of ticket 06, dispatched at the driver the domain never names: the same script, the
+/// The Session of ticket 06, dispatched at the driver the domain never names: the same script, the
 /// same transcript, the same exit.
 #[tokio::test]
 #[ignore = "builds and runs the kestrel-env image"]
-async fn the_scripted_run_ends_the_same_way_in_a_container_as_it_does_in_a_process() {
+async fn the_scripted_session_ends_the_same_way_in_a_container_as_it_does_in_a_process() {
     let kestrel = working(Script::Speaks).await;
     let workspace = a_workspace(&kestrel).await;
 
-    let run = kestrel.enqueue_run(workspace.id).await;
-    let ended = ended(&kestrel, run.id).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+    let ended = ended(&kestrel, session.id).await;
 
     assert_eq!(ended.exit, Some(Exit::Succeeded));
     assert_eq!(
@@ -148,24 +156,24 @@ async fn the_scripted_run_ends_the_same_way_in_a_container_as_it_does_in_a_proce
 
 #[tokio::test]
 #[ignore = "builds and runs the kestrel-env image"]
-async fn an_instance_is_a_container_that_outlives_its_run_but_not_its_supervisor() {
+async fn an_instance_is_a_container_that_outlives_its_session_but_not_its_supervisor() {
     let kestrel = working(Script::Speaks).await;
     let workspace = a_workspace(&kestrel).await;
 
-    let run = kestrel.enqueue_run(workspace.id).await;
-    let ended = ended(&kestrel, run.id).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+    let ended = ended(&kestrel, session.id).await;
 
     let instance = ended.instance.as_deref().expect("an instance");
     assert_eq!(
         instance,
-        format!("docker/kestrel-{}", run.id),
-        "a run names the container it executed on"
+        format!("docker/kestrel-{}", session.id),
+        "a session names the container it executed on"
     );
     let container = Container::named(instance);
     let left = without_its_processes(&container).await;
     assert!(
         !left.contains("kestrel-supervisor") && !left.contains("kestrel-scripted-agent"),
-        "the run left processes on its instance: {left}"
+        "the session left processes on its instance: {left}"
     );
 
     kestrel.teardown().await;
@@ -178,9 +186,9 @@ async fn a_projects_repositories_and_its_branch_are_in_the_container() {
     let kestrel = working(Script::Dawdles).await;
     let workspace = a_workspace(&kestrel).await;
 
-    let run = kestrel.enqueue_run(workspace.id).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
     let container = Container::named(
-        started(&kestrel, run.id)
+        started(&kestrel, session.id)
             .await
             .instance
             .as_deref()
@@ -208,18 +216,18 @@ async fn a_projects_repositories_and_its_branch_are_in_the_container() {
     container.is_gone().await;
 }
 
-/// A container that dies takes the supervisor holding the Run's lease out with it, so the Run
-/// cannot go on; the work role attending it sees the supervisor gone before the lease it stopped
-/// holding out is due, and that is what ends it.
+/// A container that dies takes the supervisor holding the Session's lease out with it, so the
+/// Session cannot go on; the work role attending it sees the supervisor gone before the lease it
+/// stopped holding out is due, and that is what ends it.
 #[tokio::test]
 #[ignore = "builds and runs the kestrel-env image"]
-async fn a_container_that_dies_mid_run_is_detected_and_the_next_run_starts_it_again() {
+async fn a_container_that_dies_mid_session_is_detected_and_the_next_session_starts_it_again() {
     let kestrel = working(Script::Dawdles).await;
     let workspace = a_workspace(&kestrel).await;
 
-    let run = kestrel.enqueue_run(workspace.id).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
     let container = Container::named(
-        started(&kestrel, run.id)
+        started(&kestrel, session.id)
             .await
             .instance
             .as_deref()
@@ -228,20 +236,20 @@ async fn a_container_that_dies_mid_run_is_detected_and_the_next_run_starts_it_ag
 
     container.kill();
 
-    let ended = ended(&kestrel, run.id).await;
+    let ended = ended(&kestrel, session.id).await;
     let Some(Exit::Failed { because }) = &ended.exit else {
         panic!(
-            "the run ended {:?}, and its container was killed",
+            "the session ended {:?}, and its container was killed",
             ended.exit
         );
     };
     assert!(
-        because.contains("without reporting how the run went"),
+        because.contains("without reporting how the session went"),
         "unhelpful exit status: {because}"
     );
     assert!(
         ended.lease_expires_at.is_none(),
-        "a run whose container died still holds a lease"
+        "a session whose container died still holds a lease"
     );
 
     let next = enqueue_when_free(&kestrel, workspace.id).await;
@@ -255,7 +263,7 @@ async fn a_container_that_dies_mid_run_is_detected_and_the_next_run_starts_it_ag
     container.is_gone().await;
 }
 
-/// Every operation against a real container, including the ones no Run makes: a
+/// Every operation against a real container, including the ones no Session makes: a
 /// driver that implemented only what the work role happens to reach for would be a driver that
 /// has to grow to meet the contract later.
 #[tokio::test]
@@ -263,20 +271,20 @@ async fn a_container_that_dies_mid_run_is_detected_and_the_next_run_starts_it_ag
 async fn every_operation_in_the_contract_works_against_a_container() {
     let kestrel = Kestrel::boot_reachable_from_an_environment().await;
     let workspace = a_workspace(&kestrel).await;
-    let (run, credential) = kestrel.dispatch_run(workspace.id).await;
+    let (session, credential) = kestrel.dispatch_session(workspace.id).await;
 
     // Provisioned through the port rather than through the work role, so the operations no
-    // Run makes are exercised on the same Instance as the ones it does.
+    // Session makes are exercised on the same Instance as the ones it does.
     let driver = Driver::Docker(Docker::provisioning_from(image::built()));
     let mut instance = driver
-        .provision(run.id)
+        .provision(session.id)
         .expect("the instance should provision");
     let container = Container::named(instance.name());
     let mut supervisor = instance
         .supervise(&[
             ("KESTREL_LINK", &kestrel.link_from_an_environment()),
-            ("KESTREL_RUN", &run.id.to_string()),
-            ("KESTREL_RUN_CREDENTIAL", credential.as_str()),
+            ("KESTREL_SESSION", &session.id.to_string()),
+            ("KESTREL_SESSION_CREDENTIAL", credential.as_str()),
             ("KESTREL_HARNESS_COMMAND", "opencode acp"),
         ])
         .expect("the supervisor should start");
@@ -292,10 +300,10 @@ async fn every_operation_in_the_contract_works_against_a_container() {
     supervisor.stop().expect("the supervisor should stop");
     assert!(
         container
-            .exec(&["sh", "-c", "env | grep KESTREL_RUN_CREDENTIAL"])
+            .exec(&["sh", "-c", "env | grep KESTREL_SESSION_CREDENTIAL"])
             .code
             != 0,
-        "the run's credential outlived its supervisor"
+        "the session's credential outlived its supervisor"
     );
 
     let mut instance = driver
