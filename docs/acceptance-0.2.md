@@ -190,3 +190,116 @@ sealing. This attempt adds two-harness subscription-backed work, same-Run follow
 non-PR task, build and test, and current-build failure and cap survival of unpublished work. It has
 **not** established a completed Claude task or several newly worked backlog issues leaving
 recoverable branches or pull requests. The `ROADMAP.md` marker therefore remains at `0.2`.
+
+## Rerun: three harnesses work the backlog
+
+On 26 September 2026 the gate was run again on the `kestrel-acceptance-186` stack, built from this
+checkout, with its volume preserved. The Organization's limit was raised to two live Instances.
+The images were rebuilt once during the run, at `8ee05f3`: Codex 0.154 was offered no `gpt-6-sol`,
+and Codex's login shells had no `cargo` on `PATH`. The rerun also corrects the record above. The
+skill-led Run `01a0dbdc-5732-7021-ab57-d7cbc14d6d8b` never completed: it failed on a ChatGPT usage
+limit.
+
+Work was handed over the way `.kestrel/triggers.yaml` intends: a maintainer comment beginning
+`@kestrel`. A Subscription Profile belongs to a whole Trigger, so each harness had its own:
+`delegated-claude`, `delegated-codex` and `delegated-opencode`. Each matched its own prefix, used the
+same skill-led Brief ("follow `.agents/skills/implement/SKILL.md` … commit, push, open a pull request
+that closes the issue") and correlated by issue. The operator's `gh` token was held as `GH_TOKEN`,
+and a fresh Claude subscription login as a Profile file.
+
+### Nothing replayed
+
+At `13:05:33Z` a maintainer comment, `@kestrel claude history check: …`, was posted on #186 and
+recorded as Event `01a0ddd2-9f5b-7853-b2a5-0242c12d9db9`. The three Triggers were declared
+afterwards. `trigger test` reports that `delegated-claude` matches that Event. No firing and no
+Session followed it on this stack over the rest of the run, which covered more than an hour of
+one-minute polls.
+
+### The backlog
+
+| Issue | Harness and model | Session | Pull request |
+| --- | --- | --- | --- |
+| [#294](https://github.com/jtmthf/kestrel/issues/294) diagnosis | Codex, `gpt-5.5`, dispatched on `skill-led-review` (`diagnosing-bugs`, non-PR) | `01a0ddd3-b735-70c3-9234-bc50f3bde77d` | none, by design |
+| [#303](https://github.com/jtmthf/kestrel/issues/303) | Claude Code, subscription login | `01a0ddd4-886a-7041-a826-d2fa845e2c3a` | [#315](https://github.com/jtmthf/kestrel/pull/315), CI green |
+| [#305](https://github.com/jtmthf/kestrel/issues/305) | Codex, `gpt-6-sol` | `01a0dddf-d148-7140-9162-066635a60d4d` | [#318](https://github.com/jtmthf/kestrel/pull/318), CI green |
+| [#294](https://github.com/jtmthf/kestrel/issues/294) fix | OpenCode, `opencode-go/glm-5.3`, then `opencode/big-pickle` | `01a0dde1-b32d-7ef3-9e00-18d7aa5f1940` | [#319](https://github.com/jtmthf/kestrel/pull/319), CI green |
+
+Claude, Codex and OpenCode each built and tested Kestrel inside an Instance, ran the two-axis code
+review, and published a branch and pull request. No operator direction was needed beyond the
+comments recorded on each issue. Each first CI failure was repaired by a follow-up:
+- Claude's rustfmt diff on #315.
+- Codex's `clippy::manual_map` on #318.
+
+The Claude Run is the first completed Claude-backed Kestrel task.
+
+**Parallel work and the cap.**
+- The Codex diagnosis and Claude's #303 ran together, and Claude and Codex's #305 overlapped for
+  eleven minutes.
+- With both slots held, the OpenCode #294 Run and Claude's follow-up Run `01a0ddec-…` queued. Each
+  was admitted only as a slot came free.
+- After the crash below, the queued Run reported: "the organization acme has reached its limit of
+  2 live Instances; none idle is known recoverable".
+
+**Same-Run follow-up.** Twice, a message posted to a Session whose Run was waiting returned that
+same Run and became its next Turn:
+- OpenCode Run `01a0de12-e37a-72c0-beb8-6b7c5d891c1e` took two more Turns and opened #319.
+- Claude Run `01a0ddec-0916-70c0-b63b-4715f2f8e147` took one.
+
+The model is chosen per Run, not per Session. #294's Session changed from `glm-5.3` to
+`big-pickle` for a new Run on its held Instance, after the Go subscription's quota ran out.
+
+### Unpublished work under failure and pressure
+
+- **A control-plane crash.** At `13:56:44Z` the control plane exited on `database is locked`
+  ([#317](https://github.com/jtmthf/kestrel/issues/317)). Both supervisors exited with it, and the
+  #305 and #294 Runs failed on lease expiry. Kestrel held both Instances, "no run reported what its
+  checkout holds", with 21 and 9 changed files. Follow-up Runs resumed on the same Instances, and
+  that work became #318 and #319.
+- **A quota failure.** Two #294 Runs failed on the Go usage limit. The Instance stayed held until a
+  Run on a free model finished the work.
+- **A stopped Run.** A stray Codex Run was stopped mid-turn; its Instance was held and then
+  deliberately released. Sealing that Session answered `503`/exit 5, which reproduced #303 live
+  before #315 fixed it.
+- **A stale observation.** Kestrel refused to seal Claude's Session over a stale "1 uncommitted
+  change" until a same-Run Turn re-observed the checkout. That is conservative, and correct.
+
+No unpublished work was lost.
+
+An idle canary was placed on purpose. Session `01a0de2d-699c-7e10-b382-fca44d53398c` holds an
+untracked `IDLE-CANARY.txt`, and its Run was stopped at `14:46Z` with the Instance held. Its idle
+window closes at `2026-09-27T14:46Z`. The check that remains is that this Session stays open with
+its Instance held, while this run's clean Sessions seal themselves.
+
+### Findings
+
+- **[#295](https://github.com/jtmthf/kestrel/issues/295): a waiting Run killed and recorded as a
+  failure.** Admission reclaims a clean Instance whose Run is waiting between turns: its supervisor
+  dies with 137, and the Run is recorded `failed`. This happened five times, to the Codex diagnosis,
+  Claude #303, Codex #305, and OpenCode #294 twice. Each time the issue received a false "run
+  failed" outcome after a successful answer.
+- **[#314](https://github.com/jtmthf/kestrel/issues/314): the prompt buries the operator's message.**
+  An operator message on a Session without a Brief reaches the agent only as "Earlier context",
+  under "Do the work this environment was provisioned for." Codex took it as licence and started
+  #305 on its own.
+- **[#317](https://github.com/jtmthf/kestrel/issues/317): one lock contention stops the control
+  plane.** A single `SQLITE_BUSY` stops the whole control plane at two concurrent Runs.
+- **[#320](https://github.com/jtmthf/kestrel/issues/320): Instance environment.** `KESTREL_*`
+  variables leak into agent shells, and PID 1 never reaps zombies. Kestrel's own test suite cannot
+  pass inside an Instance, and every agent spent time proving that.
+- **[#321](https://github.com/jtmthf/kestrel/issues/321): work after the answer.** Claude kept
+  working after its Turn answered, and committed and pushed while Kestrel called the Run waiting.
+  OpenCode lost backgrounded tests by ending Turns early.
+- **Another Kestrel stack answered too.** A second, older stack polling the same repository had
+  `delegated` applied. It opened a duplicate Session for every `@kestrel` comment, on the same
+  branch names, until an operator disabled it. Nothing was pushed. One repository must be worked
+  by one control plane, which nothing yet enforces.
+- **Queued Runs show no reason.** A Run queued behind an Active-Work Slot, rather than an Instance,
+  reports no `waiting_for`. That belongs to 0.3's
+  [#307](https://github.com/jtmthf/kestrel/issues/307).
+- **Turn comments repeat the narration.** Each Turn's comment carries every narration line the
+  agent emitted, not its answer. That belongs to 0.3's
+  [#309](https://github.com/jtmthf/kestrel/issues/309).
+- **Codex's model list was stale.** Kestrel's cached list refused `gpt-6-sol` until a
+  profile-backed Codex Run completed a Turn on the newer client
+  ([#294](https://github.com/jtmthf/kestrel/issues/294), fixed by #319). The Claude runtime, with no
+  cached list, accepted any model name.
