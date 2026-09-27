@@ -73,12 +73,8 @@ pub async fn seal(store: &Store, id: WorkspaceId) -> Result<Workspace> {
     if workspace.state == WorkspaceState::Sealed {
         bail!("the workspace {id} is already sealed, and a sealed workspace is never reopened");
     }
-    let unfinished = unfinished_session(&mut tx, &workspace).await?;
-    if let Some(holding) = unfinished.in_flight() {
+    if let Some(holding) = unfinished_session(&mut tx, &workspace).await?.in_flight() {
         bail!("the session {holding} is still in flight in the workspace {id}");
-    }
-    if let Some(waiting) = unfinished.waiting() {
-        work::stopping(&mut tx, &waiting, Exit::Succeeded).await?;
     }
     instance::archive_on_seal(&mut tx, &workspace).await?;
 
@@ -159,7 +155,7 @@ pub(crate) enum PostDestination<'a> {
 }
 
 impl UnfinishedSession {
-    /// A waiting Session is not in flight: sealing ends it (ADR-0024).
+    /// A waiting Session is not in flight: sealing (ADR-0024) or archiving its Instance ends it.
     pub fn in_flight(&self) -> Option<SessionId> {
         self.session.as_ref().and_then(|session| {
             (!matches!(session.state, SessionState::Ended | SessionState::Waiting)
@@ -173,6 +169,14 @@ impl UnfinishedSession {
             .as_ref()
             .filter(|session| session.state == SessionState::Waiting)
             .cloned()
+    }
+
+    pub async fn end_waiting(&self, tx: &mut Tx<'_>) -> Result<()> {
+        if let Some(waiting) = self.waiting() {
+            work::stopping(tx, &waiting, Exit::Succeeded).await?;
+        }
+
+        Ok(())
     }
 
     pub fn post_destination(&self) -> PostDestination<'_> {
@@ -280,9 +284,7 @@ pub(crate) async fn start_in(
     tx.workspaces()
         .add_pending_session(workspace, &pending)
         .await?;
-    if let Some(waiting) = unfinished.waiting() {
-        work::stopping(tx, &waiting, Exit::Succeeded).await?;
-    }
+    unfinished.end_waiting(tx).await?;
 
     Ok(None)
 }

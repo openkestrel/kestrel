@@ -340,6 +340,8 @@ words from drifting.
 - A session may be **waiting** with its ACP conversation and instance intact. Waiting holds no
   active-work slot; the next prompt continues that same session. A turn ending does not end a
   session.
+- Archiving a waiting session's instance, whether by sealing, releasing or reclaiming it for new
+  work, first **ends** that session, which succeeds.
 - A turn in which the agent produced no message, narration or detail **fails** its session: a
   prompt that never became work is not an answer.
 - A session's agent conversation is rooted in the checkout of the **first** repository its
