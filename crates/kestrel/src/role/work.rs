@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
 use jiff::{SignedDuration, Timestamp};
-use tokio::task::JoinSet;
+use tokio::task::{JoinError, JoinSet};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -16,7 +16,7 @@ use crate::instance;
 use crate::link;
 use crate::profile;
 use crate::provider;
-use crate::store::Store;
+use crate::store::{self, Store};
 use crate::timer;
 use crate::work::{self, Claimed, Occupied};
 use crate::workspace;
@@ -108,6 +108,8 @@ pub async fn run(
     Ok(())
 }
 
+/// A pass that fails is warned of and the next one tries again: nothing here is a reason to stop
+/// the role, because stopping it cuts every in-flight Session's supervisor off its link.
 async fn dispatching(
     store: &Store,
     dispatch: &Dispatch,
@@ -116,44 +118,81 @@ async fn dispatching(
     let mut active = JoinSet::new();
 
     while !shutdown.is_cancelled() {
-        stop_left_behind(store, &dispatch.driver).await?;
-        archive(store, &dispatch.driver).await?;
+        if let Err(error) = stop_left_behind(store, &dispatch.driver).await {
+            warn!(%error, "a pass over ended sessions' supervisors found nothing it could do");
+        }
+        if let Err(error) = archive(store, &dispatch.driver).await {
+            warn!(%error, "an archiving pass found nothing it could do");
+        }
         match work::occupy(
             store,
             dispatch.max_active_sessions.get(),
             &dispatch.serialized,
         )
-        .await?
+        .await
         {
-            Some(Occupied::Claimed(claimed)) => {
+            Ok(Some(Occupied::Claimed(claimed))) => {
                 let store = store.clone();
                 let dispatch = dispatch.clone();
                 let shutdown = shutdown.clone();
-                active.spawn(async move { execute(&store, &dispatch, claimed, &shutdown).await });
+                active.spawn(async move { executing(&store, &dispatch, claimed, &shutdown).await });
                 continue;
             }
-            Some(Occupied::Resumed(session)) => {
+            Ok(Some(Occupied::Resumed(session))) => {
                 info!(session = %session.id, "a waiting session was prompted with what was held for it");
                 continue;
             }
-            None => {}
+            Ok(None) => {}
+            Err(error) => warn!(%error, "a dispatch found nothing it could do"),
         }
 
         tokio::select! {
-            finished = active.join_next(), if !active.is_empty() => {
-                finished.expect("an active session")
-                    .context("a session's execution task failed")??;
-            }
+            Some(finished) = active.join_next(), if !active.is_empty() => executed(finished),
             () = tokio::time::sleep(POLL) => {}
             () = shutdown.cancelled() => {}
         }
     }
 
     while let Some(finished) = active.join_next().await {
-        finished.context("a session's execution task failed")??;
+        executed(finished);
     }
 
     Ok(())
+}
+
+fn executed(finished: Result<(), JoinError>) {
+    if let Err(error) = finished {
+        warn!(%error, "a session's execution task ended without ending its session");
+    }
+}
+
+/// An execution that errors fails its own Session and no other.
+async fn executing(
+    store: &Store,
+    dispatch: &Dispatch,
+    claimed: Claimed,
+    shutdown: &CancellationToken,
+) {
+    let session = claimed.session.clone();
+    let Err(error) = execute(store, dispatch, claimed, shutdown).await else {
+        return;
+    };
+    warn!(session = %session.id, %error, "a session's execution failed");
+    let because = format!("the session's execution failed: {error:#}");
+
+    loop {
+        match work::fail(store, &session, &because).await {
+            Ok(_) => return,
+            Err(error) if store::busy(&error) && !shutdown.is_cancelled() => {
+                tokio::time::sleep(POLL).await;
+            }
+            // The Session's lease ends it instead.
+            Err(error) => {
+                warn!(session = %session.id, %error, "a session whose execution failed could not be failed");
+                return;
+            }
+        }
+    }
 }
 
 async fn execute(
@@ -378,9 +417,7 @@ async fn start(
 ) -> Result<Exit> {
     info!(session = %session.id, supervisor = supervisor.name(), "a session's supervisor started");
 
-    let ended = attend(store, session, &mut supervisor, shutdown).await;
-
-    let exit = match ended? {
+    let exit = match attend(store, session, &mut supervisor, shutdown).await {
         Ended::TheSession(exit) => {
             left_the_link(&mut supervisor).await;
             exit
@@ -433,10 +470,10 @@ async fn attend(
     session: &Session,
     supervisor: &mut Supervisor,
     shutdown: &CancellationToken,
-) -> Result<Ended> {
+) -> Ended {
     loop {
         match supervisor.status() {
-            Ok(Some(exited)) => return Ok(Ended::Supervisor(exited)),
+            Ok(Some(exited)) => return Ended::Supervisor(exited),
             Ok(None) => {}
             // A daemon that cannot answer is not a supervisor that is gone. The Session's lease
             // ends it if this never clears.
@@ -444,13 +481,19 @@ async fn attend(
                 warn!(session = %session.id, %error, "a supervisor could not be asked how it is")
             }
         }
-        if let Some(exit) = work::session(store, session.id).await?.exit {
-            return Ok(Ended::TheSession(exit));
+        match work::session(store, session.id).await {
+            Ok(Session {
+                exit: Some(exit), ..
+            }) => return Ended::TheSession(exit),
+            Ok(_) => {}
+            Err(error) => {
+                warn!(session = %session.id, %error, "a session could not be asked how it is")
+            }
         }
 
         tokio::select! {
             () = tokio::time::sleep(POLL) => {}
-            () = shutdown.cancelled() => return Ok(Ended::ControlPlane),
+            () = shutdown.cancelled() => return Ended::ControlPlane,
         }
     }
 }

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
@@ -32,7 +32,7 @@ use crate::log::{self, Cursor, Page, Unreadable, Window};
 use crate::profile::{self, Entry};
 use crate::provider::{self, Held};
 use crate::store::organization::NoSuchOrganization;
-use crate::store::{Declared, Store};
+use crate::store::{self, Declared, Store};
 use crate::template::Template;
 use crate::trigger::{self, apply};
 use crate::{instance, start, work, workspace};
@@ -1902,6 +1902,17 @@ impl IntoResponse for Refused {
             Refused::NotFound(why) => (StatusCode::NOT_FOUND, why),
             Refused::Conflict(why) => (StatusCode::CONFLICT, why),
             Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why),
+            Refused::Unavailable(error) if store::busy(&error) => {
+                warn!(%error, "the operator boundary was too busy to answer");
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [(header::RETRY_AFTER, store::RETRY_AFTER)],
+                    Json(Refusal {
+                        message: "the control plane was too busy to answer".to_owned(),
+                    }),
+                )
+                    .into_response();
+            }
             Refused::Unavailable(error) => {
                 warn!(%error, "the operator boundary could not answer");
                 (

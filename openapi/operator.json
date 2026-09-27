@@ -1508,6 +1508,12 @@
     "responses": {
       "Refused": {
         "description": "The control plane refused the request. 400 is a request it could not read; 404 is a name or reference that resolves to no record, or to more than one; 409 and 422 are an operation it declined; 503 is a control plane that could not answer.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds to wait before asking again. Present on a 503 only when the database was busy, which asking again can clear.",
+            "schema": { "type": "integer" }
+          }
+        },
         "content": {
           "application/json": {
             "schema": {

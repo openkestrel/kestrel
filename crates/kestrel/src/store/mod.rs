@@ -25,6 +25,7 @@ use crate::store::trigger::Triggers;
 use crate::store::workspace::Workspaces;
 
 const DATABASE: &str = "kestrel.db";
+pub const RETRY_AFTER: &str = "1";
 
 #[derive(Clone)]
 pub struct Store {
@@ -69,6 +70,25 @@ impl Store {
             keyring: &self.keyring,
         })
     }
+}
+
+/// Another writer held the database past the busy timeout, or held every connection: the same
+/// work asked again later can succeed, so it is never a reason to stop.
+pub fn busy(error: &anyhow::Error) -> bool {
+    const SQLITE_BUSY: i32 = 5;
+    const SQLITE_LOCKED: i32 = 6;
+
+    error
+        .chain()
+        .any(|cause| match cause.downcast_ref::<sqlx::Error>() {
+            Some(sqlx::Error::Database(database)) => database
+                .code()
+                .and_then(|code| code.parse::<i32>().ok())
+                // The extended codes (SQLITE_BUSY_SNAPSHOT, ...) keep the primary in the low byte.
+                .is_some_and(|code| matches!(code & 0xff, SQLITE_BUSY | SQLITE_LOCKED)),
+            Some(sqlx::Error::PoolTimedOut) => true,
+            _ => false,
+        })
 }
 
 pub struct Tx<'a> {

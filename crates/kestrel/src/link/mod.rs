@@ -24,7 +24,7 @@ use crate::link::credential::Secret;
 use crate::log::{self, Cursor, Unreadable, Window};
 use crate::profile;
 use crate::provider;
-use crate::store::{Store, Tx};
+use crate::store::{self, Store, Tx};
 use crate::work::{self, ReportRefused, Reported};
 use crate::workspace;
 
@@ -412,6 +412,17 @@ impl IntoResponse for Refused {
             Refused::NoSuchSession => (StatusCode::NOT_FOUND, "no such session".to_owned()),
             Refused::Unauthorized(why) => (StatusCode::UNAUTHORIZED, why.to_owned()),
             Refused::Forbidden(why) => (StatusCode::FORBIDDEN, why.to_owned()),
+            Refused::Unavailable(error) if store::busy(&error) => {
+                warn!(%error, "the link was too busy to answer");
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [(header::RETRY_AFTER, store::RETRY_AFTER)],
+                    Json(Refusal {
+                        message: "the link was too busy to answer".to_owned(),
+                    }),
+                )
+                    .into_response();
+            }
             Refused::Unavailable(error) => {
                 warn!(%error, "the link could not answer");
                 (
