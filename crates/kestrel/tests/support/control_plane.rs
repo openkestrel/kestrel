@@ -21,7 +21,12 @@ pub fn built() -> &'static str {
     static BUILT: OnceLock<String> = OnceLock::new();
 
     BUILT.get_or_init(|| {
-        images::built_or_named(images::CONTROL_PLANE, "images/kestrel/Dockerfile", LOCAL)
+        images::built_or_named(
+            images::CONTROL_PLANE,
+            "images/kestrel/Dockerfile",
+            LOCAL,
+            &[],
+        )
     })
 }
 

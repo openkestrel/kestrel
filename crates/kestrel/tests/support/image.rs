@@ -51,14 +51,29 @@ fn tags() -> &'static Tags {
     TAGS.get_or_init(|| tags_for(&docker::repository()))
 }
 
+/// What every image this checkout builds carries, so the sweep can take it back with the rest.
+fn label() -> &'static str {
+    static LABEL: OnceLock<String> = OnceLock::new();
+
+    LABEL.get_or_init(|| {
+        format!(
+            "{}={}",
+            docker::CHECKOUT_LABEL,
+            docker::checkout_path(&docker::repository())
+        )
+    })
+}
+
 pub fn built() -> &'static str {
     static BUILT: OnceLock<String> = OnceLock::new();
 
     BUILT.get_or_init(|| {
+        docker::sweep_deleted_checkouts();
         images::built_or_named(
             images::ENV,
             "images/kestrel-env/Dockerfile",
             &tags().environment,
+            &[label()],
         )
     })
 }
@@ -73,6 +88,8 @@ pub fn with_the_scripted_agent() -> &'static str {
         docker::completed(
             &[
                 "build",
+                "--label",
+                label(),
                 "--file",
                 "crates/kestrel/tests/support/scripted-env.Dockerfile",
                 "--build-arg",
@@ -98,6 +115,8 @@ pub fn with_the_adapter() -> &'static str {
         docker::completed(
             &[
                 "build",
+                "--label",
+                label(),
                 "--file",
                 "crates/kestrel/tests/support/conformance-env.Dockerfile",
                 "--build-arg",
@@ -123,6 +142,8 @@ pub fn development() -> &'static str {
         docker::completed(
             &[
                 "build",
+                "--label",
+                label(),
                 "--file",
                 "images/kestrel-dev/Dockerfile",
                 "--build-arg",

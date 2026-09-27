@@ -17,16 +17,19 @@ pub fn sourced(variable: &str) -> Option<String> {
 }
 
 /// The image `variable` names, or the one built from `dockerfile` and tagged `local` when
-/// nothing named one, which is every local run.
-pub fn built_or_named(variable: &str, dockerfile: &str, local: &str) -> String {
+/// nothing named one, which is every local run. What is built here carries `labels`, so a sweep
+/// can take it back once the checkout that built it is gone.
+pub fn built_or_named(variable: &str, dockerfile: &str, local: &str, labels: &[&str]) -> String {
     if let Some(image) = sourced(variable) {
         return image;
     }
 
-    docker::completed(
-        &["build", "--file", dockerfile, "--tag", local, "."],
-        "building the image",
-    );
+    let mut build = vec!["build", "--file", dockerfile];
+    for label in labels {
+        build.extend_from_slice(&["--label", label]);
+    }
+    build.extend_from_slice(&["--tag", local, "."]);
+    docker::completed(&build, "building the image");
 
     local.to_owned()
 }
