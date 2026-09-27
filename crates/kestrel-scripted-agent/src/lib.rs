@@ -18,6 +18,9 @@ pub const OTHER_MODEL: &str = "scripted-max";
 /// What the `Mutters` script writes to stderr, followed by a line of `OVERLONG` bytes.
 pub const MUTTERED: &str = "the scripted agent muttered to itself";
 pub const OVERLONG: usize = 64 * 1024;
+pub const CHATTER: std::time::Duration = std::time::Duration::from_millis(100);
+pub const CHATTERED_LINES: usize = 10;
+pub const CHATTERED_MESSAGES: usize = 5;
 pub const FIRST_MEMORY: &str = "the first remembered message";
 pub const LAST_MEMORY: &str = "the last remembered message";
 
@@ -53,6 +56,8 @@ pub enum Script {
     Dawdles,
     /// Writes to stderr as it works at a turn that never ends.
     Mutters,
+    /// Writes to stderr several times a second through each turn, as a harness running `git` does.
+    Chatters,
     /// Speaks, but takes long enough over the turn that the control plane can be killed and
     /// restarted while the Session is still in flight.
     Lingers,
@@ -92,6 +97,7 @@ impl Script {
             Script::Insists => "insists",
             Script::Dawdles => "dawdles",
             Script::Mutters => "mutters",
+            Script::Chatters => "chatters",
             Script::Lingers => "lingers",
             Script::Locates => "locates",
             Script::Silent => "silent",
@@ -102,6 +108,10 @@ impl Script {
             Script::Vanishes => "vanishes",
         }
     }
+}
+
+pub fn chattered(turn: usize, message: usize) -> String {
+    format!("turn {turn}, message {message}")
 }
 
 /// What the `Converses` script says to the `turn`th prompt of its session, after `earlier`.

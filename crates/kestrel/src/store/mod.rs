@@ -8,11 +8,13 @@ pub mod workspace;
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context as _, Result};
 use jiff::Timestamp;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteRow};
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
+use tracing::trace;
 
 use crate::keyring::Keyring;
 use crate::log::Log;
@@ -25,6 +27,8 @@ use crate::store::trigger::Triggers;
 use crate::store::workspace::Workspaces;
 
 const DATABASE: &str = "kestrel.db";
+/// `waited_us` spans the pool acquire and `BEGIN IMMEDIATE` together, and is emitted on failure too.
+pub const WRITE_LOCK: &str = "kestrel::store::write_lock";
 
 #[derive(Clone)]
 pub struct Store {
@@ -64,8 +68,16 @@ impl Store {
     /// transaction that reads and then writes while another has written, rather than making
     /// it wait its turn.
     pub async fn begin(&self) -> Result<Tx<'_>> {
+        let asked = Instant::now();
+        let transaction = self.pool.begin_with("BEGIN IMMEDIATE").await;
+        trace!(
+            target: WRITE_LOCK,
+            waited_us = u64::try_from(asked.elapsed().as_micros()).unwrap_or(u64::MAX),
+            "waited for the write lock"
+        );
+
         Ok(Tx {
-            transaction: self.pool.begin_with("BEGIN IMMEDIATE").await?,
+            transaction: transaction?,
             keyring: &self.keyring,
         })
     }

@@ -1561,7 +1561,7 @@ impl Kestrel {
     }
 }
 
-async fn database(data_dir: &Path) -> sqlx::SqlitePool {
+pub async fn database(data_dir: &Path) -> sqlx::SqlitePool {
     let database = data_dir.join("kestrel.db");
     sqlx::SqlitePool::connect(&format!("sqlite://{}", database.display()))
         .await

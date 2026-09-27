@@ -427,6 +427,27 @@ async fn what_a_harness_writes_to_stderr_never_enters_the_transcript_or_takes_a_
 }
 
 #[tokio::test]
+async fn what_a_harness_writes_to_stderr_never_waits_for_the_write_lock() {
+    let fixture = Fixture::new().await;
+    let holding = fixture.store.begin().await.unwrap();
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        fixture.report(
+            None,
+            Report::Stderr {
+                lines: vec!["git ran".to_owned()],
+            },
+        ),
+    )
+    .await
+    .expect("a stderr report waited for the write lock")
+    .unwrap();
+
+    drop(holding);
+}
+
+#[tokio::test]
 async fn a_failed_append_rolls_back_the_session_change_and_report_acceptance() {
     let fixture = Fixture::new().await;
     complete(&fixture.store, &fixture.session).await.unwrap();
