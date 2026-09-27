@@ -23,9 +23,7 @@ impl Environment {
         let path = directory.path().join("environment");
         fs::write(
             &path,
-            format!(
-                "#!/bin/sh\nexport GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false\n{shell}\n"
-            ),
+            format!("#!/bin/sh\n{}\n{shell}\n", super::git::shell_exports()),
         )
         .expect("the environment should write");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755))

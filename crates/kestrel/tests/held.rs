@@ -16,8 +16,7 @@ use support::supervisor;
 
 const PATIENCE: Duration = Duration::from_secs(30);
 
-const COMMIT: &str = "git -C kestrel -c user.name=kestrel -c user.email=kestrel@example.com \
-                      commit --quiet";
+const COMMIT: &str = "git -C kestrel commit --quiet";
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
     let organization = kestrel.declare_organization("acme").await;

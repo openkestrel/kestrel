@@ -2,7 +2,7 @@
 //! that checks out its Project's repositories reaches nothing over the network.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::OnceLock;
 
 use tempfile::TempDir;
@@ -32,15 +32,7 @@ pub fn other_url() -> &'static str {
             for arguments in [
                 vec!["init", "--initial-branch", BRANCH],
                 vec!["add", "README.md"],
-                vec![
-                    "-c",
-                    "user.name=kestrel",
-                    "-c",
-                    "user.email=kestrel@example.com",
-                    "commit",
-                    "--message",
-                    "the commit the branch points at",
-                ],
+                vec!["commit", "--message", "the commit the branch points at"],
             ] {
                 git(&repository, &arguments);
             }
@@ -58,18 +50,7 @@ fn initialized() -> (TempDir, String) {
     std::fs::write(repository.join("README.md"), "a project's repository\n")
         .expect("the repository should have something in it");
 
-    let committed = |message| {
-        vec![
-            "-c",
-            "user.name=kestrel",
-            "-c",
-            "user.email=kestrel@example.com",
-            "commit",
-            "--all",
-            "--message",
-            message,
-        ]
-    };
+    let committed = |message| vec!["commit", "--all", "--message", message];
     for arguments in [
         vec!["init", "--initial-branch", BRANCH],
         vec!["add", "README.md"],
@@ -89,7 +70,7 @@ fn initialized() -> (TempDir, String) {
 }
 
 fn git(repository: &Path, arguments: &[&str]) {
-    let ran = Command::new("git")
+    let ran = super::git::command()
         .args(arguments)
         .current_dir(repository)
         .stdout(Stdio::null())

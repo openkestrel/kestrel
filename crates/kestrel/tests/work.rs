@@ -486,8 +486,7 @@ fn leaving_work_behind() -> Environment {
            echo fresh >> \"$here/found\"\n\
            {{ echo committed > kestrel/committed\n\
              git -C kestrel add committed\n\
-             git -C kestrel -c user.name=kestrel -c user.email=kestrel@example.com \
-               commit --message 'work only this instance has'\n\
+             git -C kestrel commit --message 'work only this instance has'\n\
              echo uncommitted >> kestrel/README.md\n\
              echo untracked > kestrel/untracked; }} >&2\n\
            sleep 300 </dev/null >/dev/null 2>&1 &\n\
