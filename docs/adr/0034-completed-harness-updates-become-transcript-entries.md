@@ -1,0 +1,11 @@
+# Completed Harness updates become Transcript entries
+
+ADR-0020 makes a Transcript entry a completed unit rather than a streamed fragment. ACP v1 marks no message, thought or plan as final, and a tool call can lack a terminal update. Kestrel therefore uses the boundaries it can observe, and keeps provisional activity in Session state until a unit is complete.
+
+- An ACP agent message becomes a **shared-state** entry when its `messageId` changes or its Turn ends. A chunk without an ID stands alone. Chunks with the same ID stay together even if thoughts or tools occur between them. Identifiable adapter notices and Harness diagnostics go to operator diagnostics, not the Transcript; a genuine agent message without an ID remains shared state.
+- An ACP thought becomes a **narration** entry by the same ID and Turn boundaries, buffered separately from messages. Each ACP plan update is already a complete replacement snapshot and becomes one narration entry. A plan has no final-only entry.
+- A tool call's start and updates maintain current **Session state**, so a Client can see its title, status and elapsed time before a Transcript entry exists. Its terminal update makes one **detail** entry with the call and result. If the Turn ends with the call open, kestrel closes it once with its own reason: interrupted on cancellation, failed on error, or unresolved with the Turn's stop reason otherwise. An unresolved call is a visible Harness anomaly, not a claim that its tool finished.
+- A failed or cancelled Turn still completes the message and thought text observed up to its boundary. Entries closed there carry the Turn outcome. A later update cannot rewrite a completed entry or leak into another Turn; it produces an operator-visible diagnostic outside the Transcript.
+- `model` and `used` reports update the Session's current values as they arrive. They do not create Transcript entries. Every Harness-derived entry identifies its Session, since a Workspace may hold Sessions with different Agents and models.
+
+Entries append when their units complete, even if their activity overlapped. Each records its start and finish time so a Client can show that overlap. The single Transcript cursor remains an immutable completion order; reserving positions for unfinished units or splitting a message at every intervening update would break one of those promises.
