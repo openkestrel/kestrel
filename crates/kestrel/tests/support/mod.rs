@@ -14,6 +14,7 @@ pub mod control_plane;
 pub mod diagnostics;
 pub mod docker;
 pub mod environment;
+pub mod git;
 pub mod github_stub;
 pub mod image;
 pub mod images;
