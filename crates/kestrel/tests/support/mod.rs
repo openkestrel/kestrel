@@ -628,7 +628,6 @@ impl Kestrel {
         .expect("the trigger should declare")
     }
 
-    /// Against the `kestrel` Project, opening on a miss and doing `on_open_workspace` on a hit.
     #[expect(
         clippy::too_many_arguments,
         reason = "a trigger is what it is declared with"

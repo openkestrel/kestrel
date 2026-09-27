@@ -377,6 +377,73 @@ async fn a_label_chooses_the_agent_of_a_new_session_among_those_its_trigger_allo
 }
 
 #[tokio::test]
+async fn a_command_chooses_the_agent_of_a_new_session_among_those_its_trigger_allows() {
+    let kestrel = Kestrel::boot().await;
+    an_organization(&kestrel).await;
+    kestrel
+        .declare_correlated_trigger(
+            "acme",
+            "ready",
+            &labelled_on(REPOSITORY, READY),
+            "builder",
+            &[],
+            &templates(support::BRIEF, None, Some(CORRELATION)),
+            OnOpenWorkspace::Continue,
+        )
+        .await;
+    kestrel
+        .declare_correlated_trigger(
+            "acme",
+            "asked",
+            &serde_json::json!({"all": [
+                {"exact": {"type": "com.github.issue_comment.created"}},
+                {"prefix": {"data.body": "@kestrel"}},
+            ]})
+            .to_string(),
+            "fixer",
+            &["codex"],
+            &templates("{{ instruction }}", None, Some(CORRELATION)),
+            OnOpenWorkspace::NewSession,
+        )
+        .await;
+    let stub = GithubStub::start();
+    stub.script_answer(
+        "GET",
+        EVENTS,
+        github_stub::page(&[github_stub::labelled(7, ISSUE, READY)]),
+    );
+    watching(&kestrel, &stub).await;
+    let workspace = opened(&kestrel).await;
+    let first = kestrel
+        .claim_session()
+        .await
+        .expect("the opening firing enqueued a session")
+        .session;
+    kestrel.complete_session(&first).await;
+
+    stub.script_answer(
+        "GET",
+        COMMENTS,
+        github_stub::page(&[github_stub::issue_comment(
+            11,
+            ISSUE,
+            "jack",
+            "@kestrel agent=codex fix the build",
+        )]),
+    );
+    let started = sessions(&kestrel, workspace.id, 2).await;
+
+    assert_eq!(started[1].agent.name, "codex");
+    assert!(
+        briefs(&kestrel, workspace.id)
+            .await
+            .contains(&(Some("asked".to_owned()), "fix the build".to_owned()))
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_trigger_that_omits_what_it_does_to_an_open_workspace_continues() {
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel).await;
