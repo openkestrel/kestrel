@@ -24,7 +24,8 @@ use crate::link::credential::Secret;
 use crate::log::{self, Cursor, Unreadable, Window};
 use crate::profile;
 use crate::provider;
-use crate::store::{Store, Tx};
+use crate::role::serve;
+use crate::store::{self, Store, Tx};
 use crate::work::{self, ReportRefused, Reported};
 use crate::workspace;
 
@@ -407,13 +408,14 @@ impl From<ReportRefused> for Refused {
 
 impl IntoResponse for Refused {
     fn into_response(self) -> Response {
+        let busy = matches!(&self, Refused::Unavailable(error) if store::busy(error));
         let (status, message) = match self {
             Refused::BadRequest(why) => (StatusCode::BAD_REQUEST, why),
             Refused::NoSuchSession => (StatusCode::NOT_FOUND, "no such session".to_owned()),
             Refused::Unauthorized(why) => (StatusCode::UNAUTHORIZED, why.to_owned()),
             Refused::Forbidden(why) => (StatusCode::FORBIDDEN, why.to_owned()),
             Refused::Unavailable(error) => {
-                warn!(%error, "the link could not answer");
+                warn!(%error, busy, "the link could not answer");
                 (
                     StatusCode::SERVICE_UNAVAILABLE,
                     "the link could not answer".to_owned(),
@@ -421,7 +423,7 @@ impl IntoResponse for Refused {
             }
         };
 
-        (status, Json(Refusal { message })).into_response()
+        serve::refusal(status, busy, Json(Refusal { message }))
     }
 }
 

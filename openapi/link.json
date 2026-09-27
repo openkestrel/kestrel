@@ -278,6 +278,12 @@
     "responses": {
       "Refused": {
         "description": "The link refused the request.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds to wait before asking again. Present on a 503 only when the database was busy, which asking again can clear.",
+            "schema": { "type": "integer" }
+          }
+        },
         "content": {
           "application/json": {
             "schema": {

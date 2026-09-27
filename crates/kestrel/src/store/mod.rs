@@ -71,6 +71,24 @@ impl Store {
     }
 }
 
+/// Never a reason to stop: the same work asked again later can succeed.
+pub fn busy(error: &anyhow::Error) -> bool {
+    const SQLITE_BUSY: i32 = 5;
+    const SQLITE_LOCKED: i32 = 6;
+
+    error
+        .chain()
+        .any(|cause| match cause.downcast_ref::<sqlx::Error>() {
+            Some(sqlx::Error::Database(database)) => database
+                .code()
+                .and_then(|code| code.parse::<i32>().ok())
+                // The extended codes (SQLITE_BUSY_SNAPSHOT, ...) keep the primary in the low byte.
+                .is_some_and(|code| matches!(code & 0xff, SQLITE_BUSY | SQLITE_LOCKED)),
+            Some(sqlx::Error::PoolTimedOut) => true,
+            _ => false,
+        })
+}
+
 pub struct Tx<'a> {
     transaction: Transaction<'a, Sqlite>,
     keyring: &'a Keyring,

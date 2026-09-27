@@ -31,8 +31,9 @@ use crate::integration::{self, Connecting, Registration};
 use crate::log::{self, Cursor, Page, Unreadable, Window};
 use crate::profile::{self, Entry};
 use crate::provider::{self, Held};
+use crate::role::serve;
 use crate::store::organization::NoSuchOrganization;
-use crate::store::{Declared, Store};
+use crate::store::{self, Declared, Store};
 use crate::template::Template;
 use crate::trigger::{self, apply};
 use crate::{instance, start, work, workspace};
@@ -1897,13 +1898,14 @@ impl From<Unreadable> for Refused {
 
 impl IntoResponse for Refused {
     fn into_response(self) -> Response {
+        let busy = matches!(&self, Refused::Unavailable(error) if store::busy(error));
         let (status, message) = match self {
             Refused::BadRequest(why) => (StatusCode::BAD_REQUEST, why),
             Refused::NotFound(why) => (StatusCode::NOT_FOUND, why),
             Refused::Conflict(why) => (StatusCode::CONFLICT, why),
             Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why),
             Refused::Unavailable(error) => {
-                warn!(%error, "the operator boundary could not answer");
+                warn!(%error, busy, "the operator boundary could not answer");
                 (
                     StatusCode::SERVICE_UNAVAILABLE,
                     "the control plane could not answer".to_owned(),
@@ -1911,7 +1913,7 @@ impl IntoResponse for Refused {
             }
         };
 
-        (status, Json(Refusal { message })).into_response()
+        serve::refusal(status, busy, Json(Refusal { message }))
     }
 }
 

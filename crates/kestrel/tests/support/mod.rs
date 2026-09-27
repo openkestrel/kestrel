@@ -269,6 +269,31 @@ impl Kestrel {
         self.data_dir.path()
     }
 
+    pub fn is_running(&self) -> bool {
+        !self.roles.is_finished()
+    }
+
+    /// Takes SQLite's write lock the way another process on the same file would.
+    pub async fn while_the_database_is_locked<T>(&self, meanwhile: impl Future<Output = T>) -> T {
+        let pool = database(self.data_dir()).await;
+        let mut holder = pool.acquire().await.expect("a connection");
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *holder)
+            .await
+            .expect("the write lock should be free to take");
+
+        let done = meanwhile.await;
+
+        sqlx::query("ROLLBACK")
+            .execute(&mut *holder)
+            .await
+            .expect("the write lock should release");
+        drop(holder);
+        pool.close().await;
+
+        done
+    }
+
     pub fn link(&self) -> String {
         format!("http://{}", self.bound.link)
     }
