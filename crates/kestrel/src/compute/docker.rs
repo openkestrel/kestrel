@@ -37,7 +37,6 @@ impl Docker {
             "create".to_owned(),
             "--name".to_owned(),
             container.clone(),
-            "--init".to_owned(),
             // The Instance dials out and nothing dials in (ADR-0002), so this is the only
             // name the link is reachable by from inside.
             "--add-host".to_owned(),
@@ -47,7 +46,19 @@ impl Docker {
             created.push("--network".to_owned());
             created.push(network.clone());
         }
-        created.extend(["--entrypoint", "sleep", &self.image, "infinity"].map(str::to_owned));
+        // Not `--init`: stopping a supervisor kills everything but the first process, which would
+        // take init's child and the container with it, so the first process reaps by ignoring SIGCHLD.
+        created.extend(
+            [
+                "--entrypoint",
+                "env",
+                &self.image,
+                "--ignore-signal=CHLD",
+                "sleep",
+                "infinity",
+            ]
+            .map(str::to_owned),
+        );
         docker(&created.iter().map(String::as_str).collect::<Vec<_>>())?;
 
         // Started rather than attached, so that by the time this returns the container is
