@@ -86,6 +86,30 @@ async fn a_session_carries_the_credential_its_organization_holds_into_the_harnes
 }
 
 #[tokio::test]
+async fn an_agents_tool_sees_no_supervisor_environment() {
+    let kestrel = Kestrel::dispatching_to(
+        supervisor::binary(),
+        &scripted_agent::playing(Script::InspectsEnvironment),
+    )
+    .await;
+    let workspace = a_workspace(&kestrel, "acme", Some(A_PROVIDER_KEY)).await;
+
+    let session = kestrel.enqueue_session(workspace.id).await;
+    let ended = ended(&kestrel, session.id).await;
+
+    assert_eq!(ended.exit, Some(Exit::Succeeded));
+    assert!(
+        transcript(&kestrel, &workspace)
+            .await
+            .contains("KESTREL_ variables: []"),
+        "the agent's tool saw supervisor variables: {}",
+        transcript(&kestrel, &workspace).await
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn one_organizations_credential_does_not_reach_anothers_session() {
     let kestrel = confiding().await;
     a_workspace(&kestrel, "acme", Some("the-acme-key")).await;

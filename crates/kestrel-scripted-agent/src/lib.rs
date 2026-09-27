@@ -29,6 +29,7 @@ pub enum Script {
     Refuses,
     /// Says which Provider Credentials reached its own process, and nothing else.
     Confides,
+    InspectsEnvironment,
     /// Says the login it found beneath its home, and rewrites it there as a harness refreshing
     /// one does.
     Refreshes,
@@ -81,6 +82,7 @@ impl Script {
             Script::Speaks => "speaks",
             Script::Refuses => "refuses",
             Script::Confides => "confides",
+            Script::InspectsEnvironment => "inspects-environment",
             Script::Refreshes => "refreshes",
             Script::Recalls => "recalls",
             Script::Echoes => "echoes",

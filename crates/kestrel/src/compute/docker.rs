@@ -46,9 +46,19 @@ impl Docker {
             created.push("--network".to_owned());
             created.push(network.clone());
         }
-        // As the first process, the one thing stopping a supervisor leaves running and the
-        // one thing no process in the container can signal.
-        created.extend(["--entrypoint", "sleep", &self.image, "infinity"].map(str::to_owned));
+        // Not `--init`: stopping a supervisor kills everything but the first process, which would
+        // take init's child and the container with it, so the first process reaps by ignoring SIGCHLD.
+        created.extend(
+            [
+                "--entrypoint",
+                "env",
+                &self.image,
+                "--ignore-signal=CHLD",
+                "sleep",
+                "infinity",
+            ]
+            .map(str::to_owned),
+        );
         docker(&created.iter().map(String::as_str).collect::<Vec<_>>())?;
 
         // Started rather than attached, so that by the time this returns the container is
