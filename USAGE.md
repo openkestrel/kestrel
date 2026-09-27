@@ -142,8 +142,10 @@ missing from it fails and says which.
 kestrel agent declare codex --harness codex
 ```
 
-A workspace takes its agent's harness and model when it opens and keeps them while it is open:
-redeclaring the agent, or changing its model, changes the workspaces opened after that.
+A session takes its agent's harness and model when it is enqueued and keeps them until it ends, and a
+session that names no agent continues on the harness and model of the workspace's latest session:
+redeclaring the agent, or changing its model, changes the sessions that name it after that and the
+workspaces opened after that.
 
 `kestrel organization list`, `kestrel project list` and `kestrel agent list` show what you have
 declared.
