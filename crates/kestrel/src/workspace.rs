@@ -236,10 +236,9 @@ pub(crate) async fn post_in(
     match unfinished.post_destination() {
         PostDestination::Start => {
             said(tx, workspace, participant, message).await?;
-            let agent = tx.workspaces().latest_agent(workspace).await?;
             Ok(Some(
                 tx.workspaces()
-                    .enqueue_session(workspace, &agent, None)
+                    .enqueue_session(workspace, None, None)
                     .await?,
             ))
         }

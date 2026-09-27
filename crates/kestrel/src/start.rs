@@ -154,7 +154,7 @@ pub async fn start(store: &Store, plan: &Plan) -> Result<Started> {
         .await?;
     let session = tx
         .workspaces()
-        .enqueue_session(&workspace, &agent.record, None)
+        .enqueue_session(&workspace, Some(&agent.record), None)
         .await?;
     tx.commit().await?;
     fanout::publish(Change::WorkspaceOpened(&workspace));

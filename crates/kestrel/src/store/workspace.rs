@@ -15,13 +15,18 @@ use crate::store::{agent, due, organization, profile, project, timestamp};
 
 macro_rules! sessions_where {
     ($tail:literal) => {
+        sessions_where!("", $tail)
+    };
+    ($columns:literal, $tail:literal) => {
         concat!(
             "SELECT id, name, organization_id, workspace_id, agent_id,
                     (SELECT name FROM agent WHERE agent.id = session.agent_id) AS agent_name,
                     harness, state, waiting_for, exit, exit_because, outcome_message, instance,
                     supervisor, enqueued_at, started_at, ended_at, lease_expires_at, connected_at,
                     supervisor_version, model, worked_model, context_used, context_size, cost_amount,
-                    cost_currency
+                    cost_currency",
+            $columns,
+            "
              FROM session
              WHERE ",
             $tail
@@ -430,16 +435,15 @@ impl<'a> Workspaces<'a> {
         &mut self,
         workspace: &Workspace,
     ) -> Result<Option<Unfinished>> {
-        let holding = sqlx::query(
-            "SELECT s.*,
-                    (SELECT name FROM agent WHERE agent.id = s.agent_id) AS agent_name,
-                    EXISTS (SELECT 1 FROM pending_message p WHERE p.workspace_id = s.workspace_id) AS held_input
-             FROM session s
-             WHERE s.workspace_id = ?
-               AND (s.state NOT IN (?, ?) OR s.supervisor_state = 'present')
-             ORDER BY s.enqueued_at, s.id
-             LIMIT 1",
-        )
+        let holding = sqlx::query(sessions_where!(
+            ",
+                    EXISTS (SELECT 1 FROM pending_message p WHERE p.workspace_id = session.workspace_id)
+                        AS held_input",
+            "workspace_id = ?
+               AND (state NOT IN (?, ?) OR supervisor_state = 'present')
+             ORDER BY enqueued_at, id
+             LIMIT 1"
+        ))
         .bind(workspace.id.to_string())
         .bind(SessionState::Ended.as_str())
         .bind(SessionState::Unreachable.as_str())
@@ -487,7 +491,7 @@ impl<'a> Workspaces<'a> {
 
     /// The latest Session's Agent as that Session froze it, so continuing work never moves onto a
     /// redeclared harness or model.
-    pub async fn latest_agent(&mut self, workspace: &Workspace) -> Result<Agent> {
+    async fn latest_agent(&mut self, workspace: &Workspace) -> Result<Agent> {
         let latest = sqlx::query(sessions_where!(
             "workspace_id = ? ORDER BY enqueued_at DESC, id DESC LIMIT 1"
         ))
@@ -502,13 +506,17 @@ impl<'a> Workspaces<'a> {
         }
     }
 
-    /// `model` stands in for whatever the Agent names.
+    /// No `agent` continues with the latest Session's; `model` stands in for whatever the Agent names.
     pub async fn enqueue_session(
         &mut self,
         workspace: &Workspace,
-        agent: &Agent,
+        agent: Option<&Agent>,
         model: Option<&str>,
     ) -> Result<Session> {
+        let agent = match agent {
+            Some(agent) => agent.clone(),
+            None => self.latest_agent(workspace).await?,
+        };
         let session = loop {
             let session = Session {
                 id: SessionId::generate(),

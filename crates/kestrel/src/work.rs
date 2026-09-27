@@ -129,13 +129,13 @@ pub async fn enqueue(
         );
     }
 
-    let agent = match agent {
-        Some(named) => tx.agents().named(&workspace.organization, named).await?,
-        None => tx.workspaces().latest_agent(&workspace).await?,
+    let named = match agent {
+        Some(named) => Some(tx.agents().named(&workspace.organization, named).await?),
+        None => None,
     };
     let session = tx
         .workspaces()
-        .enqueue_session(&workspace, &agent, model)
+        .enqueue_session(&workspace, named.as_ref(), model)
         .await?;
     tx.commit().await?;
 
@@ -557,10 +557,9 @@ async fn continue_pending(tx: &mut Tx<'_>, workspace: WorkspaceId) -> Result<Opt
         )
         .await?;
 
-    let agent = tx.workspaces().latest_agent(&workspace).await?;
     Ok(Some(
         tx.workspaces()
-            .enqueue_session(&workspace, &agent, None)
+            .enqueue_session(&workspace, None, None)
             .await?,
     ))
 }
