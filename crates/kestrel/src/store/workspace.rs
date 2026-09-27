@@ -612,6 +612,7 @@ impl<'a> Workspaces<'a> {
         Ok(())
     }
 
+    /// Leaves any that arrived after a pending Session, to drain after it.
     pub async fn take_pending_messages(
         &mut self,
         workspace: &Workspace,
@@ -619,6 +620,11 @@ impl<'a> Workspaces<'a> {
         let rows = sqlx::query(
             "DELETE FROM pending_message
              WHERE workspace_id = ?
+               AND NOT EXISTS (
+                   SELECT 1 FROM pending_session s
+                   WHERE s.workspace_id = pending_message.workspace_id
+                     AND s.received_at <= pending_message.received_at
+               )
              RETURNING participant, body, seq",
         )
         .bind(workspace.id.to_string())

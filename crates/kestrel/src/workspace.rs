@@ -262,7 +262,9 @@ pub(crate) async fn post_in(
     }
 }
 
-/// Never interrupts the unfinished Session: the new one waits for it to let go (ADR-0014).
+/// Waits for the unfinished Session to let go (ADR-0014), and ends one waiting between turns
+/// rather than wait on it: a waiting Session may wait indefinitely, and ending it there is how it
+/// succeeds (ADR-0031).
 pub(crate) async fn start_in(
     tx: &mut Tx<'_>,
     workspace: &Workspace,
@@ -270,18 +272,19 @@ pub(crate) async fn start_in(
 ) -> Result<Option<Session>> {
     workspace.accepts("session")?;
 
-    if unfinished_session(tx, workspace)
-        .await?
-        .refuses_enqueue()
-        .is_some()
-    {
-        tx.workspaces()
-            .add_pending_session(workspace, &pending)
-            .await?;
-        return Ok(None);
+    let unfinished = unfinished_session(tx, workspace).await?;
+    if unfinished.refuses_enqueue().is_none() {
+        return Ok(Some(briefed(tx, workspace, pending).await?));
     }
 
-    Ok(Some(briefed(tx, workspace, pending).await?))
+    tx.workspaces()
+        .add_pending_session(workspace, &pending)
+        .await?;
+    if let Some(waiting) = unfinished.waiting() {
+        work::stopping(tx, &waiting, Exit::Succeeded).await?;
+    }
+
+    Ok(None)
 }
 
 pub(crate) async fn briefed(

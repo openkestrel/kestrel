@@ -650,8 +650,9 @@ Session's next turn, or starts the next Session with the Agent of the latest one
 starts a new Session there with the trigger's Agent, or one a label or command chooses among those
 it allows, and the brief is that Session's first entry in the transcript: a CI failure gets a fresh
 context on the checkout the builder left, rather than a turn in the builder's conversation. A new
-Session never interrupts the unfinished one; it waits until that one lets go, and until then the
-Workspace does not seal. A key only a sealed Workspace held is still
+Session never interrupts a turn: it waits for a queued or working Session to let go, and until then
+the Workspace does not seal. A Session waiting between turns has answered everything asked of it,
+so the new one ends it, as succeeded, rather than wait on it indefinitely. A key only a sealed Workspace held is still
 kestrel's work, so either setting opens a new Workspace continuing the most recently sealed one. For a
 key no Workspace has held, `open` starts a new Workspace and `ignore` records the firing but starts no
 work.

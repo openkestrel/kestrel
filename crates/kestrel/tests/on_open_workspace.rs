@@ -7,7 +7,9 @@ mod support;
 use std::time::Duration;
 
 use jiff::SignedDuration;
-use kestrel::domain::{Direction, OnOpenWorkspace, Session, SessionState, Workspace, WorkspaceId};
+use kestrel::domain::{
+    Direction, Exit, OnOpenWorkspace, Session, SessionState, Workspace, WorkspaceId,
+};
 use kestrel::log::Entry;
 use kestrel::trigger::Would;
 use kestrel_scripted_agent::conversed;
@@ -343,6 +345,108 @@ async fn a_new_session_firing_waits_for_the_unfinished_session_to_let_go() {
     assert_eq!(started[1].agent.name, "fixer");
     assert_eq!(started[1].state, SessionState::Queued);
     assert!(briefs(&kestrel, workspace.id).await.contains(&ci_brief()));
+
+    kestrel.teardown().await;
+}
+
+/// A waiting Session has answered everything asked of it, and may wait indefinitely, so a new
+/// Session ends it rather than wait on it.
+#[tokio::test]
+async fn a_new_session_firing_ends_the_session_waiting_between_its_turns() {
+    let kestrel = Kestrel::dispatching_to(
+        supervisor::binary(),
+        &scripted_agent::playing(Script::Converses),
+    )
+    .await;
+    an_organization(&kestrel).await;
+    correlated(&kestrel, OnOpenWorkspace::NewSession).await;
+    let stub = GithubStub::start();
+    stub.script_answer(
+        "GET",
+        EVENTS,
+        github_stub::page(&[github_stub::labelled(7, ISSUE, READY)]),
+    );
+    watching(&kestrel, &stub).await;
+    let workspace = opened(&kestrel).await;
+    let first = sessions(&kestrel, workspace.id, 1).await.remove(0);
+    assert_eq!(
+        kestrel.answered(first.id, 1).await.state,
+        SessionState::Waiting
+    );
+
+    ci_failed(&stub, &[]);
+    let second = sessions(&kestrel, workspace.id, 2).await.remove(1);
+    let second = kestrel.answered(second.id, 1).await;
+
+    let first = kestrel.session(first.id).await;
+    assert_eq!(first.state, SessionState::Ended);
+    assert_eq!(first.exit, Some(Exit::Succeeded), "{:?}", first.exit);
+    assert_eq!(second.agent.name, "fixer");
+    assert_eq!(second.state, SessionState::Waiting);
+    assert_eq!(second.instance, first.instance);
+    assert!(briefs(&kestrel, workspace.id).await.contains(&ci_brief()));
+
+    kestrel.stop_session(second.id).await;
+    kestrel.teardown().await;
+}
+
+/// Messages that arrived before a new Session drain before it; one that arrived after waits for it.
+#[tokio::test]
+async fn a_workspace_drains_messages_and_new_sessions_in_the_order_they_arrived() {
+    let kestrel = Kestrel::boot().await;
+    an_organization(&kestrel).await;
+    correlated(&kestrel, OnOpenWorkspace::NewSession).await;
+    let stub = GithubStub::start();
+    stub.script_answer(
+        "GET",
+        EVENTS,
+        github_stub::page(&[github_stub::labelled(7, ISSUE, READY)]),
+    );
+    watching(&kestrel, &stub).await;
+    let workspace = opened(&kestrel).await;
+    let first = kestrel
+        .claim_session()
+        .await
+        .expect("the opening firing enqueued a session")
+        .session;
+
+    kestrel
+        .post_while_busy(workspace.id, "operator", "before")
+        .await;
+    ci_failed(&stub, &[]);
+    fed(&kestrel, 1).await;
+    kestrel
+        .post_while_busy(workspace.id, "operator", "after")
+        .await;
+
+    let mut agents = Vec::new();
+    let mut ending = first;
+    for count in 2..=4 {
+        kestrel.complete_session(&ending).await;
+        ending = kestrel.sessions(workspace.id).await.remove(count - 1);
+        agents.push(ending.agent.name.clone());
+    }
+
+    assert_eq!(agents, ["builder", "fixer", "fixer"]);
+    let transcript = kestrel.transcript(workspace.id).await;
+    let order: Vec<String> = transcript
+        .iter()
+        .filter_map(|recorded| match &recorded.entry {
+            Entry::Messages { messages } => Some(
+                messages
+                    .iter()
+                    .map(|message| message.message.clone())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+            Entry::Brief {
+                trigger: Some(trigger),
+                ..
+            } => Some(trigger.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(order, ["ready", "before", "ci", "after"]);
 
     kestrel.teardown().await;
 }

@@ -29,4 +29,7 @@ guesses.
 
 - One unfinished session per workspace still holds
   ([ADR-0014](0014-concurrency-lives-across-sessions-never-within-one.md)). A firing that starts a
-  new session waits for the unfinished one to let go.
+  new session waits for the unfinished one to let go, and ends one **waiting** between turns rather
+  than wait on it: a waiting session has answered everything asked of it and may wait indefinitely,
+  so ending it there is how it succeeds. Its conversation ends with it, and a later `continue`
+  firing starts a session seeded from the transcript.
