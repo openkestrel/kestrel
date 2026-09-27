@@ -55,7 +55,7 @@ pub async fn open(
         .append(
             &workspace,
             Entry::ParticipantJoined {
-                participant: workspace.agent.name.clone(),
+                participant: workspace.opened_with.name.clone(),
             },
         )
         .await?;
@@ -236,8 +236,11 @@ pub(crate) async fn post_in(
     match unfinished.post_destination() {
         PostDestination::Start => {
             said(tx, workspace, participant, message).await?;
+            let agent = tx.workspaces().latest_agent(workspace).await?;
             Ok(Some(
-                tx.workspaces().enqueue_session(workspace, None).await?,
+                tx.workspaces()
+                    .enqueue_session(workspace, &agent, None)
+                    .await?,
             ))
         }
         PostDestination::Brief => {
@@ -319,21 +322,28 @@ async fn continued(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::OrganizationId;
+    use crate::domain::{Agent, AgentId, OrganizationId};
 
     fn session(state: SessionState) -> Session {
+        let organization = OrganizationId::generate();
         Session {
             id: SessionId::generate(),
             name: "session".into(),
-            organization: OrganizationId::generate(),
+            organization,
             workspace: WorkspaceId::generate(),
+            agent: Agent {
+                id: AgentId::generate(),
+                organization,
+                name: "builder".into(),
+                harness: "opencode".into(),
+                model: None,
+            },
             state,
             waiting_for: None,
             exit: None,
             outcome_message: None,
             instance: None,
             supervisor: None,
-            model: None,
             worked_model: None,
             enqueued_at: Timestamp::now(),
             started_at: None,

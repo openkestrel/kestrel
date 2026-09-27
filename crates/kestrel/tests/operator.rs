@@ -975,6 +975,135 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
     kestrel.teardown().await;
 }
 
+/// A review in the Workspace another Agent built in: a Session names its own Agent, and shows the
+/// harness and model it runs on.
+#[tokio::test]
+async fn a_client_enqueues_a_session_naming_its_agent_and_shows_what_it_runs_on() {
+    let kestrel = Kestrel::boot().await;
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    kestrel
+        .declare_agent(&organization, "reviewer", "claude", Some("claude-opus-5"))
+        .await;
+    let workspace = kestrel
+        .open_workspace("acme", "kestrel", "builder")
+        .await
+        .id
+        .to_string();
+    const RUNS_ON: &str = "id,agent,harness,model";
+
+    let built = recorded(
+        &client(
+            &kestrel,
+            &[
+                "session",
+                "enqueue",
+                "--workspace",
+                &workspace,
+                "--json",
+                RUNS_ON,
+            ],
+        )
+        .await,
+    );
+    kestrel
+        .complete_session(&kestrel.sessions(workspace.parse().expect("an id")).await[0])
+        .await;
+    let reviewed = recorded(
+        &client(
+            &kestrel,
+            &[
+                "session",
+                "enqueue",
+                "--workspace",
+                &workspace,
+                "--agent",
+                "reviewer",
+                "--json",
+                RUNS_ON,
+            ],
+        )
+        .await,
+    );
+    let review = reviewed[0]["id"].as_str().expect("a session id");
+    let shown = recorded(
+        &client(
+            &kestrel,
+            &[
+                "session",
+                "show",
+                review,
+                "--organization",
+                "acme",
+                "--json",
+                RUNS_ON,
+            ],
+        )
+        .await,
+    );
+
+    assert_eq!(built[0]["agent"], "builder");
+    assert_eq!(built[0]["harness"], "opencode");
+    assert_eq!(built[0]["model"], Value::Null);
+    assert_eq!(shown, reviewed);
+    assert_eq!(shown[0]["agent"], "reviewer");
+    assert_eq!(shown[0]["harness"], "claude");
+    assert_eq!(shown[0]["model"], "claude-opus-5");
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_client_naming_an_agent_the_organization_never_declared_enqueues_nothing() {
+    let kestrel = Kestrel::boot().await;
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+
+    let refused = client(
+        &kestrel,
+        &[
+            "session",
+            "enqueue",
+            "--workspace",
+            &workspace.id.to_string(),
+            "--agent",
+            "reviewer",
+        ],
+    )
+    .await;
+
+    assert!(
+        failed(&refused).contains("no agent named reviewer in the organization acme"),
+        "{}",
+        failed(&refused)
+    );
+    assert_eq!(refused.status.code(), Some(3));
+    assert!(kestrel.sessions(workspace.id).await.is_empty());
+
+    kestrel.teardown().await;
+}
+
 #[tokio::test]
 async fn a_client_names_a_workspace_by_name_identifier_prefix_and_latest() {
     let kestrel = Kestrel::boot().await;
@@ -3046,6 +3175,7 @@ fn the_published_operator_document_describes_every_transcript_entry() {
         },
         Entry::SessionStarted {
             session: SessionId::generate(),
+            agent: "builder".to_owned(),
         },
         Entry::Said {
             participant: "builder".to_owned(),

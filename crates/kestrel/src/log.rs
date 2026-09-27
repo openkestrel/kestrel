@@ -21,6 +21,7 @@ pub enum Entry {
     },
     SessionStarted {
         session: SessionId,
+        agent: String,
     },
     Said {
         participant: String,
@@ -54,7 +55,9 @@ impl fmt::Display for Entry {
                 trigger: None,
                 brief,
             } => write!(f, "brief  {brief}"),
-            Entry::SessionStarted { session } => write!(f, "session started  {session}"),
+            Entry::SessionStarted { session, agent } => {
+                write!(f, "session started  {session}  {agent}")
+            }
             Entry::Said {
                 participant,
                 message,
@@ -146,7 +149,11 @@ impl<'a> Log<'a> {
         })
     }
 
-    pub async fn last_said_for_session(&mut self, workspace: &Workspace) -> Result<Option<String>> {
+    pub async fn last_said_for_session(
+        &mut self,
+        workspace: &Workspace,
+        participant: &str,
+    ) -> Result<Option<String>> {
         let latest = sqlx::query(
             "SELECT body
              FROM transcript_entry
@@ -160,7 +167,7 @@ impl<'a> Log<'a> {
              LIMIT 1",
         )
         .bind(workspace.id.to_string())
-        .bind(&workspace.agent.name)
+        .bind(participant)
         .bind(workspace.id.to_string())
         .fetch_optional(&mut *self.connection)
         .await
@@ -172,9 +179,9 @@ impl<'a> Log<'a> {
 
         Ok(match serde_json::from_str(row.get("body"))? {
             Entry::Said {
-                participant,
+                participant: said_by,
                 message,
-            } if participant == workspace.agent.name => Some(message),
+            } if said_by == participant => Some(message),
             _ => None,
         })
     }

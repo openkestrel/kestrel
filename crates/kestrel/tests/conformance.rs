@@ -20,7 +20,7 @@ use std::fmt;
 use std::time::Duration;
 
 use kestrel::compute::{Docker, Driver, Instance, Supervisor};
-use kestrel::domain::{Exit, Session, SessionId, Usage, Workspace};
+use kestrel::domain::{Exit, Session, Usage, Workspace};
 use kestrel::link::credential::Secret;
 use support::Kestrel;
 use support::diagnostics::Diagnostics;
@@ -64,7 +64,7 @@ impl Driven {
         let workspace = a_workspace(kestrel, lineage, model).await;
         let (session, credential) = kestrel.dispatch_session(workspace.id).await;
         let (mut instance, supervisor, mut diagnostics) =
-            provisioned(kestrel, lineage, &workspace, session.id, &credential, auth);
+            provisioned(kestrel, lineage, &session, &credential, auth);
 
         diagnostics.wait_until_it_says("reported connected").await;
         lineage.configure(&mut instance);
@@ -157,13 +157,12 @@ impl fmt::Display for Driven {
 fn provisioned(
     kestrel: &Kestrel,
     lineage: Lineage,
-    workspace: &Workspace,
-    session: SessionId,
+    session: &Session,
     credential: &Secret,
     auth: &str,
 ) -> (Instance, Supervisor, Diagnostics) {
     let link = kestrel.link_from_an_environment();
-    let session_id = session.to_string();
+    let session_id = session.id.to_string();
     let mut variables = vec![
         ("KESTREL_LINK".to_owned(), link),
         ("KESTREL_SESSION".to_owned(), session_id),
@@ -178,7 +177,7 @@ fn provisioned(
         ("KESTREL_AGENT_AUTH".to_owned(), auth.to_owned()),
         (
             "KESTREL_AGENT_MODEL".to_owned(),
-            workspace.agent.model.clone().unwrap_or_default(),
+            session.agent.model.clone().unwrap_or_default(),
         ),
     ];
     variables.extend(lineage.variables());
@@ -188,7 +187,7 @@ fn provisioned(
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect();
     let mut instance = Driver::Docker(Docker::provisioning_from(lineage.image()))
-        .provision(session)
+        .provision(session.id)
         .expect("the instance should provision");
     let mut supervisor = instance
         .supervise(&borrowed)

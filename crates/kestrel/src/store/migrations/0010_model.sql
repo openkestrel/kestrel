@@ -5,7 +5,5 @@ UPDATE agent SET names_model = model WHERE model <> '';
 ALTER TABLE agent DROP COLUMN model;
 ALTER TABLE agent RENAME COLUMN names_model TO model;
 
-ALTER TABLE workspace ADD COLUMN model TEXT;
-
 ALTER TABLE session ADD COLUMN model TEXT;
 ALTER TABLE session ADD COLUMN worked_model TEXT;

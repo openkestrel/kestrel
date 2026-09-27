@@ -500,7 +500,8 @@ pub struct Workspace {
     pub name: String,
     pub organization: Organization,
     pub project: Project,
-    pub agent: Agent,
+    /// As declared now: its first Session runs this Agent unless it names another.
+    pub opened_with: Agent,
     pub profile: Option<SubscriptionProfile>,
     pub checkout: Checkout,
     pub correlation: Option<String>,
@@ -528,14 +529,14 @@ pub struct Session {
     pub name: String,
     pub organization: OrganizationId,
     pub workspace: WorkspaceId,
+    /// With the harness and model fixed when the Session was enqueued, never redeclared under it.
+    pub agent: Agent,
     pub state: SessionState,
     pub waiting_for: Option<String>,
     pub exit: Option<Exit>,
     pub outcome_message: Option<String>,
     pub instance: Option<String>,
     pub supervisor: Option<String>,
-    /// What this Session names, or none for its Agent's or Harness's default.
-    pub model: Option<String>,
     /// What the Harness reported it worked on.
     pub worked_model: Option<String>,
     pub enqueued_at: Timestamp,

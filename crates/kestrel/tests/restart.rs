@@ -114,7 +114,7 @@ async fn the_transcript_of_a_session_that_outlived_a_restart_has_no_gap_and_no_d
         transcript(&kestrel, &workspace).await,
         vec![
             "participant joined  builder".to_owned(),
-            format!("session started  {}", session.id),
+            format!("session started  {}  builder", session.id),
             "said  builder  half of one message, and the other half".to_owned(),
             "said  builder  a second message".to_owned(),
             format!("session ended  {}  succeeded", session.id),

@@ -37,8 +37,8 @@ CREATE TABLE workspace (
     name TEXT NOT NULL,
     organization_id TEXT NOT NULL REFERENCES organization (id),
     project_id TEXT NOT NULL REFERENCES project (id),
+    -- The Agent its first Session runs unless that Session names another.
     agent_id TEXT NOT NULL REFERENCES agent (id),
-    harness TEXT NOT NULL,
     base TEXT NOT NULL,
     branch TEXT NOT NULL,
     instance TEXT,

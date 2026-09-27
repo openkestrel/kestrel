@@ -3,6 +3,8 @@ CREATE TABLE session (
     name TEXT NOT NULL,
     organization_id TEXT NOT NULL REFERENCES organization (id),
     workspace_id TEXT NOT NULL REFERENCES workspace (id),
+    agent_id TEXT NOT NULL REFERENCES agent (id),
+    harness TEXT NOT NULL,
     started_at TEXT NOT NULL,
     ended_at TEXT,
     connected_at TEXT,
