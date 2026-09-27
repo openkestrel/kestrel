@@ -1,10 +1,27 @@
 mod support;
 
+use std::time::Duration;
+
 use jiff::{SignedDuration, Timestamp};
-use kestrel::domain::{SessionState, Workspace};
+use kestrel::domain::{Exit, SessionState, Workspace};
 use kestrel::instance::{Git, Observed};
 use support::Kestrel;
 use support::repository;
+use support::supervisor;
+
+const PATIENCE: Duration = Duration::from_secs(30);
+
+async fn eventually(what: &str, done: impl AsyncFn() -> bool) {
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+
+    while !done().await {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{what} never happened"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
 
 fn clean_checkout() -> Vec<Observed> {
     vec![Observed {
@@ -191,6 +208,45 @@ async fn the_longest_idle_recoverable_instance_is_archived_to_admit_new_work() {
         .await
         .expect("the new session should claim after archival");
     assert_eq!(claimed.session.id, third.id);
+
+    kestrel.teardown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_idle_instance_reclaimed_under_the_cap_ends_its_waiting_session_succeeded() {
+    let kestrel = Kestrel::dispatching(supervisor::binary()).await;
+    let (idle, arriving, _) = workspaces(&kestrel, 1).await;
+
+    let first = kestrel.enqueue_session(idle.id).await;
+    let waiting = kestrel.answered(first.id, 1).await;
+    assert_eq!(waiting.state, SessionState::Waiting);
+    let instance = waiting.instance.clone().expect("an instance");
+
+    let second = kestrel.enqueue_session(arriving.id).await;
+
+    eventually(
+        "the reclaimed instance's waiting session ending succeeded",
+        async || kestrel.session(first.id).await.exit == Some(Exit::Succeeded),
+    )
+    .await;
+    eventually("the reclaimed instance being archived", async || {
+        !kestrel.instances_to_archive().await.contains(&instance)
+    })
+    .await;
+    eventually(
+        "the queued session starting on a fresh instance",
+        async || kestrel.session(second.id).await.started_at.is_some(),
+    )
+    .await;
+    assert_eq!(kestrel.instance(idle.id).await, None);
+
+    kestrel.answered(second.id, 1).await;
+    let resumed = kestrel.post(idle.id, "jack", "one more thing").await;
+    let resumed = kestrel.answered(resumed.id, 1).await;
+    assert_ne!(resumed.id, first.id);
+    assert_ne!(resumed.instance, Some(instance));
+    assert_eq!(kestrel.session(first.id).await.exit, Some(Exit::Succeeded));
 
     kestrel.teardown().await;
 }
