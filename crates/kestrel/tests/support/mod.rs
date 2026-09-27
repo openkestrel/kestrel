@@ -273,8 +273,7 @@ impl Kestrel {
         !self.roles.is_finished()
     }
 
-    /// Takes SQLite's write lock the way another process on the same file would, and holds it
-    /// until what `meanwhile` does is over.
+    /// Takes SQLite's write lock the way another process on the same file would.
     pub async fn while_the_database_is_locked<T>(&self, meanwhile: impl Future<Output = T>) -> T {
         let pool = database(self.data_dir()).await;
         let mut holder = pool.acquire().await.expect("a connection");

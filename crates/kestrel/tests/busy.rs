@@ -5,6 +5,8 @@ mod support;
 
 use std::time::Duration;
 
+use jiff::{SignedDuration, Timestamp};
+
 use kestrel::domain::{SessionId, SessionState, Workspace};
 use reqwest::StatusCode;
 use reqwest::header::RETRY_AFTER;
@@ -78,30 +80,52 @@ async fn a_database_locked_past_the_busy_timeout_stops_neither_the_control_plane
     let working = kestrel.enqueue_session(first.id).await;
     in_flight(&kestrel, working.id).await;
 
-    let answered = kestrel
+    let credential = kestrel
+        .issue_credential(&working, Timestamp::now() + SignedDuration::from_mins(5))
+        .await;
+
+    let answers = kestrel
         .while_the_database_is_locked(async {
             let started = tokio::time::Instant::now();
-            let answered = reqwest::Client::new()
-                .get(format!(
-                    "{}{}",
-                    kestrel.operator(),
-                    kestrel::operator::ORGANIZATIONS
-                ))
-                .send()
-                .await
-                .expect("the operator boundary should answer");
+            let client = reqwest::Client::new();
+            let (operator, link) = tokio::join!(
+                client
+                    .get(format!(
+                        "{}{}",
+                        kestrel.operator(),
+                        kestrel::operator::ORGANIZATIONS
+                    ))
+                    .send(),
+                client
+                    .get(format!(
+                        "{}{}",
+                        kestrel.link(),
+                        kestrel::link::CREDENTIALS.replace("{session}", &working.id.to_string())
+                    ))
+                    .bearer_auth(credential.as_str())
+                    .send(),
+            );
             // Every pass of the dispatch loop has run into the lock by the time this is over.
             tokio::time::sleep(BUSY_TIMEOUT.saturating_sub(started.elapsed())).await;
             tokio::time::sleep(BUSY_TIMEOUT).await;
-            answered
+            [operator, link]
         })
         .await;
 
-    assert_eq!(answered.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert!(
-        answered.headers().contains_key(RETRY_AFTER),
-        "a busy database is a reason to ask again, and the answer said nothing of when"
-    );
+    for answered in answers {
+        let answered = answered.expect("both boundaries should answer");
+        assert_eq!(
+            answered.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{}",
+            answered.url()
+        );
+        assert!(
+            answered.headers().contains_key(RETRY_AFTER),
+            "a busy database is a reason to ask again, and {} said nothing of when",
+            answered.url()
+        );
+    }
     assert!(
         kestrel.is_running(),
         "the control plane stopped for a busy database"

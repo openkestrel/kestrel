@@ -135,7 +135,9 @@ async fn dispatching(
                 let store = store.clone();
                 let dispatch = dispatch.clone();
                 let shutdown = shutdown.clone();
-                active.spawn(async move { executing(&store, &dispatch, claimed, &shutdown).await });
+                active.spawn(async move {
+                    execute_or_fail(&store, &dispatch, claimed, &shutdown).await
+                });
                 continue;
             }
             Ok(Some(Occupied::Resumed(session))) => {
@@ -147,27 +149,26 @@ async fn dispatching(
         }
 
         tokio::select! {
-            Some(finished) = active.join_next(), if !active.is_empty() => executed(finished),
+            Some(finished) = active.join_next(), if !active.is_empty() => warn_if_it_panicked(finished),
             () = tokio::time::sleep(POLL) => {}
             () = shutdown.cancelled() => {}
         }
     }
 
     while let Some(finished) = active.join_next().await {
-        executed(finished);
+        warn_if_it_panicked(finished);
     }
 
     Ok(())
 }
 
-fn executed(finished: Result<(), JoinError>) {
+fn warn_if_it_panicked(finished: Result<(), JoinError>) {
     if let Err(error) = finished {
         warn!(%error, "a session's execution task ended without ending its session");
     }
 }
 
-/// An execution that errors fails its own Session and no other.
-async fn executing(
+async fn execute_or_fail(
     store: &Store,
     dispatch: &Dispatch,
     claimed: Claimed,
@@ -180,17 +181,25 @@ async fn executing(
     warn!(session = %session.id, %error, "a session's execution failed");
     let because = format!("the session's execution failed: {error:#}");
 
+    // The Session's lease ends it instead.
+    if let Err(error) = until_not_busy(shutdown, || work::fail(store, &session, &because)).await {
+        warn!(session = %session.id, %error, "a session whose execution failed could not be failed");
+    }
+}
+
+async fn until_not_busy<T, Doing>(
+    shutdown: &CancellationToken,
+    doing: impl Fn() -> Doing,
+) -> Result<T>
+where
+    Doing: Future<Output = Result<T>>,
+{
     loop {
-        match work::fail(store, &session, &because).await {
-            Ok(_) => return,
+        match doing().await {
             Err(error) if store::busy(&error) && !shutdown.is_cancelled() => {
                 tokio::time::sleep(POLL).await;
             }
-            // The Session's lease ends it instead.
-            Err(error) => {
-                warn!(session = %session.id, %error, "a session whose execution failed could not be failed");
-                return;
-            }
+            done => return done,
         }
     }
 }
@@ -232,7 +241,9 @@ async fn execute(
     let Some(mut instance) = instance(store, dispatch, &session, &workspace).await? else {
         return Ok(());
     };
-    work::executes_on(store, &session, instance.name()).await?;
+    // An Instance provisioned and never recorded is one `archive` can never find.
+    let name = instance.name().to_owned();
+    until_not_busy(shutdown, || work::executes_on(store, &session, &name)).await?;
 
     // Committed before the supervisor is spawned, so one that outlives this process fetches its
     // Start on reconnect rather than holding the lease out forever on a Session that cannot begin.
