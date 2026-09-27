@@ -34,6 +34,7 @@ pub fn crate_root() -> std::path::PathBuf {
     )
 }
 
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -99,12 +100,38 @@ const LOOPBACK: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 0);
 
 pub struct Kestrel {
+    cleanup: Cleanup,
     data_dir: TempDir,
     store: Store,
     bound: Listen,
     environment: Option<Provisions>,
     shutdown: CancellationToken,
     roles: JoinHandle<anyhow::Result<()>>,
+}
+
+struct Cleanup {
+    data_dir: std::path::PathBuf,
+    environment: Option<Provisions>,
+    shutdown: CancellationToken,
+    abort: tokio::task::AbortHandle,
+    armed: bool,
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.shutdown.cancel();
+        self.abort.abort();
+
+        destroy_instances_on_drop(
+            self.data_dir.clone(),
+            self.environment
+                .as_ref()
+                .map(|environment| environment.driver.clone()),
+        );
+    }
 }
 
 /// What the work role provisions an Environment with.
@@ -133,6 +160,7 @@ fn spawning(harnesses: &[(&str, &str)]) -> Vec<HarnessCommand> {
 /// Comes back on the address it was listening on, so what an Environment already dialled
 /// still reaches it.
 pub struct Stopped {
+    cleanup: Cleanup,
     data_dir: TempDir,
     bound: Listen,
     environment: Option<Provisions>,
@@ -254,8 +282,16 @@ impl Kestrel {
             serialized: vec![SERIALIZED.to_owned()],
         });
         let roles = tokio::spawn(all_in_one.run(dispatch, shutdown.clone()));
+        let cleanup = Cleanup {
+            data_dir: data_dir.path().to_path_buf(),
+            environment: environment.clone(),
+            shutdown: shutdown.clone(),
+            abort: roles.abort_handle(),
+            armed: true,
+        };
 
         Self {
+            cleanup,
             data_dir,
             store,
             bound,
@@ -1535,6 +1571,7 @@ impl Kestrel {
         drop(self.store);
 
         Stopped {
+            cleanup: self.cleanup,
             data_dir: self.data_dir,
             bound: self.bound,
             environment: self.environment,
@@ -1547,13 +1584,21 @@ impl Kestrel {
 
     /// Stops the way a signalled control plane does: every role is told to stop and is waited
     /// for, rather than being cut off where it stood.
-    pub async fn teardown(self) -> Stopped {
+    pub async fn teardown(mut self) -> Stopped {
         self.shutdown.cancel();
         let _ = self.roles.await;
-        destroy_instances(self.data_dir.path(), self.environment.as_ref()).await;
+        destroy_instances(
+            self.data_dir.path(),
+            self.environment
+                .as_ref()
+                .map(|environment| &environment.driver),
+        )
+        .await;
+        self.cleanup.armed = false;
         drop(self.store);
 
         Stopped {
+            cleanup: self.cleanup,
             data_dir: self.data_dir,
             bound: self.bound,
             environment: self.environment,
@@ -1570,25 +1615,56 @@ async fn database(data_dir: &Path) -> sqlx::SqlitePool {
 
 /// An Instance outlives every Session on it and nothing here seals a Workspace into releasing one,
 /// so a test's Instances go with the test.
-async fn destroy_instances(data_dir: &Path, provisions: Option<&Provisions>) {
-    let Some(provisions) = provisions else {
+pub(crate) async fn destroy_instances(data_dir: &Path, driver: Option<&Driver>) {
+    let Some(driver) = driver else {
         return;
     };
     let pool = database(data_dir).await;
-    let instances: Vec<String> =
+    let mut instances: BTreeSet<String> =
         sqlx::query_scalar("SELECT DISTINCT instance FROM session WHERE instance IS NOT NULL")
             .fetch_all(&pool)
             .await
-            .expect("the instances should read");
+            .expect("the instances should read")
+            .into_iter()
+            .collect();
+    if matches!(driver, Driver::LocalExec(_)) {
+        let sessions: Vec<String> = sqlx::query_scalar("SELECT id FROM session")
+            .fetch_all(&pool)
+            .await
+            .expect("the sessions should read");
+        instances.extend(
+            sessions
+                .into_iter()
+                .map(|session| format!("local-exec/kestrel-{session}")),
+        );
+    }
     pool.close().await;
 
     for instance in instances {
-        let _ = provisions.driver.destroy_named(&instance);
+        if let Err(error) = driver.destroy_named(&instance) {
+            eprintln!("failed to destroy {instance}: {error}");
+        }
+    }
+}
+
+pub(crate) fn destroy_instances_on_drop(data_dir: std::path::PathBuf, driver: Option<Driver>) {
+    if std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a cleanup runtime");
+        runtime.block_on(destroy_instances(&data_dir, driver.as_ref()));
+    })
+    .join()
+    .is_err()
+    {
+        eprintln!("the test fixture could not clean up its instances");
     }
 }
 
 impl Stopped {
-    pub async fn restart(self) -> Kestrel {
+    pub async fn restart(mut self) -> Kestrel {
+        self.cleanup.armed = false;
         Kestrel::boot_against(self.data_dir, self.bound, self.environment).await
     }
 

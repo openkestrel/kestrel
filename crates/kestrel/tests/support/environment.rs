@@ -52,7 +52,10 @@ impl Environment {
     pub fn named(supervisor: &str) -> Pid {
         let pid = supervisor
             .strip_prefix("local-exec/")
-            .unwrap_or_else(|| panic!("{supervisor} is not a local supervisor"));
+            .unwrap_or_else(|| panic!("{supervisor} is not a local supervisor"))
+            .split('@')
+            .next()
+            .expect("a supervisor process id");
 
         Pid(pid.parse().unwrap_or_else(|_| panic!("{pid} is not a pid")))
     }
