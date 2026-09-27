@@ -1,11 +1,11 @@
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{CorrelationMiss, Fires, Templates, Trigger};
+use crate::domain::{CorrelationMiss, Fires, OnOpenWorkspace, Templates, Trigger};
 use crate::filter::Filter;
 use crate::store::Store;
 use crate::template::Template;
-use crate::trigger::{allowed, check_miss};
+use crate::trigger::{allowed, check_correlation};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,6 +40,7 @@ pub struct TriggerDeclaration {
     pub branch: Option<String>,
     pub correlation: Option<String>,
     pub on_miss: Option<String>,
+    pub on_open_workspace: Option<String>,
     pub project: String,
     pub agent: String,
     #[serde(default)]
@@ -93,6 +94,7 @@ struct ParsedTrigger {
     filter: Filter,
     templates: Templates,
     on_miss: Option<CorrelationMiss>,
+    on_open_workspace: OnOpenWorkspace,
 }
 
 struct Compared {
@@ -195,6 +197,7 @@ pub async fn apply(
                     &fires,
                     &parsed.templates,
                     parsed.on_miss,
+                    parsed.on_open_workspace,
                     &project,
                     &agent,
                     &allows,
@@ -214,6 +217,7 @@ pub async fn apply(
                     &fires,
                     &parsed.templates,
                     parsed.on_miss,
+                    parsed.on_open_workspace,
                     &project,
                     &agent,
                     &allows,
@@ -319,12 +323,20 @@ fn parse_trigger(declaration: &TriggerDeclaration) -> Result<ParsedTrigger> {
         .map(str::parse)
         .transpose()
         .context("a trigger on_miss")?;
-    check_miss(&templates, on_miss)?;
+    let on_open_workspace = declaration
+        .on_open_workspace
+        .as_deref()
+        .map(str::parse)
+        .transpose()
+        .context("a trigger on_open_workspace")?
+        .unwrap_or_default();
+    check_correlation(&templates, on_miss, on_open_workspace)?;
 
     Ok(ParsedTrigger {
         filter: Filter::from_json(&declaration.filter).context("a trigger filter")?,
         templates,
         on_miss,
+        on_open_workspace,
     })
 }
 
@@ -392,6 +404,10 @@ fn trigger_change(
                     .map(ToString::to_string),
             ),
             ("on miss", parsed.on_miss.map(|miss| miss.to_string())),
+            (
+                "on open workspace",
+                Some(parsed.on_open_workspace.to_string()),
+            ),
             ("brief", Some(parsed.templates.brief.to_string())),
         ],
     )
@@ -427,6 +443,10 @@ fn described_trigger(trigger: &Trigger) -> Vec<(&'static str, Option<String>)> {
                 .map(ToString::to_string),
         ),
         ("on miss", trigger.on_miss.map(|miss| miss.to_string())),
+        (
+            "on open workspace",
+            Some(trigger.on_open_workspace.to_string()),
+        ),
         ("brief", Some(trigger.templates.brief.to_string())),
     ]
 }

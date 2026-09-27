@@ -543,6 +543,9 @@ async fn continue_pending(tx: &mut Tx<'_>, workspace: WorkspaceId) -> Result<Opt
         return Ok(None);
     }
 
+    if let Some(pending) = tx.workspaces().take_pending_session(&workspace).await? {
+        return Ok(Some(workspace::briefed(tx, &workspace, pending).await?));
+    }
     let pending = tx.workspaces().take_pending_messages(&workspace).await?;
     if pending.is_empty() {
         return Ok(None);

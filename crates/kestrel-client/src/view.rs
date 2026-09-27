@@ -76,12 +76,14 @@ pub const TRIGGER: View = View::Detail(&[
     "branch",
     "correlation",
     "on_miss",
+    "on_open_workspace",
     "applied",
     "declared_at",
     "brief",
 ]);
 pub const TRIGGER_TEST: View = View::Detail(&[
     "matches",
+    "would",
     "elapsing",
     "agent",
     "branch",

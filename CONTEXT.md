@@ -296,7 +296,8 @@ words from drifting.
   agent. A session's agent, and the harness and model it started with, are fixed for the
   **session's** life.
 - A firing that feeds an open workspace does what its trigger **declares**: continues the waiting
-  session, or starts a **new** session with the trigger's agent.
+  session, or starts a **new** session with the trigger's agent. A new session waits for a queued
+  or working session, and **ends** a waiting one, which succeeds.
 - A label or a command chooses only among agents a trigger **allows**. A label that chooses **two**
   agents, or a choice the trigger does not allow, starts **nothing**.
 - A label, `ready-for-agent` included, never starts work, and neither does an ordinary comment. Work

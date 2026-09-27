@@ -3,10 +3,10 @@ use std::collections::BTreeMap;
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{CorrelationMiss, Fires, Templates, Trigger};
+use crate::domain::{CorrelationMiss, Fires, OnOpenWorkspace, Templates, Trigger};
 use crate::filter::Filter;
 use crate::store::Store;
-use crate::trigger::{allowed, check_miss};
+use crate::trigger::{allowed, check_correlation};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Declared {
@@ -14,6 +14,7 @@ pub struct Declared {
     pub filter: Filter,
     pub templates: Templates,
     pub on_miss: Option<CorrelationMiss>,
+    pub on_open_workspace: OnOpenWorkspace,
     pub project: String,
     pub agent: String,
     pub allows: Vec<String>,
@@ -64,6 +65,7 @@ struct Entry {
     branch: Option<String>,
     correlation: Option<String>,
     on_miss: Option<String>,
+    on_open_workspace: Option<String>,
     project: String,
     agent: String,
     #[serde(default)]
@@ -98,13 +100,19 @@ fn declared(name: &str, entry: Entry) -> Result<Declared> {
             .transpose()?,
     };
     let on_miss = entry.on_miss.map(|miss| miss.parse()).transpose()?;
-    check_miss(&templates, on_miss)?;
+    let on_open_workspace = entry
+        .on_open_workspace
+        .map(|on_open| on_open.parse())
+        .transpose()?
+        .unwrap_or_default();
+    check_correlation(&templates, on_miss, on_open_workspace)?;
 
     Ok(Declared {
         name: name.to_owned(),
         filter: Filter::from_json(&entry.filter).context("its filter")?,
         templates,
         on_miss,
+        on_open_workspace,
         project: entry.project,
         agent: entry.agent,
         allows: entry.allows,
@@ -150,6 +158,7 @@ pub async fn apply(
                     &fires,
                     &declared.templates,
                     declared.on_miss,
+                    declared.on_open_workspace,
                     &project,
                     &agent,
                     &allows,
@@ -173,6 +182,7 @@ pub async fn apply(
                     &fires,
                     &declared.templates,
                     declared.on_miss,
+                    declared.on_open_workspace,
                     &project,
                     &agent,
                     &allows,
@@ -232,13 +242,14 @@ pub async fn apply(
     })
 }
 
-type Described = [(&'static str, Option<String>); 9];
+type Described = [(&'static str, Option<String>); 10];
 
 fn described(declared: &Declared) -> Described {
     describe(
         &declared.filter,
         &declared.templates,
         declared.on_miss,
+        declared.on_open_workspace,
         &declared.project,
         &declared.agent,
         &declared.allows,
@@ -251,6 +262,7 @@ fn described_trigger(trigger: &Trigger) -> Described {
         &trigger.filter(),
         &trigger.templates,
         trigger.on_miss,
+        trigger.on_open_workspace,
         &trigger.project.name,
         &trigger.agent.name,
         &trigger
@@ -265,10 +277,15 @@ fn described_trigger(trigger: &Trigger) -> Described {
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a trigger is what it is declared with"
+)]
 fn describe(
     filter: &Filter,
     templates: &Templates,
     on_miss: Option<CorrelationMiss>,
+    on_open_workspace: OnOpenWorkspace,
     project: &str,
     agent: &str,
     allows: &[String],
@@ -290,6 +307,7 @@ fn describe(
             templates.correlation.as_ref().map(ToString::to_string),
         ),
         ("on miss", on_miss.map(|miss| miss.to_string())),
+        ("on open workspace", Some(on_open_workspace.to_string())),
         ("brief", Some(templates.brief.to_string())),
     ]
 }

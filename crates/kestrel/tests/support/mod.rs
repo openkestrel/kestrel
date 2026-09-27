@@ -43,8 +43,8 @@ use kestrel::agent;
 use kestrel::compute::{Docker, Driver, LocalExec};
 use kestrel::domain::{
     Agent, CorrelationMiss, Direction, Event, EventRecordId, Exit, Fires, Integration, Occurrence,
-    Organization, Project, Schedule, Session, SessionId, SessionState, SubscriptionProfile,
-    Templates, Trigger, Turn, Workspace, WorkspaceId,
+    OnOpenWorkspace, Organization, Project, Schedule, Session, SessionId, SessionState,
+    SubscriptionProfile, Templates, Trigger, Turn, Workspace, WorkspaceId,
 };
 use kestrel::instance;
 use kestrel::integration::{self, Connecting, Registration};
@@ -582,6 +582,7 @@ impl Kestrel {
                 fires: &Fires::On(filter.parse().expect("the filter should parse")),
                 templates,
                 on_miss,
+                on_open_workspace: OnOpenWorkspace::Continue,
                 project,
                 agent,
                 allows: &[],
@@ -613,6 +614,7 @@ impl Kestrel {
                 ),
                 templates: &templates(BRIEF, None, correlation),
                 on_miss: correlation.map(|_| CorrelationMiss::Open),
+                on_open_workspace: OnOpenWorkspace::Continue,
                 project: "kestrel",
                 agent,
                 allows: &allows
@@ -624,6 +626,71 @@ impl Kestrel {
         )
         .await
         .expect("the trigger should declare")
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a trigger is what it is declared with"
+    )]
+    pub async fn declare_correlated_trigger(
+        &self,
+        organization: &str,
+        name: &str,
+        filter: &str,
+        agent: &str,
+        allows: &[&str],
+        templates: &Templates,
+        on_open_workspace: OnOpenWorkspace,
+    ) -> Trigger {
+        self.try_declare_correlated_trigger(
+            organization,
+            name,
+            filter,
+            agent,
+            allows,
+            templates,
+            on_open_workspace,
+        )
+        .await
+        .expect("the trigger should declare")
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a trigger is what it is declared with"
+    )]
+    pub async fn try_declare_correlated_trigger(
+        &self,
+        organization: &str,
+        name: &str,
+        filter: &str,
+        agent: &str,
+        allows: &[&str],
+        templates: &Templates,
+        on_open_workspace: OnOpenWorkspace,
+    ) -> anyhow::Result<Trigger> {
+        trigger::declare(
+            &self.store,
+            Declaration {
+                organization,
+                name,
+                fires: &Fires::On(filter.parse().expect("the filter should parse")),
+                templates,
+                on_miss: templates
+                    .correlation
+                    .is_some()
+                    .then_some(CorrelationMiss::Open),
+                on_open_workspace,
+                project: "kestrel",
+                agent,
+                allows: &allows
+                    .iter()
+                    .map(|&name| name.to_owned())
+                    .collect::<Vec<_>>(),
+                profile: None,
+            },
+        )
+        .await
     }
 
     pub async fn apply_triggers(&self, organization: &str, file: &str) -> Applied {
@@ -724,6 +791,7 @@ impl Kestrel {
                     .correlation
                     .is_some()
                     .then_some(CorrelationMiss::Open),
+                on_open_workspace: OnOpenWorkspace::Continue,
                 project: "kestrel",
                 agent: "builder",
                 allows: &[],

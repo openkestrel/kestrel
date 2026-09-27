@@ -1773,6 +1773,7 @@
           "branch": { "type": ["string", "null"] },
           "correlation": { "type": ["string", "null"] },
           "on_miss": { "type": ["string", "null"], "enum": ["open", "ignore", null] },
+          "on_open_workspace": { "type": ["string", "null"], "enum": ["continue", "new-session", null], "description": "What a firing that correlates to an open Workspace does: continues its waiting Session, or starts a new Session with this Trigger's Agent. Absent continues." },
           "project": { "type": "string", "minLength": 1 },
           "agent": { "type": "string", "minLength": 1 },
           "allows": { "type": "array", "items": { "type": "string" }, "default": [] },
@@ -1810,6 +1811,7 @@
           "branch": { "type": ["string", "null"] },
           "correlation": { "type": ["string", "null"] },
           "on_miss": { "type": ["string", "null"], "enum": ["open", "ignore", null] },
+          "on_open_workspace": { "type": "string", "enum": ["continue", "new-session"] },
           "project": { "type": "string" },
           "agent": { "type": "string" },
           "allows": { "type": "array", "items": { "type": "string" } },
@@ -1817,7 +1819,7 @@
           "applied": { "type": "boolean", "description": "Whether a trigger file declared it, rather than flags." },
           "declared_at": { "type": "string", "format": "date-time" }
         },
-        "required": ["id", "organization", "name", "state", "disabled_because", "firing_budget", "filter", "every", "cron", "zone", "admits_outsiders", "brief", "branch", "correlation", "on_miss", "project", "agent", "allows", "profile", "applied", "declared_at"]
+        "required": ["id", "organization", "name", "state", "disabled_because", "firing_budget", "filter", "every", "cron", "zone", "admits_outsiders", "brief", "branch", "correlation", "on_miss", "on_open_workspace", "project", "agent", "allows", "profile", "applied", "declared_at"]
       },
       "TriggerTest": {
         "type": "object",
@@ -1841,9 +1843,10 @@
           "branch": { "type": ["string", "null"] },
           "correlation": { "type": ["string", "null"] },
           "agent": { "type": "string" },
+          "would": { "type": "string", "enum": ["open_workspace", "continue_session", "new_session", "ignore"], "description": "What a firing would do now: open a Workspace, continue the waiting Session of the open one it correlates to, start a new Session there, or ignore a correlation miss." },
           "elapsing": { "type": ["string", "null"], "format": "date-time" }
         },
-        "required": ["matches", "brief", "branch", "correlation", "agent", "elapsing"]
+        "required": ["matches", "brief", "branch", "correlation", "agent", "would", "elapsing"]
       },
       "AgentModel": {
         "type": "object",
@@ -1865,6 +1868,7 @@
                 "branch": { "type": ["string", "null"] },
                 "correlation": { "type": ["string", "null"] },
                 "on_miss": { "type": ["string", "null"], "enum": ["open", "ignore", null] },
+                "on_open_workspace": { "type": ["string", "null"], "enum": ["continue", "new-session", null] },
                 "project": { "type": "string" },
                 "agent": { "type": "string" },
                 "allows": { "type": "array", "items": { "type": "string" } },
