@@ -299,6 +299,42 @@ impl fmt::Display for CorrelationMiss {
     }
 }
 
+/// What a firing does to the open Workspace it correlates to, declared rather than inferred from
+/// its Agent: a second CI failure for the same Agent still wants a fresh context (ADR-0031).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OnOpenWorkspace {
+    #[default]
+    Continue,
+    NewSession,
+}
+
+impl OnOpenWorkspace {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            OnOpenWorkspace::Continue => "continue",
+            OnOpenWorkspace::NewSession => "new-session",
+        }
+    }
+}
+
+impl FromStr for OnOpenWorkspace {
+    type Err = anyhow::Error;
+
+    fn from_str(on_open: &str) -> Result<Self> {
+        match on_open {
+            "continue" => Ok(OnOpenWorkspace::Continue),
+            "new-session" => Ok(OnOpenWorkspace::NewSession),
+            other => bail!("{other} is not what a trigger does to an open workspace"),
+        }
+    }
+}
+
+impl fmt::Display for OnOpenWorkspace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl TriggerState {
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -355,6 +391,7 @@ pub struct Trigger {
     pub fires: Fires,
     pub templates: Templates,
     pub on_miss: Option<CorrelationMiss>,
+    pub on_open_workspace: OnOpenWorkspace,
     pub project: Project,
     pub agent: Agent,
     pub allows: Vec<Agent>,

@@ -613,6 +613,8 @@ kestrel trigger apply -f .kestrel/triggers.yaml
       + {{ event.source }}{{ event.subject }}
     on miss
       + open
+    on open workspace
+      + continue
     brief
       + {% if instruction %}{{ instruction }}{% else %}/implement{% endif %} {{ event.source }}/issues/{{ event.subject | replace("#", "") }}
       +
@@ -643,7 +645,13 @@ inside the control plane, so how much work it does, how deep it recurses and how
 are all bounded.
 
 A `correlation` requires `on_miss: open` or `on_miss: ignore`. A hit feeds the open Workspace that
-holds the key; its configured Agent stays fixed. A key only a sealed Workspace held is still
+holds the key, as `on_open_workspace` declares. `continue`, the default, makes the brief the waiting
+Session's next turn, or starts the next Session with the Agent of the latest one. `new-session`
+starts a new Session there with the trigger's Agent, or one a label or command chooses among those
+it allows, and the brief is that Session's first entry in the transcript: a CI failure gets a fresh
+context on the checkout the builder left, rather than a turn in the builder's conversation. A new
+Session never interrupts the unfinished one; it waits until that one lets go, and until then the
+Workspace does not seal. A key only a sealed Workspace held is still
 kestrel's work, so either setting opens a new Workspace continuing the most recently sealed one. For a
 key no Workspace has held, `open` starts a new Workspace and `ignore` records the firing but starts no
 work.
@@ -662,8 +670,9 @@ only chooses among agents the declaration names, so an issue cannot reach an age
 review. Two `agent:` labels naming different agents, or one naming an agent the trigger does not
 allow, open nothing: the firing fails, and `kestrel event show` prints why under `firings`.
 `kestrel trigger test` prints which agent a firing for an event would choose. A label only matters
-when a firing opens a workspace. Changing an issue's labels later does not change the agent of the
-workspace already working on it.
+when a firing starts a session: opening a workspace, or starting a new session in one under
+`on_open_workspace: new-session`. Changing an issue's labels later does not change the agent of a
+session already working on it.
 
 ### One-off triggers
 
@@ -684,7 +693,8 @@ kestrel trigger declare ready \
 ```
 
 `--filter` and `--brief` each take their text as it is, from a file as `@path`, or from standard
-input as `-`. `--correlation` pairs with `--on-miss`. An apply leaves a trigger declared this way
+input as `-`. `--correlation` pairs with `--on-miss`, and `--on-open-workspace` declares what a
+hit does. An apply leaves a trigger declared this way
 alone unless its file declares one of the same name, which it then takes over; `kestrel trigger
 show` says which way each was declared, on its `applied` line.
 
@@ -832,6 +842,7 @@ kestrel trigger test delegated --integration origin --issue 44 \
 
 ```
 matches      true
+would        open_workspace
 elapsing     -
 agent        codex
 branch       kestrel/issue-44
@@ -890,6 +901,7 @@ kestrel trigger test delegated --event 01a07c31-4d0c-7b91-88f1-2f1a9c0b3e77
 
 ```
 matches      true
+would        open_workspace
 elapsing     -
 agent        builder
 branch       kestrel/issue-44
@@ -898,6 +910,9 @@ brief        /implement https://github.com/openkestrel/kestrel/issues/44
 
              Read the issue and its comments with `gh issue view --comments` before you start.
 ```
+
+`would` says what a firing would do now: `open_workspace`, `continue_session` in the open workspace
+the correlation finds, `new_session` there, or `ignore` a miss.
 
 It renders even when the filter does not match, so a brief can be written against the event it is
 for before the filter is right. Add `-f .kestrel/triggers.yaml` to test the trigger as the file
@@ -979,6 +994,7 @@ kestrel trigger test sweep
 
 ```
 matches      true
+would        open_workspace
 elapsing     2026-09-17T14:02:03.118Z
 agent        builder
 branch       kestrel/sweep-2026-09-17

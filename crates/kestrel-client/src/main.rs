@@ -383,6 +383,10 @@ enum TriggerCommand {
         /// What to do when correlation finds no open Workspace: open or ignore
         #[arg(long, value_name = "OPEN|IGNORE")]
         on_miss: Option<String>,
+        /// What to do when correlation finds an open Workspace: continue its waiting Session, or
+        /// start a new Session with this Trigger's Agent once the unfinished one lets go
+        #[arg(long, value_name = "CONTINUE|NEW-SESSION", requires = "correlation")]
+        on_open_workspace: Option<String>,
         /// The Project a firing's work happens against
         #[arg(long)]
         project: String,
@@ -934,6 +938,7 @@ async fn run() -> Result<()> {
             branch,
             correlation,
             on_miss,
+            on_open_workspace,
             project,
             agent,
             allows,
@@ -959,6 +964,7 @@ async fn run() -> Result<()> {
                 "branch": branch,
                 "correlation": correlation,
                 "on_miss": on_miss,
+                "on_open_workspace": on_open_workspace,
                 "project": project,
                 "agent": agent,
                 "allows": allows,

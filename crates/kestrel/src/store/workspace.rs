@@ -72,6 +72,12 @@ pub struct PendingMessage {
     pub body: String,
 }
 
+pub struct PendingSession {
+    pub agent: Agent,
+    pub trigger: String,
+    pub brief: String,
+}
+
 pub struct Opening<'a> {
     pub organization: &'a Organization,
     pub project: &'a Project,
@@ -438,6 +444,7 @@ impl<'a> Workspaces<'a> {
         let holding = sqlx::query(sessions_where!(
             ",
                     EXISTS (SELECT 1 FROM pending_message p WHERE p.workspace_id = session.workspace_id)
+                    OR EXISTS (SELECT 1 FROM pending_session p WHERE p.workspace_id = session.workspace_id)
                         AS held_input",
             "workspace_id = ?
                AND (state NOT IN (?, ?) OR supervisor_state = 'present')
@@ -639,6 +646,79 @@ impl<'a> Workspaces<'a> {
         messages.sort_by_key(|(seq, _)| *seq);
 
         Ok(messages.into_iter().map(|(_, message)| message).collect())
+    }
+
+    pub async fn add_pending_session(
+        &mut self,
+        workspace: &Workspace,
+        pending: &PendingSession,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO pending_session (
+                 workspace_id, organization_id, seq, agent_id, trigger, brief, received_at
+             )
+             SELECT ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?
+             FROM pending_session
+             WHERE workspace_id = ?",
+        )
+        .bind(workspace.id.to_string())
+        .bind(workspace.organization.id.to_string())
+        .bind(pending.agent.id.to_string())
+        .bind(&pending.trigger)
+        .bind(&pending.brief)
+        .bind(due(Timestamp::now()))
+        .bind(workspace.id.to_string())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| {
+            format!(
+                "holding a pending session in the workspace {}",
+                workspace.id
+            )
+        })?;
+
+        Ok(())
+    }
+
+    /// Taken only when no pending message arrived before it, so a Workspace drains in the order
+    /// its input arrived.
+    pub async fn take_pending_session(
+        &mut self,
+        workspace: &Workspace,
+    ) -> Result<Option<PendingSession>> {
+        let Some(row) = sqlx::query(
+            "DELETE FROM pending_session
+             WHERE workspace_id = ?1
+               AND seq = (SELECT MIN(seq) FROM pending_session WHERE workspace_id = ?1)
+               AND NOT EXISTS (
+                   SELECT 1 FROM pending_message m
+                   WHERE m.workspace_id = ?1 AND m.received_at < pending_session.received_at
+               )
+             RETURNING agent_id, trigger, brief",
+        )
+        .bind(workspace.id.to_string())
+        .fetch_optional(&mut *self.connection)
+        .await
+        .with_context(|| {
+            format!(
+                "taking a pending session from the workspace {}",
+                workspace.id
+            )
+        })?
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(PendingSession {
+            agent: agent::with_id(
+                &mut *self.connection,
+                &workspace.organization,
+                row.get::<String, _>("agent_id").parse()?,
+            )
+            .await?,
+            trigger: row.get("trigger"),
+            brief: row.get("brief"),
+        }))
     }
 
     pub async fn declare_blocked(&mut self, session: &Session, blocker: &Session) -> Result<()> {

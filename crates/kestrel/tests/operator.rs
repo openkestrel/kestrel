@@ -583,6 +583,47 @@ async fn a_client_applies_one_project_agent_and_trigger_declaration() {
 }
 
 #[tokio::test]
+async fn a_declaration_preview_says_what_a_firing_does_to_an_open_workspace() {
+    let kestrel = Kestrel::boot().await;
+    succeeded(&client(&kestrel, &["organization", "declare", "acme"]).await);
+    let declaration = json!({
+        "project": {
+            "name": "kestrel",
+            "repositories": ["https://github.com/jtmthf/kestrel"],
+            "branch": "main",
+        },
+        "agent": { "name": "fixer", "harness": "opencode" },
+        "trigger": {
+            "name": "ci-failed",
+            "filter": { "exact": { "type": "com.github.issues.labeled" } },
+            "brief": "Fix the build of {{ event.data.issue.title }}",
+            "correlation": "{{ event.source }}{{ event.subject }}",
+            "on_miss": "ignore",
+            "on_open_workspace": "new-session",
+            "project": "kestrel",
+            "agent": "fixer",
+        },
+    });
+
+    let (status, preview) = declared(&kestrel, &declaration_preview_of("acme"), &declaration).await;
+
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert!(
+        preview["declarations"][2]["differences"]
+            .as_array()
+            .expect("the trigger's differences")
+            .contains(&json!({
+                "field": "on open workspace",
+                "was": null,
+                "becomes": "new-session",
+            })),
+        "{preview}"
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_declaration_preview_changes_nothing() {
     let kestrel = Kestrel::boot().await;
     succeeded(&client(&kestrel, &["organization", "declare", "acme"]).await);

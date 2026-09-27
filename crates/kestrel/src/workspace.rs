@@ -7,7 +7,7 @@ use crate::domain::{
 use crate::fanout::{self, Change};
 use crate::instance;
 use crate::log::{Cursor, Entry, Page, Unreadable, Window};
-use crate::store::workspace::{Opening, Unfinished};
+use crate::store::workspace::{Opening, PendingSession, Unfinished};
 use crate::store::{Store, Tx};
 use crate::work;
 
@@ -260,6 +260,48 @@ pub(crate) async fn post_in(
             Ok(Some(waiting.clone()))
         }
     }
+}
+
+/// Never interrupts the unfinished Session: the new one waits for it to let go (ADR-0014).
+pub(crate) async fn start_in(
+    tx: &mut Tx<'_>,
+    workspace: &Workspace,
+    pending: PendingSession,
+) -> Result<Option<Session>> {
+    workspace.accepts("session")?;
+
+    if unfinished_session(tx, workspace)
+        .await?
+        .refuses_enqueue()
+        .is_some()
+    {
+        tx.workspaces()
+            .add_pending_session(workspace, &pending)
+            .await?;
+        return Ok(None);
+    }
+
+    Ok(Some(briefed(tx, workspace, pending).await?))
+}
+
+pub(crate) async fn briefed(
+    tx: &mut Tx<'_>,
+    workspace: &Workspace,
+    pending: PendingSession,
+) -> Result<Session> {
+    tx.log()
+        .append(
+            workspace,
+            Entry::Brief {
+                trigger: Some(pending.trigger),
+                brief: pending.brief,
+            },
+        )
+        .await?;
+
+    tx.workspaces()
+        .enqueue_session(workspace, Some(&pending.agent), None)
+        .await
 }
 
 async fn said(
