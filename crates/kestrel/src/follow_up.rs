@@ -16,7 +16,7 @@ pub struct Received {
 
 pub async fn receive(store: &Store) -> Result<Vec<Received>> {
     let events = {
-        let mut tx = store.begin().await?;
+        let mut tx = store.read().await?;
         tx.integrations()
             .unfollowed(github::COMMENTED, AT_A_TIME)
             .await?

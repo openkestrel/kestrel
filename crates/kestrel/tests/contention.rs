@@ -113,6 +113,11 @@ async fn history(kestrel: &Kestrel, organization: &Organization, webhook: &Integ
     .execute(&pool)
     .await
     .expect("the history should record");
+    // A history accumulated over time was checkpointed as it went, not on the next commit.
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .expect("the history should checkpoint");
     pool.close().await;
 }
 

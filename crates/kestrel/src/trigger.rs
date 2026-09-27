@@ -643,7 +643,7 @@ pub async fn elapse(store: &Store, at: Timestamp) -> Result<Vec<Occurrence>> {
 /// An Event no Trigger matches opens nothing, and that is not a failure.
 pub async fn fire(store: &Store, github: &Github) -> Result<Vec<Fired>> {
     let (matched, held) = {
-        let mut tx = store.begin().await?;
+        let mut tx = store.read().await?;
         (
             tx.triggers().unfired_matches(AT_A_TIME).await?,
             tx.triggers()
