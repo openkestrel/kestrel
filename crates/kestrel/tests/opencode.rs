@@ -50,7 +50,7 @@ impl Driven {
             kestrel,
             session.id,
             &credential,
-            workspace.agent.model.as_deref().unwrap_or_default(),
+            session.agent.model.as_deref().unwrap_or_default(),
         );
 
         let mut driven = Self {

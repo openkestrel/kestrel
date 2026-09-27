@@ -208,7 +208,7 @@ async fn a_session_that_reaches_an_instance_starts_and_ends_in_the_transcript() 
         said,
         vec![
             "participant joined  builder".to_owned(),
-            format!("session started  {}", session.id),
+            format!("session started  {}  builder", session.id),
             "said  builder  half of one message, and the other half".to_owned(),
             "said  builder  a second message".to_owned(),
             format!("session ended  {}  succeeded", session.id),

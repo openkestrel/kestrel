@@ -142,8 +142,10 @@ missing from it fails and says which.
 kestrel agent declare codex --harness codex
 ```
 
-A workspace takes its agent's harness and model when it opens and keeps them while it is open:
-redeclaring the agent, or changing its model, changes the workspaces opened after that.
+A session takes its agent's harness and model when it is enqueued and keeps them until it ends, and a
+session that names no agent continues on the harness and model of the workspace's latest session:
+redeclaring the agent, or changing its model, changes the sessions that name it after that and the
+workspaces opened after that.
 
 `kestrel organization list`, `kestrel project list` and `kestrel agent list` show what you have
 declared.
@@ -178,7 +180,7 @@ id              01a07846-49fa-7dc0-a44b-183a63794ee3
 name            grand-acorn-simpjvvl
 organization    acme
 project         kestrel
-agent           builder
+opened with     builder
 profile         -
 base            main
 branch          kestrel/01a07846-49fa-7dc0-a44b-183a63794ee3
@@ -374,7 +376,7 @@ kestrel workspace transcript latest
 
 ```
 1  2026-09-06T19:51:07.514407Z  {"kind":"participant_joined","participant":"builder"}
-2  2026-09-06T19:51:13.316822Z  {"kind":"session_started","session":"01a07846-5d97-7230-9315-bfef2a644006"}
+2  2026-09-06T19:51:13.316822Z  {"kind":"session_started","session":"01a07846-5d97-7230-9315-bfef2a644006","agent":"builder"}
 3  2026-09-06T19:58:58.489250Z  {"kind":"session_ended","session":"01a07846-5d97-7230-9315-bfef2a644006","exit":{"status":"failed","because":"the control plane stopped while this session was in flight"}}
 cursor  01a07846-49fa-7dc0-a44b-183a63794ee3:3
 ```
@@ -756,8 +758,8 @@ kestrel workspace list
 ```
 
 ```
-id                                    name                  state  project  agent    started by
-01a07c31-6a10-7cc2-9d41-0b5b6a2b7f04  brisk-heron-kqpzmwdt  open   kestrel  builder  01a07c31-4d0c-7b91-88f1-2f1a9c0b3e77
+id                                    name                  state  project  opened with  started by
+01a07c31-6a10-7cc2-9d41-0b5b6a2b7f04  brisk-heron-kqpzmwdt  open   kestrel  builder      01a07c31-4d0c-7b91-88f1-2f1a9c0b3e77
 ```
 
 The last column is the event that started it. `kestrel workspace show` prints it beside the branch
@@ -1055,6 +1057,18 @@ kestrel workspace post latest "please add the missing test"
 ```
 
 Pass `--as-participant NAME` to record a name other than `operator` in the transcript.
+
+A new session runs the agent of the workspace's latest session unless it names another. A review, a
+merge conflict or a CI failure wants a fresh context, and often a different model, on the same
+checkout:
+
+```sh
+kestrel session enqueue --workspace latest --agent reviewer
+```
+
+The reviewer's harness and model drive it on the workspace's instance, in a conversation of its own,
+and stay fixed until it ends; the transcript's `session_started` entry names the agent that started.
+`kestrel session show` prints its agent, harness and model.
 
 ## Where this stops
 

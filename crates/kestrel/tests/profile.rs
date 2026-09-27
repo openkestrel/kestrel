@@ -69,6 +69,10 @@ async fn transcript(kestrel: &Kestrel, workspace: &Workspace) -> String {
 /// before an agent ever answered is left as it ended.
 async fn worked(kestrel: &Kestrel, workspace: &Workspace) -> (Session, String) {
     let session = kestrel.enqueue_session(workspace.id).await;
+    finished(kestrel, workspace, session).await
+}
+
+async fn finished(kestrel: &Kestrel, workspace: &Workspace, session: Session) -> (Session, String) {
     let mut session = kestrel.answered(session.id, 1).await;
     if session.state != SessionState::Ended {
         kestrel.stop_session(session.id).await;
@@ -200,6 +204,46 @@ async fn an_instance_holds_no_login_once_its_session_has_ended() {
     assert!(
         !home.join(LOGIN).exists(),
         "the login was left on the instance after its session"
+    );
+
+    kestrel.teardown().await;
+}
+
+/// The login reaches whichever Agent's Session uses it, and leaves the Instance with that Session.
+#[tokio::test]
+async fn an_instance_holds_no_login_once_another_agents_session_on_it_has_ended() {
+    let kestrel = playing(Script::Refreshes).await;
+    declared(&kestrel, "opencode").await;
+    let organization = kestrel.organizations().await.remove(0);
+    kestrel
+        .declare_agent(&organization, "reviewer", "opencode", None)
+        .await;
+    a_profile(&kestrel, "jack", "Jack", &login_file(), FIRST_LOGIN).await;
+    let workspace = kestrel
+        .open_workspace_with("acme", repository::NAME, "builder", "jack")
+        .await;
+    let (built, _) = worked(&kestrel, &workspace).await;
+    kestrel.supervisor_recorded_gone(&built).await;
+
+    let review = kestrel.enqueue_session_as(workspace.id, "reviewer").await;
+    let (reviewed, said) = finished(&kestrel, &workspace, review).await;
+
+    assert_eq!(reviewed.exit, Some(Exit::Succeeded), "{said}");
+    assert_eq!(reviewed.agent.name, "reviewer");
+    assert_eq!(reviewed.instance, built.instance);
+    assert!(
+        said.contains(&format!("logged in as {FIRST_LOGIN}{REFRESHED}")),
+        "the login never reached the second agent's session: {said}"
+    );
+    let instance = reviewed
+        .instance
+        .as_deref()
+        .and_then(|instance| instance.strip_prefix("local-exec/"))
+        .expect("a local instance");
+    let home = std::env::temp_dir().join(format!("{instance}.home"));
+    assert!(
+        !home.join(LOGIN).exists(),
+        "the login was left on the instance after the second agent's session"
     );
 
     kestrel.teardown().await;

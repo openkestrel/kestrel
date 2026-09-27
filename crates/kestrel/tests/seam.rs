@@ -42,7 +42,7 @@ async fn a_workspace_opens_against_a_project_and_an_agent() {
     assert_eq!(shown.id, workspace.id);
     assert_eq!(shown.organization.name, "acme");
     assert_eq!(shown.project.name, "kestrel");
-    assert_eq!(shown.agent.name, "builder");
+    assert_eq!(shown.opened_with.name, "builder");
     assert_eq!(shown.state, WorkspaceState::Open);
 
     kestrel.teardown().await;
@@ -75,7 +75,7 @@ async fn every_durable_record_carries_its_organization() {
     let shown = kestrel.show_workspace(workspace.id).await;
 
     assert_eq!(shown.project.organization, shown.organization.id);
-    assert_eq!(shown.agent.organization, shown.organization.id);
+    assert_eq!(shown.opened_with.organization, shown.organization.id);
 
     kestrel.teardown().await;
 }

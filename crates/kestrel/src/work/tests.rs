@@ -34,7 +34,7 @@ impl Fixture {
         let workspace = workspace::open(&store, "acme", "kestrel", "builder", None, None, None)
             .await
             .unwrap();
-        enqueue(&store, workspace.id, None).await.unwrap();
+        enqueue(&store, workspace.id, None, None).await.unwrap();
         let session = claim(&store, &[]).await.unwrap().unwrap().session;
 
         Self {
@@ -122,7 +122,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     )
     .await
     .unwrap();
-    let first_queued = enqueue(&store, first.id, None).await.unwrap();
+    let first_queued = enqueue(&store, first.id, None, None).await.unwrap();
     let first_session = match occupy(&store, 1, &["codex".to_owned()]).await.unwrap() {
         Some(Occupied::Claimed(claimed)) => claimed.session,
         _ => panic!("the first session should claim"),
@@ -144,7 +144,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         SessionState::Waiting
     );
 
-    let second_queued = enqueue(&store, second.id, None).await.unwrap();
+    let second_queued = enqueue(&store, second.id, None, None).await.unwrap();
     let second_session = match occupy(&store, 1, &["codex".to_owned()]).await.unwrap() {
         Some(Occupied::Claimed(claimed)) => claimed.session,
         _ => panic!("the waiting session should leave its slot and profile available"),
@@ -178,7 +178,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     )
     .await
     .unwrap();
-    let alex_queued = enqueue(&store, alex.id, None).await.unwrap();
+    let alex_queued = enqueue(&store, alex.id, None, None).await.unwrap();
     let alex_session = match occupy(&store, 2, &["codex".to_owned()]).await.unwrap() {
         Some(Occupied::Claimed(claimed)) => claimed.session,
         _ => panic!("another profile should be able to claim while Jack is busy"),
@@ -272,7 +272,8 @@ async fn reports_record_the_session_and_its_transcript_together() {
                 participant: "builder".to_owned()
             },
             Entry::SessionStarted {
-                session: fixture.session.id
+                session: fixture.session.id,
+                agent: "builder".to_owned()
             },
             Entry::Said {
                 participant: "builder".to_owned(),

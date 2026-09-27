@@ -1976,7 +1976,7 @@
           "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
           "organization": { "type": "string" },
           "project": { "type": "string" },
-          "agent": { "type": "string" },
+          "opened_with": { "type": "string", "description": "The Agent its first Session runs unless that Session names another." },
           "profile": { "type": ["string", "null"] },
           "checkout": { "$ref": "#/components/schemas/Checkout" },
           "instance": { "type": ["string", "null"], "description": "The Instance its Sessions execute on, while one is kept." },
@@ -1990,7 +1990,7 @@
           "started_by": { "type": ["string", "null"], "format": "uuid" },
           "continued_by": { "type": "array", "items": { "type": "string", "format": "uuid" } }
         },
-        "required": ["id", "name", "organization", "project", "agent", "profile", "checkout", "instance", "held", "correlation", "state", "opened_at", "last_active_at", "sealed_at", "continues", "started_by", "continued_by"]
+        "required": ["id", "name", "organization", "project", "opened_with", "profile", "checkout", "instance", "held", "correlation", "state", "opened_at", "last_active_at", "sealed_at", "continues", "started_by", "continued_by"]
       },
       "Checkout": {
         "type": "object",
@@ -2004,7 +2004,8 @@
       "SessionDeclaration": {
         "type": "object",
         "properties": {
-          "model": { "type": ["string", "null"] }
+          "agent": { "type": ["string", "null"], "description": "Omitted, the Agent of the Workspace's latest Session." },
+          "model": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." }
         }
       },
       "Session": {
@@ -2019,7 +2020,9 @@
           "outcome_message": { "type": ["string", "null"] },
           "instance": { "type": ["string", "null"] },
           "supervisor": { "type": ["string", "null"] },
-          "model": { "type": ["string", "null"] },
+          "agent": { "type": "string" },
+          "harness": { "type": "string" },
+          "model": { "type": ["string", "null"], "description": "What the Session names, or null for its Harness's default." },
           "worked_model": { "type": ["string", "null"] },
           "enqueued_at": { "type": "string", "format": "date-time" },
           "started_at": { "type": ["string", "null"], "format": "date-time" },
@@ -2029,7 +2032,7 @@
           "supervisor_version": { "type": ["string", "null"] },
           "usage": { "anyOf": [{ "$ref": "#/components/schemas/Usage" }, { "type": "null" }] }
         },
-        "required": ["id", "name", "workspace", "state", "waiting_for", "exit", "outcome_message", "instance", "supervisor", "model", "worked_model", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage"]
+        "required": ["id", "name", "workspace", "state", "waiting_for", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "worked_model", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage"]
       },
       "Exit": {
         "oneOf": [
@@ -2615,11 +2618,16 @@
           "session": {
             "type": "string",
             "format": "uuid"
+          },
+          "agent": {
+            "description": "The Agent the Session runs.",
+            "type": "string"
           }
         },
         "required": [
           "kind",
-          "session"
+          "session",
+          "agent"
         ]
       },
       "Message": {

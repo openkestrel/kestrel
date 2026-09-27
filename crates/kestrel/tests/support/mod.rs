@@ -1048,7 +1048,7 @@ impl Kestrel {
             .append(
                 &workspace,
                 Entry::Said {
-                    participant: workspace.agent.name.clone(),
+                    participant: session.agent.name.clone(),
                     message: message.to_owned(),
                 },
             )
@@ -1094,7 +1094,21 @@ impl Kestrel {
     }
 
     pub async fn try_enqueue_session(&self, workspace: WorkspaceId) -> anyhow::Result<Session> {
-        work::enqueue(&self.store, workspace, None).await
+        work::enqueue(&self.store, workspace, None, None).await
+    }
+
+    pub async fn enqueue_session_as(&self, workspace: WorkspaceId, agent: &str) -> Session {
+        self.try_enqueue_session_as(workspace, agent)
+            .await
+            .expect("the session should enqueue")
+    }
+
+    pub async fn try_enqueue_session_as(
+        &self,
+        workspace: WorkspaceId,
+        agent: &str,
+    ) -> anyhow::Result<Session> {
+        work::enqueue(&self.store, workspace, Some(agent), None).await
     }
 
     pub async fn enqueue_session_naming(
@@ -1112,7 +1126,7 @@ impl Kestrel {
         workspace: WorkspaceId,
         model: Option<&str>,
     ) -> anyhow::Result<Session> {
-        work::enqueue(&self.store, workspace, model).await
+        work::enqueue(&self.store, workspace, None, model).await
     }
 
     /// Claims what it enqueued, standing in for the work role a `boot`ed fixture leaves idle.

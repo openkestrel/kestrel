@@ -206,6 +206,7 @@ struct WorkspaceMessage {
 
 #[derive(Deserialize)]
 struct SessionDeclaration {
+    agent: Option<String>,
     model: Option<String>,
 }
 
@@ -289,7 +290,7 @@ struct WorkspaceRecord {
     name: String,
     organization: String,
     project: String,
-    agent: String,
+    opened_with: String,
     profile: Option<String>,
     checkout: domain::Checkout,
     instance: Option<String>,
@@ -315,6 +316,8 @@ struct SessionRecord {
     outcome_message: Option<String>,
     instance: Option<String>,
     supervisor: Option<String>,
+    agent: String,
+    harness: String,
     model: Option<String>,
     worked_model: Option<String>,
     enqueued_at: Timestamp,
@@ -416,7 +419,7 @@ impl WorkspaceRecord {
             name: workspace.name,
             organization: workspace.organization.name,
             project: workspace.project.name,
-            agent: workspace.agent.name,
+            opened_with: workspace.opened_with.name,
             profile: workspace.profile.map(|profile| profile.name),
             checkout: workspace.checkout,
             instance,
@@ -445,7 +448,9 @@ impl SessionRecord {
             outcome_message: session.outcome_message,
             instance: session.instance,
             supervisor: session.supervisor,
-            model: session.model,
+            agent: session.agent.name,
+            harness: session.agent.harness,
+            model: session.agent.model,
             worked_model: session.worked_model,
             enqueued_at: session.enqueued_at,
             started_at: session.started_at,
@@ -1637,6 +1642,7 @@ async fn enqueue_session(
     let session = work::enqueue(
         &control_plane.store,
         workspace.id,
+        declaration.agent.as_deref(),
         declaration.model.as_deref(),
     )
     .await

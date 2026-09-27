@@ -128,7 +128,10 @@ async fn labelling_an_issue_opens_a_workspace_and_enqueues_a_session() {
     let workspace = opened(&kestrel, 1).await.remove(0);
 
     assert_eq!(workspace.project.name, "kestrel");
-    assert_eq!(workspace.agent.name, "builder");
+    assert_eq!(
+        kestrel.sessions(workspace.id).await[0].agent.name,
+        "builder"
+    );
 
     let sessions = kestrel.sessions(workspace.id).await;
     assert_eq!(sessions.len(), 1, "a firing enqueues one session");
@@ -424,7 +427,10 @@ async fn a_correlation_hit_feeds_the_open_workspace_without_changing_its_agent()
         "one correlation opened {} workspaces",
         workspaces.len()
     );
-    assert_eq!(workspaces[0].agent.name, "builder");
+    assert_eq!(
+        kestrel.sessions(workspaces[0].id).await[0].agent.name,
+        "builder"
+    );
     assert!(
         kestrel
             .transcript(workspaces[0].id)
@@ -1035,7 +1041,10 @@ async fn an_applied_trigger_fires_for_events_recorded_after_it() {
     watching(&kestrel, &stub).await;
 
     let workspace = opened(&kestrel, 1).await.remove(0);
-    assert_eq!(workspace.agent.name, "builder");
+    assert_eq!(
+        kestrel.sessions(workspace.id).await[0].agent.name,
+        "builder"
+    );
 
     kestrel.apply_triggers("acme", "triggers: {}").await;
     assert!(kestrel.triggers("acme").await.is_empty());
@@ -1353,7 +1362,10 @@ async fn a_schedule_elapsing_opens_a_workspace_the_way_a_matched_event_does() {
         trigger.declared_at + SignedDuration::from_hours(1)
     );
     assert_eq!(workspace.started_by, Some(event.record_id));
-    assert_eq!(workspace.agent.name, "builder");
+    assert_eq!(
+        kestrel.sessions(workspace.id).await[0].agent.name,
+        "builder"
+    );
     assert_eq!(
         first_entry(&kestrel, &workspace).await,
         Entry::Brief {

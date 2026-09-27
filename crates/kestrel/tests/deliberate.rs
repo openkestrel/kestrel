@@ -124,7 +124,10 @@ async fn neither_labels_nor_assignment_start_work() {
     let opened = workspaces(&kestrel, 1).await;
 
     assert_eq!(opened.len(), 1);
-    assert_eq!(opened[0].agent.name, "builder");
+    assert_eq!(
+        kestrel.sessions(opened[0].id).await[0].agent.name,
+        "builder"
+    );
     assert_eq!(opened[0].checkout.branch, "kestrel/issue-43");
     assert_eq!(
         brief(&kestrel, opened[0].id).await,
@@ -165,7 +168,7 @@ async fn the_maintainers_mention_starts_work_with_the_instruction_and_agent_it_n
 
     let opened = workspaces(&kestrel, 1).await.remove(0);
 
-    assert_eq!(opened.agent.name, "codex");
+    assert_eq!(kestrel.sessions(opened.id).await[0].agent.name, "codex");
     assert!(
         brief(&kestrel, opened.id)
             .await
@@ -444,7 +447,7 @@ async fn a_dispatch_starts_the_work_it_asks_for_on_the_issue_it_names() {
         panic!("the dispatch opened nothing: {fired:?}");
     };
     let workspace = kestrel.show_workspace(workspace).await;
-    assert_eq!(workspace.agent.name, "codex");
+    assert_eq!(kestrel.sessions(workspace.id).await[0].agent.name, "codex");
     assert_eq!(workspace.checkout.branch, "kestrel/issue-60");
     assert!(
         brief(&kestrel, workspace.id)
@@ -580,7 +583,7 @@ async fn a_dispatch_test_renders_what_the_dispatch_then_starts_and_records_nothi
         Some(workspace.checkout.branch.as_str())
     );
     assert_eq!(rendered.correlation, workspace.correlation);
-    assert_eq!(agent, workspace.agent.name);
+    assert_eq!(agent, kestrel.sessions(workspace.id).await[0].agent.name);
 
     kestrel.teardown().await;
 }

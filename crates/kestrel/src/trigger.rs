@@ -845,7 +845,10 @@ async fn firing(
         )
         .await?;
 
-    let session = tx.workspaces().enqueue_session(&workspace, None).await?;
+    let session = tx
+        .workspaces()
+        .enqueue_session(&workspace, Some(agent), None)
+        .await?;
     tx.triggers()
         .record_opened_firing(trigger, event, &workspace, worked_ahead.as_deref())
         .await?;

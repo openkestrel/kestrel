@@ -182,7 +182,7 @@ async fn execute(
         work::fail(store, &session, &error.to_string()).await?;
         return Ok(());
     }
-    let command = match dispatch.spawns(&workspace.agent.harness) {
+    let command = match dispatch.spawns(&session.agent.harness) {
         Ok(command) => command,
         Err(error) => {
             work::fail(store, &session, &error.to_string()).await?;
@@ -218,11 +218,7 @@ async fn execute(
         ),
         (
             "KESTREL_AGENT_MODEL",
-            session
-                .model
-                .as_deref()
-                .or(workspace.agent.model.as_deref())
-                .unwrap_or_default(),
+            session.agent.model.as_deref().unwrap_or_default(),
         ),
     ]) {
         Ok(supervisor) => supervisor,

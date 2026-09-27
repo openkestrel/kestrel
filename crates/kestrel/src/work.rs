@@ -112,6 +112,7 @@ impl From<anyhow::Error> for ReportRefused {
 pub async fn enqueue(
     store: &Store,
     workspace: WorkspaceId,
+    agent: Option<&str>,
     model: Option<&str>,
 ) -> Result<Session> {
     let mut tx = store.begin().await?;
@@ -128,7 +129,14 @@ pub async fn enqueue(
         );
     }
 
-    let session = tx.workspaces().enqueue_session(&workspace, model).await?;
+    let named = match agent {
+        Some(named) => Some(tx.agents().named(&workspace.organization, named).await?),
+        None => None,
+    };
+    let session = tx
+        .workspaces()
+        .enqueue_session(&workspace, named.as_ref(), model)
+        .await?;
     tx.commit().await?;
 
     Ok(session)
@@ -290,6 +298,7 @@ pub async fn report(
                         &workspace,
                         Entry::SessionStarted {
                             session: session.id,
+                            agent: session.agent.name.clone(),
                         },
                     )
                     .await?;
@@ -306,7 +315,7 @@ pub async fn report(
                 .append(
                     &workspace,
                     Entry::Said {
-                        participant: workspace.agent.name.clone(),
+                        participant: session.agent.name.clone(),
                         message,
                     },
                 )
@@ -322,7 +331,7 @@ pub async fn report(
                 let workspace = tx.workspaces().get(session.workspace).await?;
                 let said = tx
                     .log()
-                    .said_since(&workspace, from_seq, &workspace.agent.name)
+                    .said_since(&workspace, from_seq, &session.agent.name)
                     .await?;
                 if !said.is_empty() {
                     delivery::record_turn(&mut tx, session, &workspace, turn, &said).await?;
@@ -468,7 +477,10 @@ async fn end(store: &Store, session: &Session, exit: Exit) -> Result<Exit> {
 /// what comes back is the one that stands.
 pub(crate) async fn ending(tx: &mut Tx<'_>, session: &Session, exit: Exit) -> Result<Exit> {
     let workspace = tx.workspaces().get(session.workspace).await?;
-    let said = tx.log().last_said_for_session(&workspace).await?;
+    let said = tx
+        .log()
+        .last_said_for_session(&workspace, &session.agent.name)
+        .await?;
     let stands = if tx
         .workspaces()
         .end_session(session, &exit, said.as_deref())
@@ -546,7 +558,9 @@ async fn continue_pending(tx: &mut Tx<'_>, workspace: WorkspaceId) -> Result<Opt
         .await?;
 
     Ok(Some(
-        tx.workspaces().enqueue_session(&workspace, None).await?,
+        tx.workspaces()
+            .enqueue_session(&workspace, None, None)
+            .await?,
     ))
 }
 

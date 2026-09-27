@@ -595,6 +595,9 @@ enum SessionCommand {
         /// unambiguous prefix of its identifier, or `latest`
         #[arg(long)]
         workspace: String,
+        /// The Agent it runs, or the one the Workspace's latest Session ran
+        #[arg(long)]
+        agent: Option<String>,
         /// The model it works with, or none for its Agent's or Harness's default
         #[arg(long)]
         model: Option<String>,
@@ -1203,7 +1206,11 @@ async fn run() -> Result<()> {
                 eprintln!("cursor  {cursor}");
             }
         }
-        Command::Session(SessionCommand::Enqueue { workspace, model }) => {
+        Command::Session(SessionCommand::Enqueue {
+            workspace,
+            agent,
+            model,
+        }) => {
             let organization = scoping.resolve().await?.organization;
             show(
                 &presentation,
@@ -1216,7 +1223,7 @@ async fn run() -> Result<()> {
                         &workspace,
                         "sessions",
                     ],
-                    &json!({ "model": model }),
+                    &json!({ "agent": agent, "model": model }),
                 )
                 .await?,
             )?;

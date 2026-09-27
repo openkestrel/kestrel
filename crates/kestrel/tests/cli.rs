@@ -321,7 +321,9 @@ fn transcribed(kestrel: &Booted, workspace: &str) -> Vec<String> {
             let entry = &recorded["entry"];
             let said = match entry["kind"].as_str().expect("an entry kind") {
                 "participant_joined" => format!("participant joined {}", entry["participant"]),
-                "session_started" => format!("session started {}", entry["session"]),
+                "session_started" => {
+                    format!("session started {} {}", entry["session"], entry["agent"])
+                }
                 "said" => format!("said {} {}", entry["participant"], entry["message"]),
                 "session_ended" => format!(
                     "session ended {} {}",
@@ -541,7 +543,7 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
         transcript,
         vec![
             "1 participant joined builder".to_owned(),
-            format!("2 session started {session}"),
+            format!("2 session started {session} builder"),
             "3 said builder half of one message, and the other half".to_owned(),
             "4 said builder a second message".to_owned(),
             format!("5 session ended {session} succeeded"),

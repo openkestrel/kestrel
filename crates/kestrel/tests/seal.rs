@@ -179,7 +179,7 @@ async fn a_sealed_workspace_is_fully_readable_including_its_whole_transcript() {
     let shown = kestrel.show_workspace(workspace.id).await;
     assert_eq!(shown.organization.name, "acme");
     assert_eq!(shown.project.name, "kestrel");
-    assert_eq!(shown.agent.name, "builder");
+    assert_eq!(shown.opened_with.name, "builder");
     assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
 
     let after: Vec<String> = kestrel

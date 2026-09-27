@@ -234,6 +234,43 @@ async fn a_session_that_has_ended_hands_out_no_credential() {
     kestrel.teardown().await;
 }
 
+/// A Session running another Agent in the same Workspace takes a credential of its own, which
+/// its end invalidates as surely as the first Session's.
+#[tokio::test]
+async fn another_agents_session_hands_out_no_credential_once_it_has_ended() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel, "acme", Some(A_PROVIDER_KEY)).await;
+    kestrel
+        .declare_agent(&workspace.organization, "reviewer", "opencode", None)
+        .await;
+    let (built, _) = kestrel.dispatch_session(workspace.id).await;
+    kestrel.complete_session(&built).await;
+    kestrel.enqueue_session_as(workspace.id, "reviewer").await;
+    let claimed = kestrel
+        .claim_session()
+        .await
+        .expect("the review was just enqueued to claim");
+    let link = Link::to(&kestrel.link());
+    assert_eq!(claimed.session.agent.name, "reviewer");
+    assert_eq!(
+        link.credentials(claimed.session.id, Some(&claimed.credential))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+
+    kestrel.complete_session(&claimed.session).await;
+
+    assert_eq!(
+        link.credentials(claimed.session.id, Some(&claimed.credential))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    kestrel.teardown().await;
+}
+
 /// The key is generated the first time kestrel opens a data directory: an operator supplies
 /// provider keys, and never a key of kestrel's.
 #[tokio::test]

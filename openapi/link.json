@@ -948,11 +948,16 @@
           "session": {
             "type": "string",
             "format": "uuid"
+          },
+          "agent": {
+            "description": "The Agent the Session runs.",
+            "type": "string"
           }
         },
         "required": [
           "kind",
-          "session"
+          "session",
+          "agent"
         ]
       },
       "Message": {

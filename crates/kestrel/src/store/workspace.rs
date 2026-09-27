@@ -15,11 +15,18 @@ use crate::store::{agent, due, organization, profile, project, timestamp};
 
 macro_rules! sessions_where {
     ($tail:literal) => {
+        sessions_where!("", $tail)
+    };
+    ($columns:literal, $tail:literal) => {
         concat!(
-            "SELECT id, name, organization_id, workspace_id, state, waiting_for, exit, exit_because, outcome_message, instance, supervisor,
-                    enqueued_at, started_at, ended_at, lease_expires_at, connected_at,
+            "SELECT id, name, organization_id, workspace_id, agent_id,
+                    (SELECT name FROM agent WHERE agent.id = session.agent_id) AS agent_name,
+                    harness, state, waiting_for, exit, exit_because, outcome_message, instance,
+                    supervisor, enqueued_at, started_at, ended_at, lease_expires_at, connected_at,
                     supervisor_version, model, worked_model, context_used, context_size, cost_amount,
-                    cost_currency
+                    cost_currency",
+            $columns,
+            "
              FROM session
              WHERE ",
             $tail
@@ -33,12 +40,10 @@ macro_rules! profile_free {
             "NOT EXISTS (
              SELECT 1
              FROM workspace AS w
-             JOIN workspace AS o
-               ON o.subscription_profile_id = w.subscription_profile_id
-              AND o.harness = w.harness
-             JOIN session AS a ON a.workspace_id = o.id
+             JOIN workspace AS o ON o.subscription_profile_id = w.subscription_profile_id
+             JOIN session AS a ON a.workspace_id = o.id AND a.harness = s.harness
              WHERE w.id = s.workspace_id
-               AND w.harness IN (SELECT value FROM json_each(?))
+               AND s.harness IN (SELECT value FROM json_each(?))
                AND a.state = ?
          )"
         )
@@ -97,7 +102,7 @@ impl<'a> Workspaces<'a> {
                 name: generated_name(),
                 organization: opening.organization.clone(),
                 project: opening.project.clone(),
-                agent: opening.agent.clone(),
+                opened_with: opening.agent.clone(),
                 profile: opening.profile.cloned(),
                 checkout: Checkout {
                     repositories: opening.project.repositories.clone(),
@@ -117,19 +122,17 @@ impl<'a> Workspaces<'a> {
 
             let inserted = sqlx::query(
                 "INSERT INTO workspace
-                     (id, name, organization_id, project_id, agent_id, harness, model,
-                      subscription_profile_id, base, branch, correlation, state, opened_at,
-                      last_active_at, continues, event_record_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     (id, name, organization_id, project_id, agent_id, subscription_profile_id,
+                      base, branch, correlation, state, opened_at, last_active_at, continues,
+                      event_record_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT (organization_id, name) DO NOTHING",
             )
             .bind(workspace.id.to_string())
             .bind(&workspace.name)
             .bind(workspace.organization.id.to_string())
             .bind(workspace.project.id.to_string())
-            .bind(workspace.agent.id.to_string())
-            .bind(&workspace.agent.harness)
-            .bind(&workspace.agent.model)
+            .bind(workspace.opened_with.id.to_string())
             .bind(
                 workspace
                     .profile
@@ -432,15 +435,15 @@ impl<'a> Workspaces<'a> {
         &mut self,
         workspace: &Workspace,
     ) -> Result<Option<Unfinished>> {
-        let holding = sqlx::query(
-            "SELECT s.*,
-                    EXISTS (SELECT 1 FROM pending_message p WHERE p.workspace_id = s.workspace_id) AS held_input
-             FROM session s
-             WHERE s.workspace_id = ?
-               AND (s.state NOT IN (?, ?) OR s.supervisor_state = 'present')
-             ORDER BY s.enqueued_at, s.id
-             LIMIT 1",
-        )
+        let holding = sqlx::query(sessions_where!(
+            ",
+                    EXISTS (SELECT 1 FROM pending_message p WHERE p.workspace_id = session.workspace_id)
+                        AS held_input",
+            "workspace_id = ?
+               AND (state NOT IN (?, ?) OR supervisor_state = 'present')
+             ORDER BY enqueued_at, id
+             LIMIT 1"
+        ))
         .bind(workspace.id.to_string())
         .bind(SessionState::Ended.as_str())
         .bind(SessionState::Unreachable.as_str())
@@ -486,24 +489,50 @@ impl<'a> Workspaces<'a> {
         Ok(Some(read(&mut *self.connection, id).await?))
     }
 
+    /// The latest Session's Agent as that Session froze it, so continuing work never moves onto a
+    /// redeclared harness or model.
+    async fn latest_agent(&mut self, workspace: &Workspace) -> Result<Agent> {
+        let latest = sqlx::query(sessions_where!(
+            "workspace_id = ? ORDER BY enqueued_at DESC, id DESC LIMIT 1"
+        ))
+        .bind(workspace.id.to_string())
+        .fetch_optional(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading the latest agent of the workspace {}", workspace.id))?;
+
+        match latest {
+            Some(row) => Ok(session(&row)?.agent),
+            None => Ok(workspace.opened_with.clone()),
+        }
+    }
+
+    /// No `agent` continues with the latest Session's; `model` stands in for whatever the Agent names.
     pub async fn enqueue_session(
         &mut self,
         workspace: &Workspace,
+        agent: Option<&Agent>,
         model: Option<&str>,
     ) -> Result<Session> {
+        let agent = match agent {
+            Some(agent) => agent.clone(),
+            None => self.latest_agent(workspace).await?,
+        };
         let session = loop {
             let session = Session {
                 id: SessionId::generate(),
                 name: generated_name(),
                 organization: workspace.organization.id,
                 workspace: workspace.id,
+                agent: Agent {
+                    model: model.map(str::to_owned).or_else(|| agent.model.clone()),
+                    ..agent.clone()
+                },
                 state: SessionState::Queued,
                 waiting_for: None,
                 exit: None,
                 outcome_message: None,
                 instance: None,
                 supervisor: None,
-                model: model.map(str::to_owned),
                 worked_model: None,
                 enqueued_at: Timestamp::now(),
                 started_at: None,
@@ -514,16 +543,20 @@ impl<'a> Workspaces<'a> {
             };
 
             let inserted = sqlx::query(
-                "INSERT INTO session (id, name, organization_id, workspace_id, state, model, enqueued_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)
+                "INSERT INTO session
+                     (id, name, organization_id, workspace_id, agent_id, harness, model, state,
+                      enqueued_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT (organization_id, name) DO NOTHING",
             )
             .bind(session.id.to_string())
             .bind(&session.name)
             .bind(session.organization.to_string())
             .bind(session.workspace.to_string())
+            .bind(session.agent.id.to_string())
+            .bind(&session.agent.harness)
+            .bind(&session.agent.model)
             .bind(session.state.as_str())
-            .bind(&session.model)
             .bind(due(session.enqueued_at))
             .execute(&mut *self.connection)
             .await
@@ -1422,9 +1455,8 @@ pub(crate) async fn read(connection: &mut SqliteConnection, id: WorkspaceId) -> 
 
 async fn find(connection: &mut SqliteConnection, id: WorkspaceId) -> Result<Option<Workspace>> {
     let Some(row) = sqlx::query(
-        "SELECT name, organization_id, project_id, agent_id, harness, model, subscription_profile_id,
-                base, branch, correlation, state, opened_at, last_active_at, sealed_at,
-                continues, event_record_id
+        "SELECT name, organization_id, project_id, agent_id, subscription_profile_id, base, branch,
+                correlation, state, opened_at, last_active_at, sealed_at, continues, event_record_id
          FROM workspace
          WHERE id = ?",
     )
@@ -1443,17 +1475,12 @@ async fn find(connection: &mut SqliteConnection, id: WorkspaceId) -> Result<Opti
         row.get::<String, _>("project_id").parse()?,
     )
     .await?;
-    // What the Agent was declared as when the workspace opened, not what it has been redeclared as.
-    let agent = Agent {
-        harness: row.get("harness"),
-        model: row.get("model"),
-        ..agent::with_id(
-            connection,
-            &organization,
-            row.get::<String, _>("agent_id").parse()?,
-        )
-        .await?
-    };
+    let opened_with = agent::with_id(
+        connection,
+        &organization,
+        row.get::<String, _>("agent_id").parse()?,
+    )
+    .await?;
     let profile = match row.get::<Option<String>, _>("subscription_profile_id") {
         Some(id) => Some(profile::with_id(connection, id.parse()?).await?),
         None => None,
@@ -1473,7 +1500,7 @@ async fn find(connection: &mut SqliteConnection, id: WorkspaceId) -> Result<Opti
         name: row.get("name"),
         organization,
         project,
-        agent,
+        opened_with,
         profile,
         checkout: Checkout {
             repositories,
@@ -1512,6 +1539,13 @@ fn session(row: &SqliteRow) -> Result<Session> {
         name: row.get("name"),
         organization: row.get::<String, _>("organization_id").parse()?,
         workspace: row.get::<String, _>("workspace_id").parse()?,
+        agent: Agent {
+            id: row.get::<String, _>("agent_id").parse()?,
+            organization: row.get::<String, _>("organization_id").parse()?,
+            name: row.get("agent_name"),
+            harness: row.get("harness"),
+            model: row.get("model"),
+        },
         state: row.get::<String, _>("state").parse()?,
         waiting_for: row.get("waiting_for"),
         exit: exit
@@ -1520,7 +1554,6 @@ fn session(row: &SqliteRow) -> Result<Session> {
         outcome_message: row.get("outcome_message"),
         instance: row.get("instance"),
         supervisor: row.get("supervisor"),
-        model: row.get("model"),
         worked_model: row.get("worked_model"),
         enqueued_at: row.get::<String, _>("enqueued_at").parse()?,
         started_at: timestamp(row, "started_at")?,

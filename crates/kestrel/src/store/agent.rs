@@ -107,7 +107,7 @@ impl<'a> Agents<'a> {
         .collect()
     }
 
-    /// A Session in flight was provisioned with the model its Agent named when it was dispatched,
+    /// A Session already enqueued keeps the model its Agent named when it was enqueued,
     /// and is not reached by this.
     pub async fn set_model(&mut self, agent: &Agent, model: Option<&str>) -> Result<Agent> {
         sqlx::query("UPDATE agent SET model = ? WHERE id = ?")
