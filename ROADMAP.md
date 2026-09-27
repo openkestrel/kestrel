@@ -133,6 +133,8 @@ a read names the kinds it wants, with shared state alone the page a human gets j
 stop being drained at session end and go up as they happen, so a workspace is readable in real time and an
 agent stuck thrashing is visible while it thrashes, not after
 ([ADR-0020](docs/adr/0020-the-transcript-records-what-the-runtime-emits-in-kinds.md)).
+Narration and detail content lasts 30 days from append; expiry leaves a cursor-preserving marker,
+and large payloads live behind references ([ADR-0033](docs/adr/0033-expire-transcript-detail-in-place.md)).
 
 Learning the pull request lands here too, as shared state rather than session detail: the branch `0.2`
 declared correlates the `pull_request` event the integration already delivers, so a joining human

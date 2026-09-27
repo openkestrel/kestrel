@@ -373,10 +373,11 @@ words from drifting.
 - A workspace idle for a **day** seals itself only when it has no **Unpublished Work**. A workspace
   with unpublished work needs attention and keeps its instance; an unfinished session also prevents
   sealing, however old the workspace is.
-- kestrel **never** expires a **shared-state** transcript entry. Narration and detail have a
-  retention window; an entry of any other kind leaves a transcript only by **deliberate deletion**.
-- A deletion inside a transcript is **itself recorded** in that transcript, so what a reader sees is
-  gap-free.
+- kestrel **never** expires a **shared-state** transcript entry. Narration and detail content expires
+  30 days after its entry is appended; an entry of any other kind leaves a transcript only by
+  **deliberate deletion**.
+- Expiry leaves a permanent tombstone at the entry's position. A deletion inside a transcript is
+  **itself recorded** in that transcript, so what a reader sees is gap-free.
 - Deleting a workspace removes **nothing** from the audit record.
 - A campaign is complete when **every** session it enqueued has ended and every workspace it opened
   is sealed.
