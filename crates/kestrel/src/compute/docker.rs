@@ -37,6 +37,7 @@ impl Docker {
             "create".to_owned(),
             "--name".to_owned(),
             container.clone(),
+            "--init".to_owned(),
             // The Instance dials out and nothing dials in (ADR-0002), so this is the only
             // name the link is reachable by from inside.
             "--add-host".to_owned(),
@@ -46,8 +47,6 @@ impl Docker {
             created.push("--network".to_owned());
             created.push(network.clone());
         }
-        // As the first process, the one thing stopping a supervisor leaves running and the
-        // one thing no process in the container can signal.
         created.extend(["--entrypoint", "sleep", &self.image, "infinity"].map(str::to_owned));
         docker(&created.iter().map(String::as_str).collect::<Vec<_>>())?;
 

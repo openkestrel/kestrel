@@ -36,7 +36,8 @@ another organization's row or another variable's no longer opens.
 ANTHROPIC_API_KEY --organization acme`, with the secret on standard input rather than in an
 argument, where a shell history and `ps` would both have it. kestrel holds no table of providers and
 no opinion about which of them an Agent Runtime speaks to: the operator names the variable, and the
-runtime finds it where it always looks.
+runtime finds it where it always looks. `KESTREL_` is reserved for supervisor configuration and
+cannot name a Provider Credential.
 
 **A Run's model names no credential.** kestrel cannot infer a provider from a model name, and a
 model may be available through more than one provider. A Run may name any model; at the spawn it

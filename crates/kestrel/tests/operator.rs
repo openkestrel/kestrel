@@ -2449,6 +2449,13 @@ async fn a_credential_no_process_could_carry_or_nobody_holds_is_refused() {
         Some(&json!({ "secret": "a-key" })),
     )
     .await;
+    let (reserved, reason) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &credential_of("acme", "KESTREL_PROVIDER_KEY"),
+        Some(&json!({ "secret": "a-key" })),
+    )
+    .await;
     let (empty, _) = requested(
         &kestrel,
         reqwest::Method::PUT,
@@ -2483,6 +2490,13 @@ async fn a_credential_no_process_could_carry_or_nobody_holds_is_refused() {
     .await;
 
     assert_eq!(unnamed, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(reserved, StatusCode::UNPROCESSABLE_ENTITY, "{reason}");
+    assert!(
+        reason["message"]
+            .as_str()
+            .expect("a message")
+            .contains("reserved")
+    );
     assert!(
         refusal["message"]
             .as_str()
