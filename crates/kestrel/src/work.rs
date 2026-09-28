@@ -20,7 +20,7 @@ const CREDENTIAL_LIFETIME: SignedDuration = SignedDuration::from_hours(12);
 /// A supervisor cannot say it is alive while the control plane is not listening, so this
 /// outlasts a restart under a live one by enough that an upgrade does not reap the Sessions it
 /// was carrying; a dead supervisor holds a Workspace's active-Session slot until it is up.
-const LEASE: SignedDuration = SignedDuration::from_mins(2);
+pub(crate) const LEASE: SignedDuration = SignedDuration::from_mins(2);
 
 /// The Secret is returned once, to be handed to the Session's supervisor as it starts; `Store`
 /// keeps only its digest, so it cannot be recovered afterwards.

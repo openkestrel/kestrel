@@ -47,6 +47,11 @@ impl Environment {
             .to_owned()
     }
 
+    /// Whether the script has written `name` yet, for a caller that cannot wait on a panic.
+    pub fn has_written(&self, name: &str) -> bool {
+        self._directory.path().join(name).exists()
+    }
+
     pub fn named(supervisor: &str) -> Pid {
         let pid = supervisor
             .strip_prefix("local-exec/")
