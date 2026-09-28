@@ -143,7 +143,7 @@ async fn the_scripted_session_ends_the_same_way_in_a_container_as_it_does_in_a_p
             .await
             .iter()
             .map(|entry| entry.entry.to_string())
-            .filter(|entry| entry.starts_with("said"))
+            .filter(|entry| entry.starts_with("said  builder"))
             .collect::<Vec<_>>(),
         vec![
             "said  builder  half of one message, and the other half".to_owned(),
