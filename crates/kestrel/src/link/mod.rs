@@ -352,7 +352,21 @@ async fn authenticated(
         ));
     }
 
-    Ok(tx.workspaces().session(session).await?)
+    let session = tx.workspaces().session(session).await?;
+    // A lease is held out by the Environment reaching the link, so one that has lapsed means
+    // nothing is holding it out. The sweep is about to end this Session anyway; refusing here
+    // closes the window where a control plane coming back would take a supervisor's word for a
+    // Session it has already let go.
+    if session
+        .lease_expires_at
+        .is_some_and(|expires| expires <= Timestamp::now())
+    {
+        return Err(Refused::Forbidden(
+            "the session's lease has passed, and its control plane has let it go",
+        ));
+    }
+
+    Ok(session)
 }
 
 fn bearer(headers: &HeaderMap) -> Option<Secret> {

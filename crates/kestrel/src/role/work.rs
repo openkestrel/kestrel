@@ -257,6 +257,7 @@ async fn execute(
         return Ok(());
     }
 
+    let lease = work::LEASE.as_secs().to_string();
     let mut supervisor = match instance.supervise(&[
         ("KESTREL_LINK", dispatch.link.as_str()),
         ("KESTREL_SESSION", &session.id.to_string()),
@@ -270,6 +271,9 @@ async fn execute(
             "KESTREL_AGENT_MODEL",
             session.agent.model.as_deref().unwrap_or_default(),
         ),
+        // How long the Session's lease is held out for, so a supervisor nothing answers can give
+        // up once it has certainly lapsed rather than reconnecting forever.
+        ("KESTREL_LEASE", &lease),
     ]) {
         Ok(supervisor) => supervisor,
         Err(error) => {

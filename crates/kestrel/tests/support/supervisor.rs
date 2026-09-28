@@ -52,17 +52,37 @@ impl Supervisor {
         model: &str,
     ) -> Self {
         let harness = scripted_agent::playing(script);
+
+        Self::provision_running(link, session, credential, &harness, model, None)
+    }
+
+    /// An Environment told how long its Session's lease is held out for, so a control plane that
+    /// is gone for good can be given up on. `None` is a supervisor with no bound to derive.
+    pub fn provision_running(
+        link: &str,
+        session: SessionId,
+        credential: &Secret,
+        harness: &str,
+        model: &str,
+        lease: Option<Duration>,
+    ) -> Self {
         let mut instance = driver()
             .provision(session)
             .expect("the instance should provision");
+        let session = session.to_string();
+        let lease = lease.map(|lease| lease.as_secs().to_string());
+        let mut variables = vec![
+            ("KESTREL_LINK", link),
+            ("KESTREL_SESSION", session.as_str()),
+            ("KESTREL_SESSION_CREDENTIAL", credential.as_str()),
+            ("KESTREL_HARNESS_COMMAND", harness),
+            ("KESTREL_AGENT_MODEL", model),
+        ];
+        if let Some(lease) = lease.as_deref() {
+            variables.push(("KESTREL_LEASE", lease));
+        }
         let mut supervising = instance
-            .supervise(&[
-                ("KESTREL_LINK", link),
-                ("KESTREL_SESSION", &session.to_string()),
-                ("KESTREL_SESSION_CREDENTIAL", credential.as_str()),
-                ("KESTREL_HARNESS_COMMAND", &harness),
-                ("KESTREL_AGENT_MODEL", model),
-            ])
+            .supervise(&variables)
             .expect("the supervisor should spawn");
 
         let pipe = supervising
