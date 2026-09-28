@@ -76,7 +76,7 @@ opencode `auth.json` is a one-time seed into the harness's database, not a login
 ([ADR-0026](../../docs/adr/0026-kestrel-carries-named-credentials-never-a-runtimes-store.md)). `gh`
 reads `GH_TOKEN` from its own environment. The token's scope is the operator's and kestrel does not
 narrow it: a `repo`-scoped token merges pull requests as well as opening them, so a human merge gate
-needs a reviewer identity other than the token's ([USAGE.md](../../USAGE.md) covers it where the
+needs a reviewer identity other than the token's ([GitHub automation](../../docs/usage/github-automation.md#give-the-agent-github-tools) covers it where the
 credential is set).
 
 ## How it is checked
@@ -93,4 +93,4 @@ cargo test --locked --package kestrel --test development -- --ignored kestrel_pa
 
 `crates/kestrel/tests/subscription.rs` holds the one check CI cannot run: a real model call through
 each harness on a person's own subscription, repeated after the control plane and the Instance are
-replaced. It needs that person's login, so it runs only by hand; [USAGE.md](../../USAGE.md) says how.
+replaced. It needs that person's login, so it runs only by hand; [Subscription profiles](../../docs/usage/subscription-profiles.md#use-and-check-the-profile) explains how.

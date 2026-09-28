@@ -1,39 +1,14 @@
 # kestrel
 
-kestrel runs coding agents on your own infrastructure, triggered by the events your team already
-produces: Slack threads, Linear tickets, GitHub issues and PRs, webhooks, schedules. Workspaces live in
-isolated environments, survive restarts, and anyone on the team can join one mid-flight.
+Kestrel runs coding agents on your own infrastructure. You can start work from the CLI or let GitHub events, generic webhooks, and schedules open workspaces. A workspace keeps its branch and transcript across agent sessions, so you can inspect the result and continue the work later.
 
-The point is to move engineers from *in* the loop to *on* the loop. Agent work that only happens when
-someone is sitting in front of a terminal stays a novelty, because the human is still the scheduler
-and the bottleneck. kestrel takes the events a team already produces, runs the work on infrastructure
-you control, reports back to the surface that started it, and lets a person pick the thread up at any
-point without losing what came before.
+The project is growing toward a broader platform for work delegated from the tools a team already uses. [The roadmap](ROADMAP.md) distinguishes that direction from what runs today.
 
 ## Status
 
-Early, and honest about it: rung `0.1` is under construction. Workspaces are durable — declare an
-organization, a project and an agent, open a workspace against them, and its state and transcript
-are still there after the process is killed. Sessions execute: enqueue one and the control plane
-provisions an isolated container, clones the project's repositories into it, and drives opencode
-there by speaking the Agent Client Protocol over the link in
-[`openapi/link.json`](openapi/link.json), which the environment dials out to, authenticating as the
-session it is executing, and reconnects to with its cursor when the control plane restarts under it.
-Beside the link, on a listener of its own, the control plane serves the operator boundary in
-[`openapi/operator.json`](openapi/operator.json), and it is the only way in: `kestrel`, the Client
-an operator installs, declares and lists organizations, projects and agents over it, sets and
-forgets provider credentials and the subscription profiles a workspace names, registers integrations
-and reads the events they record, and
-`kestrel workspace transcript --follow` streams a workspace's transcript over it, all from outside the
-control plane's process. What stops a session short of useful work is that
-nothing carries a task to it: every session asks its agent the same fixed question, and nothing triggers
-or schedules one, so every workspace is opened by hand.
-[`USAGE.md`](USAGE.md) walks all of that on your own machine and says where it stops. The repo also
-holds the vocabulary, in [`CONTEXT.md`](CONTEXT.md), and the full planning trail in the issue
-tracker, where every decision below is written down with its reasoning and the objections it
-survived. This document is the direction, written first so the implementation has something to be
-judged against; [`ROADMAP.md`](ROADMAP.md) is the order it gets built in, and it carries the marker
-for where the project actually is.
+Kestrel is an unreleased prototype. The local Compose stack runs a control plane, a filtered Docker socket proxy, and on-demand workspace containers. The CLI can start work from a brief, preserve a workspace and its transcript across restarts, and continue the work in later sessions. GitHub events, generic webhooks, and schedules can also start work through triggers. GitHub integrations can post session answers back to the issue that started them.
+
+The [usage guide](USAGE.md) starts with a working session and links to the detailed workflows. [CONTEXT.md](CONTEXT.md) defines the domain vocabulary; [ROADMAP.md](ROADMAP.md) tracks what remains planned.
 
 ## Running it
 
@@ -57,11 +32,9 @@ cargo install --locked --path crates/kestrel-client
 kestrel status
 ```
 
-[`USAGE.md`](USAGE.md) walks from here to a session that has reached and left an environment.
+[The usage guide](USAGE.md) walks through a first session and the workflows built on it.
 
-**A provider key is the one value kestrel asks for, and it is the operator's.** It is held by the
-organization, encrypted with a key kestrel generates at first boot beside its database, and reaches
-an environment only as the agent it belongs to is spawned:
+**For API-backed models, Kestrel stores provider keys per organization.** It encrypts them with a key generated at first boot beside its database and supplies them when a session starts:
 [ADR-0010](docs/adr/0010-a-provider-credential-crosses-the-link-at-the-spawn.md) says where it does
 and does not go.
 
