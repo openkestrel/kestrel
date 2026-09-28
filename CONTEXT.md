@@ -51,9 +51,16 @@ reported to the work source when the turn finishes, without ending the session.
 _Avoid_: session, workspace
 
 **Waiting**:
-A session's phase between turns: its last prompt answered, its agent conversation and instance kept
-for the next. Its other phases are queued, unbriefed, working (mid-turn), ended and unreachable.
+A session's phase between turns: its last prompt answered, nothing it started observably still
+running, its agent conversation and instance kept for the next. Its other phases are queued,
+unbriefed, working (mid-turn), trailing, ended and unreachable.
 _Avoid_: between turns, paused, idle
+
+**Trailing**:
+A session's phase after a turn has answered while work its agent started is still running:
+backgrounded commands, subagents, or output that keeps arriving. It becomes waiting once that work
+settles and the agent falls quiet. It takes a new turn at once.
+_Avoid_: settling, backgrounded, busy
 
 **Unbriefed**:
 A session's phase after its harness is up and before its first turn: its instance and agent
@@ -61,15 +68,15 @@ conversation ready, no brief yet given. The first message posted to it becomes i
 _Avoid_: ready, idle, warm
 
 **Unfinished Session**:
-The one session a workspace may have that has not yet let go of it: queued, working, waiting, or
-unbriefed, or ended while its harness is still leaving. A workspace has at most one; a message posted while it
+The one session a workspace may have that has not yet let go of it: queued, working, trailing,
+waiting, or unbriefed, or ended while its harness is still leaving. A workspace has at most one; a message posted while it
 exists waits on it rather than starting another.
 _Avoid_: slot, current session, holding session
 
 **Active-Work Slot**:
 One unit of the control plane's capacity for sessions doing work at once, shared by every
-organization. A session mid-turn, or blocked on an approval, occupies one; a queued or waiting
-session does not, and neither does an unbriefed one.
+organization. A session mid-turn, trailing, or blocked on an approval, occupies one; a queued or
+waiting session does not, and neither does an unbriefed one.
 _Avoid_: slot (alone), capacity, concurrency
 
 **Unpublished Work**:
@@ -361,6 +368,8 @@ words from drifting.
 - A session may be **waiting** with its ACP conversation and instance intact. Waiting holds no
   active-work slot; the next prompt continues that same session. A turn ending does not end a
   session.
+- A turn answering does not make its session **waiting** while work its agent started still runs:
+  the session is **trailing**, keeps its active-work slot, and its instance is never reclaimed.
 - A turn in which the agent produced no message, narration or detail **fails** its session: a
   prompt that never became work is not an answer.
 - A session's agent conversation is rooted in the checkout of the **first** repository its
