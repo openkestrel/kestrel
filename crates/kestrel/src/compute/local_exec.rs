@@ -134,10 +134,10 @@ fn stop_processes(home: &Path) -> io::Result<()> {
 fn stop_marker(marker: &Path, pid: i32) -> io::Result<()> {
     if marker.exists() && marker_is_locked(marker)? {
         #[cfg(unix)]
-        if let Err(error) = killed(pid) {
-            if marker_is_locked(marker)? {
-                return Err(error);
-            }
+        if let Err(error) = killed(pid)
+            && marker_is_locked(marker)?
+        {
+            return Err(error);
         }
         #[cfg(not(unix))]
         let _ = pid;
