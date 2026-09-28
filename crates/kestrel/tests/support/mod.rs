@@ -55,9 +55,10 @@ use kestrel::link::{self, Instruction};
 use kestrel::log::{Cursor, Entry, Page, TranscriptEntry, Unreadable, Window};
 use kestrel::profile::{self, Contents};
 use kestrel::provider::{self, Held};
-use kestrel::role::serve::Listen;
+use kestrel::role::serve::{self, Listen};
 use kestrel::role::work::{Dispatch, HarnessCommand};
 use kestrel::store::Store;
+use kestrel::timer::Wake;
 use kestrel::trigger::apply::Applied;
 use kestrel::trigger::{self, Against, Asked, Declaration, Tested};
 use kestrel::work::{self, Claimed};
@@ -324,6 +325,42 @@ impl Kestrel {
             serialized: vec![SERIALIZED.to_owned()],
         });
         let roles = tokio::spawn(all_in_one.run(dispatch, shutdown.clone()));
+
+        Self::running(data_dir, store, bound, environment, shutdown, roles)
+    }
+
+    /// Serves the link with no work role behind it, so nothing sweeps a lease a test has let
+    /// lapse until it restarts as a whole control plane.
+    pub async fn boot_serving_alone() -> Self {
+        let data_dir = TempDir::new().expect("a temporary data directory");
+        let store = Store::open(data_dir.path())
+            .await
+            .expect("the control plane should boot against a fresh data directory");
+        let shutdown = CancellationToken::new();
+        let listening = serve::bind(
+            store.clone(),
+            Listen {
+                link: LOOPBACK,
+                operator: LOOPBACK,
+            },
+            Wake::default(),
+        )
+        .await
+        .expect("the control plane should bind its link");
+        let bound = listening.bound();
+        let roles = tokio::spawn(serve::run(listening, shutdown.clone()));
+
+        Self::running(data_dir, store, bound, None, shutdown, roles)
+    }
+
+    fn running(
+        data_dir: TempDir,
+        store: Store,
+        bound: Listen,
+        environment: Option<Provisions>,
+        shutdown: CancellationToken,
+        roles: JoinHandle<anyhow::Result<()>>,
+    ) -> Self {
         let cleanup = Cleanup {
             data_dir: data_dir.path().to_path_buf(),
             environment: environment.clone(),
