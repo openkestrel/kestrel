@@ -35,6 +35,7 @@ use crate::integration::{self, Connecting, Registration};
 use crate::log::{self, Cursor, Page, Unreadable, Window};
 use crate::profile::{self, Entry};
 use crate::provider::{self, Held};
+use crate::queue;
 use crate::role::serve;
 use crate::store::organization::NoSuchOrganization;
 use crate::store::{self, Declared, Store};
@@ -87,6 +88,9 @@ pub const SESSION: &str = "/operator/organizations/{organization}/sessions/{sess
 pub const SESSION_STOP: &str = "/operator/organizations/{organization}/sessions/{session}/stop";
 pub const TRANSCRIPT: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/transcript";
+/// One read of a Workspace's queue: the limits, their occupancy, and the queued Sessions in
+/// dispatch order.
+pub const QUEUE: &str = "/operator/organizations/{organization}/queue";
 
 const EVENTS_LISTED: usize = 50;
 
@@ -161,6 +165,7 @@ pub fn router(store: Store, shutdown: CancellationToken) -> Router {
         .route(APPLIED_TRIGGERS, post(apply_triggers))
         .route(APPLIED_TRIGGERS_PREVIEW, post(preview_applied_triggers))
         .route(INSTANCES, get(instances))
+        .route(QUEUE, get(show_queue))
         .route(WORKSPACES, get(workspaces).post(open_workspace))
         .route(WORKSPACE, get(show_workspace))
         .route(WORKSPACE_MESSAGES, post(post_to_workspace))
@@ -1584,6 +1589,90 @@ async fn instances(
 #[derive(Serialize)]
 struct ReleasedRecord {
     instance: String,
+}
+
+#[derive(Serialize)]
+struct WorkRoleRecord {
+    active_work_slots: usize,
+    serialized_harnesses: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ActiveWorkRecord {
+    limit: Option<usize>,
+    occupied: usize,
+    occupants: Vec<String>,
+    elsewhere: usize,
+}
+
+#[derive(Serialize)]
+struct InstancesRecord {
+    limit: Option<usize>,
+    count: usize,
+    counted: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct QueuedSessionRecord {
+    position: Option<usize>,
+    name: String,
+    workspace: String,
+    agent: String,
+    waits_on: Vec<String>,
+    enqueued_at: Timestamp,
+}
+
+#[derive(Serialize)]
+struct QueueRecord {
+    work_role: Option<WorkRoleRecord>,
+    active_work: ActiveWorkRecord,
+    instances: InstancesRecord,
+    queued: Vec<QueuedSessionRecord>,
+}
+
+impl QueueRecord {
+    fn of(snapshot: queue::Snapshot) -> Self {
+        let recorded = snapshot.recorded.map(|recorded| WorkRoleRecord {
+            active_work_slots: recorded.active_work_slots,
+            serialized_harnesses: recorded.serialized_harnesses,
+        });
+
+        Self {
+            work_role: recorded,
+            active_work: ActiveWorkRecord {
+                limit: snapshot.active_work.limit,
+                occupied: snapshot.active_work.occupied,
+                occupants: snapshot.active_work.occupants,
+                elsewhere: snapshot.active_work.elsewhere,
+            },
+            instances: InstancesRecord {
+                limit: snapshot.instances.limit,
+                count: snapshot.instances.count,
+                counted: snapshot.instances.counted,
+            },
+            queued: snapshot
+                .queued
+                .into_iter()
+                .map(|queued| QueuedSessionRecord {
+                    position: queued.position,
+                    name: queued.session.name,
+                    workspace: queued.session.workspace.to_string(),
+                    agent: queued.session.agent.name,
+                    waits_on: queued.waits_on,
+                    enqueued_at: queued.session.enqueued_at,
+                })
+                .collect(),
+        }
+    }
+}
+
+async fn show_queue(
+    State(control_plane): State<ControlPlane>,
+    Path(organization): Path<String>,
+) -> Result<Json<QueueRecord>, Refused> {
+    let snapshot = queue::snapshot(&control_plane.store, &organization).await?;
+
+    Ok(Json(QueueRecord::of(snapshot)))
 }
 
 async fn release_instance(

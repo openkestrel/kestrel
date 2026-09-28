@@ -1686,6 +1686,31 @@ impl Stopped {
         Kestrel::boot_against(self.data_dir, self.bound, self.environment).await
     }
 
+    /// Restarted with a dispatch configuration the flags carry, which replaces whatever the
+    /// work role started with before.
+    pub async fn restart_with(
+        mut self,
+        supervisor: &Path,
+        command: &str,
+        maximum: usize,
+    ) -> Kestrel {
+        self.cleanup.armed = false;
+        Kestrel::boot_against(
+            self.data_dir,
+            self.bound,
+            Some(Provisions {
+                driver: Driver::LocalExec(LocalExec::running(supervisor)),
+                harnesses: vec![HarnessCommand {
+                    name: HARNESS.to_owned(),
+                    command: command.to_owned(),
+                }],
+                max_active_sessions: NonZeroUsize::new(maximum)
+                    .expect("at least one active session"),
+            }),
+        )
+        .await
+    }
+
     pub async fn session(&self, id: SessionId) -> Session {
         let store = Store::open(self.data_dir.path())
             .await

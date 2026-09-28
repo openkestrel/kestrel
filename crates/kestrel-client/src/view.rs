@@ -157,6 +157,14 @@ pub const SESSION: View = View::Detail(&[
 ]);
 pub const STOPPED: View = View::Value("exit.status");
 pub const INSTANCES: View = View::Rows(&["workspace", "instance", "because"]);
+pub const QUEUE: View = View::Rows(&[
+    "position",
+    "name",
+    "agent",
+    "workspace",
+    "waits_on",
+    "enqueued_at",
+]);
 pub const RELEASED: View = View::Value("instance");
 pub const STATUS: View = View::Detail(&[
     "control_plane",

@@ -3,6 +3,7 @@ pub mod integration;
 pub mod organization;
 pub mod profile;
 pub mod project;
+pub mod queue;
 pub mod trigger;
 pub mod workspace;
 
@@ -23,6 +24,7 @@ use crate::store::integration::Integrations;
 use crate::store::organization::Organizations;
 use crate::store::profile::Profiles;
 use crate::store::project::Projects;
+use crate::store::queue::Queue;
 use crate::store::trigger::Triggers;
 use crate::store::workspace::Workspaces;
 
@@ -142,6 +144,10 @@ impl Tx<'_> {
 
     pub fn workspaces(&mut self) -> Workspaces<'_> {
         Workspaces::over(&mut self.transaction)
+    }
+
+    pub fn queue(&mut self) -> Queue<'_> {
+        Queue::over(&mut self.transaction)
     }
 
     pub fn integrations(&mut self) -> Integrations<'_> {
