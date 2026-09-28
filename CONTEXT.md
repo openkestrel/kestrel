@@ -90,10 +90,15 @@ The ordered, replayable record of a workspace, in three kinds. **Shared state**:
 boundaries, participant joins, the branch the workspace works on and the pull request it opened,
 and the resolution of every approval and question. **Narration**: what an agent said to itself —
 its thoughts and its plans. **Detail**: a session's tool calls and their results. One order and one
-cursor across all three; a read names the kinds it wants, and shared state alone is what a human
-gets when they join a workspace late. Every entry records a completed unit and never a fragment of
-one, so the record has no gaps to reconcile.
+cursor across all three; a read names the kinds it wants, and shared state with each activity's
+summary is what a human gets when they join a workspace late. Every entry records a completed unit
+and never a fragment of one, so the record has no gaps to reconcile.
 _Avoid_: log, event stream, history
+
+**Activity**:
+The narration and detail between two consecutive shared-state entries of a transcript, read as one
+summary unless its entries are asked for. It never spans a session or a turn's start.
+_Avoid_: group, step, span, trace
 
 ### Cause
 
@@ -394,6 +399,9 @@ rather than a concept of its own.
 **Agent** (ACP's, and common usage): ACP calls the *program* an agent, and common usage calls a
 harness with a model in motion — Claude Code, Cursor — an agent. kestrel's **Agent** is a
 configured actor identity; the running thing is a **Session**, driven by a **Harness**.
+
+**Activity** (AG-UI's): a live, patchable status message a frontend shows and the agent never
+reads. It is a session's current state, not an **Activity**, which is recorded and summarized.
 
 **Environment** (a harness's): the world an agent acts on through its tools. In kestrel that is a
 workspace's **Instance** and checkout; kestrel's **Environment** is the declaration an instance is
