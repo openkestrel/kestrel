@@ -112,3 +112,258 @@ replay retained history, and the Workspaces later sealed themselves. The rung re
 successful Sessions can still destroy their only copy of completed work. After #125 lands, repeat the
 durability portion of this run and move the `ROADMAP.md` marker to `0.3` only if several backlog
 issues leave recoverable branches or pull requests.
+
+## Follow-up attempt: three harnesses and unpublished work
+
+On 25–26 September 2026, the acceptance gate in [#186](https://github.com/jtmthf/kestrel/issues/186)
+was exercised against a pre-existing local Compose stack. This was a second attempt, not a replacement
+for the September 10 run above. The stack held an `acme` Organization, a `kestrel` Project against
+this repository, and OpenCode, Codex, and Claude Agents. Private Subscription Profiles were declared
+for the operator's own logins. Their values are absent from this record.
+
+The stack's running control-plane container was four days old, exposed no host operator port, and its
+`organization declare` command had no live-Instance limit option although this checkout's Client
+does. Its exact source revision was not established. The Workspaces below checked out `9a5358d`, but
+the running control plane cannot be claimed as a build of that revision. This limits what this
+attempt can establish about the current code.
+
+| Check | Live observation |
+| --- | --- |
+| Codex subscription persistence | The opt-in `codex_answers_on_a_chatgpt_login_before_and_after_a_restart` smoke passed: two real model answers on a personal ChatGPT login, separated by control-plane and Instance replacement. |
+| Codex skill-led, non-PR work | Workspace `01a0dbc5-bf63-7791-95b2-a9e529769c59` opened Session `01a0dbc5-eb2c-7d02-8ccb-36feb996fd82` on `gpt-6-astra`. Its first instruction named the repository's `diagnosing-bugs` skill and asked for a diagnosis of profile-dependent model selection. The first Turn answered without a code change; an operator follow-up about Cargo's absolute path resumed the **same Session ID**. Codex reproduced the defect through the real library and finished the diagnosis; the Session ended succeeded. |
+| OpenCode build and test | Workspace `01a0dbc3-bc2a-7110-be4a-dea0306af70b` used the default `opencode/big-pickle` model. It reported `cargo check --locked --workspace --all-targets` exit 0, one focused `continuity.rs` test passed, and `cargo clippy --locked --workspace --all-targets -- -D warnings` exit 0, all in a clean checkout. This Session does not count as subscription-backed access. |
+| OpenCode Go subscription work | Workspace `01a0dbcb-427b-7f22-a8e9-71adcf42b70c` fixed `opencode-go/glm-5.3` and the private Go profile. Session `01a0dbcb-6622-7991-bf42-2a9522e3fb9a` completed a non-PR acceptance review and reported `cargo fmt --all -- --check` exit 0 in the checkout. It ended succeeded. |
+| Claude | Workspace `01a0dbc4-0051-7d63-95e5-9df1cfa89ada` failed first with `Authentication required` using the local login file. A retry with the same login's OAuth access token failed with HTTP 401: the token had expired. A direct local Claude call also reported that the OAuth session could not refresh. The operator is renewing the personal login. No successful Claude task is yet recorded. |
+| Active-run limit | While the Codex and OpenCode Go Sessions were active, the OpenCode durability Session `01a0dbcb-d5f2-72f0-8423-d5e6bf6220e0` stayed queued and began only after a slot was released. |
+| Unpublished work through failure | The durability Session created only `ACCEPTANCE-CANARY.txt`, untracked and unpushed, with the 29-byte contents `acceptance canary 2026-09-25\n`. Kestrel's Instance list named that one untracked file as the reason to retain `docker/kestrel-01a0dbc3-ddff-7690-bd6b-4f1d5dc2ef40`. Stopping the Session mid-turn recorded a failure. Follow-up Session `01a0dbcd-54df-7212-9c3f-0b973d160ca1` reused the same Instance and verified the file's exact contents and untracked state. |
+
+The first OpenCode Workspace did not move to Go, because its Sessions carried no Go profile.
+Before its profile-backed Session, the Organization's cached OpenCode model list contained only free
+models, and `agent model builder --model opencode-go/glm-5.3` was refused. The profile-backed Session
+refreshed the list, after which selection succeeded for the new Go Workspace. Codex reproduced the
+profile-insensitive validation with a temporary database and tests. This non-blocking finding is
+filed as [#294](https://github.com/jtmthf/kestrel/issues/294).
+
+### Current-checkout stack
+
+To remove the version ambiguity above, three images were built from this checkout and started as
+an isolated Compose project, `kestrel-acceptance-186`, with its own data volume and link network.
+Its operator boundary was published at `127.0.0.1:7728`; the pre-existing stack and its retained
+canary were left intact. This project declared a one-Instance limit and an OpenCode Go Agent using
+the operator's private Go profile.
+
+Workspace `01a0dbd4-01d8-71f3-b36f-a6bc011936da` created one untracked, unpushed file,
+`ACCEPTANCE-CANARY-186.txt`, containing `current build canary\n` (21 bytes; its first report
+miscounted the length). Kestrel listed the untracked file as the reason for retaining Instance
+`docker/kestrel-01a0dbd4-2e31-7b63-9344-8a1cd291dd11`.
+
+While that Instance was held, Codex Workspace `01a0dbd5-0374-78e1-84a0-ed255d47ed6a` queued Session
+`01a0dbd5-2e29-7410-b44c-23f40f03ff95`. Its reported wait reason was: "the organization acme
+has reached its limit of 1 live Instance; none idle is known recoverable". The OpenCode Workspace
+continued on its existing Instance under the same cap and checked the canary unchanged. An operator
+then stopped Session `01a0dbd7-3c91-7db0-8221-212bcffa96a5` mid-turn; it failed explicitly, and
+Kestrel kept the Instance because no Session had reported a recoverable checkout after that failure.
+Follow-up Session `01a0dbd7-e62f-7b72-8e38-7b273d76c771` reused that same Instance and verified
+the file's exact contents and untracked state. The canary was deliberately removed only after this
+verification, so a clean Instance could be reclaimed for queued work.
+
+The cleanup Turn did report a clean checkout and an answer, but its supervisor then exited with
+code 137 before its final report. Kestrel marked that Session failed, archived the now recoverable
+Instance, and admitted the queued Codex Session. No unpublished work was lost; the unexplained
+false-negative Session outcome is filed as [#295](https://github.com/jtmthf/kestrel/issues/295).
+The queued Codex Session `01a0dbd5-2e29-7410-b44c-23f40f03ff95` then completed a non-PR review of
+the capacity logic on the personal ChatGPT login and ended succeeded.
+
+For a literal skill-led Brief, a dispatch-only `skill-led-review` Trigger with the Codex profile
+was explicitly dispatched on [#294](https://github.com/jtmthf/kestrel/issues/294). Workspace
+`01a0dbdc-5731-7e13-b2e6-22738e8563aa` begins with a `brief` transcript entry naming
+`.agents/skills/diagnosing-bugs/SKILL.md`; its Session is `01a0dbdc-5732-7021-ab57-d7cbc14d6d8b`.
+The Brief asks for a non-PR diagnosis on a real Kestrel issue.
+
+The GitHub Integration recorded #294's `needs-triage` label Event before the `history-check`
+Trigger was declared against that label. No Workspace opened for it during the observation window;
+the Trigger was then disabled. The earlier September 10 run remains the stronger historical-label
+check because it also watched a full poll interval with multiple old ready-for-agent Events.
+
+The earlier run remains the live evidence for simultaneous issue labelling and 24-hour idle
+sealing. This attempt adds two-harness subscription-backed work, same-Session follow-up, a skill-led
+non-PR task, build and test, and current-build failure and cap survival of unpublished work. It has
+**not** established a completed Claude task or several newly worked backlog issues leaving
+recoverable branches or pull requests. The `ROADMAP.md` marker therefore remains at `0.2`.
+
+## Rerun: three harnesses work the backlog
+
+On 26 September 2026 the gate was run again on the `kestrel-acceptance-186` stack, built from this
+checkout, with its volume preserved. The Organization's limit was raised to two live Instances.
+The images were rebuilt once during the run, at `8ee05f3`: Codex 0.154 was offered no `gpt-6-sol`,
+and Codex's login shells had no `cargo` on `PATH`. The rerun also corrects the record above. The
+skill-led Session `01a0dbdc-5732-7021-ab57-d7cbc14d6d8b` never completed: it failed on a ChatGPT usage
+limit.
+
+Work was handed over the way `.kestrel/triggers.yaml` intends: a maintainer comment beginning
+`@kestrel`. A Subscription Profile belongs to a whole Trigger, so each harness had its own:
+`delegated-claude`, `delegated-codex` and `delegated-opencode`. Each matched its own prefix, used the
+same skill-led Brief ("follow `.agents/skills/implement/SKILL.md` … commit, push, open a pull request
+that closes the issue") and correlated by issue. The operator's `gh` token was held as `GH_TOKEN`,
+and a fresh Claude subscription login as a Profile file.
+
+### Nothing replayed
+
+At `13:05:33Z` a maintainer comment, `@kestrel claude history check: …`, was posted on #186 and
+recorded as Event `01a0ddd2-9f5b-7853-b2a5-0242c12d9db9`. The three Triggers were declared
+afterwards. `trigger test` reports that `delegated-claude` matches that Event. No firing and no
+Workspace followed it on this stack over the rest of the run, which covered more than an hour of
+one-minute polls.
+
+### The backlog
+
+| Issue | Harness and model | Workspace | Pull request |
+| --- | --- | --- | --- |
+| [#294](https://github.com/jtmthf/kestrel/issues/294) diagnosis | Codex, `gpt-5.5`, dispatched on `skill-led-review` (`diagnosing-bugs`, non-PR) | `01a0ddd3-b735-70c3-9234-bc50f3bde77d` | none, by design |
+| [#303](https://github.com/jtmthf/kestrel/issues/303) | Claude Code, subscription login | `01a0ddd4-886a-7041-a826-d2fa845e2c3a` | [#315](https://github.com/jtmthf/kestrel/pull/315), CI green |
+| [#305](https://github.com/jtmthf/kestrel/issues/305) | Codex, `gpt-6-sol` | `01a0dddf-d148-7140-9162-066635a60d4d` | [#318](https://github.com/jtmthf/kestrel/pull/318), CI green |
+| [#294](https://github.com/jtmthf/kestrel/issues/294) fix | OpenCode, `opencode-go/glm-5.3`, then `opencode/big-pickle` | `01a0dde1-b32d-7ef3-9e00-18d7aa5f1940` | [#319](https://github.com/jtmthf/kestrel/pull/319), CI green |
+
+Claude, Codex and OpenCode each built and tested Kestrel inside an Instance, ran the two-axis code
+review, and published a branch and pull request. No operator direction was needed beyond the
+comments recorded on each issue. Each first CI failure was repaired by a follow-up:
+- Claude's rustfmt diff on #315.
+- Codex's `clippy::manual_map` on #318.
+
+The Claude Session is the first completed Claude-backed Kestrel task.
+
+**Parallel work and the cap.**
+- The Codex diagnosis and Claude's #303 ran together, and Claude and Codex's #305 overlapped for
+  eleven minutes.
+- With both slots held, the OpenCode #294 Session and Claude's follow-up Session `01a0ddec-…`
+  queued. Each was admitted only as a slot came free.
+- After the crash below, the queued Session reported: "the organization acme has reached its limit of
+  2 live Instances; none idle is known recoverable".
+
+**Same-Session follow-up.** Twice, a message posted to a Workspace whose Session was waiting
+returned that same Session and became its next Turn:
+- OpenCode Session `01a0de12-e37a-72c0-beb8-6b7c5d891c1e` took two more Turns and opened #319.
+- Claude Session `01a0ddec-0916-70c0-b63b-4715f2f8e147` took one.
+
+The model is chosen per Session, not per Workspace. #294's Workspace changed from `glm-5.3` to
+`big-pickle` for a new Session on its held Instance, after the Go subscription's quota ran out.
+
+### Unpublished work under failure and pressure
+
+- **A control-plane crash.** At `13:56:44Z` the control plane exited on `database is locked`
+  ([#317](https://github.com/jtmthf/kestrel/issues/317)). Both supervisors exited with it, and the
+  #305 and #294 Sessions failed on lease expiry. Kestrel held both Instances, "no run reported what its
+  checkout holds", with 21 and 9 changed files. Follow-up Sessions resumed on the same Instances, and
+  that work became #318 and #319.
+- **A quota failure.** Two #294 Sessions failed on the Go usage limit. The Instance stayed held until a
+  Session on a free model finished the work.
+- **A stopped Session.** A stray Codex Session was stopped mid-turn; its Instance was held and then
+  deliberately released. Sealing that Workspace answered `503`/exit 5, which reproduced #303 live
+  before #315 fixed it.
+- **A stale observation.** Kestrel refused to seal Claude's Workspace over a stale "1 uncommitted
+  change" until a same-Session Turn re-observed the checkout. That is conservative, and correct.
+
+No unpublished work was lost.
+
+An idle canary was placed on purpose. Workspace `01a0de2d-699c-7e10-b382-fca44d53398c` holds an
+untracked `IDLE-CANARY.txt`, and its Session was stopped at `14:46Z` with the Instance held. Its idle
+window closed at `2026-09-27T14:46Z`. At `2026-09-28T01:55Z`, 35 hours after its last activity, the
+Workspace was still open, with Instance `docker/kestrel-01a0de2d-69b5-75c2-a4f2-e59d9033201f` held
+because "1 untracked file", and `IDLE-CANARY.txt` was intact with the contents
+`idle canary 2026-09-26`. Idle sealing did not seal over Unpublished Work. This run did not show a
+clean Workspace sealing itself, because every other Workspace had already been sealed by hand.
+
+### Findings
+
+- **[#295](https://github.com/jtmthf/kestrel/issues/295): a waiting Session killed and recorded as a
+  failure.** Admission reclaims a clean Instance whose Session is waiting between turns: its supervisor
+  dies with 137, and the Session is recorded `failed`. This happened five times, to the Codex diagnosis,
+  Claude #303, Codex #305, and OpenCode #294 twice. Each time the issue received a false "run
+  failed" outcome after a successful answer.
+- **[#314](https://github.com/jtmthf/kestrel/issues/314): the prompt buries the operator's message.**
+  An operator message on a Workspace without a Brief reaches the agent only as "Earlier context",
+  under "Do the work this environment was provisioned for." Codex took it as licence and started
+  #305 on its own.
+- **[#317](https://github.com/jtmthf/kestrel/issues/317): one lock contention stops the control
+  plane.** A single `SQLITE_BUSY` stops the whole control plane at two concurrent Sessions.
+- **[#320](https://github.com/jtmthf/kestrel/issues/320): Instance environment.** `KESTREL_*`
+  variables leak into agent shells, and PID 1 never reaps zombies. Kestrel's own test suite cannot
+  pass inside an Instance, and every agent spent time proving that.
+- **[#321](https://github.com/jtmthf/kestrel/issues/321): work after the answer.** Claude kept
+  working after its Turn answered, and committed and pushed while Kestrel called the Session waiting.
+  OpenCode lost backgrounded tests by ending Turns early.
+- **Another Kestrel stack answered too.** A second, older stack polling the same repository had
+  `delegated` applied. It opened a duplicate Workspace for every `@kestrel` comment, on the same
+  branch names, until an operator disabled it. Nothing was pushed. One repository must be worked
+  by one control plane, which nothing yet enforces.
+- **Queued Sessions show no reason.** A Session queued behind an Active-Work Slot, rather than an Instance,
+  reports no `waiting_for`. That belongs to 0.3's
+  [#307](https://github.com/jtmthf/kestrel/issues/307).
+- **Turn comments repeat the narration.** Each Turn's comment carries every narration line the
+  agent emitted, not its answer. That belongs to 0.3's
+  [#309](https://github.com/jtmthf/kestrel/issues/309).
+- **Codex's model list was stale.** Kestrel's cached list refused `gpt-6-sol` until a
+  profile-backed Codex Session completed a Turn on the newer client
+  ([#294](https://github.com/jtmthf/kestrel/issues/294), fixed by #319). The Claude harness, with no
+  cached list, accepted any model name.
+
+## Rebuilt on main: the fixes hold
+
+On 28 September 2026 the branch was rebased onto `22e1d51`. That main carries the fixes for the
+findings above: #295 (#352), #317 (#349), #320 (#351) and #303 (#315), plus the renames in
+[#323](https://github.com/jtmthf/kestrel/issues/323). Migrations were edited in place, so the
+rebuilt control plane refused the old volume ("migration 1 was previously applied but has been
+modified"). A fresh Compose project, `kestrel-accept02`, was brought up beside the old one. It
+declared an `acme` Organization with two live Instances, a `kestrel` Project against
+`openkestrel/kestrel`, the `builder`, `claude` and `codex` Agents, the `origin` Integration, and one
+`jack` Subscription Profile. `.kestrel/triggers.yaml` was applied as committed, adding only
+`profile: jack`.
+
+| Check | Live observation |
+| --- | --- |
+| Nothing replayed | Probe comment Event `01a0e5c4-a37a-7713-89e6-bd7779f3bf9a` on #186 was recorded at `02:07:42Z`. A `history-probe` Trigger matching it was declared at `02:08:14Z`; `trigger test` reported a match. No Workspace opened over four minutes of one-minute polls, and the Trigger was then disabled. |
+| Handover by comment | `@kestrel agent=claude …` on #314 opened a Workspace with the `claude` Agent. `@kestrel …` on #358 opened one with `builder`. Each Session started within seconds of the poll. |
+| Parallel work | Claude on #314 and OpenCode `opencode-go/glm-5.3-flash` on #358 worked at once under the two-Instance cap. |
+| Unpublished work through a quota failure | Claude hit the subscription's usage limit mid-Turn. The Session ended `failed` ("You've hit your session limit · resets 3am (UTC)"), and the Instance was held for "10 uncommitted changes". Sealing the Workspace was refused with exit 4 (`409`, #303's fix), naming the changes and the release command. |
+| Unpublished work through a lost login | After the reset, a follow-up Session resumed on the same Instance and ended on "OAuth session expired and could not be refreshed". Another ended on a mistyped token. The work stayed held throughout, growing to 17 changes. |
+| Same-Session follow-up | A message posted to #358's waiting Workspace returned the same Session, `01a0e5cd-31e8-7bf3-8930-c8c903f2cf13`. It watched CI on #377 and replied that every check had passed. |
+| Reclaim at the cap ends succeeded | With both Instances live, a third Workspace reclaimed #358's clean waiting Instance. The reclaimed Session ended **succeeded**, and #358 received no failure comment (#295's fix). |
+| Clean seal | #358's Workspace sealed at once, its work published as #377. A stopped probe Session that had reported nothing was held ("no session reported what its checkout holds") until its empty checkout was released by hand. |
+| Idle sealing over Unpublished Work | See the canary above: open and held 35 hours after its last activity. |
+
+| Issue | Harness and model | Workspace | Pull request |
+| --- | --- | --- | --- |
+| [#358](https://github.com/jtmthf/kestrel/issues/358) | OpenCode, `opencode-go/glm-5.3-flash` | `01a0e5c5-990f-7840-9ec6-932b7c29c464` | [#377](https://github.com/jtmthf/kestrel/pull/377), CI green on the first run |
+| [#314](https://github.com/jtmthf/kestrel/issues/314) | Claude Code, subscription login, then a `setup-token` token | `01a0e5c4-a5f7-7dd0-acea-89f8e2d996dc` | [#397](https://github.com/jtmthf/kestrel/pull/397), CI green after one same-Session follow-up |
+
+### Findings on main
+
+- **[#369](https://github.com/jtmthf/kestrel/issues/369): an OpenCode `auth.json` seed gives no
+  provider.** OpenCode 2.0.14 in the image ignores the seed USAGE.md recommends. Three `builder`
+  Sessions failed with "this agent does not offer the model …". Holding `OPENCODE_API_KEY` as a
+  variable works.
+- **A copied Claude login races the desktop.** A Keychain copy held as a Profile file shares its
+  refresh token with the operator's own Claude. When the desktop refreshed, Kestrel's copy died.
+  A `claude setup-token` token does not rotate, and it is what USAGE.md already recommends.
+- **[#371](https://github.com/jtmthf/kestrel/issues/371): exhausted credits end a Session
+  `failed`.** The work is held, but resuming takes an operator even though the harness names the
+  reset time.
+- **A lease test flaked once.** `one_parallel_sessions_expired_lease_leaves_the_other_session_active`
+  failed on #397's first CI run with "the supervisor exited with the code 1 without reporting how
+  the session went". It passed 14 local reruns, and on CI again after the push.
+- **[#314](https://github.com/jtmthf/kestrel/issues/314) again.** A probe Workspace told only
+  "Reply with the single word ready" worked for six minutes under the generic instruction until it
+  was stopped.
+
+Claude's #314 Workspace ran five Sessions on one Instance: a usage limit, an expired login, a
+mistyped token, the work, and a CI follow-up that fixed the image-only Docker test. Its checkout
+was held through every failure and was released only once #397 was pushed.
+
+### Result
+
+The gate is met on main. Across the two reruns, three harnesses worked five backlog issues from
+maintainer comments, in parallel under the live-Instance cap, and left five pull requests: #315,
+#318 and #319 are merged, and #377 and #397 are green. Unpublished work survived a control-plane
+crash, quota and usage limits, lost logins, stopped Sessions and 35 idle hours. A waiting Session
+continued through further Turns, reclaiming it at the cap ended it succeeded, and declaring a
+Trigger replayed nothing. The `ROADMAP.md` marker moves to `0.3`.
