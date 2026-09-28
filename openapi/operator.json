@@ -1434,6 +1434,24 @@
         }
       }
     },
+    "/operator/organizations/{organization}/queue": {
+      "get": {
+        "operationId": "showQueue",
+        "summary": "Read the Organization's queue: the limits, their occupancy, and the queued Sessions in dispatch order.",
+        "description": "Queued Sessions appear in the order they were enqueued. Each one ready for dispatch apart from the shared Active-Work Slot pool is numbered from 1, a Session blocked on dependencies carries no number and names the Sessions it waits on, and nothing is estimated. The Active-Work Slot limit is the one the dispatching work role recorded, or no work role is dispatching; the pool belongs to the control plane and every Organization shares it, so other Organizations' occupants are counted and never named. Reading changes nothing.",
+        "parameters": [
+          { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "One snapshot.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Queue" } } }
+          },
+          "404": { "$ref": "#/components/responses/Refused" },
+          "503": { "$ref": "#/components/responses/Refused" }
+        }
+      }
+    },
     "/operator/organizations/{organization}/workspaces/{workspace}/transcript": {
       "get": {
         "operationId": "transcript",
@@ -1943,6 +1961,94 @@
           "because": { "type": "string" }
         },
         "required": ["workspace", "instance", "because"]
+      },
+      "Queue": {
+        "type": "object",
+        "properties": {
+          "work_role": {
+            "type": ["object", "null"],
+            "description": "What the dispatching work role recorded when it started, or null while no work role is dispatching.",
+            "properties": {
+              "active_work_slots": { "type": "integer", "minimum": 1 },
+              "serialized_harnesses": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["active_work_slots", "serialized_harnesses"]
+          },
+          "active_work": { "$ref": "#/components/schemas/ActiveWork" },
+          "instances": { "$ref": "#/components/schemas/QueueInstances" },
+          "queued": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/QueuedSession" }
+          }
+        },
+        "required": ["work_role", "active_work", "instances", "queued"]
+      },
+      "ActiveWork": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "description": "The Active-Work Slot limit a dispatching work role recorded, or null while no work role is dispatching."
+          },
+          "occupied": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Every Working Session on the control plane: the pool it counts against is shared by every Organization."
+          },
+          "occupants": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "This Organization's Working Sessions, named."
+          },
+          "elsewhere": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Occupants of other Organizations, counted and never named."
+          }
+        },
+        "required": ["limit", "occupied", "occupants", "elsewhere"]
+      },
+      "QueueInstances": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "description": "The Organization's live Instance limit, or null when unbounded."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The Instances counted against it, idle ones retained for Unpublished Work included."
+          },
+          "counted": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "The counted Instances that can be named."
+          }
+        },
+        "required": ["limit", "count", "counted"]
+      },
+      "QueuedSession": {
+        "type": "object",
+        "properties": {
+          "position": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "description": "The Session's place among the ones dispatch will consider, numbered from 1 in enqueue order. Null while it is blocked on dependencies."
+          },
+          "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
+          "workspace": { "type": "string", "format": "uuid" },
+          "agent": { "type": "string" },
+          "waits_on": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "The Sessions it waits on, when a dependency blocks it."
+          },
+          "enqueued_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["position", "name", "workspace", "agent", "waits_on", "enqueued_at"]
       },
       "InstanceRelease": {
         "type": "object",

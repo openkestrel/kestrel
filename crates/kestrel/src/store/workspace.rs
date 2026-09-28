@@ -36,8 +36,7 @@ macro_rules! sessions_where {
 
 macro_rules! profile_free {
     () => {
-        concat!(
-            "NOT EXISTS (
+        "NOT EXISTS (
              SELECT 1
              FROM workspace AS w
              JOIN workspace AS o ON o.subscription_profile_id = w.subscription_profile_id
@@ -46,9 +45,12 @@ macro_rules! profile_free {
                AND s.harness IN (SELECT value FROM json_each(?))
                AND a.state = ?
          )"
-        )
     };
 }
+
+/// A blocker that has not ended successfully, with `session` aliased `b`: what the dispatcher
+/// skips a queued Session over and what the queue names it by, in one place.
+pub(crate) const UNSATISFIED_BLOCKER: &str = "NOT (b.state = ? AND b.exit IS ?)";
 
 /// What became of a report the link was handed: the next in the supervisor's sequence, one
 /// taken already — where a replay after an answer that never arrived lands — or one that
@@ -798,7 +800,7 @@ impl<'a> Workspaces<'a> {
         serialized: &[String],
         enqueued_before: Option<Timestamp>,
     ) -> Result<Vec<Session>> {
-        let ids = sqlx::query(concat!(
+        let claimable = format!(
             "SELECT s.id
              FROM session AS s
              WHERE s.state = ?
@@ -807,24 +809,24 @@ impl<'a> Workspaces<'a> {
                    FROM session_dependency AS d
                    JOIN session AS b ON b.id = d.blocker_id
                    WHERE d.session_id = s.id
-                     AND NOT (b.state = ? AND b.exit IS ?)
+                     AND {UNSATISFIED_BLOCKER}
                )
-               AND ",
-            profile_free!(),
-            "
+               AND {}
                AND (? IS NULL OR s.enqueued_at < ?)
-             ORDER BY s.enqueued_at, s.id"
-        ))
-        .bind(SessionState::Queued.as_str())
-        .bind(SessionState::Ended.as_str())
-        .bind(Exit::Succeeded.status())
-        .bind(serde_json::to_string(serialized)?)
-        .bind(SessionState::Working.as_str())
-        .bind(enqueued_before.map(due))
-        .bind(enqueued_before.map(due))
-        .fetch_all(&mut *self.connection)
-        .await
-        .context("reading claimable sessions")?;
+             ORDER BY s.enqueued_at, s.id",
+            profile_free!()
+        );
+        let ids = sqlx::query(sqlx::AssertSqlSafe(claimable))
+            .bind(SessionState::Queued.as_str())
+            .bind(SessionState::Ended.as_str())
+            .bind(Exit::Succeeded.status())
+            .bind(serde_json::to_string(serialized)?)
+            .bind(SessionState::Working.as_str())
+            .bind(enqueued_before.map(due))
+            .bind(enqueued_before.map(due))
+            .fetch_all(&mut *self.connection)
+            .await
+            .context("reading claimable sessions")?;
 
         let mut sessions = Vec::with_capacity(ids.len());
         for id in ids {
@@ -888,6 +890,20 @@ impl<'a> Workspaces<'a> {
             .iter()
             .map(session)
             .collect()
+    }
+
+    pub async fn queued_sessions(&mut self, organization: &Organization) -> Result<Vec<Session>> {
+        sqlx::query(sessions_where!(
+            "organization_id = ? AND state = ? ORDER BY enqueued_at, id"
+        ))
+        .bind(organization.id.to_string())
+        .bind(SessionState::Queued.as_str())
+        .fetch_all(&mut *self.connection)
+        .await
+        .context("reading the organization's queued sessions")?
+        .iter()
+        .map(session)
+        .collect()
     }
 
     pub async fn record_connected(&mut self, session: &Session, version: &str) -> Result<()> {
@@ -1527,7 +1543,7 @@ pub(crate) struct Unfinished {
 }
 
 /// A waiting Session still heartbeats and still holds its Instance.
-fn live() -> Result<String> {
+pub(crate) fn live() -> Result<String> {
     Ok(serde_json::to_string(
         &SessionState::LIVE.map(SessionState::as_str),
     )?)

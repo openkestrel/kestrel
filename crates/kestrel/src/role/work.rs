@@ -95,7 +95,10 @@ pub async fn run(
         // would spend the Session's one dispatch on nothing.
         async {
             match &dispatch {
-                Some(dispatch) => dispatching(&store, dispatch, &shutdown).await,
+                Some(dispatch) => {
+                    record(&store, dispatch).await?;
+                    dispatching(&store, dispatch, &shutdown).await
+                }
                 None => {
                     shutdown.cancelled().await;
                     Ok(())
@@ -166,6 +169,18 @@ fn warn_if_it_panicked(finished: Result<(), JoinError>) {
     if let Err(error) = finished {
         warn!(%error, "a session's execution task ended without ending its session");
     }
+}
+
+/// The queue reads this record rather than the serve role's flags, so restart with new flags
+/// is what replaces it.
+async fn record(store: &Store, dispatch: &Dispatch) -> Result<()> {
+    let mut tx = store.begin().await?;
+    tx.queue()
+        .record(dispatch.max_active_sessions.get(), &dispatch.serialized)
+        .await?;
+    tx.commit().await?;
+
+    Ok(())
 }
 
 async fn execute_or_fail(
