@@ -62,7 +62,7 @@ _Avoid_: ready, idle, warm
 
 **Unfinished Session**:
 The one session a workspace may have that has not yet let go of it: queued, working, waiting, or
-unbriefed, or ended while its supervisor is still leaving. A workspace has at most one; a message posted while it
+unbriefed, or ended while its harness is still leaving. A workspace has at most one; a message posted while it
 exists waits on it rather than starting another.
 _Avoid_: slot, current session, holding session
 
@@ -229,6 +229,12 @@ until the workspace seals, and is never reaped while it holds work that exists n
 backend may suspend an idle one and resume it unasked; kestrel never learns that it did.
 _Avoid_: sandbox, container, machine, box
 
+**Supervisor**:
+The process kestrel keeps inside an instance for as long as the instance lives. It dials the link with
+the instance's identity, spawns each session's harness, reports what the checkouts hold, and answers
+reads of them.
+_Avoid_: agent, sidecar, daemon, runner
+
 **Compute Backend**:
 A pluggable implementation that provisions and destroys instances, which kestrel drives through a
 contract. kestrel tells it when an instance is idle; what it does about that is its own business.
@@ -332,6 +338,8 @@ words from drifting.
   capability: an adapter that ignores it is expensive, never degraded.
 - A workspace's branch is **declared** by kestrel, never invented by an agent. kestrel runs no git
   command; it learns what happened from what a supervisor reports and what an integration delivers.
+- An instance's files and changes are read **live** from its supervisor and never stored. Reading
+  one is not recorded, and never wakes an instance that was hinted idle.
 - Each completed turn can report its response to the work source. A session's final **Outcome** is
   recorded once and said outward when it adds information beyond those responses; saying it changes
   **nothing** about the session's exit status. Exit status says how the execution went, never
