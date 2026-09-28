@@ -4,7 +4,7 @@
     "title": "kestrel operator",
     "version": "0.1.0",
     "summary": "The boundary a Client reaches a control plane over.",
-    "description": "Server-sent events down, JSON up, plain HTTP. It authenticates nobody, so the control plane serves it on a listener of its own, apart from the link, and binds that listener to loopback unless told otherwise. A remote control plane is reached through a tunnel.",
+    "description": "Server-sent events down, JSON up, plain HTTP. It authenticates nobody, so the control plane serves it on a listener of its own, apart from the link, and binds that listener to loopback unless told otherwise. A remote control plane is reached through a tunnel. Every operation refuses with 403, and does nothing, a request whose Host is neither localhost nor an IP address, or whose Origin, when it sends one, is not http:// and that Host.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"

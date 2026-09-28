@@ -160,6 +160,19 @@ impl Kestrel {
         .await
     }
 
+    pub async fn boot_with_the_operator_beyond_loopback() -> Self {
+        let data_dir = TempDir::new().expect("a temporary data directory");
+        Self::boot_against(
+            data_dir,
+            Listen {
+                link: LOOPBACK,
+                operator: "0.0.0.0:0".parse().expect("every interface"),
+            },
+            None,
+        )
+        .await
+    }
+
     pub async fn dispatching(supervisor: &Path) -> Self {
         Self::dispatching_to(
             supervisor,
@@ -300,6 +313,10 @@ impl Kestrel {
 
     pub fn operator(&self) -> String {
         format!("http://{}", self.bound.operator)
+    }
+
+    pub fn operator_port(&self) -> u16 {
+        self.bound.operator.port()
     }
 
     pub fn link_from_an_environment(&self) -> String {
