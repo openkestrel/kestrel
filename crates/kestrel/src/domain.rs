@@ -2,7 +2,7 @@ use std::fmt;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -390,8 +390,6 @@ pub struct Trigger {
     pub name: String,
     pub fires: Fires,
     pub templates: Templates,
-    pub on_miss: Option<CorrelationMiss>,
-    pub on_open_workspace: OnOpenWorkspace,
     pub project: Project,
     pub agent: Agent,
     pub allows: Vec<Agent>,
@@ -520,7 +518,84 @@ impl Schedule {
 pub struct Templates {
     pub brief: Template,
     pub branch: Option<Template>,
-    pub correlation: Option<Template>,
+    pub correlation: Correlation,
+}
+
+/// A Trigger's correlation key and what a firing does around it, present together or not at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Correlation {
+    None,
+    On {
+        template: Template,
+        on_miss: CorrelationMiss,
+        on_open_workspace: OnOpenWorkspace,
+    },
+}
+
+impl Correlation {
+    /// The one place a declared correlation, its miss behaviour and its open-workspace behaviour
+    /// are read, so a Trigger never holds one without the others.
+    pub fn parse(
+        correlation: Option<&str>,
+        on_miss: Option<&str>,
+        on_open_workspace: Option<&str>,
+    ) -> Result<Self> {
+        let template = correlation
+            .map(str::parse)
+            .transpose()
+            .context("a trigger correlation")?;
+        let on_miss = on_miss
+            .map(str::parse)
+            .transpose()
+            .context("a trigger on_miss")?;
+        let on_open_workspace = on_open_workspace
+            .map(str::parse)
+            .transpose()
+            .context("a trigger on_open_workspace")?
+            .unwrap_or_default();
+
+        match (template, on_miss) {
+            (Some(template), Some(on_miss)) => Ok(Correlation::On {
+                template,
+                on_miss,
+                on_open_workspace,
+            }),
+            (Some(_), None) => {
+                bail!("a trigger with a correlation must declare what it does when it misses")
+            }
+            (None, Some(_)) => {
+                bail!("a trigger without a correlation cannot declare what it does when it misses")
+            }
+            (None, None) if on_open_workspace == OnOpenWorkspace::NewSession => bail!(
+                "a trigger without a correlation never finds an open workspace to start a new \
+                 session in"
+            ),
+            (None, None) => Ok(Correlation::None),
+        }
+    }
+
+    pub fn template(&self) -> Option<&Template> {
+        match self {
+            Correlation::None => None,
+            Correlation::On { template, .. } => Some(template),
+        }
+    }
+
+    pub fn on_miss(&self) -> Option<CorrelationMiss> {
+        match self {
+            Correlation::None => None,
+            Correlation::On { on_miss, .. } => Some(*on_miss),
+        }
+    }
+
+    pub fn on_open_workspace(&self) -> OnOpenWorkspace {
+        match self {
+            Correlation::None => OnOpenWorkspace::Continue,
+            Correlation::On {
+                on_open_workspace, ..
+            } => *on_open_workspace,
+        }
+    }
 }
 
 /// Fixed when the Workspace opens, so a Project redeclared later moves no Workspace already on it.

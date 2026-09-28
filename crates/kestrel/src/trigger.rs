@@ -78,8 +78,6 @@ pub struct Declaration<'a> {
     pub name: &'a str,
     pub fires: &'a Fires,
     pub templates: &'a Templates,
-    pub on_miss: Option<CorrelationMiss>,
-    pub on_open_workspace: OnOpenWorkspace,
     pub project: &'a str,
     pub agent: &'a str,
     pub allows: &'a [String],
@@ -157,34 +155,7 @@ pub struct Tested {
     pub elapsing: Option<Timestamp>,
 }
 
-pub(crate) fn check_correlation(
-    templates: &Templates,
-    on_miss: Option<CorrelationMiss>,
-    on_open_workspace: OnOpenWorkspace,
-) -> Result<()> {
-    match (templates.correlation.is_some(), on_miss, on_open_workspace) {
-        (true, None, _) => {
-            bail!("a trigger with a correlation must declare what it does when it misses")
-        }
-        (false, Some(_), _) => {
-            bail!("a trigger without a correlation cannot declare what it does when it misses")
-        }
-        (false, _, OnOpenWorkspace::NewSession) => {
-            bail!(
-                "a trigger without a correlation never finds an open workspace to start a new \
-                 session in"
-            )
-        }
-        _ => Ok(()),
-    }
-}
-
 pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trigger> {
-    check_correlation(
-        declaration.templates,
-        declaration.on_miss,
-        declaration.on_open_workspace,
-    )?;
     if let Fires::Scheduled(schedule) = declaration.fires {
         let budget = FiringBudget::default();
         let allowed = budget.window / i32::try_from(budget.limit.get())?;
@@ -227,8 +198,6 @@ pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trig
                 &trigger,
                 declaration.fires,
                 declaration.templates,
-                declaration.on_miss,
-                declaration.on_open_workspace,
                 &project,
                 &agent,
                 &allows,
@@ -244,8 +213,6 @@ pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trig
                     &trigger,
                     declaration.fires,
                     declaration.templates,
-                    declaration.on_miss,
-                    declaration.on_open_workspace,
                     &project,
                     &agent,
                     &allows,
@@ -261,8 +228,6 @@ pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trig
                     declaration.name,
                     declaration.fires,
                     declaration.templates,
-                    declaration.on_miss,
-                    declaration.on_open_workspace,
                     &project,
                     &agent,
                     &allows,
@@ -285,8 +250,6 @@ fn same_declaration(
     trigger: &Trigger,
     fires: &Fires,
     templates: &Templates,
-    on_miss: Option<CorrelationMiss>,
-    on_open_workspace: OnOpenWorkspace,
     project: &crate::domain::Project,
     agent: &Agent,
     allows: &[Agent],
@@ -305,8 +268,6 @@ fn same_declaration(
 
     trigger.fires == *fires
         && trigger.templates == *templates
-        && trigger.on_miss == on_miss
-        && trigger.on_open_workspace == on_open_workspace
         && trigger.project.id == project.id
         && trigger.agent.id == agent.id
         && names(&trigger.allows) == names(allows)
@@ -429,8 +390,6 @@ pub async fn test_declared(
             name: declared.name.clone(),
             fires: Fires::On(declared.filter.clone()),
             templates: declared.templates.clone(),
-            on_miss: declared.on_miss,
-            on_open_workspace: declared.on_open_workspace,
             state: TriggerState::Enabled,
             disabled_because: None,
             firing_budget: FiringBudget::default(),
@@ -519,7 +478,7 @@ async fn would(tx: &mut Tx<'_>, trigger: &Trigger, correlation: Option<&str>) ->
     };
 
     Ok(match correlated(tx, trigger, correlation).await? {
-        Correlated::Holding(_) => match trigger.on_open_workspace {
+        Correlated::Holding(_) => match trigger.templates.correlation.on_open_workspace() {
             OnOpenWorkspace::Continue => Would::Continue,
             OnOpenWorkspace::NewSession => Would::NewSession,
         },
@@ -549,7 +508,8 @@ async fn correlated(tx: &mut Tx<'_>, trigger: &Trigger, correlation: &str) -> Re
         .workspaces()
         .sealed_holding_correlation(&trigger.organization, correlation)
         .await?;
-    if sealed.is_none() && trigger.on_miss == Some(CorrelationMiss::Ignore) {
+    if sealed.is_none() && trigger.templates.correlation.on_miss() == Some(CorrelationMiss::Ignore)
+    {
         return Ok(Correlated::Ignored);
     }
 
@@ -586,7 +546,7 @@ pub fn render(trigger: &Trigger, event: &Event, instruction: Option<&str>) -> Re
             .transpose()?,
         correlation: templates
             .correlation
-            .as_ref()
+            .template()
             .map(|correlation| {
                 correlation
                     .render_line(occurrence)
@@ -857,7 +817,7 @@ async fn firing(
         None => None,
         Some(correlation) => match correlated(&mut tx, trigger, correlation).await? {
             Correlated::Holding(holding) => {
-                return match trigger.on_open_workspace {
+                return match trigger.templates.correlation.on_open_workspace() {
                     OnOpenWorkspace::Continue => fed(tx, trigger, event, &rendered, holding).await,
                     OnOpenWorkspace::NewSession => {
                         started(tx, trigger, event, asked, rendered, holding).await

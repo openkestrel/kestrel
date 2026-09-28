@@ -44,8 +44,8 @@ use jiff::{SignedDuration, Timestamp};
 use kestrel::agent;
 use kestrel::compute::{Docker, Driver, LocalExec};
 use kestrel::domain::{
-    Agent, CorrelationMiss, Direction, Event, EventRecordId, Exit, Fires, Integration, Occurrence,
-    OnOpenWorkspace, Organization, Project, Schedule, Session, SessionId, SessionState,
+    Agent, Correlation, CorrelationMiss, Direction, Event, EventRecordId, Exit, Fires, Integration,
+    Occurrence, OnOpenWorkspace, Organization, Project, Schedule, Session, SessionId, SessionState,
     SubscriptionProfile, Templates, Trigger, Turn, Workspace, WorkspaceId,
 };
 use kestrel::instance;
@@ -93,8 +93,36 @@ pub fn templates(brief: &str, branch: Option<&str>, correlation: Option<&str>) -
     Templates {
         brief: parsed(brief),
         branch: branch.map(parsed),
-        correlation: correlation.map(parsed),
+        correlation: match correlation {
+            Some(correlation) => Correlation::On {
+                template: parsed(correlation),
+                on_miss: CorrelationMiss::Open,
+                on_open_workspace: OnOpenWorkspace::Continue,
+            },
+            None => Correlation::None,
+        },
     }
+}
+
+/// A Template set with one of its correlation's behaviours overridden, so a declaration the
+/// operator API would refuse can be built.
+fn correlation_overridden(
+    templates: &Templates,
+    on_miss: Option<CorrelationMiss>,
+    on_open_workspace: OnOpenWorkspace,
+) -> anyhow::Result<Templates> {
+    let template = templates.correlation.template().map(ToString::to_string);
+    let correlation = Correlation::parse(
+        template.as_deref(),
+        on_miss.map(CorrelationMiss::as_str),
+        Some(on_open_workspace.as_str()),
+    )?;
+
+    Ok(Templates {
+        brief: templates.brief.clone(),
+        branch: templates.branch.clone(),
+        correlation,
+    })
 }
 
 const LOOPBACK: SocketAddr =
@@ -604,10 +632,7 @@ impl Kestrel {
             project,
             agent,
             templates,
-            templates
-                .correlation
-                .is_some()
-                .then_some(CorrelationMiss::Open),
+            templates.correlation.on_miss(),
         )
         .await
     }
@@ -653,15 +678,18 @@ impl Kestrel {
         templates: &Templates,
         on_miss: Option<CorrelationMiss>,
     ) -> anyhow::Result<Trigger> {
+        let templates = correlation_overridden(
+            templates,
+            on_miss,
+            templates.correlation.on_open_workspace(),
+        )?;
         trigger::declare(
             &self.store,
             Declaration {
                 organization,
                 name,
                 fires: &Fires::On(filter.parse().expect("the filter should parse")),
-                templates,
-                on_miss,
-                on_open_workspace: OnOpenWorkspace::Continue,
+                templates: &templates,
                 project,
                 agent,
                 allows: &[],
@@ -692,8 +720,6 @@ impl Kestrel {
                         .expect("the filter should parse"),
                 ),
                 templates: &templates(BRIEF, None, correlation),
-                on_miss: correlation.map(|_| CorrelationMiss::Open),
-                on_open_workspace: OnOpenWorkspace::Continue,
                 project: "kestrel",
                 agent,
                 allows: &allows
@@ -748,18 +774,18 @@ impl Kestrel {
         templates: &Templates,
         on_open_workspace: OnOpenWorkspace,
     ) -> anyhow::Result<Trigger> {
+        let templates = correlation_overridden(
+            templates,
+            templates.correlation.on_miss(),
+            on_open_workspace,
+        )?;
         trigger::declare(
             &self.store,
             Declaration {
                 organization,
                 name,
                 fires: &Fires::On(filter.parse().expect("the filter should parse")),
-                templates,
-                on_miss: templates
-                    .correlation
-                    .is_some()
-                    .then_some(CorrelationMiss::Open),
-                on_open_workspace,
+                templates: &templates,
                 project: "kestrel",
                 agent,
                 allows: &allows
@@ -866,11 +892,6 @@ impl Kestrel {
                 name,
                 fires: &Fires::Scheduled(schedule),
                 templates,
-                on_miss: templates
-                    .correlation
-                    .is_some()
-                    .then_some(CorrelationMiss::Open),
-                on_open_workspace: OnOpenWorkspace::Continue,
                 project: "kestrel",
                 agent: "builder",
                 allows: &[],
