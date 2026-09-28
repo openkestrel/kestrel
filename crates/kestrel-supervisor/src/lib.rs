@@ -56,7 +56,7 @@ struct Attending {
     cursor: Option<String>,
     started: bool,
     checkout: Option<Checkout>,
-    prompt: Option<String>,
+    prompt: String,
     conversation: Option<Conversation>,
     finished: bool,
     taken: i64,
@@ -356,10 +356,7 @@ async fn conversation(
     attending: &mut Attending,
     diagnostics: &dyn Diagnostics,
 ) -> Result<Option<Conversation>, link::Error> {
-    let prompt = match attending.prompt.clone() {
-        Some(prompt) => prompt,
-        None => harness::prompt(&all_entries(link).await?),
-    };
+    let prompt = attending.prompt.clone();
     let credentials = link.credentials().await?;
     let provider = credentials.variables;
     if !provider.is_empty() {
@@ -422,20 +419,6 @@ fn written(
     ));
 
     Ok(Some(written))
-}
-
-async fn all_entries(link: &Link) -> Result<Vec<link::Entry>, link::Error> {
-    let mut entries = Vec::new();
-    let mut cursor = None;
-
-    loop {
-        let page = link.entries(cursor.as_deref()).await?;
-        entries.extend(page.entries.into_iter().map(|recorded| recorded.entry));
-        cursor = page.cursor;
-        if !page.more {
-            return Ok(entries);
-        }
-    }
 }
 
 /// Numbered from the last one the link took, and dropped once it has been taken: a reconnect

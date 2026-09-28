@@ -122,7 +122,10 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     )
     .await
     .unwrap();
-    let first_queued = enqueue(&store, first.id, None, None).await.unwrap();
+    let first_queued = workspace::post(&store, first.id, "operator", "start please")
+        .await
+        .unwrap()
+        .expect("a fresh workspace's first message starts a session");
     let first_session = match occupy(&store, 1, &["codex".to_owned()]).await.unwrap() {
         Some(Occupied::Claimed(claimed)) => claimed.session,
         _ => panic!("the first session should claim"),
@@ -178,7 +181,10 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     )
     .await
     .unwrap();
-    let alex_queued = enqueue(&store, alex.id, None, None).await.unwrap();
+    let alex_queued = workspace::post(&store, alex.id, "operator", "start please")
+        .await
+        .unwrap()
+        .expect("a fresh workspace's first message starts a session");
     let alex_session = match occupy(&store, 2, &["codex".to_owned()]).await.unwrap() {
         Some(Occupied::Claimed(claimed)) => claimed.session,
         _ => panic!("another profile should be able to claim while Jack is busy"),

@@ -10,7 +10,6 @@ use reqwest::{Client, Response, StatusCode, header};
 use serde::{Deserialize, Serialize};
 
 pub const CREDENTIALS: &str = "/link/sessions/{session}/credentials";
-pub const ENTRIES: &str = "/link/sessions/{session}/entries";
 pub const INSTRUCTIONS: &str = "/link/sessions/{session}/instructions";
 pub const REPORTS: &str = "/link/sessions/{session}/reports";
 
@@ -26,7 +25,7 @@ const SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
 pub enum Instruction {
     Start {
         checkout: Checkout,
-        prompt: Option<String>,
+        prompt: String,
     },
     /// The next turn, in the conversation the Session's first one opened.
     Prompt {
@@ -162,28 +161,6 @@ struct Refreshed<'a> {
 pub struct Delivered {
     pub id: String,
     pub instruction: Instruction,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Page {
-    pub entries: Vec<Recorded>,
-    pub cursor: Option<String>,
-    pub more: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Recorded {
-    pub entry: Entry,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(transparent)]
-pub struct Entry(serde_json::Value);
-
-impl std::fmt::Display for Entry {
-    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(out)
-    }
 }
 
 #[derive(Debug)]
@@ -326,29 +303,6 @@ impl Link {
         self.reached.touched();
 
         Ok(())
-    }
-
-    pub async fn entries(&self, cursor: Option<&str>) -> Result<Page, Error> {
-        let url = match cursor {
-            Some(cursor) => format!(
-                "{}?cursor={}",
-                self.url(ENTRIES),
-                utf8_percent_encode(cursor, NON_ALPHANUMERIC)
-            ),
-            None => self.url(ENTRIES),
-        };
-        let request = self.client.get(url).bearer_auth(&self.credential);
-
-        let response = refuse_if_declined(request.send().await?).await?;
-        if !response.status().is_success() {
-            return Err(Error::Lost(format!(
-                "the link answered {} to a request for entries",
-                response.status().as_u16()
-            )));
-        }
-        self.reached.touched();
-
-        Ok(response.json().await?)
     }
 
     pub async fn open(&self, cursor: Option<&str>) -> Result<Instructions, Error> {

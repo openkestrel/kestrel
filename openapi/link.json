@@ -368,13 +368,14 @@
             "$ref": "#/components/schemas/Checkout"
           },
           "prompt": {
-            "description": "The agent's whole prompt, sent exactly as given. Absent, the Environment prompts the agent with the Transcript as earlier context.",
+            "description": "The agent's whole prompt, sent exactly as given: the Workspace's unfollowed Brief, or the message or messages that started this Session with earlier Transcript entries as labeled context ahead of them.",
             "type": "string"
           }
         },
         "required": [
           "kind",
-          "checkout"
+          "checkout",
+          "prompt"
         ]
       },
       "Prompt": {

@@ -253,6 +253,7 @@ async fn a_session_that_reaches_an_instance_starts_and_ends_in_the_transcript() 
         said,
         vec![
             "participant joined  builder".to_owned(),
+            "said  operator  do the work this environment was provisioned for".to_owned(),
             format!("session started  {}  builder", session.id),
             "said  builder  half of one message, and the other half".to_owned(),
             "said  builder  a second message".to_owned(),
@@ -411,7 +412,10 @@ async fn located(kestrel: &Kestrel, workspace: &Workspace) -> Vec<PathBuf> {
         .await
         .into_iter()
         .filter_map(|recorded| match recorded.entry {
-            Entry::Said { message, .. } => Some(PathBuf::from(message)),
+            Entry::Said {
+                participant,
+                message,
+            } if participant == "builder" => Some(PathBuf::from(message)),
             _ => None,
         })
         .collect()

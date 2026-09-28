@@ -1240,7 +1240,16 @@ impl Kestrel {
             .expect("the session should enqueue")
     }
 
+    /// What `session enqueue` still lets through directly, with nothing ever posted to the
+    /// Workspace: a Session its first Turn has no instruction for.
+    pub async fn enqueue_session_with_nothing_posted(&self, workspace: WorkspaceId) -> Session {
+        work::enqueue(&self.store, workspace, None, None)
+            .await
+            .expect("the session should enqueue")
+    }
+
     pub async fn try_enqueue_session(&self, workspace: WorkspaceId) -> anyhow::Result<Session> {
+        self.instructed(workspace).await?;
         work::enqueue(&self.store, workspace, None, None).await
     }
 
@@ -1255,6 +1264,7 @@ impl Kestrel {
         workspace: WorkspaceId,
         agent: &str,
     ) -> anyhow::Result<Session> {
+        self.instructed(workspace).await?;
         work::enqueue(&self.store, workspace, Some(agent), None).await
     }
 
@@ -1273,7 +1283,32 @@ impl Kestrel {
         workspace: WorkspaceId,
         model: Option<&str>,
     ) -> anyhow::Result<Session> {
+        self.instructed(workspace).await?;
         work::enqueue(&self.store, workspace, None, model).await
+    }
+
+    /// What a fixture calling straight into `work::enqueue` skips: the message a real operator
+    /// posts to give the Session it starts something to do. Appended before enqueuing, the way an
+    /// operator's post always precedes the session it starts, so nothing can claim and start the
+    /// Session before it has an instruction to run.
+    async fn instructed(&self, workspace: WorkspaceId) -> anyhow::Result<()> {
+        let mut tx = self.store.begin().await.expect("a transaction");
+        let record = tx
+            .workspaces()
+            .get(workspace)
+            .await
+            .expect("the workspace should read");
+        tx.log()
+            .append(
+                &record,
+                Entry::Said {
+                    participant: "operator".to_owned(),
+                    message: "do the work this environment was provisioned for".to_owned(),
+                },
+            )
+            .await?;
+        tx.commit().await.expect("the instruction should commit");
+        Ok(())
     }
 
     /// Claims what it enqueued, standing in for the work role a `boot`ed fixture leaves idle.

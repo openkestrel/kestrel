@@ -459,7 +459,7 @@ async fn an_environment_reads_the_transcript_of_the_workspace_its_session_belong
     assert!(first["cursor"].is_string());
     assert_eq!(
         paged(&link, &session, &credential, 2).await,
-        (1..=5).collect::<Vec<_>>()
+        (1..=6).collect::<Vec<_>>()
     );
 
     kestrel.teardown().await;
