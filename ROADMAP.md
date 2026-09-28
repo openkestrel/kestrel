@@ -1,14 +1,15 @@
 # Roadmap
 
-> **We are here: `0.2`, kestrel works the backlog.** `0.1` is closed: an issue labelled
-> `ready-for-agent` on this repository is worked with no human action after the labelling, a pull
-> request lands, and the outcome round-trips to the issue it came from —
-> [`docs/acceptance-0.1.md`](docs/acceptance-0.1.md) is the acceptance run and what it found. The repo
-> holds the vocabulary in [`CONTEXT.md`](CONTEXT.md) and the direction in [`README.md`](README.md).
-> Sessions now work in parallel across Workspaces, while each Workspace has at most one unfinished
-> Session and can continue it through multiple Turns. Declaring a Trigger does not replay Events already
-> recorded; working existing repository history takes a deliberate dispatch. The `0.2` acceptance record
-> is [`docs/acceptance-0.2.md`](docs/acceptance-0.2.md); its remaining gate keeps this marker at `0.2`.
+> **We are here: `0.3`, kestrel's work is joinable mid-flight.** `0.2` is closed: kestrel works this
+> repository's backlog. Maintainer comments hand issues to Claude, Codex and OpenCode, their Sessions
+> work in parallel across Workspaces under an Organization's live-Instance cap, and each leaves a
+> branch and pull request. An Instance holding work that exists nowhere else survives failure,
+> quota exhaustion, a control-plane crash and idle sealing, and a waiting Session continues through
+> further Turns. Declaring a Trigger replays no recorded history. The acceptance runs and what they
+> found are [`docs/acceptance-0.1.md`](docs/acceptance-0.1.md) and
+> [`docs/acceptance-0.2.md`](docs/acceptance-0.2.md). The repo holds the vocabulary in
+> [`CONTEXT.md`](CONTEXT.md) and the direction in [`README.md`](README.md). A Session that runs out of
+> credits still ends failed and waits on an operator to resume it.
 
 Seven rungs from an empty repository to v1, and no dates. Each is a `0.N` release, and each is named
 by a class of kestrel's own work rather than by a feature list, because the ladder is walked by
