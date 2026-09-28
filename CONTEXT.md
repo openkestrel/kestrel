@@ -52,19 +52,24 @@ _Avoid_: session, workspace
 
 **Waiting**:
 A session's phase between turns: its last prompt answered, its agent conversation and instance kept
-for the next. Its other phases are queued, working (mid-turn), ended and unreachable.
+for the next. Its other phases are queued, unbriefed, working (mid-turn), ended and unreachable.
 _Avoid_: between turns, paused, idle
+
+**Unbriefed**:
+A session's phase after its harness is up and before its first turn: its instance and agent
+conversation ready, no brief yet given. The first message posted to it becomes its brief.
+_Avoid_: ready, idle, warm
 
 **Unfinished Session**:
 The one session a workspace may have that has not yet let go of it: queued, working, waiting, or
-ended while its supervisor is still leaving. A workspace has at most one; a message posted while it
+unbriefed, or ended while its supervisor is still leaving. A workspace has at most one; a message posted while it
 exists waits on it rather than starting another.
 _Avoid_: slot, current session, holding session
 
 **Active-Work Slot**:
 One unit of the control plane's capacity for sessions doing work at once, shared by every
 organization. A session mid-turn, or blocked on an approval, occupies one; a queued or waiting
-session does not.
+session does not, and neither does an unbriefed one.
 _Avoid_: slot (alone), capacity, concurrency
 
 **Unpublished Work**:
@@ -142,9 +147,10 @@ firing is looked at again and either opens, stays held, or is canceled.
 _Avoid_: match, activation, invocation, execution
 
 **Brief**:
-The instruction a session starts with, and its entry in the workspace's transcript. A trigger
-renders it from a human-authored template over an event and any instruction its dispatch supplied;
-an operator may supply it directly. It reaches the agent exactly as rendered.
+The instruction a session's first turn carries, and its entry in the workspace's transcript. A
+trigger renders it from a human-authored template over an event and any instruction its dispatch
+supplied; an operator may supply it directly, when opening the workspace or as the first message to
+an unbriefed session. It reaches the agent exactly as rendered.
 _Avoid_: prompt, task, instruction, request
 
 **Correlation**:
@@ -298,6 +304,8 @@ words from drifting.
   do, and only shared state carries the never-expires promise.
 - A trigger renders its brief **once** per firing. A brief that cannot be rendered **fails** the
   firing and starts nothing.
+- A workspace opens **with** its first session, never empty. Only an operator's open may leave that
+  session **unbriefed**; a firing always renders its brief.
 - A workspace fixes its **project**, **environment** and **instance** for its life, and never an
   agent. A session's agent, and the harness and model it started with, are fixed for the
   **session's** life.
