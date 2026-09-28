@@ -260,6 +260,13 @@ pub async fn report(
     session: &Session,
     Reported { seq, report }: Reported,
 ) -> Result<(), ReportRefused> {
+    if let Report::Stderr { lines } = report {
+        for line in lines {
+            info!(session = %session.id, line, "its harness wrote to stderr");
+        }
+        return Ok(());
+    }
+
     let mut tx = store.begin().await?;
 
     if report.numbered() {
@@ -285,11 +292,7 @@ pub async fn report(
                 .await?;
             debug!(session = %session.id, "a supervisor reported itself alive");
         }
-        Report::Stderr { lines } => {
-            for line in lines {
-                info!(session = %session.id, line, "its harness wrote to stderr");
-            }
-        }
+        Report::Stderr { .. } => unreachable!("stderr is reported without a transaction"),
         Report::Started => {
             if tx.workspaces().record_started(session).await? {
                 let workspace = tx.workspaces().get(session.workspace).await?;
