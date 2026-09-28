@@ -62,8 +62,9 @@ exists waits on it rather than starting another.
 _Avoid_: slot, current session, holding session
 
 **Active-Work Slot**:
-One unit of an organization's capacity for sessions doing work at once. A session mid-turn, or
-blocked on an approval, occupies one; a queued or waiting session does not.
+One unit of the control plane's capacity for sessions doing work at once, shared by every
+organization. A session mid-turn, or blocked on an approval, occupies one; a queued or waiting
+session does not.
 _Avoid_: slot (alone), capacity, concurrency
 
 **Unpublished Work**:

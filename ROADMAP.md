@@ -150,8 +150,11 @@ transcript, shared state, diffs and read-only live files, and lets a person take
 declared branch, learned pull request or merge request, and unpublished Instance changes, including
 committed but unpushed, uncommitted and untracked work. It shows the requested and effective model,
 and reports ACP conversation continuity separately from the durable kestrel Workspace: losing harness
-context must not look like successful resume. The queue shows FIFO order, active limits and wait
-reasons without inventing an estimated start time.
+context must not look like successful resume. The queue is one operator snapshot
+derived at read from the rules dispatch applies: ready Sessions numbered in FIFO order, each other
+queued Session naming what it waits on, the Active-Work Slot and live Instance limits with what
+occupies them, and Waiting Sessions apart from the queue. Reading it never moves dispatch, and
+nothing in it estimates a start time.
 Feedback is prompt, work state is clear, and the view is accessible and responsive. The same event
 stream serves the CLI and browser Client through the operator boundary
 ([ADR-0015](docs/adr/0015-the-cli-is-a-client-not-a-role.md)). Presence is best-effort, never a
