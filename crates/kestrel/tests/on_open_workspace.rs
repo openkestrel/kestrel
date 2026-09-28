@@ -579,7 +579,12 @@ triggers:
         )
         .await;
     assert_eq!(
-        kestrel.show_trigger("acme", "ci").await.on_open_workspace,
+        kestrel
+            .show_trigger("acme", "ci")
+            .await
+            .templates
+            .correlation
+            .on_open_workspace(),
         OnOpenWorkspace::Continue
     );
     let stub = GithubStub::start();

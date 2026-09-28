@@ -25,9 +25,9 @@ use crate::cron::Cron;
 use crate::declaration;
 use crate::declined::Declined;
 use crate::domain::{
-    self, Agent, Connection, CorrelationMiss, Direction, EventRecordId, EventRefusal, Fires,
-    Firing, Integration, Occurrence, OnOpenWorkspace, Organization, Project, Schedule, Session,
-    SubscriptionProfile, Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
+    self, Agent, Connection, Correlation, Direction, EventRecordId, EventRefusal, Fires, Firing,
+    Integration, Occurrence, Organization, Project, Schedule, Session, SubscriptionProfile,
+    Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::filter::Filter;
 use crate::integration::github::{self, Github};
@@ -558,9 +558,19 @@ impl From<Trigger> for TriggerRecord {
             correlation: trigger
                 .templates
                 .correlation
-                .map(|correlation| correlation.to_string()),
-            on_miss: trigger.on_miss.map(|miss| miss.as_str().to_owned()),
-            on_open_workspace: trigger.on_open_workspace.as_str().to_owned(),
+                .template()
+                .map(ToString::to_string),
+            on_miss: trigger
+                .templates
+                .correlation
+                .on_miss()
+                .map(|miss| miss.as_str().to_owned()),
+            on_open_workspace: trigger
+                .templates
+                .correlation
+                .on_open_workspace()
+                .as_str()
+                .to_owned(),
             project: trigger.project.name,
             agent: trigger.agent.name,
             allows: trigger.allows.into_iter().map(|agent| agent.name).collect(),
@@ -1183,7 +1193,7 @@ async fn declare_trigger(
 ) -> Result<(StatusCode, Json<TriggerRecord>), Refused> {
     let Json(declaration) = declaration?;
     named(&declaration.name)?;
-    let (fires, templates, on_miss, on_open_workspace) = parse_trigger_declaration(&declaration)?;
+    let (fires, templates) = parse_trigger_declaration(&declaration)?;
     let created = !trigger::triggers(&control_plane.store, &organization)
         .await
         .map_err(named_refusal)?
@@ -1196,8 +1206,6 @@ async fn declare_trigger(
             name: &declaration.name,
             fires: &fires,
             templates: &templates,
-            on_miss,
-            on_open_workspace,
             project: &declaration.project,
             agent: &declaration.agent,
             allows: &declaration.allows,
@@ -1452,7 +1460,7 @@ async fn applied_triggers(
 
 fn parse_trigger_declaration(
     declaration: &TriggerDeclaration,
-) -> Result<(Fires, Templates, Option<CorrelationMiss>, OnOpenWorkspace), Refused> {
+) -> Result<(Fires, Templates), Refused> {
     let fires = match (
         &declaration.filter,
         &declaration.every,
@@ -1490,6 +1498,12 @@ fn parse_trigger_declaration(
             ));
         }
     };
+    let correlation = Correlation::parse(
+        declaration.correlation.as_deref(),
+        declaration.on_miss.as_deref(),
+        declaration.on_open_workspace.as_deref(),
+    )
+    .map_err(|error| Refused::Unprocessable(format!("{error:#}")))?;
     let templates = Templates {
         brief: declaration
             .brief
@@ -1501,30 +1515,10 @@ fn parse_trigger_declaration(
             .map(str::parse)
             .transpose()
             .map_err(|error| Refused::Unprocessable(format!("a trigger branch: {error}")))?,
-        correlation: declaration
-            .correlation
-            .as_deref()
-            .map(str::parse)
-            .transpose()
-            .map_err(|error| Refused::Unprocessable(format!("a trigger correlation: {error}")))?,
+        correlation,
     };
-    let on_miss = declaration
-        .on_miss
-        .as_deref()
-        .map(str::parse)
-        .transpose()
-        .map_err(|error| Refused::Unprocessable(format!("a trigger on_miss: {error}")))?;
-    let on_open_workspace = declaration
-        .on_open_workspace
-        .as_deref()
-        .map(str::parse)
-        .transpose()
-        .map_err(|error| Refused::Unprocessable(format!("a trigger on_open_workspace: {error}")))?
-        .unwrap_or_default();
-    trigger::check_correlation(&templates, on_miss, on_open_workspace)
-        .map_err(|error| Refused::Unprocessable(error.to_string()))?;
 
-    Ok((fires, templates, on_miss, on_open_workspace))
+    Ok((fires, templates))
 }
 
 fn named_refusal(error: anyhow::Error) -> Refused {

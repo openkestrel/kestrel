@@ -137,7 +137,7 @@ async fn a_supervisor_whose_control_plane_is_gone_for_good_gives_up_and_stops_it
 
 #[tokio::test]
 async fn a_link_held_for_a_lease_that_has_passed_is_refused() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::boot_serving_alone().await;
     let workspace = a_workspace(&kestrel).await;
     let (session, credential) = kestrel.dispatch_session(workspace.id).await;
 
@@ -167,6 +167,7 @@ async fn a_link_held_for_a_lease_that_has_passed_is_refused() {
         "the refusal is not about the lease: {said}"
     );
 
+    let kestrel = kestrel.kill_and_restart().await;
     let ended = until(&kestrel, session.id, "was swept", |session| {
         session.state == SessionState::Ended
     })
