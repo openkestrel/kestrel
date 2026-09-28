@@ -21,11 +21,25 @@ struct Kestrel {
     data_dir: TempDir,
 }
 
+impl Drop for Kestrel {
+    fn drop(&mut self) {
+        let data_dir = self.data_dir.path().to_path_buf();
+        if !data_dir.join("kestrel.db").exists() {
+            return;
+        }
+        let driver = kestrel::compute::Driver::LocalExec(kestrel::compute::LocalExec::running(
+            support::supervisor::binary(),
+        ));
+        support::destroy_instances_on_drop(data_dir, Some(driver));
+    }
+}
+
 /// A control plane running over a [`Kestrel`]'s data directory, and every line it has said.
 struct Booted {
     child: Child,
     said: Arc<Mutex<String>>,
     operator: String,
+    stopped: bool,
 }
 
 impl Kestrel {
@@ -80,6 +94,7 @@ impl Kestrel {
             child,
             said,
             operator,
+            stopped: false,
         }
     }
 }
@@ -156,6 +171,7 @@ impl Booted {
         self.child
             .wait()
             .expect("the control plane should be waitable");
+        self.stopped = true;
     }
 
     /// Signalled rather than killed, so the work role sees a stopped Session's supervisor off the
@@ -168,11 +184,21 @@ impl Booted {
         self.child
             .wait()
             .expect("the control plane should be waitable");
+        self.stopped = true;
     }
 }
 
 impl Drop for Booted {
     fn drop(&mut self) {
+        if self.stopped || self.child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        #[cfg(unix)]
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::kill(self.child.id() as i32, libc::SIGTERM);
+        }
+        #[cfg(not(unix))]
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -484,6 +510,70 @@ fn a_session_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
             .refused(&["session", "stop", &session])
             .contains("has already ended"),
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn dropping_a_control_plane_with_a_waiting_session_stops_its_supervisor() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Converses, "info");
+    declared(&booted);
+    let workspace = opened(&booted);
+    booted.run(&["session", "enqueue", "--workspace", &workspace]);
+    let listed = booted.until(
+        &[
+            "session",
+            "list",
+            "--workspace",
+            &workspace,
+            "--json",
+            "state,supervisor",
+        ],
+        |listed| listed.iter().any(|session| session["state"] == "waiting"),
+        "reach a waiting session",
+    );
+    let supervisor = listed[0]["supervisor"]
+        .as_str()
+        .expect("the waiting session has a supervisor")
+        .to_owned();
+
+    drop(booted);
+
+    support::environment::Environment::named(&supervisor)
+        .is_gone()
+        .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn killing_a_control_plane_without_restarting_stops_its_supervisor() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Converses, "info");
+    declared(&booted);
+    let workspace = opened(&booted);
+    booted.run(&["session", "enqueue", "--workspace", &workspace]);
+    let listed = booted.until(
+        &[
+            "session",
+            "list",
+            "--workspace",
+            &workspace,
+            "--json",
+            "state,supervisor,instance",
+        ],
+        |listed| listed.iter().any(|session| session["state"] == "waiting"),
+        "reach a waiting session",
+    );
+    let supervisor = listed[0]["supervisor"].as_str().unwrap().to_owned();
+    let instance = listed[0]["instance"].as_str().unwrap().to_owned();
+
+    booted.killed();
+    drop(kestrel);
+
+    support::environment::Environment::named(&supervisor)
+        .is_gone()
+        .await;
+    assert!(!support::environment::Environment::root_of(&instance).exists());
 }
 
 /// ADR-0002's definition of done for rung 0.1, out of process and against a real `SIGKILL`:

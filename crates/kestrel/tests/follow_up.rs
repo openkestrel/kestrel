@@ -226,7 +226,9 @@ async fn cleanup_left_by_a_stopped_worker_is_found_before_the_workspace_continue
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
     let (active, _) = kestrel.dispatch_session(workspace.id).await;
-    kestrel.supervised(&active, "local-exec/2147483647").await;
+    kestrel
+        .supervised(&active, "local-exec/2147483647@kestrel-missing")
+        .await;
     assert!(
         kestrel
             .post_while_busy(workspace.id, "operator", "continue after cleanup")
