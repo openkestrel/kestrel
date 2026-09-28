@@ -79,6 +79,11 @@ organization. A session mid-turn, trailing, or blocked on an approval, occupies 
 waiting session does not, and neither does an unbriefed one.
 _Avoid_: slot (alone), capacity, concurrency
 
+**Held Message**:
+A message posted while its workspace's unfinished session cannot take it yet. It is workspace state,
+not a transcript entry, and its author may edit or withdraw it until a turn takes it.
+_Avoid_: waiting message, pending message, queued message
+
 **Interruption**:
 Ending a session's active turn at a person's request, keeping the session and its conversation. It
 names who interrupted and does not make them a participant.
@@ -382,8 +387,8 @@ words from drifting.
   the session is **trailing**, keeps its active-work slot, and its instance is never reclaimed.
 - A turn that **ended on its own** with no message, narration or detail **fails** its session: a
   prompt that never became work is not an answer. An interrupted turn never fails its session.
-- Messages posted during a turn **wait** as workspace state, editable by their author, and drain
-  into **one** turn when it ends; the transcript records them only when taken.
+- Messages posted during a turn are **held** as workspace state, editable by their author, and
+  drain into **one** turn when it ends; the transcript records them only when taken.
 - A session's agent conversation is rooted in the checkout of the **first** repository its
   workspace fixed; the workspace's other repositories sit beside it.
 - What a harness writes as diagnostics reaches the **operator**, never the transcript: it is not the
