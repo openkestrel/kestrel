@@ -1,11 +1,15 @@
 //! The boundary a Client reaches the control plane over, specified by `openapi/operator.json`.
 //! It authenticates nobody, so it is served apart from the link and on loopback (ADR-0015).
 
+use std::net::IpAddr;
 use std::time::Duration;
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
+use axum::http::header::{HOST, ORIGIN};
+use axum::http::uri::Authority;
 use axum::http::{HeaderMap, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
@@ -167,6 +171,50 @@ pub fn router(store: Store, shutdown: CancellationToken) -> Router {
         .route(SESSION_STOP, post(stop_session))
         .route(TRANSCRIPT, get(transcript))
         .with_state(ControlPlane { store, shutdown })
+        .layer(middleware::from_fn(addressed_here))
+}
+
+async fn addressed_here(request: Request, next: Next) -> Response {
+    match addressed_from_here(&request) {
+        Ok(()) => next.run(request).await,
+        Err(refused) => refused.into_response(),
+    }
+}
+
+fn addressed_from_here(request: &Request) -> Result<(), Refused> {
+    let host = request
+        .headers()
+        .get(HOST)
+        .and_then(|host| host.to_str().ok())
+        .or_else(|| request.uri().authority().map(Authority::as_str))
+        .filter(|host| cannot_be_rebound(host))
+        .ok_or_else(|| {
+            Refused::Forbidden("the request names a host other than this control plane".to_owned())
+        })?;
+
+    match request.headers().get(ORIGIN).map(|origin| origin.to_str()) {
+        None => Ok(()),
+        Some(Ok(origin)) if origin.eq_ignore_ascii_case(&format!("http://{host}")) => Ok(()),
+        Some(_) => Err(Refused::Forbidden(
+            "the request comes from an origin other than this control plane".to_owned(),
+        )),
+    }
+}
+
+// Any port, because compose and a tunnel publish the boundary on one it was never bound to.
+fn cannot_be_rebound(host: &str) -> bool {
+    let Ok(authority) = host.parse::<Authority>() else {
+        return false;
+    };
+    let name = authority.host();
+
+    !authority.as_str().contains('@')
+        && (name.eq_ignore_ascii_case("localhost")
+            || name
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<IpAddr>()
+                .is_ok())
 }
 
 #[derive(Deserialize)]
@@ -1849,6 +1897,7 @@ fn last_event_id(headers: &HeaderMap) -> Result<Option<Cursor>, Refused> {
 
 enum Refused {
     BadRequest(String),
+    Forbidden(String),
     NotFound(String),
     Conflict(String),
     Unprocessable(String),
@@ -1859,6 +1908,7 @@ impl Refused {
     fn into_error(self) -> BoxError {
         match self {
             Refused::BadRequest(why)
+            | Refused::Forbidden(why)
             | Refused::NotFound(why)
             | Refused::Conflict(why)
             | Refused::Unprocessable(why) => why.into(),
@@ -1901,6 +1951,7 @@ impl IntoResponse for Refused {
         let busy = matches!(&self, Refused::Unavailable(error) if store::busy(error));
         let (status, message) = match self {
             Refused::BadRequest(why) => (StatusCode::BAD_REQUEST, why),
+            Refused::Forbidden(why) => (StatusCode::FORBIDDEN, why),
             Refused::NotFound(why) => (StatusCode::NOT_FOUND, why),
             Refused::Conflict(why) => (StatusCode::CONFLICT, why),
             Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why),
