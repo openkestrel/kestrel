@@ -114,6 +114,7 @@ async fn the_transcript_of_a_session_that_outlived_a_restart_has_no_gap_and_no_d
         transcript(&kestrel, &workspace).await,
         vec![
             "participant joined  builder".to_owned(),
+            "said  operator  do the work this environment was provisioned for".to_owned(),
             format!("session started  {}  builder", session.id),
             "said  builder  half of one message, and the other half".to_owned(),
             "said  builder  a second message".to_owned(),
@@ -127,7 +128,7 @@ async fn the_transcript_of_a_session_that_outlived_a_restart_has_no_gap_and_no_d
             .iter()
             .map(|entry| entry.seq)
             .collect::<Vec<_>>(),
-        (1..=5).collect::<Vec<_>>()
+        (1..=6).collect::<Vec<_>>()
     );
 
     assert!(supervisor.finishes().await.success());
@@ -280,7 +281,7 @@ async fn a_report_that_skips_one_the_environment_has_yet_to_send_is_refused() {
         .await;
 
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(kestrel.transcript(session.workspace).await.len(), 1);
+    assert_eq!(kestrel.transcript(session.workspace).await.len(), 2);
 
     kestrel.teardown().await;
 }
@@ -300,7 +301,7 @@ async fn a_report_that_changes_the_sessions_record_and_is_not_numbered_is_refuse
         .await;
 
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(kestrel.transcript(session.workspace).await.len(), 1);
+    assert_eq!(kestrel.transcript(session.workspace).await.len(), 2);
 
     kestrel.teardown().await;
 }

@@ -392,6 +392,7 @@ fn the_client_recognises_every_instruction_the_published_document_declares() {
             "start" => serde_json::json!({
                 "kind": kind,
                 "checkout": {"repositories": [], "base": "main", "branch": "main"},
+                "prompt": "do the work",
             }),
             "prompt" => serde_json::json!({"kind": kind, "prompt": "and the tests"}),
             _ => serde_json::json!({"kind": kind}),

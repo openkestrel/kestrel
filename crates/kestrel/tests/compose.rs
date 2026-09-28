@@ -266,7 +266,7 @@ async fn a_session_provisions_an_instance_and_stops_its_supervisor_through_the_f
     let stack = Stack::up();
     let namespace = compose::namespace_for(&docker::repository());
     let workspace = a_workspace(&stack);
-    let session = stack.ran(&["session", "enqueue", "--workspace", &workspace]);
+    let session = stack.ran(&["workspace", "post", &workspace, "go"]);
 
     let instance = compose::until("the session to reach an instance", || {
         listed(&stack, &session).instance

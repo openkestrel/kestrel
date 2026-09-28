@@ -28,9 +28,6 @@ use tokio::task::JoinHandle;
 use crate::link::{Cost, Usage};
 use crate::permission::{self, Subject};
 
-/// Nothing on the link carries work for a Session, so every Session asks the same thing.
-const PROMPT: &str = "Do the work this environment was provisioned for.";
-
 /// What this Environment was configured to drive, what the Session asks of it, and where what the
 /// agent writes to stderr goes. Which Harness is on the other end is the configuration's
 /// business, never this module's.
@@ -570,19 +567,6 @@ async fn select(
     }
 
     Ok(Some(selects.on))
-}
-
-pub fn prompt(entries: &[crate::link::Entry]) -> String {
-    if entries.is_empty() {
-        return PROMPT.to_owned();
-    }
-
-    let context = entries
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("Earlier context, oldest first:\n{context}\n\n{PROMPT}")
 }
 
 /// ACP's `terminal` method launches an interactive process for someone to log in at, so an

@@ -166,6 +166,12 @@ async fn a_message_arriving_during_a_session_waits_for_that_session_to_end() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
     let (active, _) = kestrel.dispatch_session(workspace.id).await;
+    let before: Vec<Entry> = kestrel
+        .transcript(workspace.id)
+        .await
+        .into_iter()
+        .map(|recorded| recorded.entry)
+        .collect();
 
     assert!(
         kestrel
@@ -180,14 +186,15 @@ async fn a_message_arriving_during_a_session_waits_for_that_session_to_end() {
             .is_none()
     );
     assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
-    assert!(
-        !kestrel
-            .transcript(workspace.id)
-            .await
-            .iter()
-            .any(|recorded| {
-                matches!(&recorded.entry, Entry::Said { .. } | Entry::Messages { .. })
-            })
+    let after: Vec<Entry> = kestrel
+        .transcript(workspace.id)
+        .await
+        .into_iter()
+        .map(|recorded| recorded.entry)
+        .collect();
+    assert_eq!(
+        after, before,
+        "a message posted while busy should not yet be on the record"
     );
 
     kestrel.complete_session(&active).await;

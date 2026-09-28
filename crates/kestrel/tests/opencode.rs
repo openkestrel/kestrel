@@ -238,7 +238,7 @@ async fn what_the_agent_says_reaches_the_transcript_and_what_it_does_inside_the_
     assert_eq!(
         transcript
             .iter()
-            .filter(|entry| entry.starts_with("said"))
+            .filter(|entry| entry.starts_with("said  builder"))
             .cloned()
             .collect::<Vec<_>>(),
         vec![

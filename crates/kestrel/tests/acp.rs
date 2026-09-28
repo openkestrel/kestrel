@@ -96,7 +96,7 @@ async fn what_the_agent_says_reaches_the_transcript_coalesced_by_the_message_it_
         transcript(&kestrel, &workspace)
             .await
             .into_iter()
-            .filter(|entry| entry.starts_with("said"))
+            .filter(|entry| entry.starts_with("said  builder"))
             .collect::<Vec<_>>(),
         vec![
             "said  builder  half of one message, and the other half".to_owned(),
@@ -304,7 +304,7 @@ async fn an_agent_that_does_not_answer_acp_v1_fails_the_session_rather_than_bein
         !transcript(&kestrel, &workspace)
             .await
             .iter()
-            .any(|entry| entry.starts_with("said")),
+            .any(|entry| entry.starts_with("said  builder")),
         "an agent that was never initialized said something"
     );
 

@@ -44,14 +44,8 @@ const KEEP_ALIVE: Duration = Duration::from_secs(15);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Instruction {
-    Start {
-        checkout: Checkout,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        prompt: Option<String>,
-    },
-    Prompt {
-        prompt: String,
-    },
+    Start { checkout: Checkout, prompt: String },
+    Prompt { prompt: String },
     Stop,
 }
 
@@ -123,12 +117,20 @@ pub fn router(store: Store, shutdown: CancellationToken) -> Router {
 }
 
 /// A Brief nothing has followed is the agent's whole prompt, verbatim, so a harness still
-/// recognises the skill invocation it may lead with.
+/// recognises the skill invocation it may lead with. Otherwise the instruction is the message or
+/// messages that started this Session; a Session the control plane finds neither for is not
+/// started with an improvised one.
 pub async fn start(store: &Store, session: &Session) -> Result<SentInstruction> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(session.workspace).await?;
     workspace.accepts("turn")?;
-    let prompt = tx.log().unfollowed_brief(&workspace).await?;
+    let prompt = instruction(&mut tx, &workspace).await?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "the workspace {} has no unfollowed brief and nothing posted since its last session \
+             ended, so this session has no instruction",
+            workspace.id
+        )
+    })?;
     let sent = tx
         .workspaces()
         .send_instruction(
@@ -143,6 +145,35 @@ pub async fn start(store: &Store, session: &Session) -> Result<SentInstruction> 
     tx.commit().await?;
 
     Ok(sent)
+}
+
+/// A Brief nothing has followed, exactly as it was written; otherwise the message or messages
+/// that started this Session, with everything the Transcript held before them labeled as context
+/// ahead of them.
+async fn instruction(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Option<String>> {
+    if let Some(brief) = tx.log().unfollowed_brief(workspace).await? {
+        return Ok(Some(brief));
+    }
+
+    let messages = tx.log().starting_messages(workspace).await?;
+    if messages.is_empty() {
+        return Ok(None);
+    }
+    let instruction = crate::work::follow_up(&messages);
+
+    let context = tx.log().context_before_starting(workspace).await?;
+    if context.is_empty() {
+        return Ok(Some(instruction));
+    }
+    let context = context
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Ok(Some(format!(
+        "Earlier context, oldest first:\n{context}\n\n{instruction}"
+    )))
 }
 
 /// The next turn of a waiting Session, in the same agent conversation (ADR-0024).
