@@ -156,7 +156,11 @@ queued Session naming what it waits on, the Active-Work Slot and live Instance l
 occupies them, and Waiting Sessions apart from the queue. Reading it never moves dispatch, and
 nothing in it estimates a start time.
 A person can interrupt a turn without ending its Session, and sees, edits or withdraws the messages
-held for the next one.
+held for the next one. Between turns a person changes a Session's options: its model, mode, thought
+level and whatever else its harness offers, warned when a change costs the prompt cache. A Trigger
+declares them by what they are for. The Session shows its harness's title, its usage as it happens,
+and the commands its harness offers, and a held command is its own turn
+([ADR-0041](docs/adr/0041-a-sessions-options-are-its-harnesss-config-options.md)).
 Feedback is prompt, work state is clear, and the view is accessible and responsive. The same event
 stream serves the CLI and browser Client through the operator boundary
 ([ADR-0015](docs/adr/0015-the-cli-is-a-client-not-a-role.md)). Presence is best-effort, never a
@@ -170,7 +174,9 @@ wider than the choices policy consults it on — every decision kestrel made una
 inputs it was decided from and its verdict, whether or not a policy was consulted, and a governed
 decision is one kind of entry among them. Deliberate deletion lands here too, along with the tombstone
 that keeps a transcript gap-free and the rule that deleting a workspace removes nothing from the audit
-record.
+record. A Session's mode is a governed choice: a mode that stops the agent asking permission would
+otherwise act outside Policy, so Policy decides which modes an operator, a Trigger or the agent may
+select, and each change is audited.
 
 **This is the rung on which kestrel becomes usable by someone who is not the maintainer.** Below it,
 kestrel acts on your repository with no approval path and no audit record: defensible for the one

@@ -40,10 +40,16 @@ _Avoid_: thread, conversation, worktree, mission
 **Session**:
 One execution of a harness on a workspace's instance: one agent, one context, from start to end.
 Has a start, an end, and an exit status, and may contain many turns in one ACP conversation. Work
-that is queued but not yet started is a session in a queued state. The model driving the harness's
-main loop belongs to the session; what that loop reaches for beneath itself is the harness's
-business.
+that is queued but not yet started is a session in a queued state. Its options, including the model
+driving the harness's main loop, belong to the session; what that loop reaches for beneath itself
+is the harness's business.
 _Avoid_: run, job, task, execution, invocation
+
+**Option**:
+A setting a harness offers one session, with the values it may take and the one it has now: its
+model, its mode, its thought level, and whatever else that harness offers. A trigger or an operator
+declares an option by what it is for, never by one harness's name for it.
+_Avoid_: config, setting, preference
 
 **Turn**:
 One prompt and response within a session's continuing agent conversation. Its response can be
