@@ -129,10 +129,12 @@ the faster ones are only faster.
 
 The rung is bigger than the read `0.1` built, and this is where the transcript catches up. It is
 rewritten into three kinds under one order and one cursor — shared state, narration, and detail — and
-a read names the kinds it wants, with shared state alone the page a human gets joining late. Reports
-stop being drained at session end and go up as they happen, so a workspace is readable in real time and an
-agent stuck thrashing is visible while it thrashes, not after
-([ADR-0020](docs/adr/0020-the-transcript-records-what-the-runtime-emits-in-kinds.md)).
+a read names the kinds it wants. A person joining late gets shared state plus a summary of each
+Activity; expanding one reads its narration and detail. Each completed unit reaches the Transcript
+as it completes rather than being drained at session end, and running tools appear as transient
+Session state, so an agent stuck thrashing is visible while it thrashes
+([ADR-0020](docs/adr/0020-the-transcript-records-what-the-runtime-emits-in-kinds.md),
+[ADR-0037](docs/adr/0037-a-transcript-read-summarizes-the-activity-it-omits.md)).
 Narration and detail content lasts 30 days from append; expiry leaves a cursor-preserving marker,
 and large payloads live behind references ([ADR-0033](docs/adr/0033-expire-transcript-detail-in-place.md)).
 
@@ -141,30 +143,44 @@ declared correlates the `pull_request` event the integration already delivers, s
 knows a pull request exists without the tool calls that pushed it
 ([ADR-0019](docs/adr/0019-kestrel-declares-the-branch-and-learns-the-pull-request.md)). Joining is a
 second consumer of the same bounded window and cursor a resuming session already uses. A connection is
-never the unit of workspace continuity — reconnecting with a cursor is the normal path rather than a
-fallback — and presence is best-effort and never gates anything, because a stale presence entry that
-could block an approval would deadlock the workspace it was meant to describe.
+never the unit of workspace continuity: a follow resumes its Transcript cursor after a disconnect,
+while Organization change notices prompt current-state reads again. Presence travels with a follow,
+is held only in memory, and never gates anything.
 
-**The browser Client is where joining surfaces.** It starts and follows Workspaces, shows the live
-transcript, shared state, diffs and read-only live files, and lets a person take a turn. It shows the
-declared branch, learned pull request or merge request, and unpublished Instance changes, including
-committed but unpushed, uncommitted and untracked work. It shows the requested and effective model,
-and reports ACP conversation continuity separately from the durable kestrel Workspace: losing harness
-context must not look like successful resume. The queue is one operator snapshot
-derived at read from the rules dispatch applies: ready Sessions numbered in FIFO order, each other
+**The browser Client is where joining surfaces.** It is a static Client served by the loopback
+operator listener the CLI uses, reachable through a tunnel but not published as a public listener. It
+opens and follows Workspaces, shows the live Transcript, diffs and read-only live files, and lets a
+person take a turn. Opening a Workspace without a Brief starts its first Session unbriefed, ready for
+the first message to become its Brief ([ADR-0038](docs/adr/0038-a-session-may-start-before-its-brief.md)).
+The Client shows the declared branch, learned pull request, and Instance work, distinguishing pushed,
+committed, staged, changed and untracked work. The Instance's supervisor reports that work live over
+its link ([ADR-0039](docs/adr/0039-the-supervisor-lives-with-its-instance.md)). It shows the
+requested and effective model, and reports ACP conversation continuity separately from the durable
+kestrel Workspace: losing harness context must not look like successful resume. The queue is one
+operator snapshot derived at read from the rules dispatch applies: ready Sessions numbered in FIFO
+order, each other
 queued Session naming what it waits on, the Active-Work Slot and live Instance limits with what
 occupies them, and Waiting Sessions apart from the queue. Reading it never moves dispatch, and
 nothing in it estimates a start time.
-A person can interrupt a turn without ending its Session, and sees, edits or withdraws the messages
-held for the next one. Between turns a person changes a Session's options: its model, mode, thought
-level and whatever else its harness offers, warned when a change costs the prompt cache. A Trigger
-declares them by what they are for. The Session shows its harness's title, its usage as it happens,
-and the commands its harness offers, and a held command is its own turn
+
+A person joins under a declared name when they first take a turn. They can interrupt a working Turn
+without ending its Session, and see, edit or withdraw Held Messages until the agent takes them. A
+Turn that has answered while its agent's work continues leaves the Session trailing: its open work
+stays visible and holds an Active-Work Slot until it settles; it can take another Turn immediately
+([ADR-0040](docs/adr/0040-a-session-trails-its-answer-while-its-work-runs.md)).
+
+Between Turns a person changes a Session's options: its model, mode, thought level and whatever else
+its harness offers, warned when a change costs the prompt cache. A Trigger declares them by what they
+are for. The Session shows its harness's title, its usage as it happens, and the commands its harness
+offers, and a Held Message beginning with a command becomes its own Turn
 ([ADR-0041](docs/adr/0041-a-sessions-options-are-its-harnesss-config-options.md)).
+
 Feedback is prompt, work state is clear, and the view is accessible and responsive. The same event
-stream serves the CLI and browser Client through the operator boundary
-([ADR-0015](docs/adr/0015-the-cli-is-a-client-not-a-role.md)). Presence is best-effort, never a
-prerequisite for turn-taking or approval.
+stream and current-state reads serve Clients through the operator boundary, while the browser also
+uses change notices that the CLI does not consume at this rung
+([ADR-0015](docs/adr/0015-the-cli-is-a-client-not-a-role.md),
+[ADR-0035](docs/adr/0035-organization-change-notices-and-workspace-presence.md),
+[ADR-0036](docs/adr/0036-the-browser-client-shares-the-loopback-operator-origin.md)).
 
 ### 0.4 — kestrel asks before it acts
 
