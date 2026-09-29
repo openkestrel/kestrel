@@ -3,6 +3,9 @@
 //! its volume. Every resource the suite touches is scoped to a namespace derived from this
 //! checkout, so two checkouts on one daemon never address the same project, volume, network,
 //! image or host port.
+//!
+//! Each carries a label naming this checkout too (`CHECKOUT_LABELS`), so a checkout deleted
+//! without bringing its stack down can be swept by the next suite that runs.
 
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
@@ -12,11 +15,17 @@ use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use super::client::{self, Finished, Invocation};
-use super::docker::{Ran, checkout_digest, ran_against, repository};
+use super::docker::{
+    Ran, checkout_digest, checkout_path, ran_against, repository, sweep_deleted_checkouts,
+};
 use super::images;
 
 pub const CONTROL_PLANE: &str = "kestrel";
 pub const FILTER: &str = "socket-proxy";
+/// What the suite adds to the shipped compose file: the label naming the checkout every resource
+/// belongs to, so a sweep can take back a deleted checkout's. An operator renders `compose.yaml`
+/// alone and never sees it.
+const CHECKOUT_LABELS: &str = "crates/kestrel/tests/support/compose-checkout-labels.yaml";
 const PATIENCE: Duration = Duration::from_secs(60);
 
 /// Everything one checkout names its stack with, so no two checkouts on one daemon address
@@ -214,6 +223,7 @@ pub fn built() -> &'static [String] {
 
     BUILT.get_or_init(|| {
         host_lock();
+        sweep_deleted_checkouts();
         match (
             images::sourced(images::ENV),
             images::sourced(images::CONTROL_PLANE),
@@ -311,8 +321,19 @@ fn completed(arguments: &[&str], doing: &str) -> String {
 }
 
 fn ran(arguments: &[&str]) -> Ran {
-    let mut compose = vec!["compose"];
+    let namespace = namespace();
+    let checkout = checkout_path(&repository());
+    let mut variables = namespace.environment().to_vec();
+    variables.push(("KESTREL_TEST_CHECKOUT", checkout.as_str()));
+
+    let mut compose = vec![
+        "compose",
+        "--file",
+        "compose.yaml",
+        "--file",
+        CHECKOUT_LABELS,
+    ];
     compose.extend_from_slice(arguments);
 
-    ran_against(&namespace().environment(), &compose)
+    ran_against(&variables, &compose)
 }

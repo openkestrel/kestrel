@@ -2,9 +2,11 @@
 
 A **Subscription Profile** carries a person's subscription access as things kestrel can name: a
 variable, which reaches the Agent Runtime's environment, or a file beneath the agent's home that the
-person names ([ADR-0025](0025-subscription-profiles-are-personal.md)). It does not carry an Agent
-Runtime's own credential database, even when that is where the runtime keeps the login and refreshes
-it. opencode 2 moved credentials into SQLite (`~/.local/share/opencode/opencode.db`), importing a
+person names ([ADR-0025](0025-subscription-profiles-are-personal.md)). Variables beginning with
+`KESTREL_` are reserved for supervisor configuration and cannot be named by a Profile. It does not
+carry an Agent Runtime's own credential database, even when that is where the runtime keeps the
+login and refreshes it. opencode 2 moved credentials into SQLite
+(`~/.local/share/opencode/opencode.db`), importing a
 legacy `auth.json` once and writing refreshed OAuth tokens only there — so a Profile that names
 `auth.json` under opencode 2 is a **seed**: the runtime imports it into a fresh database, and kestrel
 does not read the refreshed token back. A runtime may add a named credential surface; kestrel will

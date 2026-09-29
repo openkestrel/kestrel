@@ -1,11 +1,11 @@
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{CorrelationMiss, Fires, Templates, Trigger};
+use crate::domain::{Correlation, Fires, Templates, Trigger};
 use crate::filter::Filter;
 use crate::store::Store;
 use crate::template::Template;
-use crate::trigger::{allowed, check_miss};
+use crate::trigger::allowed;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,6 +40,7 @@ pub struct TriggerDeclaration {
     pub branch: Option<String>,
     pub correlation: Option<String>,
     pub on_miss: Option<String>,
+    pub on_open_workspace: Option<String>,
     pub project: String,
     pub agent: String,
     #[serde(default)]
@@ -92,7 +93,6 @@ pub enum ApplyMode {
 struct ParsedTrigger {
     filter: Filter,
     templates: Templates,
-    on_miss: Option<CorrelationMiss>,
 }
 
 struct Compared {
@@ -194,7 +194,6 @@ pub async fn apply(
                     &document.trigger.name,
                     &fires,
                     &parsed.templates,
-                    parsed.on_miss,
                     &project,
                     &agent,
                     &allows,
@@ -213,7 +212,6 @@ pub async fn apply(
                     trigger,
                     &fires,
                     &parsed.templates,
-                    parsed.on_miss,
                     &project,
                     &agent,
                     &allows,
@@ -295,6 +293,11 @@ pub(crate) fn sharing_a_directory(repositories: &[String]) -> Option<String> {
 }
 
 fn parse_trigger(declaration: &TriggerDeclaration) -> Result<ParsedTrigger> {
+    let correlation = Correlation::parse(
+        declaration.correlation.as_deref(),
+        declaration.on_miss.as_deref(),
+        declaration.on_open_workspace.as_deref(),
+    )?;
     let templates = Templates {
         brief: declaration
             .brief
@@ -306,25 +309,12 @@ fn parse_trigger(declaration: &TriggerDeclaration) -> Result<ParsedTrigger> {
             .map(str::parse)
             .transpose()
             .context("a trigger branch")?,
-        correlation: declaration
-            .correlation
-            .as_deref()
-            .map(str::parse)
-            .transpose()
-            .context("a trigger correlation")?,
+        correlation,
     };
-    let on_miss = declaration
-        .on_miss
-        .as_deref()
-        .map(str::parse)
-        .transpose()
-        .context("a trigger on_miss")?;
-    check_miss(&templates, on_miss)?;
 
     Ok(ParsedTrigger {
         filter: Filter::from_json(&declaration.filter).context("a trigger filter")?,
         templates,
-        on_miss,
     })
 }
 
@@ -388,10 +378,21 @@ fn trigger_change(
                 parsed
                     .templates
                     .correlation
-                    .as_ref()
+                    .template()
                     .map(ToString::to_string),
             ),
-            ("on miss", parsed.on_miss.map(|miss| miss.to_string())),
+            (
+                "on miss",
+                parsed
+                    .templates
+                    .correlation
+                    .on_miss()
+                    .map(|miss| miss.to_string()),
+            ),
+            (
+                "on open workspace",
+                Some(parsed.templates.correlation.on_open_workspace().to_string()),
+            ),
             ("brief", Some(parsed.templates.brief.to_string())),
         ],
     )
@@ -423,10 +424,27 @@ fn described_trigger(trigger: &Trigger) -> Vec<(&'static str, Option<String>)> {
             trigger
                 .templates
                 .correlation
-                .as_ref()
+                .template()
                 .map(ToString::to_string),
         ),
-        ("on miss", trigger.on_miss.map(|miss| miss.to_string())),
+        (
+            "on miss",
+            trigger
+                .templates
+                .correlation
+                .on_miss()
+                .map(|miss| miss.to_string()),
+        ),
+        (
+            "on open workspace",
+            Some(
+                trigger
+                    .templates
+                    .correlation
+                    .on_open_workspace()
+                    .to_string(),
+            ),
+        ),
         ("brief", Some(trigger.templates.brief.to_string())),
     ]
 }

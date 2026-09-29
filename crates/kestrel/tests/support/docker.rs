@@ -1,6 +1,7 @@
 //! The docker CLI as a test drives it: one place an invocation goes through, and one place a
 //! failure says what it was doing.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -85,9 +86,130 @@ pub fn repository() -> PathBuf {
 }
 
 pub fn checkout_digest(checkout: &Path) -> String {
-    let canonical = std::fs::canonicalize(checkout).unwrap_or_else(|_| checkout.to_path_buf());
+    let canonical = canonical(checkout);
     let mut hashed = Sha256::new();
     hashed.update(canonical.to_string_lossy().as_bytes());
 
     kestrel::hex::encode(&hashed.finalize())[..16].to_owned()
+}
+
+/// The label every suite stamps on what it leaves on the daemon, naming the checkout that owns
+/// it, so a sweep can tell a live checkout's resources from a deleted one's.
+pub const CHECKOUT_LABEL: &str = "kestrel.test.checkout";
+
+/// The checkout a label names: canonical, so one checkout reached by another path is still one,
+/// and a sweep can ask whether it is on disk at all.
+pub fn checkout_path(checkout: &Path) -> String {
+    canonical(checkout).to_string_lossy().into_owned()
+}
+
+fn canonical(checkout: &Path) -> PathBuf {
+    std::fs::canonicalize(checkout).unwrap_or_else(|_| checkout.to_path_buf())
+}
+
+/// The resources a sweep takes: those whose label names a checkout that is no longer on disk.
+/// The checkout running the sweep keeps its own, because its path is still there.
+pub fn stale<T>(resources: impl IntoIterator<Item = (T, String)>) -> Vec<T> {
+    resources
+        .into_iter()
+        .filter(|(_, checkout)| !Path::new(checkout).exists())
+        .map(|(resource, _)| resource)
+        .collect()
+}
+
+/// Takes back what every checkout deleted since the last run left on the daemon. A suite runs
+/// this before it builds, so one live checkout collects every other that is gone. Containers
+/// go first: an image or a volume a live container holds is one the daemon will not take.
+pub fn sweep_deleted_checkouts() {
+    for name in stale(labelled_containers()) {
+        ran(&["container", "rm", "--force", name.as_str()]);
+    }
+    for name in stale(labelled_images()) {
+        ran(&["image", "rm", "--force", name.as_str()]);
+    }
+    for name in stale(labelled_volumes()) {
+        ran(&["volume", "rm", "--force", name.as_str()]);
+    }
+    for name in stale(labelled_networks()) {
+        ran(&["network", "rm", name.as_str()]);
+    }
+}
+
+/// `(name, checkout)` for every resource of one kind carrying the label. The value is read back
+/// with an inspect rather than taken from the filter, so a resource the filter matched without
+/// carrying the label itself is left alone.
+fn labelled(list: &[&str], inspect: &[&str]) -> Vec<(String, String)> {
+    let filter = format!("label={CHECKOUT_LABEL}");
+    let mut listing = list.to_vec();
+    listing.extend_from_slice(&["--filter", &filter]);
+    let listed = ran(&listing).out;
+    let mut names = listed.lines().map(str::to_owned).collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+    if names.is_empty() {
+        return Vec::new();
+    }
+
+    let mut inspecting = inspect.to_vec();
+    inspecting.extend(names.iter().map(String::as_str));
+
+    ran(&inspecting)
+        .out
+        .lines()
+        .filter_map(|line| {
+            let (name, labels) = line.split_once('\t')?;
+            let labels: HashMap<String, String> = serde_json::from_str(labels).ok()?;
+            let checkout = labels.get(CHECKOUT_LABEL)?;
+
+            Some((name.to_owned(), checkout.clone()))
+        })
+        .collect()
+}
+
+fn labelled_images() -> Vec<(String, String)> {
+    labelled(
+        &["image", "ls", "--quiet", "--no-trunc"],
+        &[
+            "image",
+            "inspect",
+            "--format",
+            "{{.Id}}\t{{json .Config.Labels}}",
+        ],
+    )
+}
+
+fn labelled_containers() -> Vec<(String, String)> {
+    labelled(
+        &["container", "ls", "--all", "--quiet", "--no-trunc"],
+        &[
+            "container",
+            "inspect",
+            "--format",
+            "{{.Id}}\t{{json .Config.Labels}}",
+        ],
+    )
+}
+
+fn labelled_volumes() -> Vec<(String, String)> {
+    labelled(
+        &["volume", "ls", "--quiet"],
+        &[
+            "volume",
+            "inspect",
+            "--format",
+            "{{.Name}}\t{{json .Labels}}",
+        ],
+    )
+}
+
+fn labelled_networks() -> Vec<(String, String)> {
+    labelled(
+        &["network", "ls", "--quiet"],
+        &[
+            "network",
+            "inspect",
+            "--format",
+            "{{.Name}}\t{{json .Labels}}",
+        ],
+    )
 }

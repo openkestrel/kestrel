@@ -2,7 +2,7 @@ use std::fmt;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -299,6 +299,42 @@ impl fmt::Display for CorrelationMiss {
     }
 }
 
+/// What a firing does to the open Workspace it correlates to, declared rather than inferred from
+/// its Agent: a second CI failure for the same Agent still wants a fresh context (ADR-0031).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OnOpenWorkspace {
+    #[default]
+    Continue,
+    NewSession,
+}
+
+impl OnOpenWorkspace {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            OnOpenWorkspace::Continue => "continue",
+            OnOpenWorkspace::NewSession => "new-session",
+        }
+    }
+}
+
+impl FromStr for OnOpenWorkspace {
+    type Err = anyhow::Error;
+
+    fn from_str(on_open: &str) -> Result<Self> {
+        match on_open {
+            "continue" => Ok(OnOpenWorkspace::Continue),
+            "new-session" => Ok(OnOpenWorkspace::NewSession),
+            other => bail!("{other} is not what a trigger does to an open workspace"),
+        }
+    }
+}
+
+impl fmt::Display for OnOpenWorkspace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl TriggerState {
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -354,7 +390,6 @@ pub struct Trigger {
     pub name: String,
     pub fires: Fires,
     pub templates: Templates,
-    pub on_miss: Option<CorrelationMiss>,
     pub project: Project,
     pub agent: Agent,
     pub allows: Vec<Agent>,
@@ -483,7 +518,84 @@ impl Schedule {
 pub struct Templates {
     pub brief: Template,
     pub branch: Option<Template>,
-    pub correlation: Option<Template>,
+    pub correlation: Correlation,
+}
+
+/// A Trigger's correlation key and what a firing does around it, present together or not at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Correlation {
+    None,
+    On {
+        template: Template,
+        on_miss: CorrelationMiss,
+        on_open_workspace: OnOpenWorkspace,
+    },
+}
+
+impl Correlation {
+    /// The one place a declared correlation, its miss behaviour and its open-workspace behaviour
+    /// are read, so a Trigger never holds one without the others.
+    pub fn parse(
+        correlation: Option<&str>,
+        on_miss: Option<&str>,
+        on_open_workspace: Option<&str>,
+    ) -> Result<Self> {
+        let template = correlation
+            .map(str::parse)
+            .transpose()
+            .context("a trigger correlation")?;
+        let on_miss = on_miss
+            .map(str::parse)
+            .transpose()
+            .context("a trigger on_miss")?;
+        let on_open_workspace = on_open_workspace
+            .map(str::parse)
+            .transpose()
+            .context("a trigger on_open_workspace")?
+            .unwrap_or_default();
+
+        match (template, on_miss) {
+            (Some(template), Some(on_miss)) => Ok(Correlation::On {
+                template,
+                on_miss,
+                on_open_workspace,
+            }),
+            (Some(_), None) => {
+                bail!("a trigger with a correlation must declare what it does when it misses")
+            }
+            (None, Some(_)) => {
+                bail!("a trigger without a correlation cannot declare what it does when it misses")
+            }
+            (None, None) if on_open_workspace == OnOpenWorkspace::NewSession => bail!(
+                "a trigger without a correlation never finds an open workspace to start a new \
+                 session in"
+            ),
+            (None, None) => Ok(Correlation::None),
+        }
+    }
+
+    pub fn template(&self) -> Option<&Template> {
+        match self {
+            Correlation::None => None,
+            Correlation::On { template, .. } => Some(template),
+        }
+    }
+
+    pub fn on_miss(&self) -> Option<CorrelationMiss> {
+        match self {
+            Correlation::None => None,
+            Correlation::On { on_miss, .. } => Some(*on_miss),
+        }
+    }
+
+    pub fn on_open_workspace(&self) -> OnOpenWorkspace {
+        match self {
+            Correlation::None => OnOpenWorkspace::Continue,
+            Correlation::On {
+                on_open_workspace, ..
+            } => *on_open_workspace,
+        }
+    }
 }
 
 /// Fixed when the Workspace opens, so a Project redeclared later moves no Workspace already on it.
@@ -500,7 +612,8 @@ pub struct Workspace {
     pub name: String,
     pub organization: Organization,
     pub project: Project,
-    pub agent: Agent,
+    /// As declared now: its first Session runs this Agent unless it names another.
+    pub opened_with: Agent,
     pub profile: Option<SubscriptionProfile>,
     pub checkout: Checkout,
     pub correlation: Option<String>,
@@ -528,14 +641,14 @@ pub struct Session {
     pub name: String,
     pub organization: OrganizationId,
     pub workspace: WorkspaceId,
+    /// With the harness and model fixed when the Session was enqueued, never redeclared under it.
+    pub agent: Agent,
     pub state: SessionState,
     pub waiting_for: Option<String>,
     pub exit: Option<Exit>,
     pub outcome_message: Option<String>,
     pub instance: Option<String>,
     pub supervisor: Option<String>,
-    /// What this Session names, or none for its Agent's or Harness's default.
-    pub model: Option<String>,
     /// What the Harness reported it worked on.
     pub worked_model: Option<String>,
     pub enqueued_at: Timestamp,

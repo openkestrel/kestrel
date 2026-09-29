@@ -2,13 +2,14 @@
 //! types with the control plane that serves it.
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::{Client, Response, StatusCode, header};
 use serde::{Deserialize, Serialize};
 
 pub const CREDENTIALS: &str = "/link/sessions/{session}/credentials";
-pub const ENTRIES: &str = "/link/sessions/{session}/entries";
 pub const INSTRUCTIONS: &str = "/link/sessions/{session}/instructions";
 pub const REPORTS: &str = "/link/sessions/{session}/reports";
 
@@ -24,7 +25,7 @@ const SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
 pub enum Instruction {
     Start {
         checkout: Checkout,
-        prompt: Option<String>,
+        prompt: String,
     },
     /// The next turn, in the conversation the Session's first one opened.
     Prompt {
@@ -162,28 +163,6 @@ pub struct Delivered {
     pub instruction: Instruction,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct Page {
-    pub entries: Vec<Recorded>,
-    pub cursor: Option<String>,
-    pub more: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Recorded {
-    pub entry: Entry,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(transparent)]
-pub struct Entry(serde_json::Value);
-
-impl std::fmt::Display for Entry {
-    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(out)
-    }
-}
-
 #[derive(Debug)]
 pub enum Error {
     /// The link declined this Environment, or what it sent. Sending it again will not help.
@@ -212,11 +191,39 @@ pub struct Link {
     base: String,
     session: String,
     credential: String,
+    reached: Reached,
 }
 
 pub struct Instructions {
     response: Response,
     buffered: Vec<u8>,
+    reached: Reached,
+}
+
+/// When the link last answered anything, so a supervisor nothing is answering can tell how long
+/// it has been unreachable rather than reconnecting forever. Shared with a stream, because an
+/// instruction arriving is an exchange with the link too.
+#[derive(Clone)]
+struct Reached(Arc<Mutex<Instant>>);
+
+impl Reached {
+    fn now() -> Self {
+        Self(Arc::new(Mutex::new(Instant::now())))
+    }
+
+    fn touched(&self) {
+        *self
+            .0
+            .lock()
+            .expect("when the link was last reached should not be poisoned") = Instant::now();
+    }
+
+    fn elapsed(&self) -> Duration {
+        self.0
+            .lock()
+            .expect("when the link was last reached should not be poisoned")
+            .elapsed()
+    }
 }
 
 impl Link {
@@ -226,7 +233,14 @@ impl Link {
             base: base.to_owned(),
             session: session.to_owned(),
             credential: credential.to_owned(),
+            reached: Reached::now(),
         }
+    }
+
+    /// How long it has been since the link last answered, which is how long a supervisor has been
+    /// cut off from its control plane.
+    pub(crate) fn unreached_for(&self) -> Duration {
+        self.reached.elapsed()
     }
 
     pub async fn report(&self, report: &Report, seq: Option<i64>) -> Result<(), Error> {
@@ -245,6 +259,7 @@ impl Link {
                 response.status().as_u16()
             )));
         }
+        self.reached.touched();
 
         Ok(())
     }
@@ -264,6 +279,7 @@ impl Link {
                 response.status().as_u16()
             )));
         }
+        self.reached.touched();
 
         Ok(response.json().await?)
     }
@@ -284,30 +300,9 @@ impl Link {
                 response.status().as_u16()
             )));
         }
+        self.reached.touched();
 
         Ok(())
-    }
-
-    pub async fn entries(&self, cursor: Option<&str>) -> Result<Page, Error> {
-        let url = match cursor {
-            Some(cursor) => format!(
-                "{}?cursor={}",
-                self.url(ENTRIES),
-                utf8_percent_encode(cursor, NON_ALPHANUMERIC)
-            ),
-            None => self.url(ENTRIES),
-        };
-        let request = self.client.get(url).bearer_auth(&self.credential);
-
-        let response = refuse_if_declined(request.send().await?).await?;
-        if !response.status().is_success() {
-            return Err(Error::Lost(format!(
-                "the link answered {} to a request for entries",
-                response.status().as_u16()
-            )));
-        }
-
-        Ok(response.json().await?)
     }
 
     pub async fn open(&self, cursor: Option<&str>) -> Result<Instructions, Error> {
@@ -327,10 +322,12 @@ impl Link {
                 response.status().as_u16()
             )));
         }
+        self.reached.touched();
 
         Ok(Instructions {
             response,
             buffered: Vec::new(),
+            reached: self.reached.clone(),
         })
     }
 
@@ -350,6 +347,7 @@ impl Instructions {
                         "the stream carried {data}, which is not an instruction: {error}"
                     ))
                 })?;
+                self.reached.touched();
 
                 return Ok(Some(Delivered { id, instruction }));
             }

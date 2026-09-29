@@ -5,7 +5,7 @@ use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 
 use crate::cron::Cron;
 use crate::domain::{
-    Agent, CorrelationMiss, DisableReason, Event, EventRecordId, Fires, Firing, FiringBudget,
+    Agent, Correlation, DisableReason, Event, EventRecordId, Fires, Firing, FiringBudget,
     Organization, Project, Schedule, SubscriptionProfile, Templates, Trigger, TriggerId,
     TriggerState, Workspace, WorkspaceId,
 };
@@ -15,7 +15,7 @@ use crate::store::{agent, integration, organization, profile, project};
 macro_rules! triggers_where {
     ($tail:literal) => {
         concat!(
-            "SELECT id, organization_id, name, filter, every_ms, cron, zone, due_at, brief, branch, correlation, on_miss, project_id,
+            "SELECT id, organization_id, name, filter, every_ms, cron, zone, due_at, brief, branch, correlation, on_miss, on_open_workspace, project_id,
                     agent_id, subscription_profile_id, state, applied, declared_at
              FROM trigger
              WHERE ",
@@ -43,7 +43,6 @@ impl<'a> Triggers<'a> {
         name: &str,
         fires: &Fires,
         templates: &Templates,
-        on_miss: Option<CorrelationMiss>,
         project: &Project,
         agent: &Agent,
         allows: &[Agent],
@@ -56,7 +55,6 @@ impl<'a> Triggers<'a> {
             name: name.to_owned(),
             fires: fires.clone(),
             templates: templates.clone(),
-            on_miss,
             project: project.clone(),
             agent: agent.clone(),
             allows: allows.to_vec(),
@@ -73,9 +71,9 @@ impl<'a> Triggers<'a> {
         sqlx::query(
             "INSERT INTO trigger
                  (id, organization_id, name, filter, every_ms, cron, zone, due_at, brief, branch,
-                  correlation, on_miss, project_id, agent_id, subscription_profile_id, state,
-                  applied, enabled_at, declared_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  correlation, on_miss, on_open_workspace, project_id, agent_id,
+                  subscription_profile_id, state, applied, enabled_at, declared_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(trigger.id.to_string())
         .bind(organization.id.to_string())
@@ -87,8 +85,9 @@ impl<'a> Triggers<'a> {
         .bind(columns.due_at)
         .bind(templates.brief.to_string())
         .bind(templates.branch.as_ref().map(ToString::to_string))
-        .bind(templates.correlation.as_ref().map(ToString::to_string))
-        .bind(on_miss.map(CorrelationMiss::as_str))
+        .bind(templates.correlation.template().map(ToString::to_string))
+        .bind(templates.correlation.on_miss().map(|miss| miss.as_str()))
+        .bind(templates.correlation.on_open_workspace().as_str())
         .bind(project.id.to_string())
         .bind(agent.id.to_string())
         .bind(profile.map(|profile| profile.id.to_string()))
@@ -115,7 +114,6 @@ impl<'a> Triggers<'a> {
         trigger: &Trigger,
         fires: &Fires,
         templates: &Templates,
-        on_miss: Option<CorrelationMiss>,
         project: &Project,
         agent: &Agent,
         allows: &[Agent],
@@ -128,8 +126,9 @@ impl<'a> Triggers<'a> {
         sqlx::query(
             "UPDATE trigger
                 SET filter = ?, every_ms = ?, cron = ?, zone = ?, due_at = ?, brief = ?,
-                    branch = ?, correlation = ?, on_miss = ?, project_id = ?, agent_id = ?,
-                    subscription_profile_id = ?, applied = ?, declared_at = ?
+                    branch = ?, correlation = ?, on_miss = ?, on_open_workspace = ?,
+                    project_id = ?, agent_id = ?, subscription_profile_id = ?, applied = ?,
+                    declared_at = ?
               WHERE id = ?",
         )
         .bind(columns.filter)
@@ -139,8 +138,9 @@ impl<'a> Triggers<'a> {
         .bind(columns.due_at)
         .bind(templates.brief.to_string())
         .bind(templates.branch.as_ref().map(ToString::to_string))
-        .bind(templates.correlation.as_ref().map(ToString::to_string))
-        .bind(on_miss.map(CorrelationMiss::as_str))
+        .bind(templates.correlation.template().map(ToString::to_string))
+        .bind(templates.correlation.on_miss().map(|miss| miss.as_str()))
+        .bind(templates.correlation.on_open_workspace().as_str())
         .bind(project.id.to_string())
         .bind(agent.id.to_string())
         .bind(profile.map(|profile| profile.id.to_string()))
@@ -155,7 +155,6 @@ impl<'a> Triggers<'a> {
         Ok(Trigger {
             fires: fires.clone(),
             templates: templates.clone(),
-            on_miss,
             project: project.clone(),
             agent: agent.clone(),
             allows: allows.to_vec(),
@@ -984,21 +983,23 @@ async fn trigger(connection: &mut SqliteConnection, row: &SqliteRow) -> Result<T
                 "a trigger fires on a filter, an interval or a cron expression, and only one"
             ),
         },
-        templates: Templates {
-            brief: row.get::<String, _>("brief").parse()?,
-            branch: row
-                .get::<Option<String>, _>("branch")
-                .map(|branch| branch.parse())
-                .transpose()?,
-            correlation: row
-                .get::<Option<String>, _>("correlation")
-                .map(|correlation| correlation.parse())
-                .transpose()?,
+        templates: {
+            let correlation = row.get::<Option<String>, _>("correlation");
+            let on_miss = row.get::<Option<String>, _>("on_miss");
+            let on_open_workspace = row.get::<String, _>("on_open_workspace");
+            Templates {
+                brief: row.get::<String, _>("brief").parse()?,
+                branch: row
+                    .get::<Option<String>, _>("branch")
+                    .map(|branch| branch.parse())
+                    .transpose()?,
+                correlation: Correlation::parse(
+                    correlation.as_deref(),
+                    on_miss.as_deref(),
+                    Some(on_open_workspace.as_str()),
+                )?,
+            }
         },
-        on_miss: row
-            .get::<Option<String>, _>("on_miss")
-            .map(|miss| miss.parse())
-            .transpose()?,
         project,
         agent,
         allows,

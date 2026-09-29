@@ -1,11 +1,15 @@
 //! The boundary a Client reaches the control plane over, specified by `openapi/operator.json`.
 //! It authenticates nobody, so it is served apart from the link and on loopback (ADR-0015).
 
+use std::net::IpAddr;
 use std::time::Duration;
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
+use axum::http::header::{HOST, ORIGIN};
+use axum::http::uri::Authority;
 use axum::http::{HeaderMap, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
@@ -21,8 +25,8 @@ use crate::cron::Cron;
 use crate::declaration;
 use crate::declined::Declined;
 use crate::domain::{
-    self, Agent, Connection, CorrelationMiss, Direction, EventRecordId, EventRefusal, Fires,
-    Firing, Integration, Occurrence, Organization, Project, Schedule, Session, SubscriptionProfile,
+    self, Agent, Connection, Correlation, Direction, EventRecordId, EventRefusal, Fires, Firing,
+    Integration, Occurrence, Organization, Project, Schedule, Session, SubscriptionProfile,
     Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::filter::Filter;
@@ -31,8 +35,10 @@ use crate::integration::{self, Connecting, Registration};
 use crate::log::{self, Cursor, Page, Unreadable, Window};
 use crate::profile::{self, Entry};
 use crate::provider::{self, Held};
+use crate::queue;
+use crate::role::serve;
 use crate::store::organization::NoSuchOrganization;
-use crate::store::{Declared, Store};
+use crate::store::{self, Declared, Store};
 use crate::template::Template;
 use crate::trigger::{self, apply};
 use crate::{instance, start, work, workspace};
@@ -82,6 +88,9 @@ pub const SESSION: &str = "/operator/organizations/{organization}/sessions/{sess
 pub const SESSION_STOP: &str = "/operator/organizations/{organization}/sessions/{session}/stop";
 pub const TRANSCRIPT: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/transcript";
+/// One read of a Workspace's queue: the limits, their occupancy, and the queued Sessions in
+/// dispatch order.
+pub const QUEUE: &str = "/operator/organizations/{organization}/queue";
 
 const EVENTS_LISTED: usize = 50;
 
@@ -156,6 +165,7 @@ pub fn router(store: Store, shutdown: CancellationToken) -> Router {
         .route(APPLIED_TRIGGERS, post(apply_triggers))
         .route(APPLIED_TRIGGERS_PREVIEW, post(preview_applied_triggers))
         .route(INSTANCES, get(instances))
+        .route(QUEUE, get(show_queue))
         .route(WORKSPACES, get(workspaces).post(open_workspace))
         .route(WORKSPACE, get(show_workspace))
         .route(WORKSPACE_MESSAGES, post(post_to_workspace))
@@ -166,6 +176,50 @@ pub fn router(store: Store, shutdown: CancellationToken) -> Router {
         .route(SESSION_STOP, post(stop_session))
         .route(TRANSCRIPT, get(transcript))
         .with_state(ControlPlane { store, shutdown })
+        .layer(middleware::from_fn(addressed_here))
+}
+
+async fn addressed_here(request: Request, next: Next) -> Response {
+    match addressed_from_here(&request) {
+        Ok(()) => next.run(request).await,
+        Err(refused) => refused.into_response(),
+    }
+}
+
+fn addressed_from_here(request: &Request) -> Result<(), Refused> {
+    let host = request
+        .headers()
+        .get(HOST)
+        .and_then(|host| host.to_str().ok())
+        .or_else(|| request.uri().authority().map(Authority::as_str))
+        .filter(|host| cannot_be_rebound(host))
+        .ok_or_else(|| {
+            Refused::Forbidden("the request names a host other than this control plane".to_owned())
+        })?;
+
+    match request.headers().get(ORIGIN).map(|origin| origin.to_str()) {
+        None => Ok(()),
+        Some(Ok(origin)) if origin.eq_ignore_ascii_case(&format!("http://{host}")) => Ok(()),
+        Some(_) => Err(Refused::Forbidden(
+            "the request comes from an origin other than this control plane".to_owned(),
+        )),
+    }
+}
+
+// Any port, because compose and a tunnel publish the boundary on one it was never bound to.
+fn cannot_be_rebound(host: &str) -> bool {
+    let Ok(authority) = host.parse::<Authority>() else {
+        return false;
+    };
+    let name = authority.host();
+
+    !authority.as_str().contains('@')
+        && (name.eq_ignore_ascii_case("localhost")
+            || name
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<IpAddr>()
+                .is_ok())
 }
 
 #[derive(Deserialize)]
@@ -206,6 +260,7 @@ struct WorkspaceMessage {
 
 #[derive(Deserialize)]
 struct SessionDeclaration {
+    agent: Option<String>,
     model: Option<String>,
 }
 
@@ -220,6 +275,7 @@ struct TriggerDeclaration {
     branch: Option<String>,
     correlation: Option<String>,
     on_miss: Option<String>,
+    on_open_workspace: Option<String>,
     project: String,
     agent: String,
     #[serde(default)]
@@ -289,7 +345,7 @@ struct WorkspaceRecord {
     name: String,
     organization: String,
     project: String,
-    agent: String,
+    opened_with: String,
     profile: Option<String>,
     checkout: domain::Checkout,
     instance: Option<String>,
@@ -315,6 +371,8 @@ struct SessionRecord {
     outcome_message: Option<String>,
     instance: Option<String>,
     supervisor: Option<String>,
+    agent: String,
+    harness: String,
     model: Option<String>,
     worked_model: Option<String>,
     enqueued_at: Timestamp,
@@ -343,6 +401,7 @@ struct TriggerRecord {
     branch: Option<String>,
     correlation: Option<String>,
     on_miss: Option<String>,
+    on_open_workspace: String,
     project: String,
     agent: String,
     allows: Vec<String>,
@@ -364,6 +423,7 @@ struct TriggerTestRecord {
     branch: Option<String>,
     correlation: Option<String>,
     agent: String,
+    would: &'static str,
     elapsing: Option<Timestamp>,
 }
 
@@ -416,7 +476,7 @@ impl WorkspaceRecord {
             name: workspace.name,
             organization: workspace.organization.name,
             project: workspace.project.name,
-            agent: workspace.agent.name,
+            opened_with: workspace.opened_with.name,
             profile: workspace.profile.map(|profile| profile.name),
             checkout: workspace.checkout,
             instance,
@@ -445,7 +505,9 @@ impl SessionRecord {
             outcome_message: session.outcome_message,
             instance: session.instance,
             supervisor: session.supervisor,
-            model: session.model,
+            agent: session.agent.name,
+            harness: session.agent.harness,
+            model: session.agent.model,
             worked_model: session.worked_model,
             enqueued_at: session.enqueued_at,
             started_at: session.started_at,
@@ -501,8 +563,19 @@ impl From<Trigger> for TriggerRecord {
             correlation: trigger
                 .templates
                 .correlation
-                .map(|correlation| correlation.to_string()),
-            on_miss: trigger.on_miss.map(|miss| miss.as_str().to_owned()),
+                .template()
+                .map(ToString::to_string),
+            on_miss: trigger
+                .templates
+                .correlation
+                .on_miss()
+                .map(|miss| miss.as_str().to_owned()),
+            on_open_workspace: trigger
+                .templates
+                .correlation
+                .on_open_workspace()
+                .as_str()
+                .to_owned(),
             project: trigger.project.name,
             agent: trigger.agent.name,
             allows: trigger.allows.into_iter().map(|agent| agent.name).collect(),
@@ -1125,7 +1198,7 @@ async fn declare_trigger(
 ) -> Result<(StatusCode, Json<TriggerRecord>), Refused> {
     let Json(declaration) = declaration?;
     named(&declaration.name)?;
-    let (fires, templates, on_miss) = parse_trigger_declaration(&declaration)?;
+    let (fires, templates) = parse_trigger_declaration(&declaration)?;
     let created = !trigger::triggers(&control_plane.store, &organization)
         .await
         .map_err(named_refusal)?
@@ -1138,7 +1211,6 @@ async fn declare_trigger(
             name: &declaration.name,
             fires: &fires,
             templates: &templates,
-            on_miss,
             project: &declaration.project,
             agent: &declaration.agent,
             allows: &declaration.allows,
@@ -1247,6 +1319,9 @@ async fn test_trigger(
     let agent = tested
         .agent
         .map_err(|error| Refused::Unprocessable(error.to_string()))?;
+    let would = tested
+        .would
+        .ok_or_else(|| anyhow::anyhow!("a trigger that rendered says what its firing would do"))?;
 
     Ok(Json(TriggerTestRecord {
         matches: tested.matches,
@@ -1254,6 +1329,7 @@ async fn test_trigger(
         branch: rendered.branch,
         correlation: rendered.correlation,
         agent,
+        would: would.as_str(),
         elapsing: tested.elapsing,
     }))
 }
@@ -1389,7 +1465,7 @@ async fn applied_triggers(
 
 fn parse_trigger_declaration(
     declaration: &TriggerDeclaration,
-) -> Result<(Fires, Templates, Option<CorrelationMiss>), Refused> {
+) -> Result<(Fires, Templates), Refused> {
     let fires = match (
         &declaration.filter,
         &declaration.every,
@@ -1427,6 +1503,12 @@ fn parse_trigger_declaration(
             ));
         }
     };
+    let correlation = Correlation::parse(
+        declaration.correlation.as_deref(),
+        declaration.on_miss.as_deref(),
+        declaration.on_open_workspace.as_deref(),
+    )
+    .map_err(|error| Refused::Unprocessable(format!("{error:#}")))?;
     let templates = Templates {
         brief: declaration
             .brief
@@ -1438,23 +1520,10 @@ fn parse_trigger_declaration(
             .map(str::parse)
             .transpose()
             .map_err(|error| Refused::Unprocessable(format!("a trigger branch: {error}")))?,
-        correlation: declaration
-            .correlation
-            .as_deref()
-            .map(str::parse)
-            .transpose()
-            .map_err(|error| Refused::Unprocessable(format!("a trigger correlation: {error}")))?,
+        correlation,
     };
-    let on_miss = declaration
-        .on_miss
-        .as_deref()
-        .map(str::parse)
-        .transpose()
-        .map_err(|error| Refused::Unprocessable(format!("a trigger on_miss: {error}")))?;
-    trigger::check_miss(&templates, on_miss)
-        .map_err(|error| Refused::Unprocessable(error.to_string()))?;
 
-    Ok((fires, templates, on_miss))
+    Ok((fires, templates))
 }
 
 fn named_refusal(error: anyhow::Error) -> Refused {
@@ -1514,6 +1583,90 @@ async fn instances(
 #[derive(Serialize)]
 struct ReleasedRecord {
     instance: String,
+}
+
+#[derive(Serialize)]
+struct WorkRoleRecord {
+    active_work_slots: usize,
+    serialized_harnesses: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ActiveWorkRecord {
+    limit: Option<usize>,
+    occupied: usize,
+    occupants: Vec<String>,
+    elsewhere: usize,
+}
+
+#[derive(Serialize)]
+struct InstancesRecord {
+    limit: Option<usize>,
+    count: usize,
+    counted: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct QueuedSessionRecord {
+    position: Option<usize>,
+    name: String,
+    workspace: String,
+    agent: String,
+    waits_on: Vec<String>,
+    enqueued_at: Timestamp,
+}
+
+#[derive(Serialize)]
+struct QueueRecord {
+    work_role: Option<WorkRoleRecord>,
+    active_work: ActiveWorkRecord,
+    instances: InstancesRecord,
+    queued: Vec<QueuedSessionRecord>,
+}
+
+impl QueueRecord {
+    fn of(snapshot: queue::Snapshot) -> Self {
+        let recorded = snapshot.recorded.map(|recorded| WorkRoleRecord {
+            active_work_slots: recorded.active_work_slots,
+            serialized_harnesses: recorded.serialized_harnesses,
+        });
+
+        Self {
+            work_role: recorded,
+            active_work: ActiveWorkRecord {
+                limit: snapshot.active_work.limit,
+                occupied: snapshot.active_work.occupied,
+                occupants: snapshot.active_work.occupants,
+                elsewhere: snapshot.active_work.elsewhere,
+            },
+            instances: InstancesRecord {
+                limit: snapshot.instances.limit,
+                count: snapshot.instances.count,
+                counted: snapshot.instances.counted,
+            },
+            queued: snapshot
+                .queued
+                .into_iter()
+                .map(|queued| QueuedSessionRecord {
+                    position: queued.position,
+                    name: queued.session.name,
+                    workspace: queued.session.workspace.to_string(),
+                    agent: queued.session.agent.name,
+                    waits_on: queued.waits_on,
+                    enqueued_at: queued.session.enqueued_at,
+                })
+                .collect(),
+        }
+    }
+}
+
+async fn show_queue(
+    State(control_plane): State<ControlPlane>,
+    Path(organization): Path<String>,
+) -> Result<Json<QueueRecord>, Refused> {
+    let snapshot = queue::snapshot(&control_plane.store, &organization).await?;
+
+    Ok(Json(QueueRecord::of(snapshot)))
 }
 
 async fn release_instance(
@@ -1637,6 +1790,7 @@ async fn enqueue_session(
     let session = work::enqueue(
         &control_plane.store,
         workspace.id,
+        declaration.agent.as_deref(),
         declaration.model.as_deref(),
     )
     .await
@@ -1826,6 +1980,7 @@ fn last_event_id(headers: &HeaderMap) -> Result<Option<Cursor>, Refused> {
 
 enum Refused {
     BadRequest(String),
+    Forbidden(String),
     NotFound(String),
     Conflict(String),
     Unprocessable(String),
@@ -1836,6 +1991,7 @@ impl Refused {
     fn into_error(self) -> BoxError {
         match self {
             Refused::BadRequest(why)
+            | Refused::Forbidden(why)
             | Refused::NotFound(why)
             | Refused::Conflict(why)
             | Refused::Unprocessable(why) => why.into(),
@@ -1875,13 +2031,15 @@ impl From<Unreadable> for Refused {
 
 impl IntoResponse for Refused {
     fn into_response(self) -> Response {
+        let busy = matches!(&self, Refused::Unavailable(error) if store::busy(error));
         let (status, message) = match self {
             Refused::BadRequest(why) => (StatusCode::BAD_REQUEST, why),
+            Refused::Forbidden(why) => (StatusCode::FORBIDDEN, why),
             Refused::NotFound(why) => (StatusCode::NOT_FOUND, why),
             Refused::Conflict(why) => (StatusCode::CONFLICT, why),
             Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why),
             Refused::Unavailable(error) => {
-                warn!(%error, "the operator boundary could not answer");
+                warn!(%error, busy, "the operator boundary could not answer");
                 (
                     StatusCode::SERVICE_UNAVAILABLE,
                     "the control plane could not answer".to_owned(),
@@ -1889,7 +2047,7 @@ impl IntoResponse for Refused {
             }
         };
 
-        (status, Json(Refusal { message })).into_response()
+        serve::refusal(status, busy, Json(Refusal { message }))
     }
 }
 

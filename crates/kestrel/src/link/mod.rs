@@ -24,7 +24,8 @@ use crate::link::credential::Secret;
 use crate::log::{self, Cursor, Unreadable, Window};
 use crate::profile;
 use crate::provider;
-use crate::store::{Store, Tx};
+use crate::role::serve;
+use crate::store::{self, Store, Tx};
 use crate::work::{self, ReportRefused, Reported};
 use crate::workspace;
 
@@ -43,14 +44,8 @@ const KEEP_ALIVE: Duration = Duration::from_secs(15);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Instruction {
-    Start {
-        checkout: Checkout,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        prompt: Option<String>,
-    },
-    Prompt {
-        prompt: String,
-    },
+    Start { checkout: Checkout, prompt: String },
+    Prompt { prompt: String },
     Stop,
 }
 
@@ -122,12 +117,20 @@ pub fn router(store: Store, shutdown: CancellationToken) -> Router {
 }
 
 /// A Brief nothing has followed is the agent's whole prompt, verbatim, so a harness still
-/// recognises the skill invocation it may lead with.
+/// recognises the skill invocation it may lead with. Otherwise the instruction is the message or
+/// messages that started this Session; a Session the control plane finds neither for is not
+/// started with an improvised one.
 pub async fn start(store: &Store, session: &Session) -> Result<SentInstruction> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(session.workspace).await?;
     workspace.accepts("turn")?;
-    let prompt = tx.log().unfollowed_brief(&workspace).await?;
+    let prompt = instruction(&mut tx, &workspace).await?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "the workspace {} has no unfollowed brief and nothing posted since its last session \
+             ended, so this session has no instruction",
+            workspace.id
+        )
+    })?;
     let sent = tx
         .workspaces()
         .send_instruction(
@@ -142,6 +145,35 @@ pub async fn start(store: &Store, session: &Session) -> Result<SentInstruction> 
     tx.commit().await?;
 
     Ok(sent)
+}
+
+/// A Brief nothing has followed, exactly as it was written; otherwise the message or messages
+/// that started this Session, with everything the Transcript held before them labeled as context
+/// ahead of them.
+async fn instruction(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Option<String>> {
+    if let Some(brief) = tx.log().unfollowed_brief(workspace).await? {
+        return Ok(Some(brief));
+    }
+
+    let messages = tx.log().starting_messages(workspace).await?;
+    if messages.is_empty() {
+        return Ok(None);
+    }
+    let instruction = crate::work::follow_up(&messages);
+
+    let context = tx.log().context_before_starting(workspace).await?;
+    if context.is_empty() {
+        return Ok(Some(instruction));
+    }
+    let context = context
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Ok(Some(format!(
+        "Earlier context, oldest first:\n{context}\n\n{instruction}"
+    )))
 }
 
 /// The next turn of a waiting Session, in the same agent conversation (ADR-0024).
@@ -351,7 +383,21 @@ async fn authenticated(
         ));
     }
 
-    Ok(tx.workspaces().session(session).await?)
+    let session = tx.workspaces().session(session).await?;
+    // A lease is held out by the Environment reaching the link, so one that has lapsed means
+    // nothing is holding it out. The sweep is about to end this Session anyway; refusing here
+    // closes the window where a control plane coming back would take a supervisor's word for a
+    // Session it has already let go.
+    if session
+        .lease_expires_at
+        .is_some_and(|expires| expires <= Timestamp::now())
+    {
+        return Err(Refused::Forbidden(
+            "the session's lease has passed, and its control plane has let it go",
+        ));
+    }
+
+    Ok(session)
 }
 
 fn bearer(headers: &HeaderMap) -> Option<Secret> {
@@ -407,13 +453,14 @@ impl From<ReportRefused> for Refused {
 
 impl IntoResponse for Refused {
     fn into_response(self) -> Response {
+        let busy = matches!(&self, Refused::Unavailable(error) if store::busy(error));
         let (status, message) = match self {
             Refused::BadRequest(why) => (StatusCode::BAD_REQUEST, why),
             Refused::NoSuchSession => (StatusCode::NOT_FOUND, "no such session".to_owned()),
             Refused::Unauthorized(why) => (StatusCode::UNAUTHORIZED, why.to_owned()),
             Refused::Forbidden(why) => (StatusCode::FORBIDDEN, why.to_owned()),
             Refused::Unavailable(error) => {
-                warn!(%error, "the link could not answer");
+                warn!(%error, busy, "the link could not answer");
                 (
                     StatusCode::SERVICE_UNAVAILABLE,
                     "the link could not answer".to_owned(),
@@ -421,7 +468,7 @@ impl IntoResponse for Refused {
             }
         };
 
-        (status, Json(Refusal { message })).into_response()
+        serve::refusal(status, busy, Json(Refusal { message }))
     }
 }
 

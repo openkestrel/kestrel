@@ -23,9 +23,7 @@ impl Environment {
         let path = directory.path().join("environment");
         fs::write(
             &path,
-            format!(
-                "#!/bin/sh\nexport GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false\n{shell}\n"
-            ),
+            format!("#!/bin/sh\n{}\n{shell}\n", super::git::shell_exports()),
         )
         .expect("the environment should write");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
@@ -49,10 +47,18 @@ impl Environment {
             .to_owned()
     }
 
+    /// Whether the script has written `name` yet, for a caller that cannot wait on a panic.
+    pub fn has_written(&self, name: &str) -> bool {
+        self._directory.path().join(name).exists()
+    }
+
     pub fn named(supervisor: &str) -> Pid {
         let pid = supervisor
             .strip_prefix("local-exec/")
-            .unwrap_or_else(|| panic!("{supervisor} is not a local supervisor"));
+            .unwrap_or_else(|| panic!("{supervisor} is not a local supervisor"))
+            .split('@')
+            .next()
+            .expect("a supervisor process id");
 
         Pid(pid.parse().unwrap_or_else(|_| panic!("{pid} is not a pid")))
     }

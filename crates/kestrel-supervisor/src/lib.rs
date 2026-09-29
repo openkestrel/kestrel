@@ -19,6 +19,10 @@ const RECONNECT_AFTER: Duration = Duration::from_millis(250);
 /// Often enough that the control plane keeps its hold on this Environment through a handful
 /// of these going missing, and through the control plane itself restarting under it.
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(2);
+/// Waited past the lease the control plane holds on this Session before giving up on it. Longer
+/// than a heartbeat, so a reachable link resets the clock between two of them, and long enough
+/// that a control plane restarting inside its lease is still met.
+const GIVE_UP_MARGIN: Duration = Duration::from_secs(5);
 const STDERR_LINES_PER_REPORT: usize = 64;
 const STDERR_REPORT_PATIENCE: Duration = Duration::from_secs(5);
 /// Long enough for the last lines of an agent that has just exited, which are often why.
@@ -42,6 +46,7 @@ enum Attended {
     Stopped,
     Finished,
     LostTheLink,
+    GaveUp,
 }
 
 /// Held across a reconnect: the conversation goes on whether or not the link does, and what
@@ -51,7 +56,7 @@ struct Attending {
     cursor: Option<String>,
     started: bool,
     checkout: Option<Checkout>,
-    prompt: Option<String>,
+    prompt: String,
     conversation: Option<Conversation>,
     finished: bool,
     taken: i64,
@@ -87,7 +92,14 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
     // is alive beside the work rather than between the steps of it.
     let alive = tokio::spawn(saying_it_is_alive(Arc::clone(&link)));
     let mut relaying = tokio::spawn(relaying_stderr(Arc::clone(&link), written));
-    let status = attending(&link, &harness, home.as_deref(), diagnostics).await;
+    let status = attending(
+        &link,
+        &harness,
+        home.as_deref(),
+        give_up_after(variables),
+        diagnostics,
+    )
+    .await;
     alive.abort();
     drop(harness);
     if tokio::time::timeout(STDERR_DRAINING, &mut relaying)
@@ -124,10 +136,19 @@ async fn attending(
     link: &Link,
     harness: &Harness,
     home: Option<&Path>,
+    give_up_after: Option<Duration>,
     diagnostics: &dyn Diagnostics,
 ) -> i32 {
     let mut attending = Attending::default();
-    let status = attended(link, harness, home, &mut attending, diagnostics).await;
+    let status = attended(
+        link,
+        harness,
+        home,
+        &mut attending,
+        give_up_after,
+        diagnostics,
+    )
+    .await;
     if let Some(conversation) = attending.conversation.take() {
         conversation.end().await;
     }
@@ -140,10 +161,11 @@ async fn attended(
     harness: &Harness,
     home: Option<&Path>,
     attending: &mut Attending,
+    give_up_after: Option<Duration>,
     diagnostics: &dyn Diagnostics,
 ) -> i32 {
     loop {
-        match attend(link, harness, home, attending, diagnostics).await {
+        match attend(link, harness, home, attending, give_up_after, diagnostics).await {
             Ok(Attended::Stopped) => {
                 diagnostics.info("supervisor stopped");
                 return 0;
@@ -153,6 +175,10 @@ async fn attended(
                 return 0;
             }
             Ok(Attended::LostTheLink) => diagnostics.info("lost the link"),
+            Ok(Attended::GaveUp) => {
+                give_up(link, diagnostics);
+                return 1;
+            }
             Err(link::Error::Refused(why)) => {
                 diagnostics.info(&format!("the link refused this environment: {why}"));
                 return 1;
@@ -160,8 +186,22 @@ async fn attended(
             Err(link::Error::Lost(why)) => diagnostics.info(&format!("lost the link: {why}")),
         }
 
+        if give_up_after.is_some_and(|bound| link.unreached_for() >= bound) {
+            give_up(link, diagnostics);
+            return 1;
+        }
+
         tokio::time::sleep(RECONNECT_AFTER).await;
     }
+}
+
+/// A control plane that is gone for good has already let this Session's lease go, so nothing is
+/// waiting for the work this Environment would keep its harness open for.
+fn give_up(link: &Link, diagnostics: &dyn Diagnostics) {
+    diagnostics.info(&format!(
+        "gave up on the link: it has not answered for {:?}, past the session's lease",
+        link.unreached_for()
+    ));
 }
 
 async fn attend(
@@ -169,6 +209,7 @@ async fn attend(
     harness: &Harness,
     home: Option<&Path>,
     attending: &mut Attending,
+    give_up_after: Option<Duration>,
     diagnostics: &dyn Diagnostics,
 ) -> Result<Attended, link::Error> {
     let mut instructions = link.open(attending.cursor.as_deref()).await?;
@@ -209,6 +250,7 @@ async fn attend(
                 conversation(link, harness, home, attending, diagnostics).await?;
         }
 
+        let give_up_timer = until_given_up(link, give_up_after);
         tokio::select! {
             delivered = instructions.next() => {
                 let Some(delivered) = delivered? else {
@@ -285,7 +327,25 @@ async fn attend(
                 };
                 attending.saying.extend(everything_left_to_say(worked, observed));
             }
+            () = give_up_timer => {
+                // Re-checked here because a heartbeat may have reached the link since this was
+                // armed; a reachable link is not one to give up on.
+                if let Some(bound) = give_up_after
+                    && link.unreached_for() >= bound
+                {
+                    return Ok(Attended::GaveUp);
+                }
+            }
         }
+    }
+}
+
+/// Waits out whatever is left of the bound since the link last answered, so a stream that stays
+/// open while nothing answers does not hold a supervisor past its Session's lease.
+async fn until_given_up(link: &Link, give_up_after: Option<Duration>) {
+    match give_up_after {
+        Some(bound) => tokio::time::sleep(bound.saturating_sub(link.unreached_for())).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -296,10 +356,7 @@ async fn conversation(
     attending: &mut Attending,
     diagnostics: &dyn Diagnostics,
 ) -> Result<Option<Conversation>, link::Error> {
-    let prompt = match attending.prompt.clone() {
-        Some(prompt) => prompt,
-        None => harness::prompt(&all_entries(link).await?),
-    };
+    let prompt = attending.prompt.clone();
     let credentials = link.credentials().await?;
     let provider = credentials.variables;
     if !provider.is_empty() {
@@ -364,20 +421,6 @@ fn written(
     Ok(Some(written))
 }
 
-async fn all_entries(link: &Link) -> Result<Vec<link::Entry>, link::Error> {
-    let mut entries = Vec::new();
-    let mut cursor = None;
-
-    loop {
-        let page = link.entries(cursor.as_deref()).await?;
-        entries.extend(page.entries.into_iter().map(|recorded| recorded.entry));
-        cursor = page.cursor;
-        if !page.more {
-            return Ok(entries);
-        }
-    }
-}
-
 /// Numbered from the last one the link took, and dropped once it has been taken: a reconnect
 /// says only what is left, and a replay carries the number the attempt that was lost carried.
 async fn say(
@@ -427,6 +470,15 @@ fn dialled(variables: &BTreeMap<String, String>) -> Option<Link> {
     let credential = set(variables, "KESTREL_SESSION_CREDENTIAL")?;
 
     Some(Link::to(base, session, credential))
+}
+
+/// How long the control plane holds this Session's lease out, in seconds, as it told this
+/// Environment when it was dispatched. A supervisor handed no lease has no bound to derive and
+/// reconnects until it is stopped.
+fn give_up_after(variables: &BTreeMap<String, String>) -> Option<Duration> {
+    let lease = set(variables, "KESTREL_LEASE")?.parse::<u64>().ok()?;
+
+    Duration::from_secs(lease).checked_add(GIVE_UP_MARGIN)
 }
 
 fn set<'a>(variables: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
@@ -527,5 +579,30 @@ mod tests {
 
         assert_eq!(status, 1);
         assert!(diagnostics.everything_it_said().contains("no link to dial"));
+    }
+
+    #[test]
+    fn the_bound_is_the_lease_it_was_handed_plus_a_margin() {
+        assert_eq!(
+            give_up_after(&variables(&[("KESTREL_LEASE", "120")])),
+            Some(Duration::from_secs(120) + GIVE_UP_MARGIN)
+        );
+    }
+
+    #[test]
+    fn a_supervisor_handed_no_lease_reconnects_without_a_bound() {
+        assert_eq!(give_up_after(&variables(&[])), None);
+        assert_eq!(
+            give_up_after(&variables(&[("KESTREL_LEASE", "not a number")])),
+            None
+        );
+    }
+
+    #[test]
+    fn a_lease_that_leaves_no_room_for_the_margin_is_not_a_bound() {
+        assert_eq!(
+            give_up_after(&variables(&[("KESTREL_LEASE", &u64::MAX.to_string())])),
+            None
+        );
     }
 }

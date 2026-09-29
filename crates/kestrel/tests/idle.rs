@@ -84,7 +84,7 @@ async fn a_workspace_is_last_active_when_it_opens() {
 async fn enqueueing_a_session_into_a_workspace_records_it_active() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let backdated = a_day_ago();
+    let backdated = Timestamp::now() - WELL_INSIDE_THE_WINDOW;
     kestrel.last_active(&workspace, backdated).await;
 
     kestrel.enqueue_session(workspace.id).await;

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
 use jiff::{SignedDuration, Timestamp};
-use tokio::task::JoinSet;
+use tokio::task::{JoinError, JoinSet};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -16,7 +16,7 @@ use crate::instance;
 use crate::link;
 use crate::profile;
 use crate::provider;
-use crate::store::Store;
+use crate::store::{self, Store};
 use crate::timer;
 use crate::work::{self, Claimed, Occupied};
 use crate::workspace;
@@ -95,7 +95,10 @@ pub async fn run(
         // would spend the Session's one dispatch on nothing.
         async {
             match &dispatch {
-                Some(dispatch) => dispatching(&store, dispatch, &shutdown).await,
+                Some(dispatch) => {
+                    record(&store, dispatch).await?;
+                    dispatching(&store, dispatch, &shutdown).await
+                }
                 None => {
                     shutdown.cancelled().await;
                     Ok(())
@@ -108,6 +111,8 @@ pub async fn run(
     Ok(())
 }
 
+/// A pass that fails is warned of and the next one tries again: nothing here is a reason to stop
+/// the role, because stopping it cuts every in-flight Session's supervisor off its link.
 async fn dispatching(
     store: &Store,
     dispatch: &Dispatch,
@@ -116,44 +121,102 @@ async fn dispatching(
     let mut active = JoinSet::new();
 
     while !shutdown.is_cancelled() {
-        stop_left_behind(store, &dispatch.driver).await?;
-        archive(store, &dispatch.driver).await?;
+        if let Err(error) = stop_left_behind(store, &dispatch.driver).await {
+            warn!(%error, "a pass over ended sessions' supervisors found nothing it could do");
+        }
+        if let Err(error) = archive(store, &dispatch.driver).await {
+            warn!(%error, "an archiving pass found nothing it could do");
+        }
         match work::occupy(
             store,
             dispatch.max_active_sessions.get(),
             &dispatch.serialized,
         )
-        .await?
+        .await
         {
-            Some(Occupied::Claimed(claimed)) => {
+            Ok(Some(Occupied::Claimed(claimed))) => {
                 let store = store.clone();
                 let dispatch = dispatch.clone();
                 let shutdown = shutdown.clone();
-                active.spawn(async move { execute(&store, &dispatch, claimed, &shutdown).await });
+                active.spawn(async move {
+                    execute_or_fail(&store, &dispatch, claimed, &shutdown).await
+                });
                 continue;
             }
-            Some(Occupied::Resumed(session)) => {
+            Ok(Some(Occupied::Resumed(session))) => {
                 info!(session = %session.id, "a waiting session was prompted with what was held for it");
                 continue;
             }
-            None => {}
+            Ok(None) => {}
+            Err(error) => warn!(%error, "a dispatch found nothing it could do"),
         }
 
         tokio::select! {
-            finished = active.join_next(), if !active.is_empty() => {
-                finished.expect("an active session")
-                    .context("a session's execution task failed")??;
-            }
+            Some(finished) = active.join_next(), if !active.is_empty() => warn_if_it_panicked(finished),
             () = tokio::time::sleep(POLL) => {}
             () = shutdown.cancelled() => {}
         }
     }
 
     while let Some(finished) = active.join_next().await {
-        finished.context("a session's execution task failed")??;
+        warn_if_it_panicked(finished);
     }
 
     Ok(())
+}
+
+fn warn_if_it_panicked(finished: Result<(), JoinError>) {
+    if let Err(error) = finished {
+        warn!(%error, "a session's execution task ended without ending its session");
+    }
+}
+
+/// The queue reads this record rather than the serve role's flags, so restart with new flags
+/// is what replaces it.
+async fn record(store: &Store, dispatch: &Dispatch) -> Result<()> {
+    let mut tx = store.begin().await?;
+    tx.queue()
+        .record(dispatch.max_active_sessions.get(), &dispatch.serialized)
+        .await?;
+    tx.commit().await?;
+
+    Ok(())
+}
+
+async fn execute_or_fail(
+    store: &Store,
+    dispatch: &Dispatch,
+    claimed: Claimed,
+    shutdown: &CancellationToken,
+) {
+    let session = claimed.session.clone();
+    let Err(error) = execute(store, dispatch, claimed, shutdown).await else {
+        return;
+    };
+    warn!(session = %session.id, %error, "a session's execution failed");
+    let because = format!("the session's execution failed: {error:#}");
+
+    // The Session's lease ends it instead.
+    if let Err(error) = until_not_busy(shutdown, || work::fail(store, &session, &because)).await {
+        warn!(session = %session.id, %error, "a session whose execution failed could not be failed");
+    }
+}
+
+async fn until_not_busy<T, Doing>(
+    shutdown: &CancellationToken,
+    doing: impl Fn() -> Doing,
+) -> Result<T>
+where
+    Doing: Future<Output = Result<T>>,
+{
+    loop {
+        match doing().await {
+            Err(error) if store::busy(&error) && !shutdown.is_cancelled() => {
+                tokio::time::sleep(POLL).await;
+            }
+            done => return done,
+        }
+    }
 }
 
 async fn execute(
@@ -182,7 +245,7 @@ async fn execute(
         work::fail(store, &session, &error.to_string()).await?;
         return Ok(());
     }
-    let command = match dispatch.spawns(&workspace.agent.harness) {
+    let command = match dispatch.spawns(&session.agent.harness) {
         Ok(command) => command,
         Err(error) => {
             work::fail(store, &session, &error.to_string()).await?;
@@ -193,7 +256,9 @@ async fn execute(
     let Some(mut instance) = instance(store, dispatch, &session, &workspace).await? else {
         return Ok(());
     };
-    work::executes_on(store, &session, instance.name()).await?;
+    // An Instance provisioned and never recorded is one `archive` can never find.
+    let name = instance.name().to_owned();
+    until_not_busy(shutdown, || work::executes_on(store, &session, &name)).await?;
 
     // Committed before the supervisor is spawned, so one that outlives this process fetches its
     // Start on reconnect rather than holding the lease out forever on a Session that cannot begin.
@@ -207,6 +272,7 @@ async fn execute(
         return Ok(());
     }
 
+    let lease = work::LEASE.as_secs().to_string();
     let mut supervisor = match instance.supervise(&[
         ("KESTREL_LINK", dispatch.link.as_str()),
         ("KESTREL_SESSION", &session.id.to_string()),
@@ -218,12 +284,11 @@ async fn execute(
         ),
         (
             "KESTREL_AGENT_MODEL",
-            session
-                .model
-                .as_deref()
-                .or(workspace.agent.model.as_deref())
-                .unwrap_or_default(),
+            session.agent.model.as_deref().unwrap_or_default(),
         ),
+        // How long the Session's lease is held out for, so a supervisor nothing answers can give
+        // up once it has certainly lapsed rather than reconnecting forever.
+        ("KESTREL_LEASE", &lease),
     ]) {
         Ok(supervisor) => supervisor,
         Err(error) => {
@@ -382,9 +447,7 @@ async fn start(
 ) -> Result<Exit> {
     info!(session = %session.id, supervisor = supervisor.name(), "a session's supervisor started");
 
-    let ended = attend(store, session, &mut supervisor, shutdown).await;
-
-    let exit = match ended? {
+    let exit = match attend(store, session, &mut supervisor, shutdown).await {
         Ended::TheSession(exit) => {
             left_the_link(&mut supervisor).await;
             exit
@@ -437,10 +500,10 @@ async fn attend(
     session: &Session,
     supervisor: &mut Supervisor,
     shutdown: &CancellationToken,
-) -> Result<Ended> {
+) -> Ended {
     loop {
         match supervisor.status() {
-            Ok(Some(exited)) => return Ok(Ended::Supervisor(exited)),
+            Ok(Some(exited)) => return Ended::Supervisor(exited),
             Ok(None) => {}
             // A daemon that cannot answer is not a supervisor that is gone. The Session's lease
             // ends it if this never clears.
@@ -448,13 +511,19 @@ async fn attend(
                 warn!(session = %session.id, %error, "a supervisor could not be asked how it is")
             }
         }
-        if let Some(exit) = work::session(store, session.id).await?.exit {
-            return Ok(Ended::TheSession(exit));
+        match work::session(store, session.id).await {
+            Ok(Session {
+                exit: Some(exit), ..
+            }) => return Ended::TheSession(exit),
+            Ok(_) => {}
+            Err(error) => {
+                warn!(session = %session.id, %error, "a session could not be asked how it is")
+            }
         }
 
         tokio::select! {
             () = tokio::time::sleep(POLL) => {}
-            () = shutdown.cancelled() => return Ok(Ended::ControlPlane),
+            () = shutdown.cancelled() => return Ended::ControlPlane,
         }
     }
 }

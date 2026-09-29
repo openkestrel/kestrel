@@ -20,7 +20,7 @@ const CREDENTIAL_LIFETIME: SignedDuration = SignedDuration::from_hours(12);
 /// A supervisor cannot say it is alive while the control plane is not listening, so this
 /// outlasts a restart under a live one by enough that an upgrade does not reap the Sessions it
 /// was carrying; a dead supervisor holds a Workspace's active-Session slot until it is up.
-const LEASE: SignedDuration = SignedDuration::from_mins(2);
+pub(crate) const LEASE: SignedDuration = SignedDuration::from_mins(2);
 
 /// The Secret is returned once, to be handed to the Session's supervisor as it starts; `Store`
 /// keeps only its digest, so it cannot be recovered afterwards.
@@ -112,6 +112,7 @@ impl From<anyhow::Error> for ReportRefused {
 pub async fn enqueue(
     store: &Store,
     workspace: WorkspaceId,
+    agent: Option<&str>,
     model: Option<&str>,
 ) -> Result<Session> {
     let mut tx = store.begin().await?;
@@ -128,7 +129,14 @@ pub async fn enqueue(
         );
     }
 
-    let session = tx.workspaces().enqueue_session(&workspace, model).await?;
+    let named = match agent {
+        Some(named) => Some(tx.agents().named(&workspace.organization, named).await?),
+        None => None,
+    };
+    let session = tx
+        .workspaces()
+        .enqueue_session(&workspace, named.as_ref(), model)
+        .await?;
     tx.commit().await?;
 
     Ok(session)
@@ -252,6 +260,13 @@ pub async fn report(
     session: &Session,
     Reported { seq, report }: Reported,
 ) -> Result<(), ReportRefused> {
+    if let Report::Stderr { lines } = report {
+        for line in lines {
+            info!(session = %session.id, line, "its harness wrote to stderr");
+        }
+        return Ok(());
+    }
+
     let mut tx = store.begin().await?;
 
     if report.numbered() {
@@ -277,11 +292,7 @@ pub async fn report(
                 .await?;
             debug!(session = %session.id, "a supervisor reported itself alive");
         }
-        Report::Stderr { lines } => {
-            for line in lines {
-                info!(session = %session.id, line, "its harness wrote to stderr");
-            }
-        }
+        Report::Stderr { .. } => unreachable!("stderr is reported without a transaction"),
         Report::Started => {
             if tx.workspaces().record_started(session).await? {
                 let workspace = tx.workspaces().get(session.workspace).await?;
@@ -290,6 +301,7 @@ pub async fn report(
                         &workspace,
                         Entry::SessionStarted {
                             session: session.id,
+                            agent: session.agent.name.clone(),
                         },
                     )
                     .await?;
@@ -306,7 +318,7 @@ pub async fn report(
                 .append(
                     &workspace,
                     Entry::Said {
-                        participant: workspace.agent.name.clone(),
+                        participant: session.agent.name.clone(),
                         message,
                     },
                 )
@@ -322,7 +334,7 @@ pub async fn report(
                 let workspace = tx.workspaces().get(session.workspace).await?;
                 let said = tx
                     .log()
-                    .said_since(&workspace, from_seq, &workspace.agent.name)
+                    .said_since(&workspace, from_seq, &session.agent.name)
                     .await?;
                 if !said.is_empty() {
                     delivery::record_turn(&mut tx, session, &workspace, turn, &said).await?;
@@ -468,7 +480,10 @@ async fn end(store: &Store, session: &Session, exit: Exit) -> Result<Exit> {
 /// what comes back is the one that stands.
 pub(crate) async fn ending(tx: &mut Tx<'_>, session: &Session, exit: Exit) -> Result<Exit> {
     let workspace = tx.workspaces().get(session.workspace).await?;
-    let said = tx.log().last_said_for_session(&workspace).await?;
+    let said = tx
+        .log()
+        .last_said_for_session(&workspace, &session.agent.name)
+        .await?;
     let stands = if tx
         .workspaces()
         .end_session(session, &exit, said.as_deref())
@@ -531,6 +546,9 @@ async fn continue_pending(tx: &mut Tx<'_>, workspace: WorkspaceId) -> Result<Opt
         return Ok(None);
     }
 
+    if let Some(pending) = tx.workspaces().take_pending_session(&workspace).await? {
+        return Ok(Some(workspace::briefed(tx, &workspace, pending).await?));
+    }
     let pending = tx.workspaces().take_pending_messages(&workspace).await?;
     if pending.is_empty() {
         return Ok(None);
@@ -546,7 +564,9 @@ async fn continue_pending(tx: &mut Tx<'_>, workspace: WorkspaceId) -> Result<Opt
         .await?;
 
     Ok(Some(
-        tx.workspaces().enqueue_session(&workspace, None).await?,
+        tx.workspaces()
+            .enqueue_session(&workspace, None, None)
+            .await?,
     ))
 }
 

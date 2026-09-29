@@ -77,6 +77,51 @@ async fn ended(kestrel: &Kestrel, session: SessionId) -> Session {
     kestrel.after_one_turn(session).await
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn a_panicking_test_stops_its_local_supervisor_and_removes_its_instance() {
+    let (started, received) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let environment = Environment::executing("sleep 300");
+        let kestrel = Kestrel::dispatching_to(environment.path(), "unused").await;
+        let workspace = a_workspace(&kestrel).await;
+        let session = kestrel.enqueue_session(workspace.id).await;
+        let session = until(&kestrel, session.id, "reached a supervisor", |session| {
+            session.supervisor.is_some()
+        })
+        .await;
+        started
+            .send((session.supervisor.unwrap(), session.instance.unwrap()))
+            .unwrap();
+        panic!("the test fails after starting a Session");
+    });
+
+    let (supervisor, instance) = received.await.unwrap();
+    assert!(task.await.unwrap_err().is_panic());
+    Environment::named(&supervisor).is_gone().await;
+    assert!(!Environment::root_of(&instance).exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_killed_control_plane_without_a_restart_stops_its_local_supervisor() {
+    let environment = Environment::executing("sleep 300");
+    let kestrel = Kestrel::dispatching_to(environment.path(), "unused").await;
+    let workspace = a_workspace(&kestrel).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+    let session = until(&kestrel, session.id, "reached a supervisor", |session| {
+        session.supervisor.is_some()
+    })
+    .await;
+    let supervisor = session.supervisor.unwrap();
+    let instance = session.instance.unwrap();
+
+    drop(kestrel.kill().await);
+
+    Environment::named(&supervisor).is_gone().await;
+    assert!(!Environment::root_of(&instance).exists());
+}
+
 #[tokio::test]
 async fn sessions_in_distinct_workspaces_start_at_the_same_time() {
     let kestrel = Kestrel::dispatching_up_to(
@@ -208,7 +253,8 @@ async fn a_session_that_reaches_an_instance_starts_and_ends_in_the_transcript() 
         said,
         vec![
             "participant joined  builder".to_owned(),
-            format!("session started  {}", session.id),
+            "said  operator  do the work this environment was provisioned for".to_owned(),
+            format!("session started  {}  builder", session.id),
             "said  builder  half of one message, and the other half".to_owned(),
             "said  builder  a second message".to_owned(),
             format!("session ended  {}  succeeded", session.id),
@@ -366,7 +412,10 @@ async fn located(kestrel: &Kestrel, workspace: &Workspace) -> Vec<PathBuf> {
         .await
         .into_iter()
         .filter_map(|recorded| match recorded.entry {
-            Entry::Said { message, .. } => Some(PathBuf::from(message)),
+            Entry::Said {
+                participant,
+                message,
+            } if participant == "builder" => Some(PathBuf::from(message)),
             _ => None,
         })
         .collect()
@@ -486,8 +535,7 @@ fn leaving_work_behind() -> Environment {
            echo fresh >> \"$here/found\"\n\
            {{ echo committed > kestrel/committed\n\
              git -C kestrel add committed\n\
-             git -C kestrel -c user.name=kestrel -c user.email=kestrel@example.com \
-               commit --message 'work only this instance has'\n\
+             git -C kestrel commit --message 'work only this instance has'\n\
              echo uncommitted >> kestrel/README.md\n\
              echo untracked > kestrel/untracked; }} >&2\n\
            sleep 300 </dev/null >/dev/null 2>&1 &\n\

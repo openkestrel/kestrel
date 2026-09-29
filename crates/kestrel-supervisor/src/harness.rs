@@ -1,7 +1,7 @@
 //! kestrel as an ACP client (ADR-0007): no contract of kestrel's, and no branch on which
 //! Harness is on the other end of one.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 use std::sync::{Arc, Mutex};
@@ -18,7 +18,8 @@ use agent_client_protocol::schema::v1::{
     SetSessionConfigOptionRequest, StopReason, TextContent,
 };
 use agent_client_protocol::{
-    AcpAgent, Client, ConnectionTo, Error, LineDirection, is_incoming_transport_closed,
+    AcpAgent, AcpAgentConfig, Client, ConnectionTo, Error, LineDirection,
+    is_incoming_transport_closed,
 };
 
 use tokio::sync::mpsc;
@@ -26,9 +27,6 @@ use tokio::task::JoinHandle;
 
 use crate::link::{Cost, Usage};
 use crate::permission::{self, Subject};
-
-/// Nothing on the link carries work for a Session, so every Session asks the same thing.
-const PROMPT: &str = "Do the work this environment was provisioned for.";
 
 /// What this Environment was configured to drive, what the Session asks of it, and where what the
 /// agent writes to stderr goes. Which Harness is on the other end is the configuration's
@@ -269,13 +267,27 @@ async fn living(
         }
     };
     let stderr = harness.stderr.clone();
-    let spawn = AcpAgent::new(spawn.into_config().envs(provider.clone())).with_debug(
-        move |line, direction| {
-            if direction == LineDirection::Stderr {
-                let _ = stderr.send(bounded(line));
-            }
-        },
-    );
+    let config = spawn.into_config();
+    let inherited = std::env::vars_os()
+        .filter_map(|(name, _)| name.into_string().ok())
+        .chain(config.environment().keys().cloned())
+        .filter(|name| name.starts_with("KESTREL_"))
+        .collect::<BTreeSet<_>>();
+    // ACP's launcher cannot remove inherited variables, so env removes them before execing the harness.
+    let mut clean = AcpAgentConfig::new("env");
+    for name in inherited {
+        clean = clean.arg("-u").arg(name);
+    }
+    let clean = clean
+        .arg(config.command().to_string_lossy().into_owned())
+        .args(config.arguments().iter().cloned())
+        .envs(config.environment().clone())
+        .envs(provider.clone());
+    let spawn = AcpAgent::new(clean).with_debug(move |line, direction| {
+        if direction == LineDirection::Stderr {
+            let _ = stderr.send(bounded(line));
+        }
+    });
 
     Client
         .builder()
@@ -555,19 +567,6 @@ async fn select(
     }
 
     Ok(Some(selects.on))
-}
-
-pub fn prompt(entries: &[crate::link::Entry]) -> String {
-    if entries.is_empty() {
-        return PROMPT.to_owned();
-    }
-
-    let context = entries
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("Earlier context, oldest first:\n{context}\n\n{PROMPT}")
 }
 
 /// ACP's `terminal` method launches an interactive process for someone to log in at, so an

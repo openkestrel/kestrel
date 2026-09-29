@@ -1,5 +1,6 @@
-//! A Workspace starts with its Trigger's Agent, or the one an `agent:<name>` label chooses from
-//! those the Trigger allows, and keeps that Agent's harness and model for as long as it is open.
+//! A Workspace's first Session runs its Trigger's Agent, or the one an `agent:<name>` label chooses
+//! from those the Trigger allows. Each later Session names its own Agent or takes the latest one's,
+//! and keeps that Agent's harness and model for as long as it runs (ADR-0031).
 
 mod support;
 
@@ -7,7 +8,8 @@ use std::time::Duration;
 
 use jiff::SignedDuration;
 use kestrel::domain::{Direction, Exit, Session, SessionId, Workspace};
-use kestrel_scripted_agent::{DEFAULT_MODEL, OTHER_MODEL};
+use kestrel::log::Entry;
+use kestrel_scripted_agent::{DEFAULT_MODEL, OTHER_MODEL, conversed};
 use serde_json::Value;
 use support::github_stub::{self, GithubStub};
 use support::scripted_agent::{self, Script};
@@ -140,10 +142,11 @@ async fn with_no_agent_label_a_workspace_starts_with_the_triggers_agent() {
     let _github = labelled(&kestrel, &["bug"]).await;
 
     let workspace = opened(&kestrel).await;
+    let session = kestrel.sessions(workspace.id).await.remove(0);
 
-    assert_eq!(workspace.agent.name, "builder");
-    assert_eq!(workspace.agent.harness, support::HARNESS);
-    assert_eq!(workspace.agent.model.as_deref(), Some(DEFAULT_MODEL));
+    assert_eq!(session.agent.name, "builder");
+    assert_eq!(session.agent.harness, support::HARNESS);
+    assert_eq!(session.agent.model.as_deref(), Some(DEFAULT_MODEL));
 
     kestrel.teardown().await;
 }
@@ -155,10 +158,11 @@ async fn one_agent_label_chooses_an_agent_the_trigger_allows() {
     let _github = labelled(&kestrel, &["agent:codex"]).await;
 
     let workspace = opened(&kestrel).await;
+    let session = kestrel.sessions(workspace.id).await.remove(0);
 
-    assert_eq!(workspace.agent.name, "codex");
-    assert_eq!(workspace.agent.harness, "codex");
-    assert_eq!(workspace.agent.model.as_deref(), Some(OTHER_MODEL));
+    assert_eq!(session.agent.name, "codex");
+    assert_eq!(session.agent.harness, "codex");
+    assert_eq!(session.agent.model.as_deref(), Some(OTHER_MODEL));
 
     kestrel.teardown().await;
 }
@@ -223,34 +227,13 @@ async fn a_label_on_work_that_feeds_an_open_workspace_changes_nothing_about_its_
     }
 
     assert_eq!(kestrel.workspaces("acme").await.len(), 1);
-    assert_eq!(
-        kestrel.show_workspace(workspace.id).await.agent.name,
-        "codex"
-    );
-
-    kestrel.teardown().await;
-}
-
-#[tokio::test]
-async fn an_open_workspaces_agent_keeps_the_harness_and_model_it_opened_with() {
-    let kestrel = Kestrel::boot().await;
-    an_organization(&kestrel).await;
-    let workspace = kestrel.open_workspace("acme", "kestrel", "codex").await;
-    let organization = &workspace.organization;
-
-    kestrel
-        .declare_agent(organization, "codex", support::HARNESS, None)
-        .await;
-    kestrel
-        .set_agent_model(organization, "codex", Some(DEFAULT_MODEL))
-        .await;
-
-    let shown = kestrel.show_workspace(workspace.id).await;
-    assert_eq!(shown.agent.harness, "codex");
-    assert_eq!(shown.agent.model.as_deref(), Some(OTHER_MODEL));
-    let later = kestrel.open_workspace("acme", "kestrel", "codex").await;
-    assert_eq!(later.agent.harness, support::HARNESS);
-    assert_eq!(later.agent.model.as_deref(), Some(DEFAULT_MODEL));
+    let agents: Vec<String> = kestrel
+        .sessions(workspace.id)
+        .await
+        .into_iter()
+        .map(|session| session.agent.name)
+        .collect();
+    assert_eq!(agents, ["codex"]);
 
     kestrel.teardown().await;
 }
@@ -341,6 +324,137 @@ async fn a_declaration_file_names_the_agents_a_label_may_choose() {
             .allows
             .is_empty()
     );
+
+    kestrel.teardown().await;
+}
+
+/// `builder` speaks on the default harness and `codex` converses on its own, so what `codex` says
+/// could only come from its harness, as the first turn of a conversation nobody had before it.
+#[tokio::test]
+async fn a_session_naming_another_agent_runs_it_where_the_workspaces_last_session_ran() {
+    let kestrel = Kestrel::dispatching_harnesses(
+        supervisor::binary(),
+        &[
+            (support::HARNESS, &scripted_agent::playing(Script::Speaks)),
+            ("codex", &scripted_agent::playing(Script::Converses)),
+        ],
+    )
+    .await;
+    an_organization(&kestrel).await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let first = kestrel.post(workspace.id, "operator", "build it").await;
+    let first = ended(&kestrel, first.id).await;
+    kestrel.supervisor_recorded_gone(&first).await;
+
+    let second = kestrel.enqueue_session_as(workspace.id, "codex").await;
+    let second = ended(&kestrel, second.id).await;
+
+    assert_eq!(second.exit, Some(Exit::Succeeded), "{:?}", second.exit);
+    assert_eq!(first.agent.name, "builder");
+    assert_eq!(second.agent.name, "codex");
+    assert_eq!(second.agent.harness, "codex");
+    assert_eq!(second.agent.model.as_deref(), Some(OTHER_MODEL));
+    assert_eq!(second.worked_model.as_deref(), Some(OTHER_MODEL));
+    assert!(first.instance.is_some());
+    assert_eq!(second.instance, first.instance);
+    let transcript = kestrel.transcript(workspace.id).await;
+    let started: Vec<(SessionId, String)> = transcript
+        .iter()
+        .filter_map(|recorded| match &recorded.entry {
+            Entry::SessionStarted { session, agent } => Some((*session, agent.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        started,
+        [
+            (first.id, "builder".to_owned()),
+            (second.id, "codex".to_owned())
+        ]
+    );
+    let codex_said: Vec<&str> = transcript
+        .iter()
+        .filter_map(|recorded| match &recorded.entry {
+            Entry::Said {
+                participant,
+                message,
+            } if participant == "codex" => Some(message.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(codex_said, [conversed(1, &[])]);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_session_naming_no_agent_takes_the_agent_of_the_workspaces_latest_session() {
+    let kestrel = Kestrel::boot().await;
+    an_organization(&kestrel).await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+
+    let first = kestrel.enqueue_session(workspace.id).await;
+    kestrel.complete_session(&first).await;
+    let second = kestrel.enqueue_session_as(workspace.id, "codex").await;
+    kestrel.complete_session(&second).await;
+    let third = kestrel.enqueue_session(workspace.id).await;
+
+    assert_eq!(first.agent.name, "builder");
+    assert_eq!(third.agent.name, "codex");
+    assert_eq!(third.agent.harness, "codex");
+    assert_eq!(third.agent.model.as_deref(), Some(OTHER_MODEL));
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_session_naming_an_agent_the_organization_never_declared_is_refused() {
+    let kestrel = Kestrel::boot().await;
+    an_organization(&kestrel).await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+
+    let refused = kestrel
+        .try_enqueue_session_as(workspace.id, "reviewer")
+        .await
+        .expect_err("an undeclared agent should be refused");
+
+    assert_eq!(
+        refused.to_string(),
+        "no agent named reviewer in the organization acme"
+    );
+    assert!(kestrel.sessions(workspace.id).await.is_empty());
+
+    kestrel.teardown().await;
+}
+
+/// Continuing work keeps what its Agent was declared as; only a Session that names the Agent again
+/// takes its redeclaration.
+#[tokio::test]
+async fn continuing_work_keeps_its_agents_harness_and_model_until_a_session_names_it_again() {
+    let kestrel = Kestrel::boot().await;
+    an_organization(&kestrel).await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "codex").await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+    let organization = &workspace.organization;
+
+    kestrel
+        .declare_agent(organization, "codex", support::HARNESS, None)
+        .await;
+    kestrel
+        .set_agent_model(organization, "codex", Some(DEFAULT_MODEL))
+        .await;
+
+    let shown = kestrel.session(session.id).await;
+    assert_eq!(shown.agent.harness, "codex");
+    assert_eq!(shown.agent.model.as_deref(), Some(OTHER_MODEL));
+    kestrel.complete_session(&session).await;
+    let continued = kestrel.enqueue_session(workspace.id).await;
+    assert_eq!(continued.agent.harness, "codex");
+    assert_eq!(continued.agent.model.as_deref(), Some(OTHER_MODEL));
+    kestrel.complete_session(&continued).await;
+    let named = kestrel.enqueue_session_as(workspace.id, "codex").await;
+    assert_eq!(named.agent.harness, support::HARNESS);
+    assert_eq!(named.agent.model.as_deref(), Some(DEFAULT_MODEL));
 
     kestrel.teardown().await;
 }

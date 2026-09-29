@@ -14,6 +14,7 @@ pub mod control_plane;
 pub mod diagnostics;
 pub mod docker;
 pub mod environment;
+pub mod git;
 pub mod github_stub;
 pub mod image;
 pub mod images;
@@ -34,6 +35,7 @@ pub fn crate_root() -> std::path::PathBuf {
     )
 }
 
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -42,9 +44,9 @@ use jiff::{SignedDuration, Timestamp};
 use kestrel::agent;
 use kestrel::compute::{Docker, Driver, LocalExec};
 use kestrel::domain::{
-    Agent, CorrelationMiss, Direction, Event, EventRecordId, Exit, Fires, Integration, Occurrence,
-    Organization, Project, Schedule, Session, SessionId, SessionState, SubscriptionProfile,
-    Templates, Trigger, Turn, Workspace, WorkspaceId,
+    Agent, Correlation, CorrelationMiss, Direction, Event, EventRecordId, Exit, Fires, Integration,
+    Occurrence, OnOpenWorkspace, Organization, Project, Schedule, Session, SessionId, SessionState,
+    SubscriptionProfile, Templates, Trigger, Turn, Workspace, WorkspaceId,
 };
 use kestrel::instance;
 use kestrel::integration::{self, Connecting, Registration};
@@ -53,9 +55,10 @@ use kestrel::link::{self, Instruction};
 use kestrel::log::{Cursor, Entry, Page, TranscriptEntry, Unreadable, Window};
 use kestrel::profile::{self, Contents};
 use kestrel::provider::{self, Held};
-use kestrel::role::serve::Listen;
+use kestrel::role::serve::{self, Listen};
 use kestrel::role::work::{Dispatch, HarnessCommand};
 use kestrel::store::Store;
+use kestrel::timer::Wake;
 use kestrel::trigger::apply::Applied;
 use kestrel::trigger::{self, Against, Asked, Declaration, Tested};
 use kestrel::work::{self, Claimed};
@@ -91,20 +94,74 @@ pub fn templates(brief: &str, branch: Option<&str>, correlation: Option<&str>) -
     Templates {
         brief: parsed(brief),
         branch: branch.map(parsed),
-        correlation: correlation.map(parsed),
+        correlation: match correlation {
+            Some(correlation) => Correlation::On {
+                template: parsed(correlation),
+                on_miss: CorrelationMiss::Open,
+                on_open_workspace: OnOpenWorkspace::Continue,
+            },
+            None => Correlation::None,
+        },
     }
+}
+
+/// A Template set with one of its correlation's behaviours overridden, so a declaration the
+/// operator API would refuse can be built.
+fn correlation_overridden(
+    templates: &Templates,
+    on_miss: Option<CorrelationMiss>,
+    on_open_workspace: OnOpenWorkspace,
+) -> anyhow::Result<Templates> {
+    let template = templates.correlation.template().map(ToString::to_string);
+    let correlation = Correlation::parse(
+        template.as_deref(),
+        on_miss.map(CorrelationMiss::as_str),
+        Some(on_open_workspace.as_str()),
+    )?;
+
+    Ok(Templates {
+        brief: templates.brief.clone(),
+        branch: templates.branch.clone(),
+        correlation,
+    })
 }
 
 const LOOPBACK: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 0);
 
 pub struct Kestrel {
+    cleanup: Cleanup,
     data_dir: TempDir,
     store: Store,
     bound: Listen,
     environment: Option<Provisions>,
     shutdown: CancellationToken,
     roles: JoinHandle<anyhow::Result<()>>,
+}
+
+struct Cleanup {
+    data_dir: std::path::PathBuf,
+    environment: Option<Provisions>,
+    shutdown: CancellationToken,
+    abort: tokio::task::AbortHandle,
+    armed: bool,
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.shutdown.cancel();
+        self.abort.abort();
+
+        destroy_instances_on_drop(
+            self.data_dir.clone(),
+            self.environment
+                .as_ref()
+                .map(|environment| environment.driver.clone()),
+        );
+    }
 }
 
 /// What the work role provisions an Environment with.
@@ -133,6 +190,7 @@ fn spawning(harnesses: &[(&str, &str)]) -> Vec<HarnessCommand> {
 /// Comes back on the address it was listening on, so what an Environment already dialled
 /// still reaches it.
 pub struct Stopped {
+    cleanup: Cleanup,
     data_dir: TempDir,
     bound: Listen,
     environment: Option<Provisions>,
@@ -154,6 +212,19 @@ impl Kestrel {
             Listen {
                 link: "0.0.0.0:0".parse().expect("every interface"),
                 operator: LOOPBACK,
+            },
+            None,
+        )
+        .await
+    }
+
+    pub async fn boot_with_the_operator_beyond_loopback() -> Self {
+        let data_dir = TempDir::new().expect("a temporary data directory");
+        Self::boot_against(
+            data_dir,
+            Listen {
+                link: LOOPBACK,
+                operator: "0.0.0.0:0".parse().expect("every interface"),
             },
             None,
         )
@@ -255,7 +326,51 @@ impl Kestrel {
         });
         let roles = tokio::spawn(all_in_one.run(dispatch, shutdown.clone()));
 
+        Self::running(data_dir, store, bound, environment, shutdown, roles)
+    }
+
+    /// Serves the link with no work role behind it, so nothing sweeps a lease a test has let
+    /// lapse until it restarts as a whole control plane.
+    pub async fn boot_serving_alone() -> Self {
+        let data_dir = TempDir::new().expect("a temporary data directory");
+        let store = Store::open(data_dir.path())
+            .await
+            .expect("the control plane should boot against a fresh data directory");
+        let shutdown = CancellationToken::new();
+        let listening = serve::bind(
+            store.clone(),
+            Listen {
+                link: LOOPBACK,
+                operator: LOOPBACK,
+            },
+            Wake::default(),
+        )
+        .await
+        .expect("the control plane should bind its link");
+        let bound = listening.bound();
+        let roles = tokio::spawn(serve::run(listening, shutdown.clone()));
+
+        Self::running(data_dir, store, bound, None, shutdown, roles)
+    }
+
+    fn running(
+        data_dir: TempDir,
+        store: Store,
+        bound: Listen,
+        environment: Option<Provisions>,
+        shutdown: CancellationToken,
+        roles: JoinHandle<anyhow::Result<()>>,
+    ) -> Self {
+        let cleanup = Cleanup {
+            data_dir: data_dir.path().to_path_buf(),
+            environment: environment.clone(),
+            shutdown: shutdown.clone(),
+            abort: roles.abort_handle(),
+            armed: true,
+        };
+
         Self {
+            cleanup,
             data_dir,
             store,
             bound,
@@ -269,12 +384,41 @@ impl Kestrel {
         self.data_dir.path()
     }
 
+    pub fn is_running(&self) -> bool {
+        !self.roles.is_finished()
+    }
+
+    /// Takes SQLite's write lock the way another process on the same file would.
+    pub async fn while_the_database_is_locked<T>(&self, meanwhile: impl Future<Output = T>) -> T {
+        let pool = database(self.data_dir()).await;
+        let mut holder = pool.acquire().await.expect("a connection");
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *holder)
+            .await
+            .expect("the write lock should be free to take");
+
+        let done = meanwhile.await;
+
+        sqlx::query("ROLLBACK")
+            .execute(&mut *holder)
+            .await
+            .expect("the write lock should release");
+        drop(holder);
+        pool.close().await;
+
+        done
+    }
+
     pub fn link(&self) -> String {
         format!("http://{}", self.bound.link)
     }
 
     pub fn operator(&self) -> String {
         format!("http://{}", self.bound.operator)
+    }
+
+    pub fn operator_port(&self) -> u16 {
+        self.bound.operator.port()
     }
 
     pub fn link_from_an_environment(&self) -> String {
@@ -525,10 +669,7 @@ impl Kestrel {
             project,
             agent,
             templates,
-            templates
-                .correlation
-                .is_some()
-                .then_some(CorrelationMiss::Open),
+            templates.correlation.on_miss(),
         )
         .await
     }
@@ -574,14 +715,18 @@ impl Kestrel {
         templates: &Templates,
         on_miss: Option<CorrelationMiss>,
     ) -> anyhow::Result<Trigger> {
+        let templates = correlation_overridden(
+            templates,
+            on_miss,
+            templates.correlation.on_open_workspace(),
+        )?;
         trigger::declare(
             &self.store,
             Declaration {
                 organization,
                 name,
                 fires: &Fires::On(filter.parse().expect("the filter should parse")),
-                templates,
-                on_miss,
+                templates: &templates,
                 project,
                 agent,
                 allows: &[],
@@ -612,7 +757,6 @@ impl Kestrel {
                         .expect("the filter should parse"),
                 ),
                 templates: &templates(BRIEF, None, correlation),
-                on_miss: correlation.map(|_| CorrelationMiss::Open),
                 project: "kestrel",
                 agent,
                 allows: &allows
@@ -624,6 +768,71 @@ impl Kestrel {
         )
         .await
         .expect("the trigger should declare")
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a trigger is what it is declared with"
+    )]
+    pub async fn declare_correlated_trigger(
+        &self,
+        organization: &str,
+        name: &str,
+        filter: &str,
+        agent: &str,
+        allows: &[&str],
+        templates: &Templates,
+        on_open_workspace: OnOpenWorkspace,
+    ) -> Trigger {
+        self.try_declare_correlated_trigger(
+            organization,
+            name,
+            filter,
+            agent,
+            allows,
+            templates,
+            on_open_workspace,
+        )
+        .await
+        .expect("the trigger should declare")
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a trigger is what it is declared with"
+    )]
+    pub async fn try_declare_correlated_trigger(
+        &self,
+        organization: &str,
+        name: &str,
+        filter: &str,
+        agent: &str,
+        allows: &[&str],
+        templates: &Templates,
+        on_open_workspace: OnOpenWorkspace,
+    ) -> anyhow::Result<Trigger> {
+        let templates = correlation_overridden(
+            templates,
+            templates.correlation.on_miss(),
+            on_open_workspace,
+        )?;
+        trigger::declare(
+            &self.store,
+            Declaration {
+                organization,
+                name,
+                fires: &Fires::On(filter.parse().expect("the filter should parse")),
+                templates: &templates,
+                project: "kestrel",
+                agent,
+                allows: &allows
+                    .iter()
+                    .map(|&name| name.to_owned())
+                    .collect::<Vec<_>>(),
+                profile: None,
+            },
+        )
+        .await
     }
 
     pub async fn apply_triggers(&self, organization: &str, file: &str) -> Applied {
@@ -720,10 +929,6 @@ impl Kestrel {
                 name,
                 fires: &Fires::Scheduled(schedule),
                 templates,
-                on_miss: templates
-                    .correlation
-                    .is_some()
-                    .then_some(CorrelationMiss::Open),
                 project: "kestrel",
                 agent: "builder",
                 allows: &[],
@@ -1048,7 +1253,7 @@ impl Kestrel {
             .append(
                 &workspace,
                 Entry::Said {
-                    participant: workspace.agent.name.clone(),
+                    participant: session.agent.name.clone(),
                     message: message.to_owned(),
                 },
             )
@@ -1093,8 +1298,32 @@ impl Kestrel {
             .expect("the session should enqueue")
     }
 
+    /// What `session enqueue` still lets through directly, with nothing ever posted to the
+    /// Workspace: a Session its first Turn has no instruction for.
+    pub async fn enqueue_session_with_nothing_posted(&self, workspace: WorkspaceId) -> Session {
+        work::enqueue(&self.store, workspace, None, None)
+            .await
+            .expect("the session should enqueue")
+    }
+
     pub async fn try_enqueue_session(&self, workspace: WorkspaceId) -> anyhow::Result<Session> {
-        work::enqueue(&self.store, workspace, None).await
+        self.instructed(workspace).await?;
+        work::enqueue(&self.store, workspace, None, None).await
+    }
+
+    pub async fn enqueue_session_as(&self, workspace: WorkspaceId, agent: &str) -> Session {
+        self.try_enqueue_session_as(workspace, agent)
+            .await
+            .expect("the session should enqueue")
+    }
+
+    pub async fn try_enqueue_session_as(
+        &self,
+        workspace: WorkspaceId,
+        agent: &str,
+    ) -> anyhow::Result<Session> {
+        self.instructed(workspace).await?;
+        work::enqueue(&self.store, workspace, Some(agent), None).await
     }
 
     pub async fn enqueue_session_naming(
@@ -1112,7 +1341,32 @@ impl Kestrel {
         workspace: WorkspaceId,
         model: Option<&str>,
     ) -> anyhow::Result<Session> {
-        work::enqueue(&self.store, workspace, model).await
+        self.instructed(workspace).await?;
+        work::enqueue(&self.store, workspace, None, model).await
+    }
+
+    /// What a fixture calling straight into `work::enqueue` skips: the message a real operator
+    /// posts to give the Session it starts something to do. Appended before enqueuing, the way an
+    /// operator's post always precedes the session it starts, so nothing can claim and start the
+    /// Session before it has an instruction to run.
+    async fn instructed(&self, workspace: WorkspaceId) -> anyhow::Result<()> {
+        let mut tx = self.store.begin().await.expect("a transaction");
+        let record = tx
+            .workspaces()
+            .get(workspace)
+            .await
+            .expect("the workspace should read");
+        tx.log()
+            .append(
+                &record,
+                Entry::Said {
+                    participant: "operator".to_owned(),
+                    message: "do the work this environment was provisioned for".to_owned(),
+                },
+            )
+            .await?;
+        tx.commit().await.expect("the instruction should commit");
+        Ok(())
     }
 
     /// Claims what it enqueued, standing in for the work role a `boot`ed fixture leaves idle.
@@ -1428,6 +1682,7 @@ impl Kestrel {
         drop(self.store);
 
         Stopped {
+            cleanup: self.cleanup,
             data_dir: self.data_dir,
             bound: self.bound,
             environment: self.environment,
@@ -1440,13 +1695,21 @@ impl Kestrel {
 
     /// Stops the way a signalled control plane does: every role is told to stop and is waited
     /// for, rather than being cut off where it stood.
-    pub async fn teardown(self) -> Stopped {
+    pub async fn teardown(mut self) -> Stopped {
         self.shutdown.cancel();
         let _ = self.roles.await;
-        destroy_instances(self.data_dir.path(), self.environment.as_ref()).await;
+        destroy_instances(
+            self.data_dir.path(),
+            self.environment
+                .as_ref()
+                .map(|environment| &environment.driver),
+        )
+        .await;
+        self.cleanup.armed = false;
         drop(self.store);
 
         Stopped {
+            cleanup: self.cleanup,
             data_dir: self.data_dir,
             bound: self.bound,
             environment: self.environment,
@@ -1454,7 +1717,7 @@ impl Kestrel {
     }
 }
 
-async fn database(data_dir: &Path) -> sqlx::SqlitePool {
+pub async fn database(data_dir: &Path) -> sqlx::SqlitePool {
     let database = data_dir.join("kestrel.db");
     sqlx::SqlitePool::connect(&format!("sqlite://{}", database.display()))
         .await
@@ -1463,26 +1726,82 @@ async fn database(data_dir: &Path) -> sqlx::SqlitePool {
 
 /// An Instance outlives every Session on it and nothing here seals a Workspace into releasing one,
 /// so a test's Instances go with the test.
-async fn destroy_instances(data_dir: &Path, provisions: Option<&Provisions>) {
-    let Some(provisions) = provisions else {
+pub(crate) async fn destroy_instances(data_dir: &Path, driver: Option<&Driver>) {
+    let Some(driver) = driver else {
         return;
     };
     let pool = database(data_dir).await;
-    let instances: Vec<String> =
+    let mut instances: BTreeSet<String> =
         sqlx::query_scalar("SELECT DISTINCT instance FROM session WHERE instance IS NOT NULL")
             .fetch_all(&pool)
             .await
-            .expect("the instances should read");
+            .expect("the instances should read")
+            .into_iter()
+            .collect();
+    if matches!(driver, Driver::LocalExec(_)) {
+        let sessions: Vec<String> = sqlx::query_scalar("SELECT id FROM session")
+            .fetch_all(&pool)
+            .await
+            .expect("the sessions should read");
+        instances.extend(
+            sessions
+                .into_iter()
+                .map(|session| format!("local-exec/kestrel-{session}")),
+        );
+    }
     pool.close().await;
 
     for instance in instances {
-        let _ = provisions.driver.destroy_named(&instance);
+        if let Err(error) = driver.destroy_named(&instance) {
+            eprintln!("failed to destroy {instance}: {error}");
+        }
+    }
+}
+
+pub(crate) fn destroy_instances_on_drop(data_dir: std::path::PathBuf, driver: Option<Driver>) {
+    if std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a cleanup runtime");
+        runtime.block_on(destroy_instances(&data_dir, driver.as_ref()));
+    })
+    .join()
+    .is_err()
+    {
+        eprintln!("the test fixture could not clean up its instances");
     }
 }
 
 impl Stopped {
-    pub async fn restart(self) -> Kestrel {
+    pub async fn restart(mut self) -> Kestrel {
+        self.cleanup.armed = false;
         Kestrel::boot_against(self.data_dir, self.bound, self.environment).await
+    }
+
+    /// Restarted with a dispatch configuration the flags carry, which replaces whatever the
+    /// work role started with before.
+    pub async fn restart_with(
+        mut self,
+        supervisor: &Path,
+        command: &str,
+        maximum: usize,
+    ) -> Kestrel {
+        self.cleanup.armed = false;
+        Kestrel::boot_against(
+            self.data_dir,
+            self.bound,
+            Some(Provisions {
+                driver: Driver::LocalExec(LocalExec::running(supervisor)),
+                harnesses: vec![HarnessCommand {
+                    name: HARNESS.to_owned(),
+                    command: command.to_owned(),
+                }],
+                max_active_sessions: NonZeroUsize::new(maximum)
+                    .expect("at least one active session"),
+            }),
+        )
+        .await
     }
 
     pub async fn session(&self, id: SessionId) -> Session {

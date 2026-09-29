@@ -93,9 +93,13 @@ pub async fn reaching(
         .await
 }
 
-/// A credential is named by the environment variable the harness reads it from, so a name a
-/// process could not carry is refused where it is set rather than where it is spawned.
 pub(crate) fn named(variable: &str) -> Result<()> {
+    if variable.starts_with("KESTREL_") {
+        bail!(Declined::Unacceptable(
+            "KESTREL_ is reserved for the supervisor".to_owned()
+        ));
+    }
+
     let acceptable = variable
         .chars()
         .all(|character| character.is_ascii_alphanumeric() || character == '_');

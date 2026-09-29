@@ -16,8 +16,7 @@ use support::supervisor;
 
 const PATIENCE: Duration = Duration::from_secs(30);
 
-const COMMIT: &str = "git -C kestrel -c user.name=kestrel -c user.email=kestrel@example.com \
-                      commit --quiet";
+const COMMIT: &str = "git -C kestrel commit --quiet";
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
     let organization = kestrel.declare_organization("acme").await;
@@ -333,5 +332,29 @@ async fn a_waiting_session_over_unpublished_work_outlasts_the_idle_window() {
     );
 
     kestrel.stop_session(session.id).await;
+    kestrel.teardown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn releasing_an_idle_workspace_ends_its_waiting_session_succeeded() {
+    let harness = working("true");
+    let kestrel = dispatching_to(&harness).await;
+    let workspace = a_workspace(&kestrel).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+    let waiting = kestrel.answered(session.id, 1).await;
+    assert_eq!(waiting.state, SessionState::Waiting);
+    let instance = waiting.instance.expect("an instance");
+
+    assert_eq!(kestrel.release_instance(workspace.id).await, instance);
+
+    eventually(
+        "the released workspace's waiting session ending succeeded",
+        async || kestrel.session(session.id).await.exit == Some(Exit::Succeeded),
+    )
+    .await;
+    assert_eq!(kestrel.instance(workspace.id).await, None);
+    archived(&instance).await;
+
     kestrel.teardown().await;
 }

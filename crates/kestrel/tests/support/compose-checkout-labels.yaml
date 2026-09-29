@@ -1,0 +1,27 @@
+# Layered over the shipped compose file by the suite alone, so every resource a checkout brings
+# up names that checkout and a deleted checkout's stack can be swept. `KESTREL_TEST_CHECKOUT` is
+# the checkout's canonical path, supplied by the suite; nothing here reaches an operator.
+x-checkout-labels: &checkout
+  - "kestrel.test.checkout=${KESTREL_TEST_CHECKOUT:?}"
+
+services:
+  socket-proxy:
+    labels: *checkout
+  kestrel:
+    labels: *checkout
+    build:
+      labels: *checkout
+  kestrel-env:
+    labels: *checkout
+    build:
+      labels: *checkout
+
+volumes:
+  kestrel:
+    labels: *checkout
+
+networks:
+  daemon:
+    labels: *checkout
+  link:
+    labels: *checkout

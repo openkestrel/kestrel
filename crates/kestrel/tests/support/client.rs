@@ -93,7 +93,7 @@ impl Invocation {
             std::fs::write(&path, contents).expect("the file should write");
         }
         for (repository, directory) in &self.clones {
-            let cloned = Command::new("git")
+            let cloned = super::git::command()
                 .arg("clone")
                 .arg("--quiet")
                 .arg(repository)

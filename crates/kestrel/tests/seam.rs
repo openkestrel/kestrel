@@ -42,7 +42,7 @@ async fn a_workspace_opens_against_a_project_and_an_agent() {
     assert_eq!(shown.id, workspace.id);
     assert_eq!(shown.organization.name, "acme");
     assert_eq!(shown.project.name, "kestrel");
-    assert_eq!(shown.agent.name, "builder");
+    assert_eq!(shown.opened_with.name, "builder");
     assert_eq!(shown.state, WorkspaceState::Open);
 
     kestrel.teardown().await;
@@ -75,7 +75,7 @@ async fn every_durable_record_carries_its_organization() {
     let shown = kestrel.show_workspace(workspace.id).await;
 
     assert_eq!(shown.project.organization, shown.organization.id);
-    assert_eq!(shown.agent.organization, shown.organization.id);
+    assert_eq!(shown.opened_with.organization, shown.organization.id);
 
     kestrel.teardown().await;
 }
@@ -243,7 +243,7 @@ async fn paging_walks_a_transcript_longer_than_one_window_with_no_gap_and_no_dup
 
     assert_eq!(
         walked(&kestrel, &workspace, None).await,
-        (1..=7).collect::<Vec<_>>()
+        (1..=8).collect::<Vec<_>>()
     );
 
     kestrel.teardown().await;
@@ -261,7 +261,7 @@ async fn a_cursor_still_walks_the_transcript_after_the_control_plane_restarts() 
 
     let kestrel = kestrel.kill_and_restart().await;
 
-    assert_eq!(walked(&kestrel, &workspace, held).await, vec![3, 4]);
+    assert_eq!(walked(&kestrel, &workspace, held).await, vec![3, 4, 5]);
 
     kestrel.teardown().await;
 }
@@ -280,9 +280,9 @@ async fn entries_appended_part_way_through_a_walk_land_after_what_was_already_wa
         .said(&session, "said while the read was in flight")
         .await;
 
-    assert_eq!(walked(&kestrel, &workspace, held).await, vec![3, 4, 5]);
+    assert_eq!(walked(&kestrel, &workspace, held).await, vec![3, 4, 5, 6]);
     assert_eq!(
-        kestrel.transcript(workspace.id).await[4].entry.to_string(),
+        kestrel.transcript(workspace.id).await[5].entry.to_string(),
         "said  builder  said while the read was in flight"
     );
 

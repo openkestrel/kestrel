@@ -8,7 +8,7 @@ mod start;
 mod transcript;
 mod view;
 
-use std::io::{IsTerminal as _, Read as _};
+use std::io::{IsTerminal as _, Read as _, Write as _};
 use std::process::ExitCode;
 
 use anyhow::{Context as _, Result, bail};
@@ -110,6 +110,8 @@ enum Command {
     /// List the Instances held for work that exists nowhere else, and release them
     #[command(subcommand)]
     Instance(InstanceCommand),
+    /// Read the queue: the limits and their occupancy, and one row per queued Session
+    Queue,
     /// Print the resolved scope, where each value came from, what exists in it, and what to
     /// session next
     Status,
@@ -175,6 +177,7 @@ impl Command {
             | Command::Workspace(_)
             | Command::Session(_)
             | Command::Instance(_)
+            | Command::Queue
             | Command::Status => true,
             Command::Organization(_) | Command::ExitCodes => false,
             Command::Event(event) => match event {
@@ -383,6 +386,10 @@ enum TriggerCommand {
         /// What to do when correlation finds no open Workspace: open or ignore
         #[arg(long, value_name = "OPEN|IGNORE")]
         on_miss: Option<String>,
+        /// What to do when correlation finds an open Workspace: continue its waiting Session, or
+        /// start a new Session with this Trigger's Agent once the unfinished one lets go
+        #[arg(long, value_name = "CONTINUE|NEW-SESSION", requires = "correlation")]
+        on_open_workspace: Option<String>,
         /// The Project a firing's work happens against
         #[arg(long)]
         project: String,
@@ -595,6 +602,9 @@ enum SessionCommand {
         /// unambiguous prefix of its identifier, or `latest`
         #[arg(long)]
         workspace: String,
+        /// The Agent it runs, or the one the Workspace's latest Session ran
+        #[arg(long)]
+        agent: Option<String>,
         /// The model it works with, or none for its Agent's or Harness's default
         #[arg(long)]
         model: Option<String>,
@@ -931,6 +941,7 @@ async fn run() -> Result<()> {
             branch,
             correlation,
             on_miss,
+            on_open_workspace,
             project,
             agent,
             allows,
@@ -956,6 +967,7 @@ async fn run() -> Result<()> {
                 "branch": branch,
                 "correlation": correlation,
                 "on_miss": on_miss,
+                "on_open_workspace": on_open_workspace,
                 "project": project,
                 "agent": agent,
                 "allows": allows,
@@ -1203,7 +1215,11 @@ async fn run() -> Result<()> {
                 eprintln!("cursor  {cursor}");
             }
         }
-        Command::Session(SessionCommand::Enqueue { workspace, model }) => {
+        Command::Session(SessionCommand::Enqueue {
+            workspace,
+            agent,
+            model,
+        }) => {
             let organization = scoping.resolve().await?.organization;
             show(
                 &presentation,
@@ -1216,7 +1232,7 @@ async fn run() -> Result<()> {
                         &workspace,
                         "sessions",
                     ],
-                    &json!({ "model": model }),
+                    &json!({ "agent": agent, "model": model }),
                 )
                 .await?,
             )?;
@@ -1294,6 +1310,11 @@ async fn run() -> Result<()> {
                 "control_plane_source": control_plane_source,
             });
             status(&api, &presentation, location, scoping.derive().await?).await?;
+        }
+        Command::Queue => {
+            let organization = scoping.resolve().await?.organization;
+            let snapshot = api.get(&["organizations", &organization, "queue"]).await?;
+            shown_queue(&presentation, &snapshot)?;
         }
         Command::ExitCodes => unreachable!("the catalog is shown before the control plane is"),
     }
@@ -1405,6 +1426,86 @@ async fn started(
             "session_id": started["session"]["id"],
         }),
     )
+}
+
+/// The limits and their occupancy said first, so every row below is read against what it
+/// counts against. A script asks `--json` for the fields and gets the rows alone, each one
+/// carrying the limits it arrived with.
+fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
+    let slots = &snapshot["active_work"];
+    let instances = &snapshot["instances"];
+    let queued = snapshot["queued"]
+        .as_array()
+        .context(Failed::new(
+            Exit::Unavailable,
+            "reading the snapshot's queued Sessions",
+        ))?
+        .clone();
+
+    if !matches!(presentation, Presentation::Json(_)) {
+        let mut out = std::io::stdout().lock();
+        let said = [
+            (
+                "active-work slots",
+                occupancy(slots, "no work role is dispatching", "working"),
+            ),
+            (
+                "live instances",
+                occupancy(instances, "unbounded", "counted"),
+            ),
+        ];
+        let width = said
+            .iter()
+            .map(|(label, _)| label.chars().count())
+            .max()
+            .unwrap_or_default();
+        for (label, line) in said {
+            writeln!(out, "{label:width$}  {line}").context("writing the queue's limits")?;
+        }
+        out.flush().context("writing to standard output")?;
+    }
+
+    let rows = queued
+        .into_iter()
+        .map(|row| {
+            let mut record = row.as_object().cloned().context(Failed::new(
+                Exit::Unavailable,
+                "reading one of the snapshot's queued Sessions",
+            ))?;
+            record.insert("active_work".to_owned(), slots.clone());
+            record.insert("instances".to_owned(), instances.clone());
+
+            Ok(Value::Object(record))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    show(presentation, &view::QUEUE, &Value::from(rows))
+}
+
+/// A limit and what counts against it as one line, naming what the Organization can name.
+fn occupancy(section: &Value, without_limit: &str, unit: &str) -> String {
+    let limit = match section["limit"].as_u64() {
+        Some(limit) => format!("limit {limit};"),
+        None => format!("{without_limit};"),
+    };
+    let counted = section["count"]
+        .as_u64()
+        .or_else(|| section["occupied"].as_u64())
+        .unwrap_or(0);
+    let mut line = format!("{limit} {counted} {unit}");
+    let named = named_in(section);
+    if !named.is_empty() {
+        line.push_str(&format!(" ({})", named.join(", ")));
+    }
+
+    line
+}
+
+fn named_in(section: &Value) -> Vec<&str> {
+    let of = section["counted"]
+        .as_array()
+        .or_else(|| section["occupants"].as_array());
+    of.map_or_else(Vec::new, |of| of.iter().filter_map(Value::as_str).collect())
 }
 
 fn confirmed() -> Result<bool> {

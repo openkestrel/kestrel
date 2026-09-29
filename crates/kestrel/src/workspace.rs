@@ -7,7 +7,7 @@ use crate::domain::{
 use crate::fanout::{self, Change};
 use crate::instance;
 use crate::log::{Cursor, Entry, Page, Unreadable, Window};
-use crate::store::workspace::{Opening, Unfinished};
+use crate::store::workspace::{Opening, PendingSession, Unfinished};
 use crate::store::{Store, Tx};
 use crate::work;
 
@@ -55,7 +55,7 @@ pub async fn open(
         .append(
             &workspace,
             Entry::ParticipantJoined {
-                participant: workspace.agent.name.clone(),
+                participant: workspace.opened_with.name.clone(),
             },
         )
         .await?;
@@ -73,12 +73,8 @@ pub async fn seal(store: &Store, id: WorkspaceId) -> Result<Workspace> {
     if workspace.state == WorkspaceState::Sealed {
         bail!("the workspace {id} is already sealed, and a sealed workspace is never reopened");
     }
-    let unfinished = unfinished_session(&mut tx, &workspace).await?;
-    if let Some(holding) = unfinished.in_flight() {
+    if let Some(holding) = unfinished_session(&mut tx, &workspace).await?.in_flight() {
         bail!("the session {holding} is still in flight in the workspace {id}");
-    }
-    if let Some(waiting) = unfinished.waiting() {
-        work::stopping(&mut tx, &waiting, Exit::Succeeded).await?;
     }
     instance::archive_on_seal(&mut tx, &workspace).await?;
 
@@ -159,7 +155,7 @@ pub(crate) enum PostDestination<'a> {
 }
 
 impl UnfinishedSession {
-    /// A waiting Session is not in flight: sealing ends it (ADR-0024).
+    /// A waiting Session is not in flight: sealing (ADR-0024) or archiving its Instance ends it.
     pub fn in_flight(&self) -> Option<SessionId> {
         self.session.as_ref().and_then(|session| {
             (!matches!(session.state, SessionState::Ended | SessionState::Waiting)
@@ -173,6 +169,14 @@ impl UnfinishedSession {
             .as_ref()
             .filter(|session| session.state == SessionState::Waiting)
             .cloned()
+    }
+
+    pub async fn end_waiting(&self, tx: &mut Tx<'_>) -> Result<()> {
+        if let Some(waiting) = self.waiting() {
+            work::stopping(tx, &waiting, Exit::Succeeded).await?;
+        }
+
+        Ok(())
     }
 
     pub fn post_destination(&self) -> PostDestination<'_> {
@@ -237,7 +241,9 @@ pub(crate) async fn post_in(
         PostDestination::Start => {
             said(tx, workspace, participant, message).await?;
             Ok(Some(
-                tx.workspaces().enqueue_session(workspace, None).await?,
+                tx.workspaces()
+                    .enqueue_session(workspace, None, None)
+                    .await?,
             ))
         }
         PostDestination::Brief => {
@@ -258,6 +264,49 @@ pub(crate) async fn post_in(
             Ok(Some(waiting.clone()))
         }
     }
+}
+
+/// Waits for the unfinished Session to let go (ADR-0014), and ends one waiting between turns
+/// rather than wait on it: a waiting Session may wait indefinitely, and ending it there is how it
+/// succeeds (ADR-0031).
+pub(crate) async fn start_in(
+    tx: &mut Tx<'_>,
+    workspace: &Workspace,
+    pending: PendingSession,
+) -> Result<Option<Session>> {
+    workspace.accepts("session")?;
+
+    let unfinished = unfinished_session(tx, workspace).await?;
+    if unfinished.refuses_enqueue().is_none() {
+        return Ok(Some(briefed(tx, workspace, pending).await?));
+    }
+
+    tx.workspaces()
+        .add_pending_session(workspace, &pending)
+        .await?;
+    unfinished.end_waiting(tx).await?;
+
+    Ok(None)
+}
+
+pub(crate) async fn briefed(
+    tx: &mut Tx<'_>,
+    workspace: &Workspace,
+    pending: PendingSession,
+) -> Result<Session> {
+    tx.log()
+        .append(
+            workspace,
+            Entry::Brief {
+                trigger: Some(pending.trigger),
+                brief: pending.brief,
+            },
+        )
+        .await?;
+
+    tx.workspaces()
+        .enqueue_session(workspace, Some(&pending.agent), None)
+        .await
 }
 
 async fn said(
@@ -319,21 +368,28 @@ async fn continued(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::OrganizationId;
+    use crate::domain::{Agent, AgentId, OrganizationId};
 
     fn session(state: SessionState) -> Session {
+        let organization = OrganizationId::generate();
         Session {
             id: SessionId::generate(),
             name: "session".into(),
-            organization: OrganizationId::generate(),
+            organization,
             workspace: WorkspaceId::generate(),
+            agent: Agent {
+                id: AgentId::generate(),
+                organization,
+                name: "builder".into(),
+                harness: "opencode".into(),
+                model: None,
+            },
             state,
             waiting_for: None,
             exit: None,
             outcome_message: None,
             instance: None,
             supervisor: None,
-            model: None,
             worked_model: None,
             enqueued_at: Timestamp::now(),
             started_at: None,

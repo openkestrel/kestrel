@@ -21,11 +21,25 @@ struct Kestrel {
     data_dir: TempDir,
 }
 
+impl Drop for Kestrel {
+    fn drop(&mut self) {
+        let data_dir = self.data_dir.path().to_path_buf();
+        if !data_dir.join("kestrel.db").exists() {
+            return;
+        }
+        let driver = kestrel::compute::Driver::LocalExec(kestrel::compute::LocalExec::running(
+            support::supervisor::binary(),
+        ));
+        support::destroy_instances_on_drop(data_dir, Some(driver));
+    }
+}
+
 /// A control plane running over a [`Kestrel`]'s data directory, and every line it has said.
 struct Booted {
     child: Child,
     said: Arc<Mutex<String>>,
     operator: String,
+    stopped: bool,
 }
 
 impl Kestrel {
@@ -80,6 +94,7 @@ impl Kestrel {
             child,
             said,
             operator,
+            stopped: false,
         }
     }
 }
@@ -156,6 +171,7 @@ impl Booted {
         self.child
             .wait()
             .expect("the control plane should be waitable");
+        self.stopped = true;
     }
 
     /// Signalled rather than killed, so the work role sees a stopped Session's supervisor off the
@@ -168,11 +184,21 @@ impl Booted {
         self.child
             .wait()
             .expect("the control plane should be waitable");
+        self.stopped = true;
     }
 }
 
 impl Drop for Booted {
     fn drop(&mut self) {
+        if self.stopped || self.child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        #[cfg(unix)]
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::kill(self.child.id() as i32, libc::SIGTERM);
+        }
+        #[cfg(not(unix))]
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -321,7 +347,9 @@ fn transcribed(kestrel: &Booted, workspace: &str) -> Vec<String> {
             let entry = &recorded["entry"];
             let said = match entry["kind"].as_str().expect("an entry kind") {
                 "participant_joined" => format!("participant joined {}", entry["participant"]),
-                "session_started" => format!("session started {}", entry["session"]),
+                "session_started" => {
+                    format!("session started {} {}", entry["session"], entry["agent"])
+                }
                 "said" => format!("said {} {}", entry["participant"], entry["message"]),
                 "session_ended" => format!(
                     "session ended {} {}",
@@ -421,7 +449,7 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
     let booted = kestrel.boot();
     declared(&booted);
     let workspace = opened(&booted);
-    booted.run(&["session", "enqueue", "--workspace", &workspace]);
+    booted.run(&["workspace", "post", &workspace, "go"]);
     dispatched(&booted, &workspace);
 
     let shown = booted.record(&["workspace", "show", &workspace, "--json", "instance,held"]);
@@ -445,7 +473,7 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
     );
     assert_eq!(
         transcribed(&booted, &workspace).last(),
-        Some(&format!("6 instance released operator {instance}")),
+        Some(&format!("7 instance released operator {instance}")),
         "the release is not on the record"
     );
     assert!(
@@ -461,7 +489,7 @@ fn a_session_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
     let booted = kestrel.boot();
     declared(&booted);
     let workspace = opened(&booted);
-    let session = booted.run(&["session", "enqueue", "--workspace", &workspace]);
+    let session = booted.run(&["workspace", "post", &workspace, "go"]);
 
     let listed = dispatched(&booted, &workspace);
 
@@ -484,6 +512,70 @@ fn a_session_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn dropping_a_control_plane_with_a_waiting_session_stops_its_supervisor() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Converses, "info");
+    declared(&booted);
+    let workspace = opened(&booted);
+    booted.run(&["workspace", "post", &workspace, "go"]);
+    let listed = booted.until(
+        &[
+            "session",
+            "list",
+            "--workspace",
+            &workspace,
+            "--json",
+            "state,supervisor",
+        ],
+        |listed| listed.iter().any(|session| session["state"] == "waiting"),
+        "reach a waiting session",
+    );
+    let supervisor = listed[0]["supervisor"]
+        .as_str()
+        .expect("the waiting session has a supervisor")
+        .to_owned();
+
+    drop(booted);
+
+    support::environment::Environment::named(&supervisor)
+        .is_gone()
+        .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn killing_a_control_plane_without_restarting_stops_its_supervisor() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Converses, "info");
+    declared(&booted);
+    let workspace = opened(&booted);
+    booted.run(&["workspace", "post", &workspace, "go"]);
+    let listed = booted.until(
+        &[
+            "session",
+            "list",
+            "--workspace",
+            &workspace,
+            "--json",
+            "state,supervisor,instance",
+        ],
+        |listed| listed.iter().any(|session| session["state"] == "waiting"),
+        "reach a waiting session",
+    );
+    let supervisor = listed[0]["supervisor"].as_str().unwrap().to_owned();
+    let instance = listed[0]["instance"].as_str().unwrap().to_owned();
+
+    booted.killed();
+    drop(kestrel);
+
+    support::environment::Environment::named(&supervisor)
+        .is_gone()
+        .await;
+    assert!(!support::environment::Environment::root_of(&instance).exists());
+}
+
 /// ADR-0002's definition of done for rung 0.1, out of process and against a real `SIGKILL`:
 /// nothing the control plane held in memory lands, and the Environment it provisioned
 /// outlives it.
@@ -494,7 +586,7 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
     let killed = kestrel.booting(&listen, Script::Lingers, "info");
     declared(&killed);
     let workspace = opened(&killed);
-    let session = killed.run(&["session", "enqueue", "--workspace", &workspace]);
+    let session = killed.run(&["workspace", "post", &workspace, "go"]);
     // The transcript says the Session started only once the supervisor holds the Start instruction,
     // which is the first moment a restart has anything to recover; an instance alone is not.
     killed.until(
@@ -541,10 +633,11 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
         transcript,
         vec![
             "1 participant joined builder".to_owned(),
-            format!("2 session started {session}"),
-            "3 said builder half of one message, and the other half".to_owned(),
-            "4 said builder a second message".to_owned(),
-            format!("5 session ended {session} succeeded"),
+            "2 said operator go".to_owned(),
+            format!("3 session started {session} builder"),
+            "4 said builder half of one message, and the other half".to_owned(),
+            "5 said builder a second message".to_owned(),
+            format!("6 session ended {session} succeeded"),
         ]
     );
 }

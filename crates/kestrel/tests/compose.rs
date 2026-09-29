@@ -266,7 +266,7 @@ async fn a_session_provisions_an_instance_and_stops_its_supervisor_through_the_f
     let stack = Stack::up();
     let namespace = compose::namespace_for(&docker::repository());
     let workspace = a_workspace(&stack);
-    let session = stack.ran(&["session", "enqueue", "--workspace", &workspace]);
+    let session = stack.ran(&["workspace", "post", &workspace, "go"]);
 
     let instance = compose::until("the session to reach an instance", || {
         listed(&stack, &session).instance
@@ -346,7 +346,7 @@ fn the_commands_usage_documents_are_the_commands_that_work() {
     assert_eq!(opened["id"], workspace);
     assert_eq!(opened["organization"], "acme");
     assert_eq!(opened["project"], "kestrel");
-    assert_eq!(opened["agent"], "builder");
+    assert_eq!(opened["opened_with"], "builder");
     assert_eq!(opened["state"], "open");
     assert!(opened["opened_at"].is_string(), "{opened}");
 
@@ -372,7 +372,7 @@ fn the_commands_usage_documents_are_the_commands_that_work() {
     );
 }
 
-const WORKSPACE: &str = "id,name,organization,project,agent,checkout,state,opened_at";
+const WORKSPACE: &str = "id,name,organization,project,opened_with,checkout,state,opened_at";
 
 fn shown(stack: &Stack, workspace: &str) -> Value {
     let shown = stack.ran(&["workspace", "show", workspace, "--json", WORKSPACE]);

@@ -1,11 +1,15 @@
 //! The escape hatch that exists whether or not it is planned (ADR-0005), and the Instance the
 //! primary test seam provisions: a directory, and a supervisor process per Session inside it.
 
-use std::fs;
+use std::collections::HashSet;
+use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 
+#[cfg(unix)]
+use std::os::fd::AsRawFd as _;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
 
@@ -15,17 +19,29 @@ use crate::domain::SessionId;
 #[derive(Debug, Clone)]
 pub struct LocalExec {
     supervisor: PathBuf,
+    lifecycle: Arc<Mutex<HashSet<String>>>,
 }
 
 impl LocalExec {
     pub fn running(supervisor: impl Into<PathBuf>) -> Self {
         Self {
             supervisor: supervisor.into(),
+            lifecycle: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
     pub(super) fn provision(&self, session: SessionId) -> io::Result<Instance> {
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| io::Error::other("instance lock poisoned"))?;
         let name = format!("kestrel-{session}");
+        if lifecycle.contains(&name) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "instance was destroyed",
+            ));
+        }
         fs::create_dir_all(within(&name))?;
         fs::create_dir_all(home(&name))?;
 
@@ -42,7 +58,13 @@ impl LocalExec {
     }
 
     pub(super) fn destroy_named(&self, instance: &str) -> io::Result<()> {
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| io::Error::other("instance lock poisoned"))?;
         let name = named(instance)?;
+        lifecycle.insert(name.to_owned());
+        stop_processes(&home(name))?;
         removed(&home(name))?;
         removed(&within(name))
     }
@@ -51,6 +73,8 @@ impl LocalExec {
         Instance {
             provisioned: Box::new(Directory {
                 supervisor: self.supervisor.clone(),
+                lifecycle: self.lifecycle.clone(),
+                name: name.clone(),
                 root: within(&name),
                 home: home(&name),
             }),
@@ -76,8 +100,83 @@ fn named(instance: &str) -> io::Result<&str> {
         .ok_or_else(|| io::Error::other(format!("{instance} is not a local instance")))
 }
 
+fn supervisors(home: &Path) -> PathBuf {
+    home.join(".kestrel-supervisors")
+}
+
+fn stop_processes(home: &Path) -> io::Result<()> {
+    let entries = match fs::read_dir(supervisors(home)) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        entries => entries?,
+    };
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            if marker_is_locked(&entry.path())? {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "supervisor is starting",
+                ));
+            }
+            let _ = fs::remove_file(entry.path());
+            continue;
+        }
+        let pid: i32 = entry
+            .file_name()
+            .to_string_lossy()
+            .parse()
+            .map_err(|error| io::Error::other(format!("invalid supervisor marker: {error}")))?;
+        stop_marker(&entry.path(), pid)?;
+    }
+    Ok(())
+}
+
+fn stop_marker(marker: &Path, pid: i32) -> io::Result<()> {
+    if marker.exists() && marker_is_locked(marker)? {
+        #[cfg(unix)]
+        if let Err(error) = killed(pid)
+            && marker_is_locked(marker)?
+        {
+            return Err(error);
+        }
+        #[cfg(not(unix))]
+        let _ = pid;
+    }
+    match fs::remove_file(marker) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        removed => removed,
+    }
+}
+
+#[cfg(unix)]
+fn marker_is_locked(marker: &Path) -> io::Result<bool> {
+    let file = match OpenOptions::new().read(true).open(marker) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        opened => opened?,
+    };
+    #[allow(unsafe_code)]
+    let locked = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if locked == 0 {
+        Ok(false)
+    } else {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+            Ok(true)
+        } else {
+            Err(error)
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn marker_is_locked(_: &Path) -> io::Result<bool> {
+    Ok(true)
+}
+
 struct Directory {
     supervisor: PathBuf,
+    lifecycle: Arc<Mutex<HashSet<String>>>,
+    name: String,
     root: PathBuf,
     home: PathBuf,
 }
@@ -119,8 +218,35 @@ impl Provisioned for Directory {
     }
 
     fn supervise(&mut self, variables: &[(&str, &str)]) -> io::Result<Supervisor> {
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| io::Error::other("instance lock poisoned"))?;
+        if lifecycle.contains(&self.name) || !self.root.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "instance was destroyed",
+            ));
+        }
         let mut command = Command::new(&self.supervisor);
         fs::create_dir_all(&self.home)?;
+        let markers = supervisors(&self.home);
+        fs::create_dir_all(&markers)?;
+        let pending = markers.join(format!(".{}", uuid::Uuid::now_v7()));
+        let marker_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&pending)?;
+        #[cfg(unix)]
+        {
+            #[allow(unsafe_code)]
+            let locked = unsafe { libc::flock(marker_file.as_raw_fd(), libc::LOCK_EX) };
+            if locked == -1 {
+                let error = io::Error::last_os_error();
+                let _ = fs::remove_file(&pending);
+                return Err(error);
+            }
+        }
         command
             .current_dir(&self.root)
             .env("HOME", &self.home)
@@ -131,12 +257,16 @@ impl Provisioned for Directory {
 
         #[cfg(unix)]
         {
+            let marker_fd = marker_file.as_raw_fd();
             // `setsid` makes this process its own process-group leader, so every
             // child it forks inherits the same group and `killpg` reaches all of them.
             #[allow(unsafe_code)]
             unsafe {
-                command.pre_exec(|| {
+                command.pre_exec(move || {
                     if libc::setsid() == -1 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    if libc::fcntl(marker_fd, libc::F_SETFD, 0) == -1 {
                         return Err(io::Error::last_os_error());
                     }
                     Ok(())
@@ -144,13 +274,30 @@ impl Provisioned for Directory {
             }
         }
 
-        let mut child = command.spawn()?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = fs::remove_file(&pending);
+                return Err(error);
+            }
+        };
+        let marker = markers.join(child.id().to_string());
+        if let Err(error) = fs::rename(&pending, &marker) {
+            #[cfg(unix)]
+            let _ = killed(child.id() as i32);
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = fs::remove_file(&pending);
+            return Err(error);
+        }
+        drop(marker_file);
 
         Ok(Supervisor {
-            name: format!("local-exec/{}", child.id()),
+            name: format!("local-exec/{}@{}", child.id(), self.name),
             stdout: child.stdout.take(),
             stderr: child.stderr.take(),
             supervising: Box::new(Process {
+                marker,
                 #[cfg(unix)]
                 pgid: child.id() as i32,
                 child,
@@ -160,6 +307,12 @@ impl Provisioned for Directory {
     }
 
     fn destroy(&mut self) -> io::Result<()> {
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| io::Error::other("instance lock poisoned"))?;
+        lifecycle.insert(self.name.clone());
+        stop_processes(&self.home)?;
         removed(&self.home)?;
         removed(&self.root)
     }
@@ -167,6 +320,7 @@ impl Provisioned for Directory {
 
 struct Process {
     child: Child,
+    marker: PathBuf,
     #[cfg(unix)]
     pgid: i32,
 }
@@ -186,7 +340,9 @@ impl Supervising for Process {
         #[cfg(not(unix))]
         self.child.kill()?;
 
-        self.child.wait().map(drop)
+        self.child.wait()?;
+        let _ = fs::remove_file(&self.marker);
+        Ok(())
     }
 }
 
@@ -213,18 +369,22 @@ fn removed(root: &Path) -> io::Result<()> {
 }
 
 pub(super) fn stop_named(supervisor: &str) -> io::Result<()> {
-    let pid: i32 = supervisor
+    let named = supervisor
         .strip_prefix("local-exec/")
-        .ok_or_else(|| io::Error::other(format!("{supervisor} is not a local supervisor")))?
+        .ok_or_else(|| io::Error::other(format!("{supervisor} is not a local supervisor")))?;
+    let (pid, instance) = named
+        .split_once('@')
+        .ok_or_else(|| io::Error::other(format!("{supervisor} has no instance")))?;
+    if instance.is_empty() || instance.contains(['/', '\\']) || instance == ".." {
+        return Err(io::Error::other(format!(
+            "{supervisor} has no valid instance"
+        )));
+    }
+    let pid: i32 = pid
         .parse()
         .map_err(|error| io::Error::other(format!("{supervisor} has no process id: {error}")))?;
 
-    #[cfg(unix)]
-    killed(pid)?;
-    #[cfg(not(unix))]
-    let _ = pid;
-
-    Ok(())
+    stop_marker(&supervisors(&home(instance)).join(pid.to_string()), pid)
 }
 
 #[cfg(all(test, unix))]

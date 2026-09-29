@@ -76,12 +76,14 @@ pub const TRIGGER: View = View::Detail(&[
     "branch",
     "correlation",
     "on_miss",
+    "on_open_workspace",
     "applied",
     "declared_at",
     "brief",
 ]);
 pub const TRIGGER_TEST: View = View::Detail(&[
     "matches",
+    "would",
     "elapsing",
     "agent",
     "branch",
@@ -90,14 +92,21 @@ pub const TRIGGER_TEST: View = View::Detail(&[
 ]);
 pub const TRIGGER_STATE: View = View::Value("state");
 pub const FIRED: View = View::Detail(&["outcome", "workspace", "session", "event", "correlation"]);
-pub const WORKSPACES: View = View::Rows(&["id", "name", "state", "project", "agent", "started_by"]);
+pub const WORKSPACES: View = View::Rows(&[
+    "id",
+    "name",
+    "state",
+    "project",
+    "opened_with",
+    "started_by",
+]);
 pub const ENTRIES: View = View::Rows(&["seq", "appended_at", "entry"]);
 pub const WORKSPACE: View = View::Detail(&[
     "id",
     "name",
     "organization",
     "project",
-    "agent",
+    "opened_with",
     "profile",
     "checkout.base",
     "checkout.branch",
@@ -116,6 +125,7 @@ pub const SESSIONS: View = View::Rows(&[
     "id",
     "name",
     "state",
+    "agent",
     "waiting_for",
     "exit.status",
     "exit.because",
@@ -133,6 +143,8 @@ pub const SESSION: View = View::Detail(&[
     "outcome_message",
     "instance",
     "supervisor",
+    "agent",
+    "harness",
     "model",
     "worked_model",
     "enqueued_at",
@@ -145,6 +157,14 @@ pub const SESSION: View = View::Detail(&[
 ]);
 pub const STOPPED: View = View::Value("exit.status");
 pub const INSTANCES: View = View::Rows(&["workspace", "instance", "because"]);
+pub const QUEUE: View = View::Rows(&[
+    "position",
+    "name",
+    "agent",
+    "workspace",
+    "waits_on",
+    "enqueued_at",
+]);
 pub const RELEASED: View = View::Value("instance");
 pub const STATUS: View = View::Detail(&[
     "control_plane",

@@ -47,9 +47,7 @@ pub async fn admit(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Admission> 
         if workspace::unfinished_session(tx, &candidate).await?.idle()
             && unpublished(&candidate.checkout.repositories, kept.observed.as_deref()).is_none()
         {
-            tx.workspaces()
-                .archive_instance(&candidate, &kept.instance)
-                .await?;
+            archive(tx, &candidate, &kept.instance).await?;
             return Ok(Admission::Waiting(format!(
                 "waiting for the idle Instance {} to be archived",
                 kept.instance
@@ -232,9 +230,7 @@ pub async fn release(store: &Store, id: WorkspaceId, participant: &str) -> Resul
             },
         )
         .await?;
-    tx.workspaces()
-        .archive_instance(&workspace, &kept.instance)
-        .await?;
+    archive(&mut tx, &workspace, &kept.instance).await?;
     tx.commit().await?;
 
     Ok(kept.instance)
@@ -242,7 +238,10 @@ pub async fn release(store: &Store, id: WorkspaceId, participant: &str) -> Resul
 
 pub(crate) async fn archive_on_seal(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<()> {
     let Some(kept) = tx.workspaces().kept_instance(workspace.id).await? else {
-        return Ok(());
+        return workspace::unfinished_session(tx, workspace)
+            .await?
+            .end_waiting(tx)
+            .await;
     };
 
     if let Some(because) = unpublished(&workspace.checkout.repositories, kept.observed.as_deref()) {
@@ -253,9 +252,17 @@ pub(crate) async fn archive_on_seal(tx: &mut Tx<'_>, workspace: &Workspace) -> R
         )));
     }
 
-    tx.workspaces()
-        .archive_instance(workspace, &kept.instance)
-        .await
+    archive(tx, workspace, &kept.instance).await
+}
+
+/// Destroying an Instance under a waiting Session would record it failed, though it has done
+/// everything asked of it.
+async fn archive(tx: &mut Tx<'_>, workspace: &Workspace, instance: &str) -> Result<()> {
+    workspace::unfinished_session(tx, workspace)
+        .await?
+        .end_waiting(tx)
+        .await?;
+    tx.workspaces().archive_instance(workspace, instance).await
 }
 
 pub async fn to_archive(store: &Store) -> Result<Vec<String>> {

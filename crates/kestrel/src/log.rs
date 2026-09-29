@@ -21,6 +21,7 @@ pub enum Entry {
     },
     SessionStarted {
         session: SessionId,
+        agent: String,
     },
     Said {
         participant: String,
@@ -54,7 +55,9 @@ impl fmt::Display for Entry {
                 trigger: None,
                 brief,
             } => write!(f, "brief  {brief}"),
-            Entry::SessionStarted { session } => write!(f, "session started  {session}"),
+            Entry::SessionStarted { session, agent } => {
+                write!(f, "session started  {session}  {agent}")
+            }
             Entry::Said {
                 participant,
                 message,
@@ -146,7 +149,11 @@ impl<'a> Log<'a> {
         })
     }
 
-    pub async fn last_said_for_session(&mut self, workspace: &Workspace) -> Result<Option<String>> {
+    pub async fn last_said_for_session(
+        &mut self,
+        workspace: &Workspace,
+        participant: &str,
+    ) -> Result<Option<String>> {
         let latest = sqlx::query(
             "SELECT body
              FROM transcript_entry
@@ -160,7 +167,7 @@ impl<'a> Log<'a> {
              LIMIT 1",
         )
         .bind(workspace.id.to_string())
-        .bind(&workspace.agent.name)
+        .bind(participant)
         .bind(workspace.id.to_string())
         .fetch_optional(&mut *self.connection)
         .await
@@ -172,9 +179,9 @@ impl<'a> Log<'a> {
 
         Ok(match serde_json::from_str(row.get("body"))? {
             Entry::Said {
-                participant,
+                participant: said_by,
                 message,
-            } if participant == workspace.agent.name => Some(message),
+            } if said_by == participant => Some(message),
             _ => None,
         })
     }
@@ -215,17 +222,24 @@ impl<'a> Log<'a> {
         Ok(said)
     }
 
-    /// The Brief, if nobody has said anything since it: participants joining and Sessions starting
-    /// are not something said.
+    /// The Brief that started this Session, if nothing has said anything since it: participants
+    /// joining and Sessions starting are not something said. Bounded to what the Transcript holds
+    /// since the Workspace's last Session ended, or since it opened if none has, so a Brief that
+    /// started an earlier Session is not mistaken for one starting this one.
     pub async fn unfollowed_brief(&mut self, workspace: &Workspace) -> Result<Option<String>> {
         let said = sqlx::query(
             "SELECT body
              FROM transcript_entry
              WHERE workspace_id = ?
                AND json_extract(body, '$.kind') NOT IN ('participant_joined', 'session_started')
+               AND seq > COALESCE((
+                   SELECT MAX(seq) FROM transcript_entry
+                   WHERE workspace_id = ? AND json_extract(body, '$.kind') = 'session_ended'
+               ), 0)
              ORDER BY seq
              LIMIT 2",
         )
+        .bind(workspace.id.to_string())
         .bind(workspace.id.to_string())
         .fetch_all(&mut *self.connection)
         .await
@@ -238,6 +252,77 @@ impl<'a> Log<'a> {
             Entry::Brief { brief, .. } => Some(brief),
             _ => None,
         })
+    }
+
+    /// Every entry the Transcript holds before the messages starting the Session about to begin,
+    /// oldest first: a Brief or an earlier Session's history that a message which followed it
+    /// reads as context rather than as its own instruction.
+    pub async fn context_before_starting(&mut self, workspace: &Workspace) -> Result<Vec<Entry>> {
+        let rows = sqlx::query(
+            "SELECT body
+             FROM transcript_entry
+             WHERE workspace_id = ?
+               AND json_extract(body, '$.kind') != 'participant_joined'
+               AND seq < (
+                   SELECT MIN(seq) FROM transcript_entry
+                   WHERE workspace_id = ?
+                     AND json_extract(body, '$.kind') IN ('said', 'messages')
+                     AND seq > COALESCE((
+                         SELECT MAX(seq) FROM transcript_entry
+                         WHERE workspace_id = ? AND json_extract(body, '$.kind') = 'session_ended'
+                     ), 0)
+               )
+             ORDER BY seq",
+        )
+        .bind(workspace.id.to_string())
+        .bind(workspace.id.to_string())
+        .bind(workspace.id.to_string())
+        .fetch_all(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading the transcript of workspace {}", workspace.id))?;
+
+        rows.iter()
+            .map(|row| Ok(serde_json::from_str(row.get("body"))?))
+            .collect()
+    }
+
+    /// The Said and Messages entries the Transcript holds since the Workspace's last Session
+    /// ended, or since it opened if none has, flattened into the messages that make them up and
+    /// ordered oldest first: the message or messages that started the Session about to begin.
+    pub async fn starting_messages(&mut self, workspace: &Workspace) -> Result<Vec<Message>> {
+        let rows = sqlx::query(
+            "SELECT body
+             FROM transcript_entry
+             WHERE workspace_id = ?
+               AND json_extract(body, '$.kind') IN ('said', 'messages')
+               AND seq > COALESCE((
+                   SELECT MAX(seq) FROM transcript_entry
+                   WHERE workspace_id = ? AND json_extract(body, '$.kind') = 'session_ended'
+               ), 0)
+             ORDER BY seq",
+        )
+        .bind(workspace.id.to_string())
+        .bind(workspace.id.to_string())
+        .fetch_all(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading the transcript of workspace {}", workspace.id))?;
+
+        let mut messages = Vec::new();
+        for row in rows {
+            match serde_json::from_str(row.get("body"))? {
+                Entry::Said {
+                    participant,
+                    message,
+                } => messages.push(Message {
+                    participant,
+                    message,
+                }),
+                Entry::Messages { messages: mut said } => messages.append(&mut said),
+                _ => {}
+            }
+        }
+
+        Ok(messages)
     }
 
     pub async fn page(

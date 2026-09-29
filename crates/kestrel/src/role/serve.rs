@@ -1,6 +1,8 @@
 use std::net::SocketAddr;
 
 use anyhow::{Context as _, Result};
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -88,4 +90,14 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
     info!(role = %Role::Serve, "role stopped");
 
     Ok(())
+}
+
+/// A busy refusal says when to ask again, so a caller can tell it from one that asking again
+/// will not fix.
+pub(crate) fn refusal(status: StatusCode, busy: bool, body: impl IntoResponse) -> Response {
+    if busy {
+        (status, [(header::RETRY_AFTER, "1")], body).into_response()
+    } else {
+        (status, body).into_response()
+    }
 }

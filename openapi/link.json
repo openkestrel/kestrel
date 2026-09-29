@@ -278,6 +278,12 @@
     "responses": {
       "Refused": {
         "description": "The link refused the request.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds to wait before asking again. Present on a 503 only when the database was busy, which asking again can clear.",
+            "schema": { "type": "integer" }
+          }
+        },
         "content": {
           "application/json": {
             "schema": {
@@ -362,13 +368,14 @@
             "$ref": "#/components/schemas/Checkout"
           },
           "prompt": {
-            "description": "The agent's whole prompt, sent exactly as given. Absent, the Environment prompts the agent with the Transcript as earlier context.",
+            "description": "The agent's whole prompt, sent exactly as given: the Workspace's unfollowed Brief, or the message or messages that started this Session with earlier Transcript entries as labeled context ahead of them.",
             "type": "string"
           }
         },
         "required": [
           "kind",
-          "checkout"
+          "checkout",
+          "prompt"
         ]
       },
       "Prompt": {
@@ -948,11 +955,16 @@
           "session": {
             "type": "string",
             "format": "uuid"
+          },
+          "agent": {
+            "description": "The Agent the Session runs.",
+            "type": "string"
           }
         },
         "required": [
           "kind",
-          "session"
+          "session",
+          "agent"
         ]
       },
       "Message": {

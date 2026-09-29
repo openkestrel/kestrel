@@ -96,7 +96,7 @@ async fn what_the_agent_says_reaches_the_transcript_coalesced_by_the_message_it_
         transcript(&kestrel, &workspace)
             .await
             .into_iter()
-            .filter(|entry| entry.starts_with("said"))
+            .filter(|entry| entry.starts_with("said  builder"))
             .collect::<Vec<_>>(),
         vec![
             "said  builder  half of one message, and the other half".to_owned(),
@@ -304,7 +304,7 @@ async fn an_agent_that_does_not_answer_acp_v1_fails_the_session_rather_than_bein
         !transcript(&kestrel, &workspace)
             .await
             .iter()
-            .any(|entry| entry.starts_with("said")),
+            .any(|entry| entry.starts_with("said  builder")),
         "an agent that was never initialized said something"
     );
 
@@ -384,7 +384,7 @@ async fn the_supervisor_sets_the_model_it_was_given() {
 async fn a_session_without_a_model_uses_its_agents_model() {
     let (kestrel, _, session) = worked_naming(Script::Speaks, Some(OTHER_MODEL)).await;
 
-    assert!(session.model.is_none());
+    assert_eq!(session.agent.model.as_deref(), Some(OTHER_MODEL));
     assert_eq!(session.worked_model.as_deref(), Some(OTHER_MODEL));
 
     kestrel.teardown().await;
@@ -440,8 +440,8 @@ async fn two_sessions_in_one_workspace_can_drive_different_models() {
     };
     let reviewed = kestrel.after_one_turn(reviewed.id).await;
 
-    assert_eq!(built.model.as_deref(), Some(OTHER_MODEL));
-    assert_eq!(reviewed.model.as_deref(), Some(DEFAULT_MODEL));
+    assert_eq!(built.agent.model.as_deref(), Some(OTHER_MODEL));
+    assert_eq!(reviewed.agent.model.as_deref(), Some(DEFAULT_MODEL));
     assert_eq!(built.worked_model.as_deref(), Some(OTHER_MODEL));
     assert_eq!(reviewed.worked_model.as_deref(), Some(DEFAULT_MODEL));
 
@@ -498,7 +498,7 @@ async fn an_agent_that_lets_no_client_choose_a_model_fails_a_session_that_named_
         .await;
     let session = kestrel.after_one_turn(session.id).await;
 
-    assert_eq!(session.model.as_deref(), Some(OTHER_MODEL));
+    assert_eq!(session.agent.model.as_deref(), Some(OTHER_MODEL));
 
     let Some(Exit::Failed { because }) = &session.exit else {
         panic!(

@@ -219,13 +219,7 @@ mod tests {
                 repositories: Vec::new(),
                 branch: "main".to_owned(),
             },
-            agent: Agent {
-                id: AgentId::generate(),
-                organization: organization.id,
-                name: "builder".to_owned(),
-                harness: "opencode".to_owned(),
-                model: None,
-            },
+            opened_with: an_agent(organization.id),
             profile: None,
             organization,
             checkout: Checkout {
@@ -243,19 +237,29 @@ mod tests {
         }
     }
 
+    fn an_agent(organization: OrganizationId) -> Agent {
+        Agent {
+            id: AgentId::generate(),
+            organization,
+            name: "builder".to_owned(),
+            harness: "opencode".to_owned(),
+            model: None,
+        }
+    }
+
     fn a_session(workspace: &Workspace) -> Session {
         Session {
             id: SessionId::generate(),
             name: "quiet-river".to_owned(),
             organization: workspace.organization.id,
             workspace: workspace.id,
+            agent: workspace.opened_with.clone(),
             state: SessionState::Ended,
             waiting_for: None,
             exit: None,
             outcome_message: None,
             instance: None,
             supervisor: None,
-            model: None,
             worked_model: None,
             enqueued_at: Timestamp::now(),
             started_at: None,

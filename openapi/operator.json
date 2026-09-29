@@ -4,7 +4,7 @@
     "title": "kestrel operator",
     "version": "0.1.0",
     "summary": "The boundary a Client reaches a control plane over.",
-    "description": "Server-sent events down, JSON up, plain HTTP. It authenticates nobody, so the control plane serves it on a listener of its own, apart from the link, and binds that listener to loopback unless told otherwise. A remote control plane is reached through a tunnel.",
+    "description": "Server-sent events down, JSON up, plain HTTP. It authenticates nobody, so the control plane serves it on a listener of its own, apart from the link, and binds that listener to loopback unless told otherwise. A remote control plane is reached through a tunnel. Every operation refuses with 403, and does nothing, a request whose Host is neither localhost nor an IP address, or whose Origin, when it sends one, is not http:// and that Host.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -1434,6 +1434,24 @@
         }
       }
     },
+    "/operator/organizations/{organization}/queue": {
+      "get": {
+        "operationId": "showQueue",
+        "summary": "Read the Organization's queue: the limits, their occupancy, and the queued Sessions in dispatch order.",
+        "description": "Queued Sessions appear in the order they were enqueued. Each one ready for dispatch apart from the shared Active-Work Slot pool is numbered from 1, a Session blocked on dependencies carries no number and names the Sessions it waits on, and nothing is estimated. The Active-Work Slot limit is the one the dispatching work role recorded, or no work role is dispatching; the pool belongs to the control plane and every Organization shares it, so other Organizations' occupants are counted and never named. Reading changes nothing.",
+        "parameters": [
+          { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "One snapshot.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Queue" } } }
+          },
+          "404": { "$ref": "#/components/responses/Refused" },
+          "503": { "$ref": "#/components/responses/Refused" }
+        }
+      }
+    },
     "/operator/organizations/{organization}/workspaces/{workspace}/transcript": {
       "get": {
         "operationId": "transcript",
@@ -1508,6 +1526,12 @@
     "responses": {
       "Refused": {
         "description": "The control plane refused the request. 400 is a request it could not read; 404 is a name or reference that resolves to no record, or to more than one; 409 and 422 are an operation it declined; 503 is a control plane that could not answer.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds to wait before asking again. Present on a 503 only when the database was busy, which asking again can clear.",
+            "schema": { "type": "integer" }
+          }
+        },
         "content": {
           "application/json": {
             "schema": {
@@ -1773,6 +1797,7 @@
           "branch": { "type": ["string", "null"] },
           "correlation": { "type": ["string", "null"] },
           "on_miss": { "type": ["string", "null"], "enum": ["open", "ignore", null] },
+          "on_open_workspace": { "type": ["string", "null"], "enum": ["continue", "new-session", null], "description": "What a firing that correlates to an open Workspace does: continues its waiting Session, or starts a new Session with this Trigger's Agent. Absent continues." },
           "project": { "type": "string", "minLength": 1 },
           "agent": { "type": "string", "minLength": 1 },
           "allows": { "type": "array", "items": { "type": "string" }, "default": [] },
@@ -1810,6 +1835,7 @@
           "branch": { "type": ["string", "null"] },
           "correlation": { "type": ["string", "null"] },
           "on_miss": { "type": ["string", "null"], "enum": ["open", "ignore", null] },
+          "on_open_workspace": { "type": "string", "enum": ["continue", "new-session"] },
           "project": { "type": "string" },
           "agent": { "type": "string" },
           "allows": { "type": "array", "items": { "type": "string" } },
@@ -1817,7 +1843,7 @@
           "applied": { "type": "boolean", "description": "Whether a trigger file declared it, rather than flags." },
           "declared_at": { "type": "string", "format": "date-time" }
         },
-        "required": ["id", "organization", "name", "state", "disabled_because", "firing_budget", "filter", "every", "cron", "zone", "admits_outsiders", "brief", "branch", "correlation", "on_miss", "project", "agent", "allows", "profile", "applied", "declared_at"]
+        "required": ["id", "organization", "name", "state", "disabled_because", "firing_budget", "filter", "every", "cron", "zone", "admits_outsiders", "brief", "branch", "correlation", "on_miss", "on_open_workspace", "project", "agent", "allows", "profile", "applied", "declared_at"]
       },
       "TriggerTest": {
         "type": "object",
@@ -1841,9 +1867,10 @@
           "branch": { "type": ["string", "null"] },
           "correlation": { "type": ["string", "null"] },
           "agent": { "type": "string" },
+          "would": { "type": "string", "enum": ["open_workspace", "continue_session", "new_session", "ignore"], "description": "What a firing would do now: open a Workspace, continue the waiting Session of the open one it correlates to, start a new Session there, or ignore a correlation miss." },
           "elapsing": { "type": ["string", "null"], "format": "date-time" }
         },
-        "required": ["matches", "brief", "branch", "correlation", "agent", "elapsing"]
+        "required": ["matches", "brief", "branch", "correlation", "agent", "would", "elapsing"]
       },
       "AgentModel": {
         "type": "object",
@@ -1865,6 +1892,7 @@
                 "branch": { "type": ["string", "null"] },
                 "correlation": { "type": ["string", "null"] },
                 "on_miss": { "type": ["string", "null"], "enum": ["open", "ignore", null] },
+                "on_open_workspace": { "type": ["string", "null"], "enum": ["continue", "new-session", null] },
                 "project": { "type": "string" },
                 "agent": { "type": "string" },
                 "allows": { "type": "array", "items": { "type": "string" } },
@@ -1934,6 +1962,94 @@
         },
         "required": ["workspace", "instance", "because"]
       },
+      "Queue": {
+        "type": "object",
+        "properties": {
+          "work_role": {
+            "type": ["object", "null"],
+            "description": "What the dispatching work role recorded when it started, or null while no work role is dispatching.",
+            "properties": {
+              "active_work_slots": { "type": "integer", "minimum": 1 },
+              "serialized_harnesses": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["active_work_slots", "serialized_harnesses"]
+          },
+          "active_work": { "$ref": "#/components/schemas/ActiveWork" },
+          "instances": { "$ref": "#/components/schemas/QueueInstances" },
+          "queued": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/QueuedSession" }
+          }
+        },
+        "required": ["work_role", "active_work", "instances", "queued"]
+      },
+      "ActiveWork": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "description": "The Active-Work Slot limit a dispatching work role recorded, or null while no work role is dispatching."
+          },
+          "occupied": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Every Working Session on the control plane: the pool it counts against is shared by every Organization."
+          },
+          "occupants": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "This Organization's Working Sessions, named."
+          },
+          "elsewhere": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Occupants of other Organizations, counted and never named."
+          }
+        },
+        "required": ["limit", "occupied", "occupants", "elsewhere"]
+      },
+      "QueueInstances": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "description": "The Organization's live Instance limit, or null when unbounded."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The Instances counted against it, idle ones retained for Unpublished Work included."
+          },
+          "counted": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "The counted Instances that can be named."
+          }
+        },
+        "required": ["limit", "count", "counted"]
+      },
+      "QueuedSession": {
+        "type": "object",
+        "properties": {
+          "position": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "description": "The Session's place among the ones dispatch will consider, numbered from 1 in enqueue order. Null while it is blocked on dependencies."
+          },
+          "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
+          "workspace": { "type": "string", "format": "uuid" },
+          "agent": { "type": "string" },
+          "waits_on": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "The Sessions it waits on, when a dependency blocks it."
+          },
+          "enqueued_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["position", "name", "workspace", "agent", "waits_on", "enqueued_at"]
+      },
       "InstanceRelease": {
         "type": "object",
         "properties": {
@@ -1976,7 +2092,7 @@
           "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
           "organization": { "type": "string" },
           "project": { "type": "string" },
-          "agent": { "type": "string" },
+          "opened_with": { "type": "string", "description": "The Agent its first Session runs unless that Session names another." },
           "profile": { "type": ["string", "null"] },
           "checkout": { "$ref": "#/components/schemas/Checkout" },
           "instance": { "type": ["string", "null"], "description": "The Instance its Sessions execute on, while one is kept." },
@@ -1990,7 +2106,7 @@
           "started_by": { "type": ["string", "null"], "format": "uuid" },
           "continued_by": { "type": "array", "items": { "type": "string", "format": "uuid" } }
         },
-        "required": ["id", "name", "organization", "project", "agent", "profile", "checkout", "instance", "held", "correlation", "state", "opened_at", "last_active_at", "sealed_at", "continues", "started_by", "continued_by"]
+        "required": ["id", "name", "organization", "project", "opened_with", "profile", "checkout", "instance", "held", "correlation", "state", "opened_at", "last_active_at", "sealed_at", "continues", "started_by", "continued_by"]
       },
       "Checkout": {
         "type": "object",
@@ -2004,7 +2120,8 @@
       "SessionDeclaration": {
         "type": "object",
         "properties": {
-          "model": { "type": ["string", "null"] }
+          "agent": { "type": ["string", "null"], "description": "Omitted, the Agent of the Workspace's latest Session." },
+          "model": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." }
         }
       },
       "Session": {
@@ -2019,7 +2136,9 @@
           "outcome_message": { "type": ["string", "null"] },
           "instance": { "type": ["string", "null"] },
           "supervisor": { "type": ["string", "null"] },
-          "model": { "type": ["string", "null"] },
+          "agent": { "type": "string" },
+          "harness": { "type": "string" },
+          "model": { "type": ["string", "null"], "description": "What the Session names, or null for its Harness's default." },
           "worked_model": { "type": ["string", "null"] },
           "enqueued_at": { "type": "string", "format": "date-time" },
           "started_at": { "type": ["string", "null"], "format": "date-time" },
@@ -2029,7 +2148,7 @@
           "supervisor_version": { "type": ["string", "null"] },
           "usage": { "anyOf": [{ "$ref": "#/components/schemas/Usage" }, { "type": "null" }] }
         },
-        "required": ["id", "name", "workspace", "state", "waiting_for", "exit", "outcome_message", "instance", "supervisor", "model", "worked_model", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage"]
+        "required": ["id", "name", "workspace", "state", "waiting_for", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "worked_model", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage"]
       },
       "Exit": {
         "oneOf": [
@@ -2615,11 +2734,16 @@
           "session": {
             "type": "string",
             "format": "uuid"
+          },
+          "agent": {
+            "description": "The Agent the Session runs.",
+            "type": "string"
           }
         },
         "required": [
           "kind",
-          "session"
+          "session",
+          "agent"
         ]
       },
       "Message": {

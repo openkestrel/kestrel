@@ -1,0 +1,162 @@
+# Architecture
+
+How kestrel's pieces fit together as the code stands. Terms are [`CONTEXT.md`](../../CONTEXT.md)'s;
+the reasons behind each shape are in [`docs/adr/`](../adr/), cited inline. This page is the map;
+each area has its own page.
+
+| Page | Read it before you change |
+| --- | --- |
+| [Sessions](sessions.md) | how work is queued, claimed, executed, waits, ends or seals |
+| [Link](link.md) | anything the supervisor and control plane say to each other |
+| [Triggers](triggers.md) | Event ingest, matching, correlation, readiness, follow-ups, delivery |
+| [Data model](data-model.md) | the schema, or a query against it |
+| [Operator boundary and Client](operator-and-client.md) | an operator endpoint or a `kestrel` command |
+| [Conventions](conventions.md) | anything: transactions, errors, sweeps, tests |
+
+## Reading the ADRs
+
+ADRs 0001–0029 predate the rename in [ADR-0030](../adr/0030-a-session-is-what-a-harness-user-calls-one.md)
+and are not rewritten. Translate as you read:
+
+| ADR 0001–0029 says | The code and `CONTEXT.md` say |
+| --- | --- |
+| Run | Session |
+| Session | Workspace |
+| Workspace | Project |
+| Agent Runtime | Harness |
+| Environment (the running box) | Instance ([ADR-0017](../adr/0017-the-environment-is-declared-the-instance-is-provisioned.md)) |
+
+A superseded ADR carries a banner naming its successor; 0001 and 0003 are superseded by 0007.
+
+## Processes
+
+```mermaid
+flowchart LR
+    client["kestrel Client<br/>crates/kestrel-client"]
+    producer["GitHub / any producer"]
+
+    subgraph cp["kestrel-control-plane (crates/kestrel)"]
+        operator[":7718 operator boundary<br/>loopback, no auth"]
+        webhooks[":7717 /webhooks"]
+        link[":7717 /link"]
+        roles["serve + work roles"]
+        db[("SQLite + kestrel.key<br/>KESTREL_DATA_DIR")]
+        operator --> roles
+        webhooks --> roles
+        link --- roles
+        roles --- db
+    end
+
+    proxy["socket-proxy<br/>allowlisted requests"]
+    dockerd["dockerd"]
+
+    subgraph instance["Instance (kestrel-env image)"]
+        supervisor["kestrel-supervisor"]
+        harness["harness<br/>opencode acp · claude-agent-acp · codex-acp"]
+        checkout[("git checkout<br/>/workspace")]
+        supervisor -- "ACP over stdio" --> harness
+        supervisor --- checkout
+        harness --- checkout
+    end
+
+    client -- HTTP --> operator
+    producer -- POST --> webhooks
+    roles -- "poll, comment" --> producer
+    roles -- DOCKER_HOST --> proxy --> dockerd
+    dockerd -- provisions --> instance
+    supervisor -- "dials out: SSE down, POST up" --> link
+```
+
+- **Two deployables** ([ADR-0002](../adr/0002-two-deployables-the-environment-dials-out.md)): the
+  `kestrel` image (control plane) and `kestrel-env` (what an Instance runs). `kestrel-dev` derives
+  from `kestrel-env` with the toolchain kestrel's own development needs. See `images/*/README.md`.
+- **The Instance dials out.** An Instance exposes no port; the supervisor opens the link. Nothing
+  in the compute contract may assume an inbound address.
+- **The Client is not a role** ([ADR-0015](../adr/0015-the-cli-is-a-client-not-a-role.md)). It holds
+  no store and reaches the control plane only over the operator boundary.
+- **The control plane never holds the Docker socket** ([ADR-0009](../adr/0009-the-daemon-is-reached-through-a-filtered-proxy.md)).
+  `compose.yaml`'s socket-proxy regexes are the complete list of daemon requests the Docker driver
+  may make; a new driver operation needs a new regex there.
+- **The control plane runs no git.** Everything it knows about a checkout comes from the
+  supervisor's reports or an Integration's Events ([ADR-0019](../adr/0019-kestrel-declares-the-branch-and-learns-the-pull-request.md)).
+
+## Crates
+
+| Crate | Binary | What it is |
+| --- | --- | --- |
+| `kestrel` | `kestrel-control-plane` | The control plane: store, link, operator API, triggers, dispatch. |
+| `kestrel-supervisor` | `kestrel-supervisor` | Runs inside an Instance: dials the link, checks out, drives the harness as an ACP client. |
+| `kestrel-client` | `kestrel` | The CLI Client. |
+| `kestrel-scripted-agent` | `kestrel-scripted-agent` | A scripted ACP agent the tests drive the supervisor against. |
+
+No crate depends on another. The two HTTP contracts are `openapi/link.json` and
+`openapi/operator.json`; each side defines its own types, and tests on both sides read the
+documents.
+
+## The control plane
+
+One binary, two **Roles** selected by argv (`crates/kestrel/src/lib.rs`). With no subcommand it runs
+both in one process, the only supported topology: cross-process `Fanout` and `Timer` do not exist,
+so a separate `serve` cannot wake `work`'s sweeps.
+
+- **`serve`** (`role/serve.rs`) binds two listeners so exposing one never exposes the other: the
+  link plus webhooks (`KESTREL_LISTEN`, 7717) and the operator boundary (`KESTREL_OPERATOR_LISTEN`,
+  7718).
+- **`work`** (`role/work.rs`) runs the timer's sweeps and the dispatch loop.
+
+### Ports
+
+[ADR-0005](../adr/0005-six-ports-at-rung-one-are-named-boundaries.md) names six ports. Five are
+concrete modules with no trait; only `Compute` has real dispatch. Keep it that way until a second
+real implementation exists ([ADR-0022](../adr/0022-store-repository-traits-and-enum-dispatch-are-deferred-to-the-postgres-rung.md)).
+
+| Port | Module | Notes |
+| --- | --- | --- |
+| `Store` | `store/` | SQLite via sqlx. One repository module per aggregate, reached through `Tx`. |
+| `Log` | `log.rs` | The Transcript. Same database and transaction as `Store` ([ADR-0004](../adr/0004-store-and-log-are-one-transactional-domain.md)). |
+| `Fanout` | `fanout.rs` | A named no-op. Everything that would subscribe polls `Store` instead. |
+| `Timer` | `timer.rs` | In-process sweeps; every due time lives in `Store`, so a restart loses none. |
+| `Work` | `work.rs` | Enqueue, claim, lease, reports, ending a Session. |
+| `Compute` | `compute/` | `Driver` enum over `Docker` and `LocalExec`, chosen once by `KESTREL_COMPUTE`. |
+
+### Modules
+
+The rest of `crates/kestrel/src`, grouped by the page that covers them:
+
+| Area | Modules |
+| --- | --- |
+| Sessions | `work.rs`, `workspace.rs`, `instance.rs`, `queue.rs`, `role/work.rs` |
+| Link | `link/`, `provider.rs`, `profile.rs`, `keyring.rs` |
+| Triggers | `trigger.rs`, `trigger/apply.rs`, `filter.rs`, `template.rs`, `cron.rs`, `readiness.rs`, `follow_up.rs`, `integration/` |
+| Operator | `operator.rs`, `declaration.rs`, `start.rs`, `agent.rs`, `reference.rs`, `declined.rs` |
+| Shared | `domain.rs` (every record type), `log.rs`, `store/`, `timer.rs`, `cli.rs`, `telemetry.rs`, `shutdown.rs`, `hex.rs` |
+
+## Trust boundaries
+
+| Boundary | Who is on the other side | What protects it |
+| --- | --- | --- |
+| Operator (7718) | A Client | Nothing. Bind it to loopback; the control plane warns otherwise. |
+| Link (7717) | A supervisor | A per-Session bearer credential and a live lease ([Link](link.md#authentication)). |
+| Webhooks (7717) | Any producer | The Integration's HMAC signing secret or shared secret. A refusal becomes no Event; the last one is kept on the Integration. |
+| Docker daemon | The control plane | socket-proxy's allowlist, on an internal network. |
+| Harness | Model output and Event text | Nothing at this layer: brief content is attacker-controlled, and policy is future work. |
+
+Secrets reach an Instance only as the harness process's environment or files under its home, for
+one Session, and never in a Transcript. `KESTREL_`-prefixed variables are reserved for the
+supervisor ([ADR-0026](../adr/0026-kestrel-carries-named-credentials-never-a-runtimes-store.md)).
+
+## Where the code lags the ADRs
+
+An accepted ADR is a decision, not a description. These are decided and not yet built:
+
+- **Transcript kinds** ([ADR-0020](../adr/0020-the-transcript-records-what-the-runtime-emits-in-kinds.md),
+  [ADR-0033](../adr/0033-expire-transcript-detail-in-place.md)): `log::Entry` holds shared state only.
+  The supervisor drops thoughts, plans and tool calls, and nothing expires.
+- **Integration identity** ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)): there
+  is no GitHub App. The Integration and the agent's `gh` both use tokens an operator supplies.
+- **Pull request state** ([ADR-0032](../adr/0032-a-pull-request-event-updates-workspace-state-without-a-firing.md)):
+  nothing records a pull request against a Workspace; `pull_request` Events reach Triggers only.
+- **Split roles**: `serve` and `work` parse separately but run correctly only in one process.
+- **Policy, Approvals, Questions, Workflows, Campaigns** exist in `CONTEXT.md` and
+  [`ROADMAP.md`](../../ROADMAP.md), not in code. `session_dependency` and the Unreachable state are
+  the only Workflow machinery built.

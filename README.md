@@ -1,283 +1,33 @@
-# kestrel
+<p align="center">
+  <img src="docs/assets/kestrel-logo.png" alt="Kestrel logo" width="300">
+</p>
 
-kestrel runs coding agents on your own infrastructure, triggered by the events your team already
-produces: Slack threads, Linear tickets, GitHub issues and PRs, webhooks, schedules. Workspaces live in
-isolated environments, survive restarts, and anyone on the team can join one mid-flight.
+<h1 align="center">Kestrel</h1>
 
-The point is to move engineers from *in* the loop to *on* the loop. Agent work that only happens when
-someone is sitting in front of a terminal stays a novelty, because the human is still the scheduler
-and the bottleneck. kestrel takes the events a team already produces, runs the work on infrastructure
-you control, reports back to the surface that started it, and lets a person pick the thread up at any
-point without losing what came before.
+<p align="center"><strong>Run coding agents on your own infrastructure.</strong></p>
 
-## Status
+Kestrel starts agent work from the CLI, GitHub events, webhooks, or schedules. Each session runs in a container. Its workspace keeps the branch and transcript, so you can inspect the work and continue it in a later session.
 
-Early, and honest about it: rung `0.1` is under construction. Workspaces are durable — declare an
-organization, a project and an agent, open a workspace against them, and its state and transcript
-are still there after the process is killed. Sessions execute: enqueue one and the control plane
-provisions an isolated container, clones the project's repositories into it, and drives opencode
-there by speaking the Agent Client Protocol over the link in
-[`openapi/link.json`](openapi/link.json), which the environment dials out to, authenticating as the
-session it is executing, and reconnects to with its cursor when the control plane restarts under it.
-Beside the link, on a listener of its own, the control plane serves the operator boundary in
-[`openapi/operator.json`](openapi/operator.json), and it is the only way in: `kestrel`, the Client
-an operator installs, declares and lists organizations, projects and agents over it, sets and
-forgets provider credentials and the subscription profiles a workspace names, registers integrations
-and reads the events they record, and
-`kestrel workspace transcript --follow` streams a workspace's transcript over it, all from outside the
-control plane's process. What stops a session short of useful work is that
-nothing carries a task to it: every session asks its agent the same fixed question, and nothing triggers
-or schedules one, so every workspace is opened by hand.
-[`USAGE.md`](USAGE.md) walks all of that on your own machine and says where it stops. The repo also
-holds the vocabulary, in [`CONTEXT.md`](CONTEXT.md), and the full planning trail in the issue
-tracker, where every decision below is written down with its reasoning and the objections it
-survived. This document is the direction, written first so the implementation has something to be
-judged against; [`ROADMAP.md`](ROADMAP.md) is the order it gets built in, and it carries the marker
-for where the project actually is.
+**Project status:** Kestrel is an unreleased prototype. The local Docker Compose deployment supports manual and event-driven sessions. GitHub-triggered sessions can report answers to the originating issue. See the [roadmap](ROADMAP.md) for planned capabilities.
 
-## Running it
+## Get started
+
+You need Docker with Compose v2, an amd64 or arm64 machine, and Rust installed through [rustup](https://rustup.rs).
 
 ```sh
 git clone https://github.com/openkestrel/kestrel
 cd kestrel
-docker compose up
-```
-
-One command, no kestrel configuration file, and no values for an operator to supply — kestrel
-asks for none of its own, and vendor credentials are the only thing it ever will. Three images
-come up: the control plane, the image a session executes in, and the filtered socket proxy the Docker
-daemon is reached through. The database is on a named volume, so bringing the stack down and up
-again keeps every workspace and its transcript.
-
-The stack publishes the operator boundary on the host's loopback, at `127.0.0.1:7718`, and kestrel's
-surface is the Client that reaches it, installed on its own:
-
-```sh
+docker compose up -d
 cargo install --locked --path crates/kestrel-client
 kestrel status
 ```
 
-[`USAGE.md`](USAGE.md) walks from here to a session that has reached and left an environment.
+The first start builds the container images from source. Follow the [usage guide](USAGE.md) to run your first session and inspect its work.
 
-**A provider key is the one value kestrel asks for, and it is the operator's.** It is held by the
-organization, encrypted with a key kestrel generates at first boot beside its database, and reaches
-an environment only as the agent it belongs to is spawned:
-[ADR-0010](docs/adr/0010-a-provider-credential-crosses-the-link-at-the-spawn.md) says where it does
-and does not go.
+## Documentation
 
-**The control plane never holds the Docker socket.** It reaches the daemon through a proxy that
-forwards the ten requests the compute driver makes and refuses everything else, which is the
-shipped default rather than a hardening step:
-[ADR-0009](docs/adr/0009-the-daemon-is-reached-through-a-filtered-proxy.md) lists what is allowed
-and says plainly what the filter does not buy.
+- [Usage guide](USAGE.md) — first session and links to manual workspaces, subscriptions, and automation.
+- [Roadmap](ROADMAP.md) — current milestones and planned work.
+- [Domain model](CONTEXT.md) — the terms used throughout the project.
 
-## What kestrel is
-
-kestrel ships as a self-hostable platform, installed and operated as one system: you point it at
-your repositories and your event sources and it runs agents for you. The framework and SDK seams get
-extracted later, once they have proven themselves inside something people actually run. Five ideas
-carry the whole product, and they are defined precisely in [`CONTEXT.md`](CONTEXT.md):
-
-- **Trigger**: a standing, configured rule that matches events from systems kestrel does not own and
-  starts work. GitHub, Slack, Linear, generic webhook, and schedule are first-party, and every one of
-  them round-trips, so the surface that started a workspace receives the result there.
-- **Workspace**: the durable, joinable thread of work. It owns its history and its participants,
-  survives restarts, and contains many sessions over its life.
-- **Session**: one execution of a harness inside one environment, with a start, an end, and an
-  exit status. At most one session is active in a workspace at a time, which is what makes turn-taking a
-  correctness property.
-- **Environment**: the isolated compute a session executes in. Disposable, provisioned by a pluggable
-  compute backend, and destroyed when the session finishes.
-- **Workflow**: a standing declaration of a roster of agents that may be enqueued, and the caps and
-  failure tolerances that bound one enactment of it. The sequence is not declared: a session grows it at
-  runtime by enqueueing further workspaces, and nothing outside the roster may be enqueued. One
-  enactment is a campaign, which owns the workspaces enqueued under it, the concurrency and spend caps
-  binding them, and the scope a cancellation applies to.
-
-Participants in a workspace are humans or agents, and the workspace makes no structural distinction
-between them: a person joining a running workspace and an agent taking a turn are the same kind of
-thing happening to the same record. That symmetry is deliberate, and it is what lets a session hand the
-turn to a human without the workspace having to become a different object. Handing work to another
-*agent* is a different act: it enqueues a new workspace rather than taking a turn in this one.
-
-## Who it is for
-
-Platform engineering teams at mid-size organizations are the north star. That is where the gains
-compound, because one person's setup becomes everyone's throughput and the governance question is a
-live one. Solo developers and small teams are the on-ramp, and the way kestrel gets built in the
-first place, so the single-machine docker-compose path is a first class experience and not a demo
-mode.
-
-There are two people to serve here and they want different things: boring to operate, delightful to
-use. Whoever installs kestrel and whoever works in it are rarely the same person, and pretending
-otherwise gives you a product that demos well and cannot be run, or one that runs beautifully and
-has no users. When the two conflict, the developer surface wins.
-
-The bar for that surface is set by exemplars rather than adjectives: opencode's TUI, Linear,
-Tailscale, Stripe. The common thread is products that have put real thought into how people use them
-and try to be seamless, and the review question when something is in doubt is whether those teams
-would have shipped it.
-
-Flexibility and "it just works" resolve into one rule: opinionated defaults, swappable underneath.
-One command yields a working system, with SQLite, Docker, a default model, and opencode already
-chosen for you. The first PR needs no kestrel configuration. Optional integrations, managed Skills,
-external MCP servers and Organization SSO need declarations or credentials when a team chooses to
-use them; none is a prerequisite for the default path.
-
-## What v1 means
-
-v1 is a stability lock. It freezes the implementation and commits to no breaking changes until v2:
-semver on the public API, migrations that never lose workspaces, a documented upgrade path, and a
-deprecation policy. The day it lands is the day this project is willing to stop changing its mind,
-which puts it deliberately far out; the `0.x` line carries real, recommended releases and is where
-people will live for a long time.
-
-The gate is an internal one. kestrel drives a harness by speaking the Agent Client Protocol
-to it, so the seam is proven against two ACP agents of different lineages — one that speaks the
-protocol natively and one reached through an adapter — because that line is where resume behaviour,
-permission granularity and declared capabilities all differ, and a client with opencode-shaped
-assumptions fails on it. Adoption is the right outcome but the wrong line, since it is not something
-the project controls. Twelve capabilities are the content of that freeze:
-
-1. **Trigger ingestion**: GitHub, Slack, Linear, Jira, Microsoft Teams, GitLab, generic webhook,
-   and schedule can start work. The seven external surfaces round-trip: the place that started work
-   receives its outcome. A schedule has no external recipient, so its result is visible in kestrel.
-   Generic CloudEvents ingestion is the core and the named integrations are adapters over it, so
-   another source is a contribution rather than a fork. Operators can dry-run a Trigger against a
-   sample or recorded Event without opening a Workspace, and trace every evaluation, including
-   nonmatches and ignored Firings. Scheduled Triggers support intervals and time-zone-aware cron
-   expressions; their Events take the same recorded path as external Events. An Event
-   supplies data, never authority.
-2. **Scheduling**: placement, concurrency limits per organization and per campaign, a spend cap on
-   every campaign, and a queue that never rejects. kestrel retries *dispatch*, never *work*: a session
-   that never started is dispatched again, a session that started and failed is never re-run, and a
-   workflow that wants the work retried enqueues a new session. Priority is excluded from v1 on purpose,
-   since fairness cannot be tuned without production load the project does not have yet; ready order
-   is FIFO, which is an order rather than a priority. The Client shows queued work, wait reasons and
-   Campaign spend; an operator can pause a Campaign without terminating its active Sessions, resume it,
-   or cancel it and terminate active Sessions.
-3. **Isolated execution**: every session in its own environment, provisioned through a compute contract
-   kestrel defines rather than a layer kestrel owns. An authorized operator can inspect live files
-   and unpublished work, including committed but unpushed, uncommitted and untracked changes; a
-   Policy-governed interactive Instance shell is audited rather than a raw compute-backend escape.
-4. **Model choice**: any provider the configured harness supports, selectable per agent, with keys
-   held per organization and reaching an environment only when a session needs them. Uniform behavior
-   across models is not promised, and neither is model availability across harnesses: "any model" is
-   scoped to whichever harness you are running, and to whether that harness lets a client select one
-   at all. A session whose agent names a model the harness cannot honour fails rather than quietly
-   running a different one. The Client shows the requested and effective model and explains a
-   harness capability mismatch.
-5. **Persistent workspaces**: a workspace survives everything except deliberate deletion, and an
-   environment survives nothing. Process restart, environment teardown, and control-plane upgrade all
-   preserve the workspace and its full transcript, and a session interrupted by a restart ends with an
-   explicit exit status. Workspaces do not stay open forever: an idle one is sealed, which ends it
-   without deleting it — a sealed workspace is readable and is never reopened, and work that would have
-   continued it starts a new workspace that records the sealed one. Nothing expires a transcript entry
-   at any age; there is no retention knob, only deletion you asked for. The Client distinguishes that
-   durable Workspace from the Harness's ACP conversation continuity, and shows the branch, pull
-   request or merge request, and unpublished work that can be recovered or reviewed.
-6. **Pluggable storage**: SQLite for the single-machine path, Postgres for production.
-7. **Multiplayer**: one uniform promise, designed to the weakest transport kestrel supports, so every
-   deployment gets the same guarantees and the faster ones are only faster. People can discover,
-   read, join and take turns in authorized Workspaces; Policy checks those operations separately.
-   Presence is best-effort and never gates correctness, and sharing a link grants no authority.
-8. **Workflows**: a declared roster rather than a declared sequence, with the sequence grown at
-   runtime by sessions enqueueing further workspaces against it, under a campaign's caps and failure
-   tolerances. A handoff is an enqueue and never a message: kestrel delivers ordering and once-only
-   dispatch, there is no coordination bus, and the brief passes as the new workspace's first transcript
-   entry, which makes a handoff auditable and joinable by construction rather than private. Work runs
-   concurrently *across* workspaces while at most one session is ever active *within* one — Temporal, Step
-   Functions, Prefect and Restate all draw that line the other way, which is why it is worth stating
-   rather than assuming. The Client shows a navigable Campaign graph with child Workspaces,
-   dependencies, status, blocked reasons and spend; authorized people can follow up, pause, resume
-   and cancel.
-9. **Governance**: an audit record, policy enforced at the execution layer rather than by prompt, and
-   a real path for routing an approval outward to the human the policy authorizes to resolve it —
-   who is usually not in the workspace, and does not join it by answering. Operators sign in through
-   OIDC or SAML, with identity-provider groups mapped to Organization access grants; a local
-   administrator path serves the single-machine installation. External approvers remain verified
-   external principals, without mandatory kestrel accounts. Authorized operators can search and
-   filter the Audit Record, inspect decision inputs and the Policy snapshot, follow links to the
-   relevant work, and export stable paged records; routine output redacts secrets.
-10. **Browser Client**: a high-quality place to start and follow work, inspect live transcripts,
-    state, files and diffs, take a turn, and answer an Approval or Question. By v1 it handles routine
-    work and administration after initial installation, with prompt feedback, accessible and
-    responsive interaction. The CLI remains useful for scripting and power use.
-11. **Managed Skills**: an Organization catalog holds versioned Skills selected by Projects and
-    Agents. kestrel stages them at the Harness's filesystem convention; the harness chooses
-    when to load one or invoke it as a command. A repository Skill of the same name wins unless
-    Policy denies it, and the effective source is visible without overwriting repository files. A
-    Session fails visibly if a selected Skill cannot be staged. It retains the exact managed versions
-    delivered to it and records Skills the agent advertises using, without inventing a use claim
-    when the agent reports none.
-12. **MCP extensibility**: kestrel supplies its own MCP tools and Organization-managed external MCP
-    servers selected by Projects and Agents. Stdio works across supported harnesses; HTTP is used
-    when the harness advertises it, with SSE compatibility where needed. Unsupported transport
-    fails visibly. kestrel mediates external tool calls under Policy, records them in the Audit
-    Record, and supplies per-server, per-Session credentials without ambient secrets in the harness.
-    Event data and unreviewed repository MCP configuration cannot grant tool authority.
-
-Underneath all of it sits one pluggability rule: every pluggable layer ships at least two real
-implementations at v1, one of them the default. A contract with a single implementation is an
-untested abstraction, and a release whose whole purpose is to freeze interfaces cannot afford to
-freeze one that has only ever been driven once.
-
-## Where it runs
-
-kestrel has to be portable enough to adopt wherever a team already runs things, so serverless is a v1
-commitment alongside the obvious targets: docker-compose, Kubernetes, ECS, Cloud Run, Azure Container
-Apps, Vercel, AWS Lambda, and Cloudflare. None of them is a way to avoid paying for a server: at
-kestrel's capability floor every one of them converts to a standing monthly bill, so they buy
-portability rather than a cheap tier, and the free path is docker-compose on your own machine.
-Platform-specific adapters are accepted as the cost of that, because the realtime seam alone spans
-five genuinely different connection models and pretending they intersect produces a contract that
-lies.
-
-The rule about configuration survives the move: zero required *kestrel* configuration, with vendor
-credentials treated as the platform's cost of entry rather than as kestrel config. Every supported
-target has a one-command path to a first PR with no kestrel config file, and every adapter names a
-default compute pairing so that choice never lands on whoever is adopting it.
-
-## What kestrel is not
-
-- **kestrel does not write an agent loop**, and does not own a contract for one: it speaks the
-  Agent Client Protocol as a client. opencode is the default, and Claude Code, Codex, Gemini CLI or
-  anything else that speaks ACP can drive a session.
-- **Not a hosted SaaS**: there is no plan to run one, and the data model only avoids foreclosing it,
-  which is why `Organization` is carried by every durable record from the first migration.
-- **Not a CI/CD replacement**: kestrel schedules agent work in response to events and leaves your
-  pipelines where they are.
-- **Not an IDE or a laptop-attached agent**: it has to be runnable on your own machine, via
-  docker-compose or Kubernetes, and that is a separate thing from attaching to your editor.
-
-## Prior art
-
-kestrel is not the first thing in this shape and does not claim to be. Open-Inspect is MIT licensed,
-built on opencode, ships multiplayer and multi-source triggers, and is worth reading before you read
-anything here; its control plane is bound to Cloudflare Durable Objects, which hand it a per-workspace
-single-threaded actor, colocated SQLite, hibernatable WebSockets, and a per-object alarm, and those
-happen to be exactly the four hard parts of durable multiplayer. OpenHands covers much of the same
-ground, with governance apparently behind an enterprise tier.
-
-Where a capability is already covered, kestrel's answer is to do it better rather than to cede it or
-go hunting for an unoccupied corner. In practice that means a control plane that runs on
-infrastructure you choose, cooperative multi-tenancy with a per-organization audit record, and
-governance in the open core. Ramp reports that its own Inspect writes more than half of its merged
-PRs, and that is the number to beat rather than a reason to pick a smaller problem.
-
-## The project
-
-kestrel is Apache-2.0, in [`LICENSE`](LICENSE). It clears enterprise review as cleanly as MIT while
-adding a patent grant and a trademark clause, and it is a license this project would still accept if
-commercial pressure arrives, which is the test that matters given how expensive relicensing is later.
-
-kestrel will not be relicensed. Contributions come in under the
-[Developer Certificate of Origin](https://developercertificate.org/), signed off with
-`git commit -s`, and there is no CLA: a CLA's substantive function is relicensing optionality, which
-this project is declining on purpose. The DCO already binds it mechanically, so saying it out loud
-costs nothing and turns a technicality into a promise you can read.
-
-Governance is BDFL for now: one maintainer, Jack Moore, with a written path to adding more as
-contributors show up. There is no `GOVERNANCE.md`, because a paragraph is the right size for a
-project at this stage, and inventing a steering committee for a repo with one contributor would be
-worse than saying nothing.
+Kestrel is licensed under [Apache 2.0](LICENSE).

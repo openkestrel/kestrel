@@ -10,15 +10,15 @@ pub mod apply;
 
 use crate::domain::{
     Agent, CorrelationMiss, DisableReason, Event, EventRecordId, Fires, Firing, FiringBudget,
-    Integration, Occurrence, Organization, Schedule, SessionId, Templates, Trigger, TriggerId,
-    TriggerState, WorkspaceId,
+    Integration, Occurrence, OnOpenWorkspace, Organization, Schedule, SessionId, Templates,
+    Trigger, TriggerId, TriggerState, Workspace, WorkspaceId,
 };
 use crate::fanout::{self, Change};
 use crate::integration::github::{self, EventData, Github};
 use crate::log::Entry;
 use crate::readiness::{Decision, Readiness, Request};
 use crate::store::integration::Recorded;
-use crate::store::workspace::Opening;
+use crate::store::workspace::{Opening, PendingSession};
 use crate::store::{Store, Tx};
 use crate::workspace;
 
@@ -78,7 +78,6 @@ pub struct Declaration<'a> {
     pub name: &'a str,
     pub fires: &'a Fires,
     pub templates: &'a Templates,
-    pub on_miss: Option<CorrelationMiss>,
     pub project: &'a str,
     pub agent: &'a str,
     pub allows: &'a [String],
@@ -126,29 +125,37 @@ pub struct Rendered {
     pub correlation: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Would {
+    Open,
+    Continue,
+    NewSession,
+    Ignore,
+}
+
+impl Would {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Would::Open => "open_workspace",
+            Would::Continue => "continue_session",
+            Would::NewSession => "new_session",
+            Would::Ignore => "ignore",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Tested {
     pub matches: bool,
     pub rendered: Result<Rendered>,
     pub agent: Result<String>,
+    /// `None` when nothing rendered to correlate with.
+    pub would: Option<Would>,
     /// When the elapsing a test named no Event for is due.
     pub elapsing: Option<Timestamp>,
 }
 
-pub(crate) fn check_miss(templates: &Templates, on_miss: Option<CorrelationMiss>) -> Result<()> {
-    match (templates.correlation.is_some(), on_miss) {
-        (true, None) => {
-            bail!("a trigger with a correlation must declare what it does when it misses")
-        }
-        (false, Some(_)) => {
-            bail!("a trigger without a correlation cannot declare what it does when it misses")
-        }
-        _ => Ok(()),
-    }
-}
-
 pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trigger> {
-    check_miss(declaration.templates, declaration.on_miss)?;
     if let Fires::Scheduled(schedule) = declaration.fires {
         let budget = FiringBudget::default();
         let allowed = budget.window / i32::try_from(budget.limit.get())?;
@@ -191,7 +198,6 @@ pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trig
                 &trigger,
                 declaration.fires,
                 declaration.templates,
-                declaration.on_miss,
                 &project,
                 &agent,
                 &allows,
@@ -207,7 +213,6 @@ pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trig
                     &trigger,
                     declaration.fires,
                     declaration.templates,
-                    declaration.on_miss,
                     &project,
                     &agent,
                     &allows,
@@ -223,7 +228,6 @@ pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trig
                     declaration.name,
                     declaration.fires,
                     declaration.templates,
-                    declaration.on_miss,
                     &project,
                     &agent,
                     &allows,
@@ -246,7 +250,6 @@ fn same_declaration(
     trigger: &Trigger,
     fires: &Fires,
     templates: &Templates,
-    on_miss: Option<CorrelationMiss>,
     project: &crate::domain::Project,
     agent: &Agent,
     allows: &[Agent],
@@ -265,7 +268,6 @@ fn same_declaration(
 
     trigger.fires == *fires
         && trigger.templates == *templates
-        && trigger.on_miss == on_miss
         && trigger.project.id == project.id
         && trigger.agent.id == agent.id
         && names(&trigger.allows) == names(allows)
@@ -388,7 +390,6 @@ pub async fn test_declared(
             name: declared.name.clone(),
             fires: Fires::On(declared.filter.clone()),
             templates: declared.templates.clone(),
-            on_miss: declared.on_miss,
             state: TriggerState::Enabled,
             disabled_because: None,
             firing_budget: FiringBudget::default(),
@@ -406,24 +407,16 @@ async fn tested(
     against: Against<'_>,
     asked: Asked<'_>,
 ) -> Result<Tested> {
-    let unrecorded = |integration, occurrence, elapsing| {
-        let event = Event {
-            record_id: EventRecordId::generate(),
-            organization: trigger.organization.id,
-            integration,
-            occurrence,
-            recorded_at: Timestamp::now(),
-        };
-        Tested {
-            matches: true,
-            rendered: render(trigger, &event, asked.instruction),
-            agent: chosen_name(trigger, &event, asked.agent),
-            elapsing,
-        }
+    let unrecorded = |integration, occurrence| Event {
+        record_id: EventRecordId::generate(),
+        organization: trigger.organization.id,
+        integration,
+        occurrence,
+        recorded_at: Timestamp::now(),
     };
 
     let mut tx = store.begin().await?;
-    match against {
+    let (matches, event, elapsing) = match against {
         Against::NextElapsing => {
             let due = tx.triggers().due_at(trigger).await?.with_context(|| {
                 format!(
@@ -434,7 +427,7 @@ async fn tested(
             let occurrence = trigger
                 .elapsing(due)
                 .context("a trigger with a due time has a schedule")?;
-            Ok(unrecorded(None, occurrence, Some(due)))
+            (true, unrecorded(None, occurrence), Some(due))
         }
         Against::Issue {
             github,
@@ -447,7 +440,8 @@ async fn tested(
                 .await?;
             drop(tx);
             let occurrence = dispatched(github, trigger, &integration, issue, asked).await?;
-            Ok(unrecorded(Some(integration.id), occurrence, None))
+            tx = store.begin().await?;
+            (true, unrecorded(Some(integration.id), occurrence), None)
         }
         Against::Event(event) => {
             let event = tx.integrations().event(event).await?;
@@ -458,16 +452,68 @@ async fn tested(
                     trigger.organization.name
                 );
             }
-
-            let commanded = Asked::by(&event);
-            Ok(Tested {
-                matches: tx.triggers().matches(trigger, &event).await?,
-                rendered: render(trigger, &event, asked.instruction.or(commanded.instruction)),
-                agent: chosen_name(trigger, &event, asked.agent.or(commanded.agent)),
-                elapsing: None,
-            })
+            let matches = tx.triggers().matches(trigger, &event).await?;
+            (matches, event, None)
         }
+    };
+    let commanded = Asked::by(&event);
+    let rendered = render(trigger, &event, asked.instruction.or(commanded.instruction));
+    let would = match &rendered {
+        Ok(rendered) => Some(would(&mut tx, trigger, rendered.correlation.as_deref()).await?),
+        Err(_) => None,
+    };
+
+    Ok(Tested {
+        matches,
+        agent: chosen_name(trigger, &event, asked.agent.or(commanded.agent)),
+        rendered,
+        would,
+        elapsing,
+    })
+}
+
+async fn would(tx: &mut Tx<'_>, trigger: &Trigger, correlation: Option<&str>) -> Result<Would> {
+    let Some(correlation) = correlation else {
+        return Ok(Would::Open);
+    };
+
+    Ok(match correlated(tx, trigger, correlation).await? {
+        Correlated::Holding(_) => match trigger.templates.correlation.on_open_workspace() {
+            OnOpenWorkspace::Continue => Would::Continue,
+            OnOpenWorkspace::NewSession => Would::NewSession,
+        },
+        Correlated::Ignored => Would::Ignore,
+        Correlated::Missed(_) => Would::Open,
+    })
+}
+
+enum Correlated {
+    Holding(WorkspaceId),
+    Ignored,
+    /// The sealed Workspace an opening continues, if one held the key.
+    Missed(Option<Box<Workspace>>),
+}
+
+async fn correlated(tx: &mut Tx<'_>, trigger: &Trigger, correlation: &str) -> Result<Correlated> {
+    if let Some(holding) = tx
+        .workspaces()
+        .holding_correlation(&trigger.organization, correlation)
+        .await?
+    {
+        return Ok(Correlated::Holding(holding));
     }
+
+    // A key a sealed workspace held is kestrel's own work, so `ignore` does not drop it.
+    let sealed = tx
+        .workspaces()
+        .sealed_holding_correlation(&trigger.organization, correlation)
+        .await?;
+    if sealed.is_none() && trigger.templates.correlation.on_miss() == Some(CorrelationMiss::Ignore)
+    {
+        return Ok(Correlated::Ignored);
+    }
+
+    Ok(Correlated::Missed(sealed.map(Box::new)))
 }
 
 fn chosen_name(trigger: &Trigger, event: &Event, asked: Option<&str>) -> Result<String> {
@@ -500,7 +546,7 @@ pub fn render(trigger: &Trigger, event: &Event, instruction: Option<&str>) -> Re
             .transpose()?,
         correlation: templates
             .correlation
-            .as_ref()
+            .template()
             .map(|correlation| {
                 correlation
                     .render_line(occurrence)
@@ -557,7 +603,7 @@ pub async fn elapse(store: &Store, at: Timestamp) -> Result<Vec<Occurrence>> {
 /// An Event no Trigger matches opens nothing, and that is not a failure.
 pub async fn fire(store: &Store, github: &Github) -> Result<Vec<Fired>> {
     let (matched, held) = {
-        let mut tx = store.begin().await?;
+        let mut tx = store.read().await?;
         (
             tx.triggers().unfired_matches(AT_A_TIME).await?,
             tx.triggers()
@@ -767,26 +813,20 @@ async fn firing(
         Ok(rendered) => rendered,
         Err(error) => return failed(tx, trigger, event, format!("{error:#}")).await,
     };
-    let continues = if let Some(correlation) = &rendered.correlation {
-        if let Some(holding) = tx
-            .workspaces()
-            .holding_correlation(&trigger.organization, correlation)
-            .await?
-        {
-            return fed(tx, trigger, event, &rendered, holding).await;
-        }
-
-        // A key a sealed workspace held is kestrel's own work, so `ignore` does not drop it.
-        let sealed = tx
-            .workspaces()
-            .sealed_holding_correlation(&trigger.organization, correlation)
-            .await?;
-        if sealed.is_none() && trigger.on_miss == Some(CorrelationMiss::Ignore) {
-            return ignored(tx, trigger, event, correlation).await;
-        }
-        sealed
-    } else {
-        None
+    let continues = match &rendered.correlation {
+        None => None,
+        Some(correlation) => match correlated(&mut tx, trigger, correlation).await? {
+            Correlated::Holding(holding) => {
+                return match trigger.templates.correlation.on_open_workspace() {
+                    OnOpenWorkspace::Continue => fed(tx, trigger, event, &rendered, holding).await,
+                    OnOpenWorkspace::NewSession => {
+                        started(tx, trigger, event, asked, rendered, holding).await
+                    }
+                };
+            }
+            Correlated::Ignored => return ignored(tx, trigger, event, correlation).await,
+            Correlated::Missed(sealed) => sealed,
+        },
     };
 
     let agent = match chosen(trigger, event, asked.agent) {
@@ -818,11 +858,11 @@ async fn firing(
             agent,
             profile: trigger.profile.as_ref(),
             branch: continues
-                .as_ref()
+                .as_deref()
                 .map(|sealed| sealed.checkout.branch.as_str())
                 .or(rendered.branch.as_deref()),
             correlation: rendered.correlation.as_deref(),
-            continues: continues.as_ref(),
+            continues: continues.as_deref(),
             started_by: Some(event),
         })
         .await?;
@@ -845,7 +885,10 @@ async fn firing(
         )
         .await?;
 
-    let session = tx.workspaces().enqueue_session(&workspace, None).await?;
+    let session = tx
+        .workspaces()
+        .enqueue_session(&workspace, Some(agent), None)
+        .await?;
     tx.triggers()
         .record_opened_firing(trigger, event, &workspace, worked_ahead.as_deref())
         .await?;
@@ -873,6 +916,42 @@ async fn fed(
 ) -> Result<Fired> {
     let workspace = tx.workspaces().get(holding).await?;
     let session = workspace::post_in(&mut tx, &workspace, &trigger.name, &rendered.brief).await?;
+    tx.triggers()
+        .record_fed_firing(trigger, event, &workspace)
+        .await?;
+    tx.commit().await?;
+
+    Ok(Fired::Fed {
+        event: event.record_id,
+        workspace: workspace.id,
+        session: session.map(|session| session.id),
+    })
+}
+
+/// Recorded as feeding the Workspace whether its Session starts now or waits its turn.
+async fn started(
+    mut tx: Tx<'_>,
+    trigger: &Trigger,
+    event: &Event,
+    asked: Asked<'_>,
+    rendered: Rendered,
+    holding: WorkspaceId,
+) -> Result<Fired> {
+    let agent = match chosen(trigger, event, asked.agent) {
+        Ok(agent) => agent.clone(),
+        Err(error) => return failed(tx, trigger, event, format!("{error:#}")).await,
+    };
+    let workspace = tx.workspaces().get(holding).await?;
+    let session = workspace::start_in(
+        &mut tx,
+        &workspace,
+        PendingSession {
+            agent,
+            trigger: trigger.name.clone(),
+            brief: rendered.brief,
+        },
+    )
+    .await?;
     tx.triggers()
         .record_fed_firing(trigger, event, &workspace)
         .await?;

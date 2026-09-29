@@ -20,8 +20,8 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Agent, Client, ConnectionTo, Error, Result, Stdio};
 use clap::Parser;
 use kestrel_scripted_agent::{
-    CONFIDED, DEFAULT_MODEL, FIRST_MEMORY, LAST_MEMORY, LOGIN, MUTTERED, OTHER_MODEL, OVERLONG,
-    REFRESHED, Script, conversed,
+    CHATTER, CHATTERED_LINES, CHATTERED_MESSAGES, CONFIDED, DEFAULT_MODEL, FIRST_MEMORY,
+    LAST_MEMORY, LOGIN, MUTTERED, OTHER_MODEL, OVERLONG, REFRESHED, Script, chattered, conversed,
 };
 
 const SESSION: &str = "scripted";
@@ -206,11 +206,51 @@ async fn play(
     if matches!(script, Script::Dawdles | Script::Mutters) {
         std::future::pending::<()>().await;
     }
+    if script == Script::Chatters {
+        for line in 1..=CHATTERED_LINES {
+            eprintln!("git ran {line} of turn {}", earlier.len() + 1);
+            tokio::time::sleep(CHATTER).await;
+        }
+        for message in 1..=CHATTERED_MESSAGES {
+            say(
+                connection,
+                &format!("message-{message}"),
+                &chattered(earlier.len() + 1, message),
+            )?;
+        }
+        return Ok(StopReason::EndTurn);
+    }
     if script == Script::Lingers {
         tokio::time::sleep(LINGER).await;
     }
     if script == Script::Confides {
         say(connection, "message-1", &confided())?;
+        return Ok(StopReason::EndTurn);
+    }
+    if script == Script::InspectsEnvironment {
+        update(
+            connection,
+            SessionUpdate::ToolCall(
+                ToolCall::new(TOOL_CALL, "env").status(ToolCallStatus::Completed),
+            ),
+        )?;
+        let output = std::process::Command::new("env")
+            .output()
+            .map_err(Error::into_internal_error)?;
+        if !output.status.success() {
+            return Err(Error::internal_error());
+        }
+        let exposed: Vec<_> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(name, _)| name))
+            .filter(|name| name.starts_with("KESTREL_"))
+            .map(str::to_owned)
+            .collect();
+        say(
+            connection,
+            "message-1",
+            &format!("KESTREL_ variables: {exposed:?}"),
+        )?;
         return Ok(StopReason::EndTurn);
     }
     if script == Script::Refreshes {

@@ -275,6 +275,11 @@ jobs:
       - name: Test the compose path
         run: cargo test --locked --package kestrel --test compose -- --ignored --test-threads 1
 
+      # The sweep every suite runs first, exercised against the resources a deleted checkout
+      # leaves behind.
+      - name: Test the sweep
+        run: cargo test --locked --package kestrel --test cleanup -- --ignored
+
   # The only job that builds the arm64 half of the image: the release it pins, the checksum it
   # verifies, and the architecture it selects on.
   architectures:

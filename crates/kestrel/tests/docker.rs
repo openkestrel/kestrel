@@ -143,7 +143,7 @@ async fn the_scripted_session_ends_the_same_way_in_a_container_as_it_does_in_a_p
             .await
             .iter()
             .map(|entry| entry.entry.to_string())
-            .filter(|entry| entry.starts_with("said"))
+            .filter(|entry| entry.starts_with("said  builder"))
             .collect::<Vec<_>>(),
         vec![
             "said  builder  half of one message, and the other half".to_owned(),
@@ -178,6 +178,47 @@ async fn an_instance_is_a_container_that_outlives_its_session_but_not_its_superv
 
     kestrel.teardown().await;
     container.is_gone().await;
+}
+
+#[tokio::test]
+#[ignore = "builds and runs the kestrel-env image"]
+async fn an_instance_reaps_a_grandchild_and_stays_running() {
+    let driver = Driver::Docker(Docker::provisioning_from(image::built()));
+    let mut instance = driver
+        .provision(SessionId::generate())
+        .expect("the instance should provision");
+    let child = instance
+        .exec(&["sh", "-c", "sleep infinity >/dev/null 2>&1 & echo $!"])
+        .expect("the shell should start")
+        .finish()
+        .expect("the shell should finish");
+    assert!(child.exited.success(), "the shell said {child:?}");
+    let pid = child.out.trim();
+    let killed = instance
+        .exec(&["sh", "-c", "kill -9 \"$1\"", "sh", pid])
+        .expect("the grandchild should be signalled")
+        .finish()
+        .expect("the signal should finish");
+    assert!(killed.exited.success(), "the signal said {killed:?}");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+
+    loop {
+        let reaped = instance
+            .exec(&["sh", "-c", "test ! -e /proc/$1", "sh", pid])
+            .expect("the instance should still accept commands")
+            .finish()
+            .expect("the command should finish");
+        if reaped.exited.success() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{pid} was not reaped"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    instance.destroy().expect("the instance should destroy");
 }
 
 #[tokio::test]

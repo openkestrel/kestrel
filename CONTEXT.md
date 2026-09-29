@@ -80,9 +80,9 @@ exists waits on it rather than starting another.
 _Avoid_: slot, current session, holding session
 
 **Active-Work Slot**:
-One unit of the control plane's capacity for sessions doing work at once, shared by every
-organization. A session mid-turn, trailing, or blocked on an approval, occupies one; a queued or
-waiting session does not, and neither does an unbriefed one.
+One unit of the control plane's capacity for sessions doing work at once, in a pool shared by
+every Organization. A session mid-turn, trailing, or blocked on an approval occupies one; a queued,
+waiting or unbriefed session does not.
 _Avoid_: slot (alone), capacity, concurrency
 
 **Held Message**:
@@ -344,7 +344,8 @@ words from drifting.
   agent. A session's agent, and the harness and model it started with, are fixed for the
   **session's** life.
 - A firing that feeds an open workspace does what its trigger **declares**: continues the waiting
-  session, or starts a **new** session with the trigger's agent.
+  session, or starts a **new** session with the trigger's agent. A new session waits for a queued
+  or working session, and **ends** a waiting one, which succeeds.
 - A label or a command chooses only among agents a trigger **allows**. A label that chooses **two**
   agents, or a choice the trigger does not allow, starts **nothing**.
 - A label, `ready-for-agent` included, never starts work, and neither does an ordinary comment. Work
@@ -389,6 +390,8 @@ words from drifting.
 - A session may be **waiting** with its ACP conversation and instance intact. Waiting holds no
   active-work slot; the next prompt continues that same session. A turn ending does not end a
   session.
+- Archiving a waiting session's instance, whether by sealing, releasing or reclaiming it for new
+  work, first **ends** that session, which succeeds.
 - A turn answering does not make its session **waiting** while work its agent started still runs:
   the session is **trailing**, keeps its active-work slot, and its instance is never reclaimed.
 - A turn that **ended on its own** with no message, narration or detail **fails** its session: a
