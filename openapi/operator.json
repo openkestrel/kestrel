@@ -1437,8 +1437,8 @@
     "/operator/organizations/{organization}/queue": {
       "get": {
         "operationId": "showQueue",
-        "summary": "Read the Organization's queue: the limits, their occupancy, and the queued Sessions in dispatch order.",
-        "description": "Queued Sessions appear in the order they were enqueued. Each one ready for dispatch apart from the shared Active-Work Slot pool is numbered from 1, a Session blocked on dependencies carries no number and names the Sessions it waits on, and nothing is estimated. The Active-Work Slot limit is the one the dispatching work role recorded, or no work role is dispatching; the pool belongs to the control plane and every Organization shares it, so other Organizations' occupants are counted and never named. Reading changes nothing.",
+        "summary": "Read the Organization's queue: the limits, their occupancy, the queued Sessions in dispatch order, and the Waiting Sessions.",
+        "description": "Queued Sessions appear in the order they were enqueued. Each one ready for dispatch apart from the shared Active-Work Slot pool is numbered from 1; one that is not carries no number and names every reason that holds it, derived by the rules dispatch applies. Waiting Sessions follow, unnumbered, with any held input and why their next turn has not started. Nothing is estimated. The Active-Work Slot limit is the one the dispatching work role recorded, or no work role is dispatching; the pool belongs to the control plane and every Organization shares it, so other Organizations' occupants are counted and never named. Reading changes nothing.",
         "parameters": [
           { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } }
         ],
@@ -1979,9 +1979,13 @@
           "queued": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/QueuedSession" }
+          },
+          "waiting": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/WaitingSession" }
           }
         },
-        "required": ["work_role", "active_work", "instances", "queued"]
+        "required": ["work_role", "active_work", "instances", "queued", "waiting"]
       },
       "ActiveWork": {
         "type": "object",
@@ -2036,19 +2040,89 @@
           "position": {
             "type": ["integer", "null"],
             "minimum": 1,
-            "description": "The Session's place among the ones dispatch will consider, numbered from 1 in enqueue order. Null while it is blocked on dependencies."
+            "description": "The Session's place among the ready ones, numbered from 1 in enqueue order. Null while any reason holds it."
           },
           "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
           "workspace": { "type": "string", "format": "uuid" },
           "agent": { "type": "string" },
-          "waits_on": {
+          "reasons": {
             "type": "array",
-            "items": { "type": "string" },
-            "description": "The Sessions it waits on, when a dependency blocks it."
+            "items": { "$ref": "#/components/schemas/QueueReason" },
+            "description": "Every current reason it has not started: dependencies, subscription_profile, instance_archiving or live_instance_limit. Empty for a ready Session, whose only wait is the Active-Work Slot pool."
           },
           "enqueued_at": { "type": "string", "format": "date-time" }
         },
-        "required": ["position", "name", "workspace", "agent", "waits_on", "enqueued_at"]
+        "required": ["position", "name", "workspace", "agent", "reasons", "enqueued_at"]
+      },
+      "WaitingSession": {
+        "type": "object",
+        "description": "A Session between turns. It holds no Active-Work Slot and has no place in the queue; messages behind a working turn are Workspace state, not these.",
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
+          "workspace": { "type": "string", "format": "uuid" },
+          "agent": { "type": "string" },
+          "pending_since": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "When the oldest input held for its next turn arrived, or null while it is only waiting for a turn."
+          },
+          "reasons": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/QueueReason" },
+            "description": "Why its next turn has not started: active_work_slots, subscription_profile or ahead. Empty without held input."
+          },
+          "enqueued_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["name", "workspace", "agent", "pending_since", "reasons", "enqueued_at"]
+      },
+      "QueueReason": {
+        "type": "object",
+        "description": "One reason a Session has not started, for a Client to phrase.",
+        "oneOf": [
+          {
+            "properties": {
+              "kind": { "const": "dependencies" },
+              "sessions": { "type": "array", "items": { "type": "string" }, "description": "The blocking Sessions that have not ended successfully." }
+            },
+            "required": ["kind", "sessions"]
+          },
+          {
+            "properties": {
+              "kind": { "const": "subscription_profile" },
+              "profile": { "type": "string" },
+              "session": { "type": "string", "description": "The Working Session holding the serialized profile." }
+            },
+            "required": ["kind", "profile", "session"]
+          },
+          {
+            "properties": {
+              "kind": { "const": "instance_archiving" },
+              "instance": { "type": "string", "description": "The idle Instance being archived, or that dispatch will archive, to make room." }
+            },
+            "required": ["kind", "instance"]
+          },
+          {
+            "properties": {
+              "kind": { "const": "live_instance_limit" },
+              "limit": { "type": "integer", "minimum": 1, "description": "The Organization's live Instance limit, reached with no idle Instance known recoverable." }
+            },
+            "required": ["kind", "limit"]
+          },
+          {
+            "properties": {
+              "kind": { "const": "active_work_slots" },
+              "limit": { "type": "integer", "minimum": 1, "description": "The Active-Work Slot limit, every slot occupied." }
+            },
+            "required": ["kind", "limit"]
+          },
+          {
+            "properties": {
+              "kind": { "const": "ahead" },
+              "sessions": { "type": "array", "items": { "type": "string" }, "description": "This Organization's earlier input and queued work a freed slot goes to first." }
+            },
+            "required": ["kind", "sessions"]
+          }
+        ]
       },
       "InstanceRelease": {
         "type": "object",
@@ -2131,7 +2205,6 @@
           "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
           "workspace": { "type": "string", "format": "uuid" },
           "state": { "type": "string", "enum": ["queued", "working", "waiting", "ended", "unreachable"] },
-          "waiting_for": { "type": ["string", "null"] },
           "exit": { "anyOf": [{ "$ref": "#/components/schemas/Exit" }, { "type": "null" }] },
           "outcome_message": { "type": ["string", "null"] },
           "instance": { "type": ["string", "null"] },
@@ -2148,7 +2221,7 @@
           "supervisor_version": { "type": ["string", "null"] },
           "usage": { "anyOf": [{ "$ref": "#/components/schemas/Usage" }, { "type": "null" }] }
         },
-        "required": ["id", "name", "workspace", "state", "waiting_for", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "worked_model", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage"]
+        "required": ["id", "name", "workspace", "state", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "worked_model", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage"]
       },
       "Exit": {
         "oneOf": [

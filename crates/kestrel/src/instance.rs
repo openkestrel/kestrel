@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
@@ -10,10 +12,13 @@ use crate::workspace;
 
 pub enum Admission {
     Available,
-    Waiting(String),
+    Archiving(String),
+    Archivable(Kept),
+    AtLimit(NonZeroUsize),
 }
 
-pub async fn admit(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Admission> {
+/// Judges without acting, so the queue can ask what dispatch would find.
+pub async fn admission(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Admission> {
     if tx.workspaces().instance(workspace.id).await?.is_some() {
         return Ok(Admission::Available);
     }
@@ -33,9 +38,7 @@ pub async fn admit(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Admission> 
         .instance_being_archived(&workspace.organization)
         .await?
     {
-        return Ok(Admission::Waiting(format!(
-            "waiting for the idle Instance {instance} to be archived"
-        )));
+        return Ok(Admission::Archiving(instance));
     }
 
     for kept in tx
@@ -47,20 +50,16 @@ pub async fn admit(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Admission> 
         if workspace::unfinished_session(tx, &candidate).await?.idle()
             && unpublished(&candidate.checkout.repositories, kept.observed.as_deref()).is_none()
         {
-            archive(tx, &candidate, &kept.instance).await?;
-            return Ok(Admission::Waiting(format!(
-                "waiting for the idle Instance {} to be archived",
-                kept.instance
-            )));
+            return Ok(Admission::Archivable(kept));
         }
     }
 
-    Ok(Admission::Waiting(format!(
-        "the organization {} has reached its limit of {} live Instance{}; none idle is known recoverable",
-        workspace.organization.name,
-        limit,
-        if limit.get() == 1 { "" } else { "s" }
-    )))
+    Ok(Admission::AtLimit(limit))
+}
+
+pub async fn reclaim(tx: &mut Tx<'_>, kept: &Kept) -> Result<()> {
+    let workspace = tx.workspaces().get(kept.workspace).await?;
+    archive(tx, &workspace, &kept.instance).await
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

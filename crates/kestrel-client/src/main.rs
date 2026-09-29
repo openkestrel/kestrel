@@ -1434,13 +1434,6 @@ async fn started(
 fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
     let slots = &snapshot["active_work"];
     let instances = &snapshot["instances"];
-    let queued = snapshot["queued"]
-        .as_array()
-        .context(Failed::new(
-            Exit::Unavailable,
-            "reading the snapshot's queued Sessions",
-        ))?
-        .clone();
 
     if !matches!(presentation, Presentation::Json(_)) {
         let mut out = std::io::stdout().lock();
@@ -1465,21 +1458,90 @@ fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
         out.flush().context("writing to standard output")?;
     }
 
-    let rows = queued
-        .into_iter()
-        .map(|row| {
-            let mut record = row.as_object().cloned().context(Failed::new(
+    let mut rows = Vec::new();
+    for state in ["queued", "waiting"] {
+        let section = snapshot[state].as_array().with_context(|| {
+            Failed::new(
                 Exit::Unavailable,
-                "reading one of the snapshot's queued Sessions",
-            ))?;
+                format!("reading the snapshot's {state} Sessions"),
+            )
+        })?;
+        for row in section {
+            let mut record = row.as_object().cloned().with_context(|| {
+                Failed::new(
+                    Exit::Unavailable,
+                    format!("reading one of the snapshot's {state} Sessions"),
+                )
+            })?;
+            record.insert("state".to_owned(), Value::from(state));
+            record.entry("position").or_insert(Value::Null);
+            record.entry("pending_since").or_insert(Value::Null);
+            record.insert("why".to_owned(), Value::from(why(&record)));
             record.insert("active_work".to_owned(), slots.clone());
             record.insert("instances".to_owned(), instances.clone());
-
-            Ok(Value::Object(record))
-        })
-        .collect::<Result<Vec<_>>>()?;
+            rows.push(Value::Object(record));
+        }
+    }
 
     show(presentation, &view::QUEUE, &Value::from(rows))
+}
+
+fn why(row: &serde_json::Map<String, Value>) -> String {
+    let mut said: Vec<String> = Vec::new();
+    if let Some(since) = row["pending_since"].as_str() {
+        said.push(format!("input since {since}"));
+    }
+    said.extend(
+        row["reasons"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(reason_in_words),
+    );
+    if said.is_empty() {
+        said.push(
+            match row["state"].as_str() {
+                Some("waiting") => "waiting for a turn",
+                _ => "ready",
+            }
+            .to_owned(),
+        );
+    }
+
+    said.join("; ")
+}
+
+fn reason_in_words(reason: &Value) -> String {
+    let names = |field: &str| {
+        reason[field]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let text = |field: &str| reason[field].as_str().unwrap_or("?").to_owned();
+    let limit = reason["limit"].as_u64().unwrap_or_default();
+    let plural = if limit == 1 { "" } else { "s" };
+
+    match reason["kind"].as_str().unwrap_or_default() {
+        "dependencies" => format!("waits on {}", names("sessions")),
+        "subscription_profile" => {
+            format!(
+                "the Subscription Profile {} is held by {}",
+                text("profile"),
+                text("session")
+            )
+        }
+        "instance_archiving" => {
+            format!("waits for the Instance {} to be archived", text("instance"))
+        }
+        "live_instance_limit" => format!("at the limit of {limit} live Instance{plural}"),
+        "active_work_slots" => format!("all {limit} Active-Work Slot{plural} occupied"),
+        "ahead" => format!("behind {}", names("sessions")),
+        kind => kind.to_owned(),
+    }
 }
 
 /// A limit and what counts against it as one line, naming what the Organization can name.

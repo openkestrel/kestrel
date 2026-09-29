@@ -385,7 +385,6 @@ mod tests {
                 model: None,
             },
             state,
-            waiting_for: None,
             exit: None,
             outcome_message: None,
             instance: None,

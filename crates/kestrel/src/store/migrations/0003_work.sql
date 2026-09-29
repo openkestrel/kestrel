@@ -10,7 +10,6 @@ ALTER TABLE session ADD COLUMN instance TEXT;
 ALTER TABLE session ADD COLUMN exit TEXT;
 ALTER TABLE session ADD COLUMN exit_because TEXT;
 ALTER TABLE session ADD COLUMN outcome_message TEXT;
-ALTER TABLE session ADD COLUMN waiting_for TEXT;
 
 CREATE TABLE turn (
     session_id TEXT NOT NULL REFERENCES session (id),

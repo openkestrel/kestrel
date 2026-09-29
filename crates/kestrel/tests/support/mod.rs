@@ -55,6 +55,7 @@ use kestrel::link::{self, Instruction};
 use kestrel::log::{Cursor, Entry, Page, TranscriptEntry, Unreadable, Window};
 use kestrel::profile::{self, Contents};
 use kestrel::provider::{self, Held};
+use kestrel::queue;
 use kestrel::role::serve::{self, Listen};
 use kestrel::role::work::{Dispatch, HarnessCommand};
 use kestrel::store::Store;
@@ -1402,6 +1403,45 @@ impl Kestrel {
         work::occupy(&self.store, 1, &[SERIALIZED.to_owned()])
             .await
             .expect("the occupancy should ask");
+    }
+
+    pub async fn occupy_up_to(&self, slots: usize) -> Option<work::Occupied> {
+        work::occupy(&self.store, slots, &[SERIALIZED.to_owned()])
+            .await
+            .expect("the occupancy should ask")
+    }
+
+    pub async fn record_dispatch(&self, slots: usize) {
+        let mut tx = self.store.begin().await.expect("a transaction");
+        tx.queue()
+            .record(slots, &[SERIALIZED.to_owned()])
+            .await
+            .expect("the dispatch should record");
+        tx.commit().await.expect("the record should commit");
+    }
+
+    pub async fn queue(&self, organization: &str) -> queue::Snapshot {
+        queue::snapshot(&self.store, organization)
+            .await
+            .expect("the queue should read")
+    }
+
+    pub async fn waits_after_its_first_turn(&self, session: &Session) -> Session {
+        link::start(&self.store, session)
+            .await
+            .expect("the session should start");
+        work::report(
+            &self.store,
+            session,
+            work::Reported {
+                seq: Some(1),
+                report: work::Report::Answered,
+            },
+        )
+        .await
+        .expect("the answer should be reported");
+
+        self.session(session.id).await
     }
 
     pub async fn block_session(&self, session: &Session, blocker: &Session) {

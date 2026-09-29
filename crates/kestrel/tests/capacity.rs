@@ -3,8 +3,9 @@ mod support;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
-use kestrel::domain::{Exit, SessionState, Workspace};
+use kestrel::domain::{Exit, Session, SessionState, Workspace};
 use kestrel::instance::{Git, Observed};
+use kestrel::queue::Reason;
 use support::Kestrel;
 use support::repository;
 use support::supervisor;
@@ -69,6 +70,17 @@ async fn workspaces(kestrel: &Kestrel, maximum: usize) -> (Workspace, Workspace,
     )
 }
 
+async fn reasons(kestrel: &Kestrel, session: &Session) -> Vec<Reason> {
+    kestrel
+        .queue("acme")
+        .await
+        .queued
+        .into_iter()
+        .find(|queued| queued.session.id == session.id)
+        .expect("the session is queued")
+        .reasons
+}
+
 async fn complete_clean_sessions(kestrel: &Kestrel, workspaces: &[(&Workspace, &str)]) {
     for (workspace, instance) in workspaces {
         let queued = kestrel.enqueue_session(workspace.id).await;
@@ -101,7 +113,10 @@ async fn an_active_instance_counts_toward_the_organization_limit() {
     let second = kestrel.session(second.id).await;
 
     assert_eq!(second.state, SessionState::Queued);
-    assert!(second.waiting_for.is_some());
+    assert_eq!(
+        reasons(&kestrel, &second).await,
+        [Reason::LiveInstanceLimit(1)]
+    );
 
     kestrel.teardown().await;
 }
@@ -128,7 +143,10 @@ async fn reclaiming_for_new_work_does_not_delay_a_follow_up_that_already_has_an_
     );
     let new_session = kestrel.session(new_session.id).await;
     assert_eq!(new_session.state, SessionState::Queued);
-    assert!(new_session.waiting_for.is_some());
+    assert_eq!(
+        reasons(&kestrel, &new_session).await,
+        [Reason::InstanceArchiving("oldest".to_owned())]
+    );
     assert_eq!(kestrel.instance(oldest.id).await, None);
 
     kestrel.teardown().await;
@@ -162,10 +180,10 @@ async fn a_held_instance_blocks_new_work_but_not_its_workspaces_follow_up() {
     assert!(kestrel.occupy_session().await.is_none());
     let blocked = kestrel.session(blocked.id).await;
     assert_eq!(blocked.state, SessionState::Queued);
-    assert!(blocked.waiting_for.as_deref().is_some_and(|reason| {
-        reason.contains("limit of 1 live Instance")
-            && reason.contains("none idle is known recoverable")
-    }));
+    assert_eq!(
+        reasons(&kestrel, &blocked).await,
+        [Reason::LiveInstanceLimit(1)]
+    );
 
     let follow_up = kestrel.enqueue_session(existing.id).await;
     let claimed = kestrel

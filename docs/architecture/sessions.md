@@ -33,7 +33,15 @@ stateDiagram-v2
 - **Unreachable has no exit.** A queued Session whose blocker failed never ran, so nothing failed
   (`cascade_unreachable`, `session_dependency`).
 - **A queued Session may wait for an Instance.** When the Organization's `max_live_instances` is
-  full, `instance::admit` records why in `session.waiting_for` and the claim moves on.
+  full, `instance::admission` judges it without acting: another Instance is being archived, an
+  idle one is safe to archive, or none is recoverable. Only the dispatcher's claim archives the
+  idle one (`instance::reclaim`), and only for a Session it could claim; the claim moves on
+  either way.
+- **Nothing stores why a Session waits.** `queue::snapshot` derives positions and reasons at read
+  time from the dispatcher's own rules: `UNSATISFIED_BLOCKER`, the `profile_held!` conflict,
+  Working as the only slot occupant, `held_input!` ordering and `work::goes_before_input`. A rule
+  changed in one place changes both: unless older held input is prompted first, a free slot
+  claims position 1.
 
 ## The unfinished Session
 

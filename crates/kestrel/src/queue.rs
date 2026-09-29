@@ -1,18 +1,24 @@
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
+use jiff::Timestamp;
 
-use crate::domain::{Organization, Session, SessionId};
+use crate::domain::{Organization, Session, SessionId, SessionState};
+use crate::instance::{self, Admission};
+use crate::store::queue::Recorded;
 use crate::store::{Store, Tx};
+use crate::work;
 
-/// One coherent read of an Organization's queue: positions, names and limits derived at read
-/// time from the state one transaction saw, never a value a dispatcher happened to store.
+/// One coherent read of an Organization's queue: positions, reasons and limits derived at read
+/// time from the state one transaction saw, by the rules dispatch applies, never a value a
+/// dispatcher happened to store.
 pub struct Snapshot {
     /// What the dispatching work role recorded. `None` says no work role is dispatching.
-    pub recorded: Option<crate::store::queue::Recorded>,
+    pub recorded: Option<Recorded>,
     pub active_work: ActiveWork,
     pub instances: Instances,
     pub queued: Vec<Queued>,
+    pub waiting: Vec<Waiting>,
 }
 
 pub struct ActiveWork {
@@ -37,30 +43,71 @@ pub struct Instances {
     pub counted: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reason {
+    Dependencies(Vec<String>),
+    SubscriptionProfile {
+        profile: String,
+        session: String,
+    },
+    /// An idle Instance being archived, or one dispatch will archive, to make room.
+    InstanceArchiving(String),
+    LiveInstanceLimit(usize),
+    ActiveWorkSlots(usize),
+    Ahead(Vec<String>),
+}
+
 pub struct Queued {
     pub session: Session,
-    /// The Session's place among the ones dispatch will consider, numbered from 1 in enqueue
-    /// order. `None` while it is blocked on dependencies; it takes its place back once every
-    /// blocker has ended successfully.
+    /// `None` while any reason holds it, and its enqueue place back once none does.
     pub position: Option<usize>,
-    /// The Sessions it waits on, when a dependency blocks it.
-    pub waits_on: Vec<String>,
+    pub reasons: Vec<Reason>,
+}
+
+pub struct Waiting {
+    pub session: Session,
+    /// When the oldest input held for its next turn arrived; `None` while nothing is held.
+    pub pending_since: Option<Timestamp>,
+    pub reasons: Vec<Reason>,
 }
 
 pub async fn snapshot(store: &Store, name: &str) -> Result<Snapshot> {
     let mut tx = store.read().await?;
     let organization = tx.organizations().named(name).await?;
+    let recorded = tx.queue().recorded().await?;
+    let serialized = recorded
+        .as_ref()
+        .map_or(&[][..], |recorded| &recorded.serialized_harnesses);
+
+    let mut held: HashMap<SessionId, Vec<Reason>> = HashMap::new();
+    for (session, profile, holder) in tx.queue().profiles_held(&organization, serialized).await? {
+        held.entry(session)
+            .or_default()
+            .push(Reason::SubscriptionProfile {
+                profile,
+                session: holder,
+            });
+    }
+
+    let active_work = active_work(&mut tx, &organization, recorded.as_ref()).await?;
+    let instances = instances(&mut tx, &organization).await?;
+    let queued = queued(&mut tx, &organization, &mut held).await?;
+    let waiting = waiting(&mut tx, &organization, &active_work, &queued, &mut held).await?;
 
     Ok(Snapshot {
-        recorded: tx.queue().recorded().await?,
-        active_work: active_work(&mut tx, &organization).await?,
-        instances: instances(&mut tx, &organization).await?,
-        queued: queued(&mut tx, &organization).await?,
+        recorded,
+        active_work,
+        instances,
+        queued,
+        waiting,
     })
 }
 
-async fn active_work(tx: &mut Tx<'_>, organization: &Organization) -> Result<ActiveWork> {
-    let recorded = tx.queue().recorded().await?;
+async fn active_work(
+    tx: &mut Tx<'_>,
+    organization: &Organization,
+    recorded: Option<&Recorded>,
+) -> Result<ActiveWork> {
     let mut occupants = Vec::new();
     let mut elsewhere = 0;
     for (name, ours) in tx.queue().occupying(organization).await? {
@@ -97,30 +144,121 @@ async fn instances(tx: &mut Tx<'_>, organization: &Organization) -> Result<Insta
     })
 }
 
-async fn queued(tx: &mut Tx<'_>, organization: &Organization) -> Result<Vec<Queued>> {
+async fn queued(
+    tx: &mut Tx<'_>,
+    organization: &Organization,
+    held: &mut HashMap<SessionId, Vec<Reason>>,
+) -> Result<Vec<Queued>> {
     let mut blocked: HashMap<SessionId, Vec<String>> = HashMap::new();
     for (queued, blocker) in tx.queue().waiting_on(organization).await? {
         blocked.entry(queued.parse()?).or_default().push(blocker);
     }
 
-    let mut ready = 1;
+    let mut ready = 0;
     let mut queued = Vec::new();
-    for session in tx.workspaces().queued_sessions(organization).await? {
-        let waits_on = blocked.remove(&session.id).unwrap_or_default();
-        let position = match waits_on.is_empty() {
-            true => {
-                let numbered = ready;
-                ready += 1;
-                Some(numbered)
+    for session in tx
+        .workspaces()
+        .sessions_in(organization, SessionState::Queued)
+        .await?
+    {
+        let mut reasons = Vec::new();
+        if let Some(blockers) = blocked.remove(&session.id) {
+            reasons.push(Reason::Dependencies(blockers));
+        }
+        reasons.extend(held.remove(&session.id).unwrap_or_default());
+        let workspace = tx.workspaces().get(session.workspace).await?;
+        match instance::admission(tx, &workspace).await? {
+            Admission::Available => {}
+            Admission::Archiving(instance) => reasons.push(Reason::InstanceArchiving(instance)),
+            // Dispatch archives only for a Session it could claim.
+            Admission::Archivable(kept) if reasons.is_empty() => {
+                reasons.push(Reason::InstanceArchiving(kept.instance));
             }
-            false => None,
-        };
+            Admission::Archivable(_) => {
+                let limit = workspace.organization.max_live_instances;
+                reasons.extend(limit.map(|limit| Reason::LiveInstanceLimit(limit.get())));
+            }
+            Admission::AtLimit(limit) => reasons.push(Reason::LiveInstanceLimit(limit.get())),
+        }
+
+        let position = reasons.is_empty().then(|| {
+            ready += 1;
+            ready
+        });
         queued.push(Queued {
             session,
             position,
-            waits_on,
+            reasons,
         });
     }
 
     Ok(queued)
+}
+
+/// Those with held input come first, in the order a freed slot prompts them.
+async fn waiting(
+    tx: &mut Tx<'_>,
+    organization: &Organization,
+    active_work: &ActiveWork,
+    queued: &[Queued],
+    held: &mut HashMap<SessionId, Vec<Reason>>,
+) -> Result<Vec<Waiting>> {
+    let full = active_work
+        .limit
+        .filter(|limit| active_work.occupied >= *limit);
+    let mut sessions: HashMap<SessionId, Session> = HashMap::new();
+    let mut in_enqueue_order = Vec::new();
+    for session in tx
+        .workspaces()
+        .sessions_in(organization, SessionState::Waiting)
+        .await?
+    {
+        in_enqueue_order.push(session.id);
+        sessions.insert(session.id, session);
+    }
+
+    let mut waiting = Vec::new();
+    let mut earlier_input = Vec::new();
+    for (id, since) in tx.queue().held_input(organization).await? {
+        let session = sessions
+            .remove(&id)
+            .with_context(|| format!("the waiting session {id} was read twice"))?;
+        let mut reasons: Vec<Reason> = full.map(Reason::ActiveWorkSlots).into_iter().collect();
+        let profile = held.remove(&id).unwrap_or_default();
+        let prompted_in_turn = profile.is_empty();
+        reasons.extend(profile);
+        let ahead: Vec<String> = queued
+            .iter()
+            .filter(|queued| {
+                queued.position.is_some() && work::goes_before_input(&queued.session, since)
+            })
+            .map(|queued| queued.session.name.clone())
+            .chain(earlier_input.iter().cloned())
+            .collect();
+        if !ahead.is_empty() {
+            reasons.push(Reason::Ahead(ahead));
+        }
+        // A slot never goes to input a serialized profile holds back, so it is ahead of nothing.
+        if prompted_in_turn {
+            earlier_input.push(session.name.clone());
+        }
+
+        waiting.push(Waiting {
+            session,
+            pending_since: Some(since),
+            reasons,
+        });
+    }
+
+    for id in in_enqueue_order {
+        if let Some(session) = sessions.remove(&id) {
+            waiting.push(Waiting {
+                session,
+                pending_since: None,
+                reasons: Vec::new(),
+            });
+        }
+    }
+
+    Ok(waiting)
 }
