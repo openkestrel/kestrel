@@ -21,7 +21,7 @@ macro_rules! sessions_where {
         concat!(
             "SELECT id, name, organization_id, workspace_id, agent_id,
                     (SELECT name FROM agent WHERE agent.id = session.agent_id) AS agent_name,
-                    harness, state, waiting_for, exit, exit_because, outcome_message, instance,
+                    harness, state, exit, exit_because, outcome_message, instance,
                     supervisor, enqueued_at, started_at, ended_at, lease_expires_at, connected_at,
                     supervisor_version, model, worked_model, context_used, context_size, cost_amount,
                     cost_currency",
@@ -34,19 +34,43 @@ macro_rules! sessions_where {
     };
 }
 
-macro_rules! profile_free {
+/// Another Session, aliased `a`, working on a Workspace, `o`, that shares the Subscription Profile
+/// of `s`'s Workspace, `w`, on the same serialized harness: what the dispatcher passes `s` over for
+/// and what the queue names as holding the profile, in one place.
+macro_rules! profile_held {
     () => {
-        "NOT EXISTS (
-             SELECT 1
-             FROM workspace AS w
-             JOIN workspace AS o ON o.subscription_profile_id = w.subscription_profile_id
-             JOIN session AS a ON a.workspace_id = o.id AND a.harness = s.harness
-             WHERE w.id = s.workspace_id
-               AND s.harness IN (SELECT value FROM json_each(?))
-               AND a.state = ?
-         )"
+        "workspace AS w
+         JOIN workspace AS o ON o.subscription_profile_id = w.subscription_profile_id
+         JOIN session AS a ON a.workspace_id = o.id AND a.harness = s.harness
+         WHERE w.id = s.workspace_id
+           AND s.harness IN (SELECT value FROM json_each(?))
+           AND a.state = ?"
     };
 }
+pub(crate) use profile_held;
+
+macro_rules! profile_free {
+    () => {
+        concat!("NOT EXISTS (SELECT 1 FROM ", profile_held!(), ")")
+    };
+}
+
+/// Each Waiting Session's held input, oldest first: the order a freed slot prompts them in.
+macro_rules! held_input {
+    ($condition:expr) => {
+        concat!(
+            "SELECT s.id, MIN(p.received_at) AS since
+             FROM session AS s
+             JOIN pending_message AS p ON p.workspace_id = s.workspace_id
+             WHERE s.state = ? AND ",
+            $condition,
+            "
+             GROUP BY s.id
+             ORDER BY since, s.id"
+        )
+    };
+}
+pub(crate) use held_input;
 
 /// A blocker that has not ended successfully, with `session` aliased `b`: what the dispatcher
 /// skips a queued Session over and what the queue names it by, in one place.
@@ -537,7 +561,6 @@ impl<'a> Workspaces<'a> {
                     ..agent.clone()
                 },
                 state: SessionState::Queued,
-                waiting_for: None,
                 exit: None,
                 outcome_message: None,
                 instance: None,
@@ -781,7 +804,7 @@ impl<'a> Workspaces<'a> {
     /// `false` when the Session was no longer queued, so a claimant that got there first stands.
     pub async fn mark_unreachable(&mut self, session: &Session) -> Result<bool> {
         let marked = sqlx::query(
-            "UPDATE session SET state = ?, waiting_for = NULL, ended_at = ?
+            "UPDATE session SET state = ?, ended_at = ?
                  WHERE id = ? AND state = ?",
         )
         .bind(SessionState::Unreachable.as_str())
@@ -795,11 +818,7 @@ impl<'a> Workspaces<'a> {
         Ok(marked.rows_affected() > 0)
     }
 
-    pub async fn claimable_sessions(
-        &mut self,
-        serialized: &[String],
-        enqueued_before: Option<Timestamp>,
-    ) -> Result<Vec<Session>> {
+    pub async fn claimable_sessions(&mut self, serialized: &[String]) -> Result<Vec<Session>> {
         let claimable = format!(
             "SELECT s.id
              FROM session AS s
@@ -812,7 +831,6 @@ impl<'a> Workspaces<'a> {
                      AND {UNSATISFIED_BLOCKER}
                )
                AND {}
-               AND (? IS NULL OR s.enqueued_at < ?)
              ORDER BY s.enqueued_at, s.id",
             profile_free!()
         );
@@ -822,8 +840,6 @@ impl<'a> Workspaces<'a> {
             .bind(Exit::Succeeded.status())
             .bind(serde_json::to_string(serialized)?)
             .bind(SessionState::Working.as_str())
-            .bind(enqueued_before.map(due))
-            .bind(enqueued_before.map(due))
             .fetch_all(&mut *self.connection)
             .await
             .context("reading claimable sessions")?;
@@ -842,7 +858,7 @@ impl<'a> Workspaces<'a> {
     ) -> Result<Option<Session>> {
         let claimed = sqlx::query(
             "UPDATE session
-             SET state = ?, waiting_for = NULL, claimed_at = ?, lease_expires_at = ?
+             SET state = ?, claimed_at = ?, lease_expires_at = ?
              WHERE id = ? AND state = ?
              RETURNING id",
         )
@@ -859,17 +875,6 @@ impl<'a> Workspaces<'a> {
             Some(_) => Ok(Some(self.session(session.id).await?)),
             None => Ok(None),
         }
-    }
-
-    pub async fn wait_for_instance(&mut self, session: &Session, because: &str) -> Result<()> {
-        sqlx::query("UPDATE session SET waiting_for = ? WHERE id = ? AND state = ?")
-            .bind(because)
-            .bind(session.id.to_string())
-            .bind(SessionState::Queued.as_str())
-            .execute(&mut *self.connection)
-            .await
-            .with_context(|| format!("recording why the session {} is waiting", session.id))?;
-        Ok(())
     }
 
     pub async fn session(&mut self, id: SessionId) -> Result<Session> {
@@ -892,15 +897,19 @@ impl<'a> Workspaces<'a> {
             .collect()
     }
 
-    pub async fn queued_sessions(&mut self, organization: &Organization) -> Result<Vec<Session>> {
+    pub async fn sessions_in(
+        &mut self,
+        organization: &Organization,
+        state: SessionState,
+    ) -> Result<Vec<Session>> {
         sqlx::query(sessions_where!(
             "organization_id = ? AND state = ? ORDER BY enqueued_at, id"
         ))
         .bind(organization.id.to_string())
-        .bind(SessionState::Queued.as_str())
+        .bind(state.as_str())
         .fetch_all(&mut *self.connection)
         .await
-        .context("reading the organization's queued sessions")?
+        .with_context(|| format!("reading the organization's {state} sessions"))?
         .iter()
         .map(session)
         .collect()
@@ -1255,7 +1264,7 @@ impl<'a> Workspaces<'a> {
     ) -> Result<bool> {
         let ended = sqlx::query(
             "UPDATE session
-             SET state = ?, waiting_for = NULL, ended_at = ?, exit = ?, exit_because = ?, outcome_message = ?, lease_expires_at = NULL
+             SET state = ?, ended_at = ?, exit = ?, exit_because = ?, outcome_message = ?, lease_expires_at = NULL
              WHERE id = ? AND state != ?",
         )
         .bind(SessionState::Ended.as_str())
@@ -1507,23 +1516,13 @@ impl<'a> Workspaces<'a> {
         &mut self,
         serialized: &[String],
     ) -> Result<Option<(Session, Timestamp)>> {
-        let row = sqlx::query(concat!(
-            "SELECT s.id, MIN(p.received_at) AS since
-             FROM session AS s
-             JOIN pending_message AS p ON p.workspace_id = s.workspace_id
-             WHERE s.state = ? AND ",
-            profile_free!(),
-            "
-             GROUP BY s.id
-             ORDER BY since, s.id
-             LIMIT 1"
-        ))
-        .bind(SessionState::Waiting.as_str())
-        .bind(serde_json::to_string(serialized)?)
-        .bind(SessionState::Working.as_str())
-        .fetch_optional(&mut *self.connection)
-        .await
-        .context("reading which waiting session has input held longest")?;
+        let row = sqlx::query(concat!(held_input!(profile_free!()), " LIMIT 1"))
+            .bind(SessionState::Waiting.as_str())
+            .bind(serde_json::to_string(serialized)?)
+            .bind(SessionState::Working.as_str())
+            .fetch_optional(&mut *self.connection)
+            .await
+            .context("reading which waiting session has input held longest")?;
 
         let Some(row) = row else {
             return Ok(None);
@@ -1649,7 +1648,6 @@ fn session(row: &SqliteRow) -> Result<Session> {
             model: row.get("model"),
         },
         state: row.get::<String, _>("state").parse()?,
-        waiting_for: row.get("waiting_for"),
         exit: exit
             .map(|status| Exit::read(&status, row.get("exit_because")))
             .transpose()?,

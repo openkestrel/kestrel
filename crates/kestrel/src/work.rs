@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 use crate::domain::{Exit, Session, SessionId, Turn, Usage, WorkspaceId};
-use crate::instance::Observed;
+use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
 use crate::link;
 use crate::link::credential::Secret;
@@ -187,19 +187,25 @@ pub async fn occupy(
     Ok(Some(occupied))
 }
 
+/// A freed slot goes to whichever asked first, so a queued Session enqueued before the oldest held
+/// input takes it ahead of that input.
+pub(crate) fn goes_before_input(queued: &Session, input_since: Timestamp) -> bool {
+    queued.enqueued_at < input_since
+}
+
 async fn claiming(
     tx: &mut Tx<'_>,
     serialized: &[String],
-    enqueued_before: Option<Timestamp>,
+    input_since: Option<Timestamp>,
 ) -> Result<Option<Claimed>> {
-    let claimable = tx
-        .workspaces()
-        .claimable_sessions(serialized, enqueued_before)
-        .await?;
+    let claimable = tx.workspaces().claimable_sessions(serialized).await?;
     for queued in claimable {
+        if input_since.is_some_and(|since| !goes_before_input(&queued, since)) {
+            continue;
+        }
         let workspace = tx.workspaces().get(queued.workspace).await?;
-        match crate::instance::admit(tx, &workspace).await? {
-            crate::instance::Admission::Available => {
+        match crate::instance::admission(tx, &workspace).await? {
+            Admission::Available => {
                 let Some(session) = tx
                     .workspaces()
                     .claim_session(&queued, Timestamp::now() + LEASE)
@@ -220,9 +226,8 @@ async fn claiming(
                     credential,
                 }));
             }
-            crate::instance::Admission::Waiting(because) => {
-                tx.workspaces().wait_for_instance(&queued, &because).await?;
-            }
+            Admission::Archivable(kept) => crate::instance::reclaim(tx, &kept).await?,
+            Admission::Archiving(_) | Admission::AtLimit(_) => {}
         }
     }
 

@@ -9,12 +9,13 @@ use kestrel::instance::{Git, Observed};
 use kestrel::link;
 use kestrel::log::{Entry, Message};
 use kestrel::operator;
+use kestrel::work;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use support::client::{self, Client};
 use support::github_stub::{self, GithubStub};
 use support::supervisor;
-use support::{Kestrel, TOKEN};
+use support::{Kestrel, SERIALIZED, TOKEN};
 
 async fn an_open_workspace(kestrel: &Kestrel, said: usize) -> (String, kestrel::domain::Session) {
     let organization = kestrel.declare_organization("acme").await;
@@ -3209,8 +3210,11 @@ async fn a_client_reads_the_queue_in_enqueue_order_with_positions_its_blockers_a
             .collect::<Vec<_>>(),
         [Some(1), Some(2), None, Some(3)]
     );
-    assert_eq!(said[2]["waits_on"], json!([blocker.name]));
-    assert_eq!(said[0]["waits_on"], json!([]));
+    assert_eq!(
+        said[2]["reasons"],
+        json!([{ "kind": "dependencies", "sessions": [blocker.name] }])
+    );
+    assert_eq!(said[0]["reasons"], json!([]));
 
     // With the blocker succeeded, the Session it delayed takes the place it was enqueued into.
     kestrel.complete_session(&blocker).await;
@@ -3226,7 +3230,7 @@ async fn a_client_reads_the_queue_in_enqueue_order_with_positions_its_blockers_a
     assert_eq!(
         numbered(&queue)
             .iter()
-            .map(|row| row["waits_on"].as_array().map(Vec::len))
+            .map(|row| row["reasons"].as_array().map(Vec::len))
             .collect::<Vec<_>>(),
         [Some(0); 3]
     );
@@ -3409,7 +3413,7 @@ async fn a_queue_without_a_recorded_dispatch_says_so_and_still_numbers_the_queue
     kestrel.teardown().await;
 }
 
-const QUEUE_ROW: &str = "position,name,agent,waits_on";
+const QUEUE_ROW: &str = "position,name,agent,reasons";
 const QUEUE_LIMITS: &str =
     "active_work.limit,active_work.occupied,active_work.elsewhere,instances.limit,instances.count";
 
@@ -3451,7 +3455,10 @@ async fn a_client_reads_the_queue_with_kestrel_queue_and_whatever_fields_it_name
     assert_eq!(rows[1]["name"], between.name);
     assert_eq!(rows[2]["position"].as_u64(), None);
     assert_eq!(rows[2]["name"], blocked.name);
-    assert_eq!(rows[2]["waits_on"], json!([blocker.name]));
+    assert_eq!(
+        rows[2]["reasons"],
+        json!([{ "kind": "dependencies", "sessions": [blocker.name] }])
+    );
 
     let limits = recorded(
         &client(
@@ -3522,6 +3529,613 @@ async fn a_terminal_reads_the_kestrel_queue_with_the_limits_said_first() {
         said.contains(&format!("2         {}", queued.name)),
         "{said}"
     );
+
+    kestrel.teardown().await;
+}
+
+fn clean_checkout() -> Vec<Observed> {
+    vec![Observed {
+        repository: "https://github.com/jtmthf/kestrel".to_owned(),
+        git: Git::Read {
+            branch: Some("kestrel/work".to_owned()),
+            untracked: 0,
+            uncommitted: 0,
+            stashes: 0,
+            unpushed: 0,
+        },
+    }]
+}
+
+/// An Organization of `maximum` live Instances whose `idle` Workspaces each keep one, clean.
+async fn at_the_instance_limit(kestrel: &Kestrel, maximum: usize, idle: usize) -> Vec<WorkspaceId> {
+    let organization = kestrel.declare_limited_organization("acme", maximum).await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+
+    let mut kept = Vec::new();
+    for place in 0..idle {
+        let workspace = a_queued_workspace_in(kestrel, "acme", "kestrel").await;
+        let (session, _) = kestrel.dispatch_session(workspace).await;
+        kestrel
+            .executes_on(&session, &format!("docker/kestrel-{place}"))
+            .await;
+        kestrel.report_checkout(&session, clean_checkout()).await;
+        kestrel.complete_session(&session).await;
+        kept.push(workspace);
+    }
+
+    kept
+}
+
+fn reasons_of<'a>(queue: &'a Value, section: &str, name: &str) -> &'a Value {
+    let row = queue[section]
+        .as_array()
+        .unwrap_or_else(|| panic!("the snapshot's {section} Sessions: {queue}"))
+        .iter()
+        .find(|row| row["name"] == name)
+        .unwrap_or_else(|| panic!("no {section} Session {name}: {queue}"));
+
+    &row["reasons"]
+}
+
+#[tokio::test]
+async fn reading_the_queue_at_the_instance_limit_archives_nothing_and_dispatch_still_does() {
+    let kestrel = Kestrel::boot().await;
+    at_the_instance_limit(&kestrel, 1, 1).await;
+    let arriving = a_queued_workspace_in(&kestrel, "acme", "kestrel").await;
+    let queued = kestrel.enqueue_session(arriving).await;
+
+    let (status, queue) = got(&kestrel, &queue_of("acme")).await;
+    assert_eq!(status, StatusCode::OK, "{queue}");
+    assert_eq!(
+        *reasons_of(&queue, "queued", &queued.name),
+        json!([{ "kind": "instance_archiving", "instance": "docker/kestrel-0" }])
+    );
+    assert_eq!(numbered(&queue)[0]["position"], Value::Null);
+    assert!(
+        kestrel.instances_to_archive().await.is_empty(),
+        "reading the queue archived an Instance"
+    );
+
+    assert!(kestrel.occupy_session().await.is_none());
+    assert_eq!(kestrel.instances_to_archive().await, ["docker/kestrel-0"]);
+    let (_, queue) = got(&kestrel, &queue_of("acme")).await;
+    assert_eq!(
+        *reasons_of(&queue, "queued", &queued.name),
+        json!([{ "kind": "instance_archiving", "instance": "docker/kestrel-0" }])
+    );
+
+    kestrel.teardown().await;
+}
+
+/// An Organization whose `builder` runs a serialized harness, with the Subscription Profile
+/// `jack` for its Workspaces to share, and a work role recorded dispatching `slots`.
+async fn sharing_a_serialized_profile(kestrel: &Kestrel, maximum: Option<usize>, slots: usize) {
+    let organization = match maximum {
+        Some(maximum) => kestrel.declare_limited_organization("acme", maximum).await,
+        None => kestrel.declare_organization("acme").await,
+    };
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", SERIALIZED, None)
+        .await;
+    kestrel
+        .declare_profile("acme", "jack", "Jack")
+        .await
+        .expect("the profile should declare");
+    kestrel.record_dispatch(slots).await;
+}
+
+async fn jacks_workspace(kestrel: &Kestrel) -> WorkspaceId {
+    kestrel
+        .open_workspace_with("acme", "kestrel", "builder", "jack")
+        .await
+        .id
+}
+
+async fn queue_read(kestrel: &Kestrel) -> Value {
+    let (status, queue) = got(kestrel, &queue_of("acme")).await;
+    assert_eq!(status, StatusCode::OK, "{queue}");
+    queue
+}
+
+#[tokio::test]
+async fn a_queued_session_names_each_reason_that_holds_it_alone_and_together() {
+    let kestrel = Kestrel::boot().await;
+    sharing_a_serialized_profile(&kestrel, Some(2), 4).await;
+    let (holding, _) = kestrel
+        .dispatch_session(jacks_workspace(&kestrel).await)
+        .await;
+    kestrel.executes_on(&holding, "docker/holding").await;
+    let held = kestrel
+        .enqueue_session(jacks_workspace(&kestrel).await)
+        .await;
+    let blocked = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    kestrel.block_session(&blocked, &held).await;
+    let profile =
+        json!({ "kind": "subscription_profile", "profile": "jack", "session": holding.name });
+    let dependencies = json!({ "kind": "dependencies", "sessions": [held.name] });
+
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(*reasons_of(&queue, "queued", &held.name), json!([profile]));
+    assert_eq!(
+        *reasons_of(&queue, "queued", &blocked.name),
+        json!([dependencies])
+    );
+
+    let (filling, _) = kestrel
+        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    kestrel.executes_on(&filling, "docker/filling").await;
+    let limited = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    let limit = json!({ "kind": "live_instance_limit", "limit": 2 });
+
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(
+        *reasons_of(&queue, "queued", &held.name),
+        json!([profile, limit])
+    );
+    assert_eq!(
+        *reasons_of(&queue, "queued", &blocked.name),
+        json!([dependencies, limit])
+    );
+    assert_eq!(*reasons_of(&queue, "queued", &limited.name), json!([limit]));
+    assert!(
+        numbered(&queue).iter().all(|row| row["position"].is_null()),
+        "a Session some reason holds was numbered: {queue}"
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_blocked_session_at_the_instance_limit_names_the_limit_rather_than_an_archival() {
+    let kestrel = Kestrel::boot().await;
+    at_the_instance_limit(&kestrel, 1, 1).await;
+    let blocked = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    let never_ran = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    kestrel.block_session(&blocked, &never_ran).await;
+
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(
+        *reasons_of(&queue, "queued", &blocked.name),
+        json!([
+            { "kind": "dependencies", "sessions": [never_ran.name] },
+            { "kind": "live_instance_limit", "limit": 1 },
+        ])
+    );
+    assert_eq!(
+        *reasons_of(&queue, "queued", &never_ran.name),
+        json!([{ "kind": "instance_archiving", "instance": "docker/kestrel-0" }])
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_waiting_session_with_held_input_waits_on_full_slots_alone() {
+    let kestrel = Kestrel::boot().await;
+    sharing_a_serialized_profile(&kestrel, None, 1).await;
+    let workspace = a_queued_workspace_in(&kestrel, "acme", "kestrel").await;
+    let waiting = a_waiting_session(&kestrel, workspace).await;
+    kestrel
+        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    kestrel
+        .post_while_busy(workspace, "jack", "one more thing")
+        .await;
+
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(
+        waiting_row(&queue, &waiting.name)["reasons"],
+        json!([{ "kind": "active_work_slots", "limit": 1 }])
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_ready_session_behind_full_slots_keeps_its_place() {
+    let kestrel = Kestrel::boot().await;
+    sharing_a_serialized_profile(&kestrel, None, 1).await;
+    let (working, _) = kestrel
+        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    let first = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    let second = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(
+        queue["active_work"],
+        json!({ "limit": 1, "occupied": 1, "occupants": [working.name], "elsewhere": 0 })
+    );
+    assert_eq!(
+        numbered(&queue)
+            .iter()
+            .map(|row| (
+                row["name"].clone(),
+                row["position"].clone(),
+                row["reasons"].clone()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (json!(first.name), json!(1), json!([])),
+            (json!(second.name), json!(2), json!([])),
+        ]
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn the_session_dispatch_claims_next_is_the_queues_first_position() {
+    let kestrel = Kestrel::boot().await;
+    sharing_a_serialized_profile(&kestrel, None, 8).await;
+    let (holding, _) = kestrel
+        .dispatch_session(jacks_workspace(&kestrel).await)
+        .await;
+    let blocker = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    let held = kestrel
+        .enqueue_session(jacks_workspace(&kestrel).await)
+        .await;
+    let blocked = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    kestrel.block_session(&blocked, &blocker).await;
+    let ready = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+
+    let mut claimed = Vec::new();
+    loop {
+        let queue = queue_read(&kestrel).await;
+        let first = numbered(&queue)
+            .into_iter()
+            .find(|row| row["position"] == 1)
+            .map(|row| row["name"].as_str().expect("a name").to_owned());
+        let next = match kestrel.occupy_up_to(8).await {
+            Some(work::Occupied::Claimed(next)) => Some(next.session),
+            Some(work::Occupied::Resumed(_)) => panic!("nothing waits to resume"),
+            None => None,
+        };
+        assert_eq!(
+            next.as_ref().map(|session| session.name.clone()),
+            first,
+            "dispatch disagreed with the queue: {queue}"
+        );
+        let Some(next) = next else { break };
+        claimed.push(next);
+        if claimed.len() == 2 {
+            kestrel.complete_session(&holding).await;
+            kestrel.complete_session(&claimed[0]).await;
+        }
+    }
+
+    assert_eq!(
+        claimed.iter().map(|session| session.id).collect::<Vec<_>>(),
+        [blocker.id, ready.id, held.id, blocked.id]
+    );
+
+    kestrel.teardown().await;
+}
+
+async fn a_waiting_session(kestrel: &Kestrel, workspace: WorkspaceId) -> kestrel::domain::Session {
+    let (session, _) = kestrel.dispatch_session(workspace).await;
+    kestrel.waits_after_its_first_turn(&session).await
+}
+
+fn waiting_row<'a>(queue: &'a Value, name: &str) -> &'a Value {
+    queue["waiting"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the snapshot's waiting Sessions: {queue}"))
+        .iter()
+        .find(|row| row["name"] == name)
+        .unwrap_or_else(|| panic!("no waiting Session {name}: {queue}"))
+}
+
+#[tokio::test]
+async fn a_waiting_session_with_held_input_says_why_its_next_turn_has_not_started() {
+    let kestrel = Kestrel::boot().await;
+    sharing_a_serialized_profile(&kestrel, None, 2).await;
+    let early = a_queued_workspace_in(&kestrel, "acme", "kestrel").await;
+    let late = a_queued_workspace_in(&kestrel, "acme", "kestrel").await;
+    let idle = a_queued_workspace_in(&kestrel, "acme", "kestrel").await;
+    let early_session = a_waiting_session(&kestrel, early).await;
+    let late_session = a_waiting_session(&kestrel, late).await;
+    let idle_session = a_waiting_session(&kestrel, idle).await;
+    kestrel.post_while_busy(early, "jack", "first").await;
+    let queued = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    kestrel.post_while_busy(late, "jack", "second").await;
+
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(
+        queue["waiting"]
+            .as_array()
+            .expect("the waiting Sessions")
+            .iter()
+            .map(|row| row["name"].as_str().expect("a name"))
+            .collect::<Vec<_>>(),
+        [
+            early_session.name.as_str(),
+            late_session.name.as_str(),
+            idle_session.name.as_str()
+        ],
+        "held input first, oldest first, then the rest"
+    );
+    assert!(waiting_row(&queue, &early_session.name)["pending_since"].is_string());
+    assert_eq!(
+        waiting_row(&queue, &early_session.name)["reasons"],
+        json!([])
+    );
+    assert_eq!(
+        waiting_row(&queue, &late_session.name)["reasons"],
+        json!([{ "kind": "ahead", "sessions": [queued.name, early_session.name] }])
+    );
+    assert_eq!(
+        waiting_row(&queue, &idle_session.name)["pending_since"],
+        Value::Null
+    );
+    assert_eq!(
+        waiting_row(&queue, &idle_session.name)["reasons"],
+        json!([])
+    );
+    assert_eq!(
+        numbered(&queue)
+            .iter()
+            .map(|row| row["name"].clone())
+            .collect::<Vec<_>>(),
+        [json!(queued.name)],
+        "a Waiting Session was listed in the queue"
+    );
+
+    let order = [
+        early_session.name.clone(),
+        queued.name.clone(),
+        late_session.name.clone(),
+    ];
+    for expected in order {
+        let taken = match kestrel.occupy_up_to(8).await {
+            Some(work::Occupied::Claimed(claimed)) => claimed.session,
+            Some(work::Occupied::Resumed(resumed)) => resumed,
+            None => panic!("a slot is free and {expected} is ahead"),
+        };
+        assert_eq!(taken.name, expected);
+    }
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_waiting_session_with_held_input_waits_on_full_slots_and_on_its_profile() {
+    let kestrel = Kestrel::boot().await;
+    sharing_a_serialized_profile(&kestrel, None, 2).await;
+    let jacks = jacks_workspace(&kestrel).await;
+    let waiting = a_waiting_session(&kestrel, jacks).await;
+    let (holding, _) = kestrel
+        .dispatch_session(jacks_workspace(&kestrel).await)
+        .await;
+    kestrel
+        .post_while_busy(jacks, "jack", "one more thing")
+        .await;
+    let profile =
+        json!({ "kind": "subscription_profile", "profile": "jack", "session": holding.name });
+
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(
+        waiting_row(&queue, &waiting.name)["reasons"],
+        json!([profile])
+    );
+
+    kestrel
+        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(
+        waiting_row(&queue, &waiting.name)["reasons"],
+        json!([{ "kind": "active_work_slots", "limit": 2 }, profile])
+    );
+    assert!(kestrel.occupy_up_to(2).await.is_none());
+
+    kestrel.teardown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_session_that_failed_to_dispatch_shows_as_ended_and_not_as_waiting() {
+    let kestrel = Kestrel::dispatching(supervisor::binary()).await;
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    let workspace = a_queued_workspace_in(&kestrel, "acme", "kestrel").await;
+    let session = kestrel.enqueue_session(workspace).await;
+
+    let ended = kestrel.answered(session.id, 1).await;
+    assert_eq!(ended.state.as_str(), "ended");
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(queue["queued"], json!([]), "{queue}");
+    assert_eq!(queue["waiting"], json!([]), "{queue}");
+    let (status, shown) = got(
+        &kestrel,
+        &format!("/operator/organizations/acme/sessions/{}", session.id),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(shown["state"], "ended");
+    assert_eq!(shown["exit"]["status"], "failed", "{shown}");
+
+    kestrel.teardown().await;
+}
+
+/// A ready Session, one blocked on the Working holder of a serialized profile, and a Waiting
+/// Session the profile holds back with input beside one only waiting for a turn.
+struct EveryKind {
+    holding: kestrel::domain::Session,
+    ready: kestrel::domain::Session,
+    blocked: kestrel::domain::Session,
+    prompted: kestrel::domain::Session,
+    waiting: kestrel::domain::Session,
+}
+
+async fn a_queue_of_every_kind(kestrel: &Kestrel) -> EveryKind {
+    sharing_a_serialized_profile(kestrel, None, 4).await;
+    let waiting = a_waiting_session(
+        kestrel,
+        a_queued_workspace_in(kestrel, "acme", "kestrel").await,
+    )
+    .await;
+    let jacks = jacks_workspace(kestrel).await;
+    let prompted = a_waiting_session(kestrel, jacks).await;
+    let (holding, _) = kestrel
+        .dispatch_session(jacks_workspace(kestrel).await)
+        .await;
+    kestrel
+        .post_while_busy(jacks, "jack", "one more thing")
+        .await;
+    let ready = kestrel
+        .enqueue_session(a_queued_workspace_in(kestrel, "acme", "kestrel").await)
+        .await;
+    let blocked = kestrel
+        .enqueue_session(a_queued_workspace_in(kestrel, "acme", "kestrel").await)
+        .await;
+    kestrel.block_session(&blocked, &holding).await;
+
+    EveryKind {
+        holding,
+        ready,
+        blocked,
+        prompted,
+        waiting,
+    }
+}
+
+#[tokio::test]
+async fn kestrel_queue_says_each_reason_in_words_with_the_waiting_sessions_after_the_queue() {
+    let kestrel = Kestrel::boot().await;
+    let every = a_queue_of_every_kind(&kestrel).await;
+
+    // Wide enough that no reason is truncated.
+    let operator = kestrel.operator();
+    let shown = tokio::task::spawn_blocking(move || {
+        client::ran_on_a_terminal(&operator, &["queue", "--organization", "acme"], 240, "")
+    })
+    .await
+    .expect("the client should run");
+    assert!(shown.status.success(), "{}", shown.said);
+    let lines: Vec<&str> = shown.said.lines().collect();
+    let line_of = |name: &str| {
+        lines
+            .iter()
+            .position(|line| line.contains(name))
+            .unwrap_or_else(|| panic!("no line names {name}: {}", shown.said))
+    };
+    assert!(
+        line_of(&every.ready.name) < line_of(&every.blocked.name)
+            && line_of(&every.blocked.name) < line_of(&every.prompted.name)
+            && line_of(&every.prompted.name) < line_of(&every.waiting.name),
+        "{}",
+        shown.said
+    );
+    for (session, said) in [
+        (&every.ready, "ready".to_owned()),
+        (&every.blocked, format!("waits on {}", every.holding.name)),
+        (
+            &every.prompted,
+            format!(
+                "the Subscription Profile jack is held by {}",
+                every.holding.name
+            ),
+        ),
+        (&every.waiting, "waiting for a turn".to_owned()),
+    ] {
+        let line = lines[line_of(&session.name)];
+        assert!(line.contains(&said), "{line} does not say {said}");
+    }
+    assert!(lines[line_of(&every.prompted.name)].contains("input since "));
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn kestrel_queue_json_agrees_with_the_operator_read() {
+    let kestrel = Kestrel::boot().await;
+    a_queue_of_every_kind(&kestrel).await;
+
+    let queue = queue_read(&kestrel).await;
+    let rows = recorded(
+        &client(
+            &kestrel,
+            &[
+                "queue",
+                "--organization",
+                "acme",
+                "--json",
+                "name,state,position,reasons,pending_since",
+            ],
+        )
+        .await,
+    );
+
+    let mut read = Vec::new();
+    for row in numbered(&queue) {
+        read.push(json!({
+            "name": row["name"],
+            "state": "queued",
+            "position": row["position"],
+            "reasons": row["reasons"],
+            "pending_since": null,
+        }));
+    }
+    for row in queue["waiting"].as_array().expect("the waiting Sessions") {
+        read.push(json!({
+            "name": row["name"],
+            "state": "waiting",
+            "position": null,
+            "reasons": row["reasons"],
+            "pending_since": row["pending_since"],
+        }));
+    }
+    assert_eq!(rows, read);
 
     kestrel.teardown().await;
 }

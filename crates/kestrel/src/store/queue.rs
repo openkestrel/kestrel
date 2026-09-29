@@ -1,8 +1,9 @@
 use anyhow::{Context as _, Result};
+use jiff::Timestamp;
 use sqlx::{Row, SqliteConnection};
 
-use crate::domain::{Exit, Organization, SessionState};
-use crate::store::workspace::{UNSATISFIED_BLOCKER, live};
+use crate::domain::{Exit, Organization, SessionId, SessionState};
+use crate::store::workspace::{UNSATISFIED_BLOCKER, held_input, live, profile_held};
 
 /// What a work role that can dispatch recorded on start: the Active-Work Slot limit it
 /// enforces and the harnesses it dispatches one Session at a time. A restart with new flags
@@ -150,5 +151,60 @@ impl<'a> Queue<'a> {
         .iter()
         .map(|row| row.get("instance"))
         .collect())
+    }
+
+    pub async fn profiles_held(
+        &mut self,
+        organization: &Organization,
+        serialized: &[String],
+    ) -> Result<Vec<(SessionId, String, String)>> {
+        sqlx::query(concat!(
+            "SELECT s.id AS held, a.name AS holder,
+                    (SELECT name FROM subscription_profile WHERE id = w.subscription_profile_id)
+                        AS profile
+             FROM session AS s, ",
+            profile_held!(),
+            "
+               AND s.organization_id = ?
+               AND s.state IN (?, ?)
+             ORDER BY s.id, a.enqueued_at, a.id"
+        ))
+        .bind(serde_json::to_string(serialized)?)
+        .bind(SessionState::Working.as_str())
+        .bind(organization.id.to_string())
+        .bind(SessionState::Queued.as_str())
+        .bind(SessionState::Waiting.as_str())
+        .fetch_all(&mut *self.connection)
+        .await
+        .context("reading which sessions a subscription profile holds back")?
+        .iter()
+        .map(|row| {
+            Ok((
+                row.get::<String, _>("held").parse()?,
+                row.get("profile"),
+                row.get("holder"),
+            ))
+        })
+        .collect()
+    }
+
+    pub async fn held_input(
+        &mut self,
+        organization: &Organization,
+    ) -> Result<Vec<(SessionId, Timestamp)>> {
+        sqlx::query(held_input!("s.organization_id = ?"))
+            .bind(SessionState::Waiting.as_str())
+            .bind(organization.id.to_string())
+            .fetch_all(&mut *self.connection)
+            .await
+            .context("reading the input held for waiting sessions")?
+            .iter()
+            .map(|row| {
+                Ok((
+                    row.get::<String, _>("id").parse()?,
+                    row.get::<String, _>("since").parse()?,
+                ))
+            })
+            .collect()
     }
 }

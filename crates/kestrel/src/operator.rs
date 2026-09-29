@@ -366,7 +366,6 @@ struct SessionRecord {
     name: String,
     workspace: String,
     state: String,
-    waiting_for: Option<String>,
     exit: Option<domain::Exit>,
     outcome_message: Option<String>,
     instance: Option<String>,
@@ -500,7 +499,6 @@ impl SessionRecord {
             name: session.name,
             workspace: session.workspace.to_string(),
             state: session.state.as_str().to_owned(),
-            waiting_for: session.waiting_for,
             exit: session.exit,
             outcome_message: session.outcome_message,
             instance: session.instance,
@@ -1607,12 +1605,52 @@ struct InstancesRecord {
 }
 
 #[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ReasonRecord {
+    Dependencies { sessions: Vec<String> },
+    SubscriptionProfile { profile: String, session: String },
+    InstanceArchiving { instance: String },
+    LiveInstanceLimit { limit: usize },
+    ActiveWorkSlots { limit: usize },
+    Ahead { sessions: Vec<String> },
+}
+
+impl From<queue::Reason> for ReasonRecord {
+    fn from(reason: queue::Reason) -> Self {
+        match reason {
+            queue::Reason::Dependencies(sessions) => Self::Dependencies { sessions },
+            queue::Reason::SubscriptionProfile { profile, session } => {
+                Self::SubscriptionProfile { profile, session }
+            }
+            queue::Reason::InstanceArchiving(instance) => Self::InstanceArchiving { instance },
+            queue::Reason::LiveInstanceLimit(limit) => Self::LiveInstanceLimit { limit },
+            queue::Reason::ActiveWorkSlots(limit) => Self::ActiveWorkSlots { limit },
+            queue::Reason::Ahead(sessions) => Self::Ahead { sessions },
+        }
+    }
+}
+
+fn reasons(reasons: Vec<queue::Reason>) -> Vec<ReasonRecord> {
+    reasons.into_iter().map(ReasonRecord::from).collect()
+}
+
+#[derive(Serialize)]
 struct QueuedSessionRecord {
     position: Option<usize>,
     name: String,
     workspace: String,
     agent: String,
-    waits_on: Vec<String>,
+    reasons: Vec<ReasonRecord>,
+    enqueued_at: Timestamp,
+}
+
+#[derive(Serialize)]
+struct WaitingSessionRecord {
+    name: String,
+    workspace: String,
+    agent: String,
+    pending_since: Option<Timestamp>,
+    reasons: Vec<ReasonRecord>,
     enqueued_at: Timestamp,
 }
 
@@ -1622,6 +1660,7 @@ struct QueueRecord {
     active_work: ActiveWorkRecord,
     instances: InstancesRecord,
     queued: Vec<QueuedSessionRecord>,
+    waiting: Vec<WaitingSessionRecord>,
 }
 
 impl QueueRecord {
@@ -1652,8 +1691,20 @@ impl QueueRecord {
                     name: queued.session.name,
                     workspace: queued.session.workspace.to_string(),
                     agent: queued.session.agent.name,
-                    waits_on: queued.waits_on,
+                    reasons: reasons(queued.reasons),
                     enqueued_at: queued.session.enqueued_at,
+                })
+                .collect(),
+            waiting: snapshot
+                .waiting
+                .into_iter()
+                .map(|waiting| WaitingSessionRecord {
+                    name: waiting.session.name,
+                    workspace: waiting.session.workspace.to_string(),
+                    agent: waiting.session.agent.name,
+                    pending_since: waiting.pending_since,
+                    reasons: reasons(waiting.reasons),
+                    enqueued_at: waiting.session.enqueued_at,
                 })
                 .collect(),
         }

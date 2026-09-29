@@ -644,7 +644,6 @@ pub struct Session {
     /// With the harness and model fixed when the Session was enqueued, never redeclared under it.
     pub agent: Agent,
     pub state: SessionState,
-    pub waiting_for: Option<String>,
     pub exit: Option<Exit>,
     pub outcome_message: Option<String>,
     pub instance: Option<String>,

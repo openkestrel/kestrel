@@ -126,7 +126,6 @@ pub const SESSIONS: View = View::Rows(&[
     "name",
     "state",
     "agent",
-    "waiting_for",
     "exit.status",
     "exit.because",
     "instance",
@@ -137,7 +136,6 @@ pub const SESSION: View = View::Detail(&[
     "name",
     "workspace",
     "state",
-    "waiting_for",
     "exit.status",
     "exit.because",
     "outcome_message",
@@ -160,9 +158,10 @@ pub const INSTANCES: View = View::Rows(&["workspace", "instance", "because"]);
 pub const QUEUE: View = View::Rows(&[
     "position",
     "name",
+    "state",
     "agent",
+    "why",
     "workspace",
-    "waits_on",
     "enqueued_at",
 ]);
 pub const RELEASED: View = View::Value("instance");
