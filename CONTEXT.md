@@ -40,10 +40,16 @@ _Avoid_: thread, conversation, worktree, mission
 **Session**:
 One execution of a harness on a workspace's instance: one agent, one context, from start to end.
 Has a start, an end, and an exit status, and may contain many turns in one ACP conversation. Work
-that is queued but not yet started is a session in a queued state. The model driving the harness's
-main loop belongs to the session; what that loop reaches for beneath itself is the harness's
-business.
+that is queued but not yet started is a session in a queued state. Its options, including the model
+driving the harness's main loop, belong to the session; what that loop reaches for beneath itself
+is the harness's business.
 _Avoid_: run, job, task, execution, invocation
+
+**Option**:
+A setting a harness offers one session, with the values it may take and the one it has now: its
+model, its mode, its thought level, and whatever else that harness offers. A trigger or an operator
+declares an option by what it is for, never by one harness's name for it.
+_Avoid_: config, setting, preference
 
 **Turn**:
 One prompt and response within a session's continuing agent conversation. Its response can be
@@ -51,21 +57,43 @@ reported to the work source when the turn finishes, without ending the session.
 _Avoid_: session, workspace
 
 **Waiting**:
-A session's phase between turns: its last prompt answered, its agent conversation and instance kept
-for the next. Its other phases are queued, working (mid-turn), ended and unreachable.
+A session's phase between turns: its last prompt answered, nothing it started observably still
+running, its agent conversation and instance kept for the next. Its other phases are queued,
+unbriefed, working (mid-turn), trailing, ended and unreachable.
 _Avoid_: between turns, paused, idle
 
+**Trailing**:
+A session's phase after a turn has answered while work its agent started is still running:
+backgrounded commands, subagents, or output that keeps arriving. It becomes waiting once that work
+settles and the agent falls quiet. It takes a new turn at once.
+_Avoid_: settling, backgrounded, busy
+
+**Unbriefed**:
+A session's phase after its harness is up and before its first turn: its instance and agent
+conversation ready, no brief yet given. The first message posted to it becomes its brief.
+_Avoid_: ready, idle, warm
+
 **Unfinished Session**:
-The one session a workspace may have that has not yet let go of it: queued, working, waiting, or
-ended while its supervisor is still leaving. A workspace has at most one; a message posted while it
+The one session a workspace may have that has not yet let go of it: queued, working, trailing,
+waiting, or unbriefed, or ended while its harness is still leaving. A workspace has at most one; a message posted while it
 exists waits on it rather than starting another.
 _Avoid_: slot, current session, holding session
 
 **Active-Work Slot**:
 One unit of the control plane's capacity for sessions doing work at once, in a pool shared by
-every Organization. A session mid-turn, or blocked on an approval, occupies one; a queued or
-waiting session does not.
+every Organization. A session mid-turn, trailing, or blocked on an approval occupies one; a queued,
+waiting or unbriefed session does not.
 _Avoid_: slot (alone), capacity, concurrency
+
+**Held Message**:
+A message posted while its workspace's unfinished session cannot take it yet. It is workspace state,
+not a transcript entry, and its author may edit or withdraw it until a turn takes it.
+_Avoid_: waiting message, pending message, queued message
+
+**Interruption**:
+Ending a session's active turn at a person's request, keeping the session and its conversation. It
+names who interrupted and does not make them a participant.
+_Avoid_: cancel, abort, stop
 
 **Unpublished Work**:
 Checkout changes or commits that exist only on an instance and cannot be recovered from a remote
@@ -90,10 +118,15 @@ The ordered, replayable record of a workspace, in three kinds. **Shared state**:
 boundaries, participant joins, the branch the workspace works on and the pull request it opened,
 and the resolution of every approval and question. **Narration**: what an agent said to itself —
 its thoughts and its plans. **Detail**: a session's tool calls and their results. One order and one
-cursor across all three; a read names the kinds it wants, and shared state alone is what a human
-gets when they join a workspace late. Every entry records a completed unit and never a fragment of
-one, so the record has no gaps to reconcile.
+cursor across all three; a read names the kinds it wants, and shared state with each activity's
+summary is what a human gets when they join a workspace late. Every entry records a completed unit
+and never a fragment of one, so the record has no gaps to reconcile.
 _Avoid_: log, event stream, history
+
+**Activity**:
+The narration and detail between two consecutive shared-state entries of a transcript, read as one
+summary unless its entries are asked for. It never spans a session or a turn's start.
+_Avoid_: group, step, span, trace
 
 ### Cause
 
@@ -137,9 +170,10 @@ firing is looked at again and either opens, stays held, or is canceled.
 _Avoid_: match, activation, invocation, execution
 
 **Brief**:
-The instruction a session starts with, and its entry in the workspace's transcript. A trigger
-renders it from a human-authored template over an event and any instruction its dispatch supplied;
-an operator may supply it directly. It reaches the agent exactly as rendered.
+The instruction a session's first turn carries, and its entry in the workspace's transcript. A
+trigger renders it from a human-authored template over an event and any instruction its dispatch
+supplied; an operator may supply it directly, when opening the workspace or as the first message to
+an unbriefed session. It reaches the agent exactly as rendered.
 _Avoid_: prompt, task, instruction, request
 
 **Correlation**:
@@ -218,6 +252,12 @@ until the workspace seals, and is never reaped while it holds work that exists n
 backend may suspend an idle one and resume it unasked; kestrel never learns that it did.
 _Avoid_: sandbox, container, machine, box
 
+**Supervisor**:
+The process kestrel keeps inside an instance for as long as the instance lives. It dials the link with
+the instance's identity, spawns each session's harness, reports what the checkouts hold, and answers
+reads of them.
+_Avoid_: agent, sidecar, daemon, runner
+
 **Compute Backend**:
 A pluggable implementation that provisions and destroys instances, which kestrel drives through a
 contract. kestrel tells it when an instance is idle; what it does about that is its own business.
@@ -245,11 +285,16 @@ from outside.
 _Avoid_: agent runtime, engine, backend, driver
 
 **Participant**:
-A member of a workspace. A participant is either a human or an agent; the workspace makes no
-structural distinction between them in the transcript or in turn-taking. Reachability is where they
-differ: an agent is reached through its harness, a human only through an integration, or not at
-all.
+A member of a workspace: the agent that works it, or anyone who has taken a turn in it. The
+workspace makes no structural distinction between a human and an agent in the transcript or in
+turn-taking. Reachability is where they differ: an agent is reached through its harness, a human
+only through an integration, or not at all.
 _Avoid_: member, user, collaborator
+
+**Presence**:
+Who appears to be following a workspace right now. Best-effort: held nowhere durable, lost on restart,
+and never a prerequisite for anything. Being present does not make someone a participant.
+_Avoid_: online, watchers, viewers
 
 ### Governance
 
@@ -293,6 +338,8 @@ words from drifting.
   do, and only shared state carries the never-expires promise.
 - A trigger renders its brief **once** per firing. A brief that cannot be rendered **fails** the
   firing and starts nothing.
+- A workspace opens **with** its first session, never empty. Only an operator's open may leave that
+  session **unbriefed**; a firing always renders its brief.
 - A workspace fixes its **project**, **environment** and **instance** for its life, and never an
   agent. A session's agent, and the harness and model it started with, are fixed for the
   **session's** life.
@@ -320,6 +367,8 @@ words from drifting.
   capability: an adapter that ignores it is expensive, never degraded.
 - A workspace's branch is **declared** by kestrel, never invented by an agent. kestrel runs no git
   command; it learns what happened from what a supervisor reports and what an integration delivers.
+- An instance's files and changes are read **live** from its supervisor and never stored. Reading
+  one is not recorded, and never wakes an instance that was hinted idle.
 - Each completed turn can report its response to the work source. A session's final **Outcome** is
   recorded once and said outward when it adds information beyond those responses; saying it changes
   **nothing** about the session's exit status. Exit status says how the execution went, never
@@ -343,8 +392,12 @@ words from drifting.
   session.
 - Archiving a waiting session's instance, whether by sealing, releasing or reclaiming it for new
   work, first **ends** that session, which succeeds.
-- A turn in which the agent produced no message, narration or detail **fails** its session: a
-  prompt that never became work is not an answer.
+- A turn answering does not make its session **waiting** while work its agent started still runs:
+  the session is **trailing**, keeps its active-work slot, and its instance is never reclaimed.
+- A turn that **ended on its own** with no message, narration or detail **fails** its session: a
+  prompt that never became work is not an answer. An interrupted turn never fails its session.
+- Messages posted during a turn are **held** as workspace state, editable by their author, and
+  drain into **one** turn when it ends; the transcript records them only when taken.
 - A session's agent conversation is rooted in the checkout of the **first** repository its
   workspace fixed; the workspace's other repositories sit beside it.
 - What a harness writes as diagnostics reaches the **operator**, never the transcript: it is not the
@@ -365,8 +418,9 @@ words from drifting.
 - A question's expiry is **not** a denial; only an approval's is.
 - Every approval resolution appears in **both** the workspace's transcript and the organization's
   audit record.
-- A workspace's transcript is readable only by its **participants**. A workspace is a read boundary,
-  not only a work boundary.
+- Reading a workspace never makes someone a **participant**; only taking a turn does. A workspace
+  is still a read boundary: who may read it is **policy**'s to say.
+- **Presence** never gates a turn, a question or an approval.
 - Nothing reconstructs a workspace's state from its **transcript**. A transcript is read; state is
   held as current values, **never** derived from history.
 - A workspace is **open** or **sealed**. Sealing is not deletion: a sealed workspace is readable and
@@ -397,6 +451,9 @@ rather than a concept of its own.
 **Agent** (ACP's, and common usage): ACP calls the *program* an agent, and common usage calls a
 harness with a model in motion — Claude Code, Cursor — an agent. kestrel's **Agent** is a
 configured actor identity; the running thing is a **Session**, driven by a **Harness**.
+
+**Activity** (AG-UI's): a live, patchable status message a frontend shows and the agent never
+reads. It is a session's current state, not an **Activity**, which is recorded and summarized.
 
 **Environment** (a harness's): the world an agent acts on through its tools. In kestrel that is a
 workspace's **Instance** and checkout; kestrel's **Environment** is the declaration an instance is
