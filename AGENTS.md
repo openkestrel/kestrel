@@ -12,6 +12,13 @@ Five canonical triage labels (needs-triage, needs-info, ready-for-agent, ready-f
 
 Single-context layout (root `CONTEXT.md` + `docs/adr/`). See `docs/agents/domain.md`.
 
+### Architecture
+
+`docs/architecture/README.md` maps processes, crates, ports, trust boundaries, and the ADRs the code
+has not caught up to, and routes to one page per area: Sessions, the link, Triggers, the data
+model, the operator boundary and Client, and conventions. Read the map, then the page for the area
+you are changing.
+
 ## Code
 
 ### Compatibility
