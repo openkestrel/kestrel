@@ -748,13 +748,20 @@ async fn changes_include_files_in_an_untracked_nested_repository() {
             .len(),
         2
     );
-    let selected = changes(&kestrel, &workspace, &[("path", "kestrel/nested/new.txt/")]).await;
-    assert!(
-        selected["repositories"][0]["files"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    for path in [
+        "kestrel/nested/new.txt/",
+        "kestrel/nested/new.txt/.",
+        "kestrel/nested/new.txt/./.",
+    ] {
+        let selected = changes(&kestrel, &workspace, &[("path", path)]).await;
+        assert!(
+            selected["repositories"][0]["files"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "{path}"
+        );
+    }
     std::fs::remove_file(nested.join("tracked.txt")).unwrap();
     let selected = changes(&kestrel, &workspace, &[("path", "kestrel/nested/")]).await;
     assert_eq!(

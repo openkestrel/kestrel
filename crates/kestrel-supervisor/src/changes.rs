@@ -64,7 +64,9 @@ async fn read_in(
                             .filter(|part| !part.is_empty() && *part != ".")
                             .collect::<Vec<_>>()
                             .join("/");
-                        if within.ends_with('/') && !normalized.is_empty() {
+                        if (within.ends_with('/') || within.ends_with("/."))
+                            && !normalized.is_empty()
+                        {
                             normalized.push('/');
                         }
                         filters.push(format!(":(literal){normalized}"));
