@@ -352,7 +352,7 @@ async fn patch(
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
-    if !status.success() && !(no_index && status.code() == Some(1) && error.is_empty()) {
+    if !(status.success() || no_index && status.code() == Some(1) && error.is_empty()) {
         return Err(String::from_utf8_lossy(&error).into_owned());
     }
     let mut diff = String::from_utf8_lossy(&held).into_owned();
