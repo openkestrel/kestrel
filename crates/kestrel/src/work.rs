@@ -9,7 +9,7 @@ use crate::domain::{Exit, Session, SessionId, Turn, Usage, WorkspaceId};
 use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
 use crate::link;
-use crate::log::{Entry, Message};
+use crate::log::{Completion, Entry, Message, PlanEntry};
 use crate::store::workspace::{PendingMessage, Taken};
 use crate::store::{Store, Tx};
 use crate::workspace;
@@ -38,6 +38,15 @@ pub enum Report {
     },
     Said {
         message: String,
+        completion: Completion,
+    },
+    Thought {
+        text: String,
+        completion: Completion,
+    },
+    Plan {
+        entries: Vec<PlanEntry>,
+        completion: Completion,
     },
     Used {
         usage: Usage,
@@ -61,6 +70,8 @@ impl Report {
             Report::Started
             | Report::Model { .. }
             | Report::Said { .. }
+            | Report::Thought { .. }
+            | Report::Plan { .. }
             | Report::Used { .. }
             | Report::Answered
             | Report::Checkout { .. }
@@ -381,7 +392,10 @@ async fn reported(
             tx.workspaces().record_worked_model(session, &model).await?;
             info!(session = %session.id, model, "a supervisor reported the model its agent is on");
         }
-        Report::Said { message } => {
+        Report::Said {
+            message,
+            completion,
+        } => {
             let workspace = tx.workspaces().get(session.workspace).await?;
             tx.log()
                 .append(
@@ -389,10 +403,41 @@ async fn reported(
                     Entry::Said {
                         participant: session.agent.name.clone(),
                         message,
+                        session_id: Some(session.id),
+                        completion: Some(completion),
                     },
                 )
                 .await?;
             info!(session = %session.id, "a supervisor reported what its agent said");
+        }
+        Report::Thought { text, completion } => {
+            let workspace = tx.workspaces().get(session.workspace).await?;
+            tx.log()
+                .append(
+                    &workspace,
+                    Entry::Thought {
+                        session_id: session.id,
+                        text,
+                        completion,
+                    },
+                )
+                .await?;
+        }
+        Report::Plan {
+            entries,
+            completion,
+        } => {
+            let workspace = tx.workspaces().get(session.workspace).await?;
+            tx.log()
+                .append(
+                    &workspace,
+                    Entry::Plan {
+                        session_id: session.id,
+                        entries,
+                        completion,
+                    },
+                )
+                .await?;
         }
         Report::Used { usage } => {
             info!(session = %session.id, %usage, "a supervisor reported what its agent used");

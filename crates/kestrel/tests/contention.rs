@@ -290,6 +290,7 @@ async fn three_chatty_sessions_wait_for_the_write_lock_well_inside_the_busy_time
                 Entry::Said {
                     participant,
                     message,
+                    ..
                 } if participant == "builder" => Some(message),
                 _ => None,
             })

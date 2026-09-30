@@ -378,6 +378,7 @@ async fn a_session_naming_another_agent_runs_it_where_the_workspaces_last_sessio
             Entry::Said {
                 participant,
                 message,
+                ..
             } if participant == "codex" => Some(message.as_str()),
             _ => None,
         })

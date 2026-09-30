@@ -109,10 +109,13 @@ struct ControlPlane {
 #[derive(Deserialize)]
 struct Following {
     follow: Option<bool>,
+    kinds: Option<String>,
 }
 
 #[derive(Serialize)]
 struct Recorded {
+    kind: log::Kind,
+    session_id: Option<crate::domain::SessionId>,
     seq: i64,
     appended_at: String,
     entry: log::Entry,
@@ -1985,20 +1988,35 @@ async fn transcript(
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     let workspace = workspace.id;
     let follow = following.follow.unwrap_or(true);
+    let kinds = following
+        .kinds
+        .as_deref()
+        .map(str::parse::<log::Kinds>)
+        .transpose()
+        .map_err(|error| Refused::BadRequest(error.to_string()))?
+        .unwrap_or_default();
     let from = last_event_id(&headers)?;
-    let mut read = reading(&control_plane.store, workspace, from).await?;
+    let mut read = reading(&control_plane.store, workspace, from, &kinds).await?;
 
     let stream = async_stream::try_stream! {
+        let mut delivered = from;
         loop {
             for entry in read.page.entries {
+                delivered = Some(Cursor::at(workspace, entry.seq));
                 yield Event::default()
                     .id(Cursor::at(workspace, entry.seq).to_string())
                     .event("entry")
                     .json_data(Recorded {
+                        kind: entry.kind,
+                        session_id: entry.session_id,
                         seq: entry.seq,
                         appended_at: entry.appended_at.to_string(),
                         entry: entry.entry,
                     })?;
+            }
+            if let Some(cursor) = read.page.cursor && delivered != Some(cursor) {
+                delivered = Some(cursor);
+                yield Event::default().event("cursor").id(cursor.to_string()).json_data(cursor.to_string())?;
             }
             if !read.page.more {
                 let because = match (read.sealed, follow) {
@@ -2017,7 +2035,7 @@ async fn transcript(
                 }
             }
 
-            read = reading(&control_plane.store, workspace, read.page.cursor)
+            read = reading(&control_plane.store, workspace, read.page.cursor, &kinds)
                 .await
                 .map_err(Refused::into_error)?;
         }
@@ -2028,14 +2046,22 @@ async fn transcript(
 
 /// The state is read in the transaction the page is, so a Workspace sealed between the two
 /// cannot end the stream short of its last entry.
-async fn reading(store: &Store, id: WorkspaceId, from: Option<Cursor>) -> Result<Read, Refused> {
+async fn reading(
+    store: &Store,
+    id: WorkspaceId,
+    from: Option<Cursor>,
+    kinds: &log::Kinds,
+) -> Result<Read, Refused> {
     let mut tx = store.begin().await?;
     let workspace = tx
         .workspaces()
         .find(id)
         .await?
         .ok_or_else(|| Refused::NotFound("no workspace".to_owned()))?;
-    let page = tx.log().page(&workspace, from, Window::DEFAULT).await?;
+    let page = tx
+        .log()
+        .page(&workspace, from, Window::DEFAULT, kinds)
+        .await?;
 
     Ok(Read {
         page,

@@ -260,6 +260,7 @@ async fn prompted(kestrel: &Kestrel, workspace: &Workspace) -> String {
             Entry::Said {
                 participant,
                 message,
+                ..
             } if participant == "builder" => Some(message),
             _ => None,
         })
@@ -435,7 +436,7 @@ async fn a_correlation_hit_feeds_the_open_workspace_without_changing_its_agent()
             .any(|recorded| {
                 matches!(
                     &recorded.entry,
-                    Entry::Said { participant, message }
+                    Entry::Said { participant, message, .. }
                         if participant == "also-ready" && message == "Work on an issue numbered 43"
                 )
             })

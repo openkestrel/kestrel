@@ -594,6 +594,8 @@ enum WorkspaceCommand {
         /// Keep reading as entries are appended, until the Workspace is sealed
         #[arg(long)]
         follow: bool,
+        #[arg(long, default_value = "shared_state")]
+        kinds: String,
     },
 }
 
@@ -1224,6 +1226,7 @@ async fn run() -> Result<()> {
             workspace,
             cursor,
             follow,
+            kinds,
         }) => {
             let organization = scoping.resolve().await?.organization;
             let read = transcript::read(
@@ -1232,6 +1235,7 @@ async fn run() -> Result<()> {
                 &workspace,
                 cursor,
                 follow,
+                &kinds,
                 &presentation,
             )
             .await?;

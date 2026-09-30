@@ -60,11 +60,13 @@ sequenceDiagram
         S->>L: POST heartbeat (the carried Session's lease +2 min)
     end
     H-->>S: session updates, permission requests (allowed once)
-    S->>L: POST model, said…, used, checkout, answered
+    S->>L: POST model, said/thought/plan as units complete, used as it arrives
+    S->>L: POST checkout, answered
     Note over L: Session is Waiting
     L-->>S: prompt {session, prompt}
     S->>H: ACP prompt, same conversation
-    S->>L: POST said…, checkout, answered
+    S->>L: POST said/thought/plan as units complete
+    S->>L: POST checkout, answered
     L-->>S: stop {session}
     S->>S: remove profile files, end the harness, stay on the link
 ```
@@ -101,7 +103,9 @@ effects (ADR-0004).
 | `stderr {lines}` | no | Logged to the operator, never the Transcript. |
 | `started` | yes | Appends `SessionStarted`. |
 | `model {model}` | yes | Records the model the harness is actually on. |
-| `said {message}` | yes | Appends `Said`. |
+| `said {message, completion}` | yes | Appends shared-state `Said`, naming its Session. |
+| `thought {text, completion}` | yes | Appends narration `Thought`. |
+| `plan {entries, completion}` | yes | Appends one narration plan replacement. |
 | `used {usage}` | yes | Records cumulative context use and cost. |
 | `checkout {repositories}` | yes | Replaces the Workspace's observed git state (decides Unpublished Work). |
 | `answered` | yes | Closes the open Turn, moves the Session to Waiting, records a delivery. |
@@ -110,8 +114,8 @@ effects (ADR-0004).
 **Numbered reports are exactly-once.** The supervisor numbers each Session's reports from 1 and
 resends from the first one not acknowledged. The control plane keeps `session.reports_taken`: the
 next number is applied, an old one is acknowledged and ignored, and a gap is refused with `400`. A
-supervisor reports `model`, `said`, `used`, `checkout` and then `answered` or `finished` after every
-Turn.
+supervisor sends completed units immediately, and `model` and `used` as they arrive. It reports
+`checkout` and then `answered` or `finished` at the Turn boundary.
 
 ## Authentication
 
@@ -169,8 +173,9 @@ with no branch on which harness it drives.
   environment.
 - `session/request_permission` is answered with the agent's own allow-once option
   (`permission.rs`). There is no policy yet.
-- Only message chunks and usage are kept; thoughts, plans and tool calls are dropped
-  ([ADR-0020](../adr/0020-the-transcript-records-what-the-runtime-emits-in-kinds.md) is not built).
+- The pure completer buffers messages and thoughts independently by ID, completes chunks without
+  IDs immediately, and records each plan replacement. ID changes and Turn boundaries close text
+  units; late updates become operator diagnostics. Tool calls are still dropped.
 - A Turn in which the agent produced no message, thought, plan or tool call fails the Session.
 - `checkout.rs` clones each repository side by side under `/workspace`, cuts the declared branch
   from the base when the remote lacks it, and leaves an existing checkout as an earlier Session
