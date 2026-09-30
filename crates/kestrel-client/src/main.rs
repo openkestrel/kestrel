@@ -1,4 +1,5 @@
 mod api;
+mod changes;
 mod corrective;
 mod exit;
 mod files;
@@ -558,6 +559,21 @@ enum WorkspaceCommand {
     },
     /// List every Workspace in the Organization
     List,
+    #[command(alias = "diff")]
+    Changes {
+        workspace: String,
+        #[arg(long, conflicts_with_all = ["changed", "commit"])]
+        staged: bool,
+        #[arg(long, conflicts_with = "commit")]
+        changed: bool,
+        commit: Option<String>,
+        #[arg(last = true)]
+        paths: Vec<String>,
+    },
+    #[command(alias = "log")]
+    Commits { workspace: String },
+    #[command(alias = "stash")]
+    Stashes { workspace: String },
     #[command(alias = "status")]
     Work { workspace: String },
     /// List one directory of a Workspace's live Instance, each entry marked tracked, untracked
@@ -676,6 +692,9 @@ async fn run() -> Result<()> {
                 WorkspaceCommand::Work { .. }
                     | WorkspaceCommand::Files { .. }
                     | WorkspaceCommand::Read { .. }
+                    | WorkspaceCommand::Changes { .. }
+                    | WorkspaceCommand::Commits { .. }
+                    | WorkspaceCommand::Stashes { .. }
             )
         ) {
             None
@@ -1191,6 +1210,59 @@ async fn run() -> Result<()> {
                 ])
                 .await?;
             work::show(answer, client.json.is_some())?;
+        }
+        Command::Workspace(WorkspaceCommand::Changes {
+            workspace,
+            staged,
+            changed,
+            commit,
+            paths,
+        }) => {
+            let organization = scoping.resolve().await?.organization;
+            let scope = if staged {
+                "staged".to_owned()
+            } else if changed {
+                "changed".to_owned()
+            } else if let Some(commit) = commit {
+                format!("commit:{commit}")
+            } else {
+                "unpublished".to_owned()
+            };
+            let mut query = vec![("scope", scope.as_str())];
+            query.extend(paths.iter().map(|path| ("path", path.as_str())));
+            let answer = api
+                .get_where(
+                    &[
+                        "organizations",
+                        &organization,
+                        "workspaces",
+                        &workspace,
+                        "changes",
+                    ],
+                    &query,
+                )
+                .await?;
+            changes::show(answer, client.json.is_some())?;
+        }
+        Command::Workspace(
+            command @ (WorkspaceCommand::Commits { .. } | WorkspaceCommand::Stashes { .. }),
+        ) => {
+            let (workspace, read) = match command {
+                WorkspaceCommand::Commits { workspace } => (workspace, "commits"),
+                WorkspaceCommand::Stashes { workspace } => (workspace, "stashes"),
+                _ => unreachable!(),
+            };
+            let organization = scoping.resolve().await?.organization;
+            let answer = api
+                .get(&[
+                    "organizations",
+                    &organization,
+                    "workspaces",
+                    &workspace,
+                    read,
+                ])
+                .await?;
+            changes::show(answer, client.json.is_some())?;
         }
         Command::Workspace(WorkspaceCommand::Files { workspace, path }) => {
             let organization = scoping.resolve().await?.organization;

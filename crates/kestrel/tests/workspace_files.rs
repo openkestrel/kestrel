@@ -430,3 +430,345 @@ async fn a_workspace_with_no_instance_has_nothing_to_read() {
     );
     kestrel.teardown().await;
 }
+
+fn git_in(checkout: &std::path::Path, arguments: &[&str]) -> String {
+    let output = support::git::command()
+        .current_dir(checkout)
+        .args(arguments)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+async fn changes(kestrel: &Kestrel, workspace: &Workspace, query: &[(&str, &str)]) -> Value {
+    let response = get(kestrel, workspace, "changes", query).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    response.json().await.unwrap()
+}
+
+#[tokio::test]
+async fn changes_include_every_unpublished_scope_and_the_client_filters_paths() {
+    let (kestrel, workspace, checkout) = held(Script::Speaks).await;
+    let declared = git_in(&checkout, &["branch", "--show-current"]);
+    git_in(
+        &checkout,
+        &["checkout", "-b", "advanced-base", "origin/main"],
+    );
+    std::fs::write(
+        checkout.join("base-only.txt"),
+        "published on base after the branch was cut\n",
+    )
+    .unwrap();
+    git_in(&checkout, &["add", "base-only.txt"]);
+    git_in(&checkout, &["commit", "-m", "base advanced"]);
+    git_in(
+        &checkout,
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+    );
+    git_in(&checkout, &["checkout", &declared]);
+    std::fs::write(checkout.join("committed.txt"), "unpublished commit\n").unwrap();
+    git_in(&checkout, &["add", "committed.txt"]);
+    git_in(&checkout, &["commit", "-m", "unpublished"]);
+    let commit = git_in(&checkout, &["rev-parse", "HEAD"]);
+    std::fs::write(checkout.join("staged.txt"), "in the index\n").unwrap();
+    git_in(&checkout, &["add", "staged.txt"]);
+    std::fs::write(checkout.join("README.md"), "unstaged\n").unwrap();
+    std::fs::write(checkout.join("new.txt"), "untracked\n").unwrap();
+    std::fs::write(
+        checkout.parent().unwrap().join("companion/new.txt"),
+        "second repo\n",
+    )
+    .unwrap();
+    let recorded = format!("{:?}", kestrel.show_workspace(workspace.id).await);
+    let transcript = kestrel.transcript(workspace.id).await.len();
+    let events = kestrel.events("acme").await.len();
+    let index = std::fs::read(checkout.join(".git/index")).unwrap();
+    std::fs::write(checkout.join(".git/index.lock"), "agent holds the index").unwrap();
+
+    let answer = changes(&kestrel, &workspace, &[]).await;
+    assert_eq!(answer["repositories"].as_array().unwrap().len(), 2);
+    let diff = answer["repositories"][0]["diff"].as_str().unwrap();
+    for path in ["committed.txt", "staged.txt", "README.md", "new.txt"] {
+        assert!(diff.contains(&format!("b/kestrel/{path}")), "{diff}");
+    }
+    assert!(
+        answer["repositories"][1]["diff"]
+            .as_str()
+            .unwrap()
+            .contains("b/companion/new.txt")
+    );
+    assert!(!diff.contains("base-only.txt"), "{diff}");
+    let files = answer["repositories"][0]["files"].as_array().unwrap();
+    assert!(
+        files
+            .iter()
+            .any(|file| file["path"] == "kestrel/new.txt" && file["added"] == 1)
+    );
+
+    for (scope, present, absent) in [
+        ("changed".to_owned(), "README.md", "staged.txt"),
+        ("staged".to_owned(), "staged.txt", "README.md"),
+        (format!("commit:{commit}"), "committed.txt", "staged.txt"),
+    ] {
+        let scoped = changes(&kestrel, &workspace, &[("scope", &scope)]).await;
+        let diff = scoped["repositories"][0]["diff"].as_str().unwrap();
+        assert!(diff.contains(present), "{scope}: {diff}");
+        assert!(!diff.contains(absent), "{scope}: {diff}");
+        let limited = changes(
+            &kestrel,
+            &workspace,
+            &[("scope", &scope), ("path", "kestrel/new.txt")],
+        )
+        .await;
+        assert_eq!(limited["repositories"][0]["diff"], "");
+        assert_eq!(limited["repositories"].as_array().unwrap().len(), 1);
+    }
+    let id = workspace.id.to_string();
+    for command in ["changes", "diff"] {
+        let shown = cli_bytes(&kestrel, &["workspace", command, &id, "--json"]).await;
+        assert_eq!(serde_json::from_slice::<Value>(&shown).unwrap(), answer);
+        let shown = cli_bytes(
+            &kestrel,
+            &["workspace", command, &id, "--", "kestrel/new.txt"],
+        )
+        .await;
+        let shown = String::from_utf8(shown).unwrap();
+        assert!(shown.contains("+untracked"), "{shown}");
+        assert!(!shown.contains("staged.txt"), "{shown}");
+    }
+    for (arguments, present) in [
+        (vec!["workspace", "diff", &id, "--staged"], "+in the index"),
+        (vec!["workspace", "diff", &id, "--changed"], "+unstaged"),
+        (
+            vec![
+                "workspace",
+                "diff",
+                &id,
+                &commit,
+                "--",
+                "kestrel/committed.txt",
+            ],
+            "+unpublished commit",
+        ),
+    ] {
+        let shown = String::from_utf8(cli_bytes(&kestrel, &arguments).await).unwrap();
+        assert!(shown.contains(present), "{shown}");
+    }
+    assert_eq!(std::fs::read(checkout.join(".git/index")).unwrap(), index);
+    assert_eq!(kestrel.transcript(workspace.id).await.len(), transcript);
+    assert_eq!(kestrel.events("acme").await.len(), events);
+    assert_eq!(
+        format!("{:?}", kestrel.show_workspace(workspace.id).await),
+        recorded
+    );
+    std::fs::remove_file(checkout.join(".git/index.lock")).unwrap();
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn changes_after_a_push_use_the_declared_remote_and_commits_include_other_branches() {
+    let (kestrel, workspace, checkout) = held(Script::Speaks).await;
+    let declared = git_in(&checkout, &["branch", "--show-current"]);
+    std::fs::write(checkout.join("README.md"), "pushed work\n").unwrap();
+    git_in(&checkout, &["commit", "-am", "published"]);
+    git_in(&checkout, &["push", "origin", &declared]);
+    std::fs::write(checkout.join("README.md"), "unpublished work\n").unwrap();
+    git_in(&checkout, &["commit", "-am", "unpushed on declared"]);
+    git_in(&checkout, &["checkout", "-b", "side", "origin/main"]);
+    std::fs::write(checkout.join("README.md"), "side branch\n").unwrap();
+    git_in(&checkout, &["commit", "-am", "unpushed on side"]);
+    git_in(&checkout, &["checkout", &declared]);
+    std::fs::write(checkout.join("README.md"), "parked\n").unwrap();
+    git_in(&checkout, &["stash", "push", "-m", "parked work"]);
+    git_in(&checkout, &["checkout", "--detach"]);
+    std::fs::write(checkout.join("README.md"), "detached work\n").unwrap();
+    git_in(&checkout, &["commit", "-am", "unpushed detached"]);
+    let diff = changes(&kestrel, &workspace, &[]).await;
+    let diff = diff["repositories"][0]["diff"].as_str().unwrap();
+    assert!(diff.contains("-pushed work"), "{diff}");
+    assert!(diff.contains("+detached work"), "{diff}");
+    let id = workspace.id.to_string();
+    for (read, alias, expected) in [
+        (
+            "commits",
+            "log",
+            vec![
+                "unpushed on side",
+                "unpushed on declared",
+                "unpushed detached",
+            ],
+        ),
+        ("stashes", "stash", vec!["stash@{0}", "parked work"]),
+    ] {
+        let response = get(&kestrel, &workspace, read, &[]).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let answer: Value = response.json().await.unwrap();
+        assert_eq!(answer["repositories"].as_array().unwrap().len(), 2);
+        let text = answer["repositories"][0]["text"].as_str().unwrap();
+        for expected in expected {
+            assert!(text.contains(expected), "{text}");
+        }
+        assert!(!text.contains("diff --git"), "{text}");
+        if read == "commits" {
+            assert!(!text.contains("    published\n"), "{text}");
+        }
+        for command in [read, alias] {
+            let shown = cli_bytes(&kestrel, &["workspace", command, &id, "--json"]).await;
+            assert_eq!(serde_json::from_slice::<Value>(&shown).unwrap(), answer);
+            let shown =
+                String::from_utf8(cli_bytes(&kestrel, &["workspace", command, &id]).await).unwrap();
+            assert!(shown.contains(text), "{shown}");
+        }
+    }
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn changes_over_two_mebibytes_keep_complete_stats_and_refuse_escaping_paths() {
+    let (kestrel, workspace, checkout) = held(Script::Speaks).await;
+    std::fs::write(checkout.join("large.txt"), "large line\n".repeat(220_000)).unwrap();
+    std::fs::write(checkout.join("small.txt"), "one\ntwo\n").unwrap();
+    std::fs::write(checkout.join("binary"), [0, 1, 2]).unwrap();
+    std::fs::write(
+        checkout.parent().unwrap().join("companion/large.txt"),
+        "other line\n".repeat(220_000),
+    )
+    .unwrap();
+    let answer = changes(&kestrel, &workspace, &[]).await;
+    let repository = &answer["repositories"][0];
+    assert_eq!(repository["truncated"], true);
+    assert!(repository["diff"].as_str().unwrap().len() <= 2 * 1024 * 1024);
+    let files = repository["files"].as_array().unwrap();
+    assert!(
+        files
+            .iter()
+            .any(|file| file["path"] == "kestrel/large.txt" && file["added"] == 220_000)
+    );
+    assert!(
+        files
+            .iter()
+            .any(|file| file["path"] == "kestrel/small.txt" && file["added"] == 2)
+    );
+    assert!(
+        files
+            .iter()
+            .any(|file| file["path"] == "kestrel/binary" && file["added"].is_null())
+    );
+    assert!(
+        answer["repositories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|repository| repository["diff"].as_str().unwrap().len())
+            .sum::<usize>()
+            <= 2 * 1024 * 1024
+    );
+    assert_eq!(answer["repositories"][1]["truncated"], true);
+    assert_eq!(answer["repositories"][1]["files"][0]["added"], 220_000);
+    let shown = String::from_utf8(
+        cli_bytes(&kestrel, &["workspace", "diff", &workspace.id.to_string()]).await,
+    )
+    .unwrap();
+    assert!(shown.contains("diff truncated"));
+    std::os::unix::fs::symlink("/etc/hosts", checkout.join("escape")).unwrap();
+    for path in [
+        "kestrel/../../etc/hosts",
+        "kestrel/escape",
+        "kestrel/.git/config",
+    ] {
+        let response = get(&kestrel, &workspace, "changes", &[("path", path)]).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{path}"
+        );
+    }
+    assert_eq!(
+        get(&kestrel, &workspace, "changes", &[("scope", "bad")])
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn changes_include_files_in_an_untracked_nested_repository() {
+    let (kestrel, workspace, checkout) = held(Script::Speaks).await;
+    let nested = checkout.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    git_in(&nested, &["init", "--initial-branch", "main"]);
+    std::fs::write(nested.join("tracked.txt"), "nested tracked\n").unwrap();
+    git_in(&nested, &["add", "tracked.txt"]);
+    git_in(&nested, &["commit", "-m", "nested work"]);
+    std::fs::write(nested.join("new.txt"), "nested untracked\n").unwrap();
+    let answer = changes(&kestrel, &workspace, &[]).await;
+    let repository = &answer["repositories"][0];
+    for path in ["tracked.txt", "new.txt"] {
+        assert!(
+            repository["diff"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("b/kestrel/nested/{path}")),
+            "{repository}"
+        );
+        assert!(
+            repository["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|file| file["path"] == format!("kestrel/nested/{path}") && file["added"] == 1)
+        );
+    }
+    for path in ["kestrel/nested/new.txt", "kestrel/./nested/new.txt"] {
+        let selected = changes(&kestrel, &workspace, &[("path", path)]).await;
+        assert_eq!(
+            selected["repositories"][0]["files"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "{path}"
+        );
+        assert_eq!(
+            selected["repositories"][0]["files"][0]["path"],
+            "kestrel/nested/new.txt"
+        );
+    }
+    let selected = changes(&kestrel, &workspace, &[("path", "kestrel/.")]).await;
+    assert_eq!(
+        selected["repositories"][0]["files"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let selected = changes(&kestrel, &workspace, &[("path", "kestrel/nested/new.txt/")]).await;
+    assert!(
+        selected["repositories"][0]["files"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    std::fs::remove_file(nested.join("tracked.txt")).unwrap();
+    let selected = changes(&kestrel, &workspace, &[("path", "kestrel/nested/")]).await;
+    assert_eq!(
+        selected["repositories"][0]["files"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        !repository["diff"]
+            .as_str()
+            .unwrap()
+            .contains("nested/.git/")
+    );
+    kestrel.teardown().await;
+}

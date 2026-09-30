@@ -1195,6 +1195,178 @@
         }
       }
     },
+    "/operator/organizations/{organization}/workspaces/{workspace}/changes": {
+      "get": {
+        "operationId": "workspaceChanges",
+        "summary": "Read changes from a Workspace's live Instance.",
+        "description": "Diff grouped by repository, capped at 2 MiB across all repositories with complete per-file line counts (null for binary files). Unpublished includes untracked files and the working tree against origin/<declared>, or the merge base of HEAD and origin/<base> before the first push. Paths are <repo>/<path>. Reads never write Store, Transcript or Events.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "unpublished",
+              "pattern": "^(unpublished|changed|staged|commit:[0-9a-fA-F]+)$"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "description": "Repeated literal <repo>/<path> filters.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The directory's entries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceChanges"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "504": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/commits": {
+      "get": {
+        "operationId": "workspaceCommits",
+        "summary": "Read commits from a Workspace's live Instance.",
+        "description": "Commits no remote-tracking branch reaches, on any local branch or detached HEAD, grouped by repository in git log format. Reads never write Store, Transcript or Events.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The directory's entries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceCommits"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "504": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/stashes": {
+      "get": {
+        "operationId": "workspaceStashes",
+        "summary": "Read stashes from a Workspace's live Instance.",
+        "description": "Stashes grouped by repository in git stash list format; never diffed. Reads never write Store, Transcript or Events.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The directory's entries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceStashes"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "504": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
     "/operator/organizations/{organization}/workspaces/{workspace}/files": {
       "get": {
         "operationId": "workspaceFiles",
@@ -1671,6 +1843,117 @@
       }
     },
     "schemas": {
+      "RepositoryDiff": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "diff": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FileStat"
+            }
+          }
+        },
+        "required": [
+          "repository",
+          "diff",
+          "files",
+          "truncated"
+        ]
+      },
+      "FileStat": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "added": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "removed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          }
+        },
+        "required": [
+          "path",
+          "added",
+          "removed"
+        ]
+      },
+      "RepositoryText": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "text"
+        ]
+      },
+      "WorkspaceChanges": {
+        "type": "object",
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepositoryDiff"
+            }
+          }
+        },
+        "required": [
+          "repositories"
+        ]
+      },
+      "WorkspaceCommits": {
+        "type": "object",
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepositoryText"
+            }
+          }
+        },
+        "required": [
+          "repositories"
+        ]
+      },
+      "WorkspaceStashes": {
+        "type": "object",
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepositoryText"
+            }
+          }
+        },
+        "required": [
+          "repositories"
+        ]
+      },
+
       "WorkChanges": {
         "type": "object",
         "properties": {

@@ -509,6 +509,7 @@ fn the_client_recognises_every_read_the_published_document_declares() {
     for (kind, _) in declared(&published, "Read") {
         let asked: link::Asked = serde_json::from_value(serde_json::json!({
             "request": "r1", "read": kind, "path": "widgets/src", "raw": false,
+            "scope": "unpublished", "paths": [],
         }))
         .expect("a read");
 

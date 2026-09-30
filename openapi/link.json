@@ -359,6 +359,174 @@
       }
     },
     "schemas": {
+      "RepositoryDiff": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "diff": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FileStat"
+            }
+          }
+        },
+        "required": [
+          "repository",
+          "diff",
+          "files",
+          "truncated"
+        ]
+      },
+      "FileStat": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "added": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "removed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          }
+        },
+        "required": [
+          "path",
+          "added",
+          "removed"
+        ]
+      },
+      "RepositoryText": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "text"
+        ]
+      },
+      "ReadChanges": {
+        "type": "object",
+        "properties": {
+          "read": {
+            "const": "changes"
+          },
+          "scope": {
+            "type": "string",
+            "pattern": "^(unpublished|changed|staged|commit:[0-9a-fA-F]+)$"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "read",
+          "scope",
+          "paths"
+        ]
+      },
+      "AnswerChanges": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "const": "changes"
+          },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepositoryDiff"
+            }
+          }
+        },
+        "required": [
+          "answer",
+          "repositories"
+        ]
+      },
+      "ReadCommits": {
+        "type": "object",
+        "properties": {
+          "read": {
+            "const": "commits"
+          }
+        },
+        "required": [
+          "read"
+        ]
+      },
+      "AnswerCommits": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "const": "commits"
+          },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepositoryText"
+            }
+          }
+        },
+        "required": [
+          "answer",
+          "repositories"
+        ]
+      },
+      "ReadStashes": {
+        "type": "object",
+        "properties": {
+          "read": {
+            "const": "stashes"
+          }
+        },
+        "required": [
+          "read"
+        ]
+      },
+      "AnswerStashes": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "const": "stashes"
+          },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepositoryText"
+            }
+          }
+        },
+        "required": [
+          "answer",
+          "repositories"
+        ]
+      },
+
       "Credentials": {
         "description": "What a Harness is spawned with to reach a model: the Provider Credentials of the Session's Organization and the Subscription Profile its Workspace names.",
         "type": "object",
@@ -477,20 +645,41 @@
       "Read": {
         "description": "A read of the Instance's checkouts, answered by POSTing to `answers/{request}`. Paths are `<repo>/<path>`, resolved through symlinks, and refused outside that repository's checkout.",
         "oneOf": [
-          { "$ref": "#/components/schemas/ReadFiles" },
-          { "$ref": "#/components/schemas/ReadFile" }
+          {
+            "$ref": "#/components/schemas/ReadFiles"
+          },
+          {
+            "$ref": "#/components/schemas/ReadFile"
+          },
+          {
+            "$ref": "#/components/schemas/ReadChanges"
+          },
+          {
+            "$ref": "#/components/schemas/ReadCommits"
+          },
+          {
+            "$ref": "#/components/schemas/ReadStashes"
+          }
         ],
         "discriminator": {
           "propertyName": "read",
           "mapping": {
             "files": "#/components/schemas/ReadFiles",
-            "file": "#/components/schemas/ReadFile"
+            "file": "#/components/schemas/ReadFile",
+            "changes": "#/components/schemas/ReadChanges",
+            "commits": "#/components/schemas/ReadCommits",
+            "stashes": "#/components/schemas/ReadStashes"
           }
         },
         "properties": {
-          "request": { "type": "string", "format": "uuid" }
+          "request": {
+            "type": "string",
+            "format": "uuid"
+          }
         },
-        "required": ["request"]
+        "required": [
+          "request"
+        ]
       },
       "ReadFiles": {
         "description": "One directory level, at most 5,000 entries, each marked tracked, untracked or ignored. No path lists the repositories.",
@@ -513,10 +702,27 @@
       },
       "Answer": {
         "oneOf": [
-          { "$ref": "#/components/schemas/AnswerListing" },
-          { "$ref": "#/components/schemas/AnswerText" },
-          { "$ref": "#/components/schemas/AnswerRefused" },
-          { "$ref": "#/components/schemas/AnswerMissing" }
+          {
+            "$ref": "#/components/schemas/AnswerListing"
+          },
+          {
+            "$ref": "#/components/schemas/AnswerText"
+          },
+          {
+            "$ref": "#/components/schemas/AnswerRefused"
+          },
+          {
+            "$ref": "#/components/schemas/AnswerMissing"
+          },
+          {
+            "$ref": "#/components/schemas/AnswerChanges"
+          },
+          {
+            "$ref": "#/components/schemas/AnswerCommits"
+          },
+          {
+            "$ref": "#/components/schemas/AnswerStashes"
+          }
         ],
         "discriminator": {
           "propertyName": "answer",
@@ -524,7 +730,10 @@
             "listing": "#/components/schemas/AnswerListing",
             "text": "#/components/schemas/AnswerText",
             "refused": "#/components/schemas/AnswerRefused",
-            "missing": "#/components/schemas/AnswerMissing"
+            "missing": "#/components/schemas/AnswerMissing",
+            "changes": "#/components/schemas/AnswerChanges",
+            "commits": "#/components/schemas/AnswerCommits",
+            "stashes": "#/components/schemas/AnswerStashes"
           }
         }
       },

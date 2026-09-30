@@ -70,6 +70,20 @@ an Instance that does not answer within 10 s `504`. `kestrel workspace files` (a
 entry a line with its git mark; `kestrel workspace read` (alias `cat`) writes the file's bytes to
 stdout. `--json` returns the operator response, except for bytes, which are always written raw.
 
+`GET …/workspaces/{workspace}/changes` reads a diff per repository. Its `scope` defaults to
+`unpublished`: the working tree and untracked files against `origin/<declared>`, or the merge base
+of `HEAD` and `origin/<base>` before the first push. `changed`, `staged` and `commit:<sha>` select
+unstaged changes, staged changes and one commit. Repeated `path=<repo>/<path>` parameters filter
+literal paths. Patch text across all repositories is capped at 2 MiB; per-file stats remain complete.
+
+`GET …/commits` lists commits reachable from any local branch or detached HEAD that no
+remote-tracking branch reaches. `GET …/stashes` lists stashes without diffing them. Both return
+text grouped by repository. All three reads use the same transient read path as files.
+
+`kestrel workspace changes` (alias `diff`) accepts `--changed`, `--staged`, a commit id and paths
+after `--`. `commits` (alias `log`) and `stashes` (alias `stash`) print git's output under repository
+headings. Each command's `--json` returns the operator response.
+
 ### Declarations
 
 - `POST …/declaration` applies a whole document (Projects, Agents, Triggers) in one transaction;

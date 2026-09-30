@@ -32,6 +32,12 @@ pub enum Read {
         path: String,
         raw: bool,
     },
+    Changes {
+        scope: String,
+        paths: Vec<String>,
+    },
+    Commits,
+    Stashes,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -46,8 +52,16 @@ pub struct Request {
 enum Answer {
     Listing(Listing),
     Text(Text),
+    Changes(Repositories),
+    Commits(Repositories),
+    Stashes(Repositories),
     Refused { message: String },
     Missing { message: String },
+}
+
+#[derive(Serialize, Deserialize)]
+struct Repositories {
+    repositories: Vec<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -286,6 +300,11 @@ impl Reads {
             Ok(json) => match serde_json::from_slice::<Answer>(&json) {
                 Ok(Answer::Listing(listing)) => serialized(&listing),
                 Ok(Answer::Text(text)) => serialized(&text),
+                Ok(
+                    Answer::Changes(repositories)
+                    | Answer::Commits(repositories)
+                    | Answer::Stashes(repositories),
+                ) => serialized(&repositories),
                 Ok(Answer::Refused { message }) => Outcome::Refused(message),
                 Ok(Answer::Missing { message }) => Outcome::Missing(message),
                 Err(_) => Outcome::NotAnswering,

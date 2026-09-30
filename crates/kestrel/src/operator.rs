@@ -79,6 +79,12 @@ pub const WORKSPACES: &str = "/operator/organizations/{organization}/workspaces"
 pub const WORKSPACE: &str = "/operator/organizations/{organization}/workspaces/{workspace}";
 pub const WORKSPACE_WORK: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/work";
+pub const WORKSPACE_CHANGES: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/changes";
+pub const WORKSPACE_COMMITS: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/commits";
+pub const WORKSPACE_STASHES: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/stashes";
 pub const WORKSPACE_FILES: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/files";
 pub const WORKSPACE_FILE: &str =
@@ -199,6 +205,9 @@ pub fn router(
         .route(WORKSPACE_WORK, get(work_summary))
         .route(WORKSPACE_FILES, get(workspace_files))
         .route(WORKSPACE_FILE, get(workspace_file))
+        .route(WORKSPACE_CHANGES, get(workspace_changes))
+        .route(WORKSPACE_COMMITS, get(workspace_commits))
+        .route(WORKSPACE_STASHES, get(workspace_stashes))
         .route(WORKSPACE_MESSAGES, post(post_to_workspace))
         .route(WORKSPACE_SEAL, post(seal_workspace))
         .route(WORKSPACE_INSTANCE_RELEASE, post(release_instance))
@@ -1822,6 +1831,72 @@ async fn work_summary(
         )
         .await?,
     ))
+}
+
+#[derive(Deserialize)]
+struct ChangesQuery {
+    scope: Option<String>,
+}
+
+async fn workspace_changes(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, reference)): Path<(String, String)>,
+    Query(query): Query<ChangesQuery>,
+    axum::extract::RawQuery(raw): axum::extract::RawQuery,
+) -> Result<crate::live_read::AnswerBody, Refused> {
+    let scope = query.scope.unwrap_or_else(|| "unpublished".to_owned());
+    if !matches!(scope.as_str(), "unpublished" | "changed" | "staged")
+        && !scope
+            .strip_prefix("commit:")
+            .is_some_and(|sha| !sha.is_empty() && sha.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        return Err(Refused::BadRequest(
+            "scope must be unpublished, changed, staged or commit:<sha>".to_owned(),
+        ));
+    }
+    let url = reqwest::Url::parse(&format!("http://localhost/?{}", raw.unwrap_or_default()))
+        .map_err(|_| Refused::BadRequest("invalid changes query".to_owned()))?;
+    let paths = url
+        .query_pairs()
+        .filter(|(name, _)| name == "path")
+        .map(|(_, path)| path.into_owned())
+        .collect();
+    Ok(crate::live_read::read(
+        &control_plane.store,
+        &control_plane.reads,
+        &organization,
+        &reference,
+        crate::live_read::Read::Changes { scope, paths },
+    )
+    .await?)
+}
+
+async fn workspace_commits(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, reference)): Path<(String, String)>,
+) -> Result<crate::live_read::AnswerBody, Refused> {
+    Ok(crate::live_read::read(
+        &control_plane.store,
+        &control_plane.reads,
+        &organization,
+        &reference,
+        crate::live_read::Read::Commits,
+    )
+    .await?)
+}
+
+async fn workspace_stashes(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, reference)): Path<(String, String)>,
+) -> Result<crate::live_read::AnswerBody, Refused> {
+    Ok(crate::live_read::read(
+        &control_plane.store,
+        &control_plane.reads,
+        &organization,
+        &reference,
+        crate::live_read::Read::Stashes,
+    )
+    .await?)
 }
 
 async fn workspace_files(
