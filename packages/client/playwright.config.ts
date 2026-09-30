@@ -5,7 +5,6 @@ import { defineConfig, devices } from "@playwright/test";
 
 const operator = 17718;
 
-// The built Client, served by a real control plane's operator listener.
 export default defineConfig({
 	testDir: "e2e",
 	forbidOnly: !!process.env.CI,

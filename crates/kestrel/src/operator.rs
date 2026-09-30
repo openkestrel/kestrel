@@ -2,6 +2,7 @@
 //! It authenticates nobody, so it is served apart from the link and on loopback (ADR-0015).
 
 use std::net::IpAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -106,7 +107,7 @@ struct ControlPlane {
     store: Store,
     shutdown: CancellationToken,
     summaries: crate::live_work::Summaries,
-    client: Option<Arc<std::path::Path>>,
+    client: Option<Arc<PathBuf>>,
 }
 
 #[derive(Deserialize)]
@@ -142,7 +143,7 @@ pub fn router(
     store: Store,
     shutdown: CancellationToken,
     summaries: crate::live_work::Summaries,
-    client: Option<Arc<std::path::Path>>,
+    client: Option<PathBuf>,
 ) -> Router {
     Router::new()
         .route(ORGANIZATIONS, get(organizations).post(declare_organization))
@@ -192,7 +193,7 @@ pub fn router(
             store,
             shutdown,
             summaries,
-            client,
+            client: client.map(Arc::new),
         })
         .layer(middleware::from_fn(addressed_here))
 }

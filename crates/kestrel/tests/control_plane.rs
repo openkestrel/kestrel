@@ -38,7 +38,7 @@ fn the_image_carries_the_client_its_compute_driver_executes() {
 /// The Client is installed where an operator is, never beside the database (ADR-0015).
 #[test]
 #[ignore = "builds and runs the kestrel image"]
-fn the_image_carries_no_client() {
+fn the_image_carries_no_cli_client() {
     for client in ["kestrel", "kestrel-client"] {
         let found = control_plane::running(&["sh", "-c", &format!("command -v {client}")]);
 

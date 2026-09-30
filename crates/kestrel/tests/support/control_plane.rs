@@ -189,7 +189,6 @@ impl Started {
         answered
     }
 
-    /// The status and body the operator listener answers a browser's GET for `path` with.
     pub fn what_the_operator_serves(&self, path: &str) -> (u16, String) {
         let address = self.operator().trim_start_matches("http://").to_owned();
         let mut operator =

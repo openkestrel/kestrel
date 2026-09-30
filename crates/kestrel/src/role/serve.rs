@@ -89,12 +89,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
     let summaries = crate::live_work::Summaries::default();
     let link_router = link::router(store.clone(), shutdown.clone(), summaries.clone())
         .merge(webhook::router(store.clone(), wake));
-    let operator_router = operator::router(
-        store,
-        shutdown.clone(),
-        summaries,
-        client.map(PathBuf::into_boxed_path).map(Into::into),
-    );
+    let operator_router = operator::router(store, shutdown.clone(), summaries, client);
 
     let serving_link = axum::serve(link_listener, link_router)
         .with_graceful_shutdown(shutdown.clone().cancelled_owned());

@@ -53,6 +53,19 @@ async fn a_deep_link_is_answered_with_the_shell_every_time_it_is_loaded() {
 }
 
 #[tokio::test]
+async fn a_deep_link_naming_something_with_a_dot_is_still_the_shell() {
+    let built = built_client();
+    let kestrel = Kestrel::boot_serving_client(built.path()).await;
+
+    for path in ["/organizations/acme.io", "/organizations/acme.io/new"] {
+        let page = get(&kestrel, path).await;
+
+        assert_eq!(page.status(), StatusCode::OK, "{path}");
+        assert_eq!(page.text().await.unwrap(), SHELL, "{path}");
+    }
+}
+
+#[tokio::test]
 async fn a_built_asset_is_served_as_itself() {
     let built = built_client();
     let kestrel = Kestrel::boot_serving_client(built.path()).await;

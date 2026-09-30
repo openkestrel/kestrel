@@ -1,5 +1,3 @@
-//! The browser Client's built assets, served on the operator listener (ADR-0036).
-
 use std::path::Path;
 
 use axum::extract::Request;
@@ -11,8 +9,8 @@ use tower_http::services::{ServeDir, ServeFile};
 
 const SHELL: &str = "index.html";
 
-/// A path whose last segment names a file is an asset, and answers 404 when absent; any other
-/// path is a Client route the shell resolves, so a deep link survives a refresh.
+/// A build puts files only at its root and under `/assets/`, so any other path is a Client
+/// route the shell resolves (ADR-0036), even one naming an Organization with a dot in it.
 pub async fn served(built: &Path, request: Request) -> Response {
     if !matches!(*request.method(), Method::GET | Method::HEAD) {
         return (
@@ -22,28 +20,19 @@ pub async fn served(built: &Path, request: Request) -> Response {
             .into_response();
     }
 
-    let names_a_file = request
-        .uri()
-        .path()
-        .rsplit('/')
-        .next()
-        .is_some_and(|segment| segment.contains('.'));
+    let path = request.uri().path();
+    let names_a_built_file =
+        path.starts_with("/assets/") || (path.rfind('/') == Some(0) && path.contains('.'));
 
-    if names_a_file {
-        let assets = ServeDir::new(built).append_index_html_on_directories(false);
-        match assets.oneshot(request).await {
-            Ok(response) => response.into_response(),
-            Err(never) => match never {},
-        }
+    if names_a_built_file {
+        let files = ServeDir::new(built).append_index_html_on_directories(false);
+        let Ok(file) = files.oneshot(request).await;
+        file.into_response()
     } else {
-        match ServeFile::new(built.join(SHELL)).oneshot(request).await {
-            Ok(mut response) => {
-                response
-                    .headers_mut()
-                    .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-                response.into_response()
-            }
-            Err(never) => match never {},
-        }
+        let Ok(mut shell) = ServeFile::new(built.join(SHELL)).oneshot(request).await;
+        shell
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        shell.into_response()
     }
 }
