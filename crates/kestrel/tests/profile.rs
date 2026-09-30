@@ -78,15 +78,23 @@ async fn finished(kestrel: &Kestrel, workspace: &Workspace, session: Session) ->
         kestrel.stop_session(session.id).await;
         session = kestrel.session(session.id).await;
         // The Session ends in the database the moment it is told to stop; what its supervisor holds
-        // of the profile is only gone once the supervisor itself has left.
-        support::environment::Environment::named(
-            session
-                .supervisor
-                .as_deref()
-                .expect("a stopped session had a supervisor"),
-        )
-        .is_gone()
-        .await;
+        // of the profile is only gone once the supervisor has let the Session go.
+        let instance = session
+            .instance
+            .as_deref()
+            .and_then(|instance| instance.strip_prefix("local-exec/"))
+            .expect("a local instance");
+        let login = std::env::temp_dir()
+            .join(format!("{instance}.home"))
+            .join(LOGIN);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while login.exists() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the login outlived its session"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
     }
 
     (session, transcript(kestrel, workspace).await)
@@ -223,7 +231,6 @@ async fn an_instance_holds_no_login_once_another_agents_session_on_it_has_ended(
         .open_workspace_with("acme", repository::NAME, "builder", "jack")
         .await;
     let (built, _) = worked(&kestrel, &workspace).await;
-    kestrel.supervisor_recorded_gone(&built).await;
 
     let review = kestrel.enqueue_session_as(workspace.id, "reviewer").await;
     let (reviewed, said) = finished(&kestrel, &workspace, review).await;
@@ -389,7 +396,7 @@ async fn sessions_on_a_serialized_harness_sharing_a_profile_are_dispatched_one_a
 
     let mut claimed = Vec::new();
     while let Some(next) = kestrel.claim_session().await {
-        claimed.push(next.session);
+        claimed.push(next);
     }
 
     let workspaces: Vec<_> = claimed.iter().map(|session| session.workspace).collect();
@@ -397,10 +404,7 @@ async fn sessions_on_a_serialized_harness_sharing_a_profile_are_dispatched_one_a
 
     kestrel.complete_session(&claimed[0]).await;
     assert_eq!(
-        kestrel
-            .claim_session()
-            .await
-            .map(|next| next.session.workspace),
+        kestrel.claim_session().await.map(|next| next.workspace),
         Some(jacks_again.id)
     );
 
@@ -416,12 +420,13 @@ async fn a_session_refreshes_only_the_files_its_profile_already_holds() {
     let workspace = kestrel
         .open_workspace_with("acme", repository::NAME, "builder", "jack")
         .await;
-    let (session, credential) = kestrel.dispatch_session(workspace.id).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
 
     let answered = Link::to(&kestrel.link())
         .refresh(
+            &on.instance,
             session.id,
-            &credential,
+            &on.credential,
             &[
                 (LOGIN, "a-refreshed-login"),
                 (".ssh/id_ed25519", "smuggled"),
@@ -448,14 +453,19 @@ async fn a_session_that_has_ended_refreshes_nothing() {
     let workspace = kestrel
         .open_workspace_with("acme", repository::NAME, "builder", "jack")
         .await;
-    let (session, credential) = kestrel.dispatch_session(workspace.id).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
     kestrel.complete_session(&session).await;
 
     let answered = Link::to(&kestrel.link())
-        .refresh(session.id, &credential, &[(LOGIN, "too-late")])
+        .refresh(
+            &on.instance,
+            session.id,
+            &on.credential,
+            &[(LOGIN, "too-late")],
+        )
         .await;
 
-    assert_eq!(answered.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(answered.status(), StatusCode::GONE);
     let profile = workspace.profile.expect("the workspace names a profile");
     assert_eq!(
         kestrel.profile_contents(&profile).await.files[LOGIN],

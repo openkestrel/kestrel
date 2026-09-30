@@ -136,7 +136,7 @@ The rest of `crates/kestrel/src`, grouped by the page that covers them:
 | Boundary | Who is on the other side | What protects it |
 | --- | --- | --- |
 | Operator (7718) | A Client | Nothing. Bind it to loopback; the control plane warns otherwise. |
-| Link (7717) | A supervisor | A per-Session bearer credential and a live lease ([Link](link.md#authentication)). |
+| Link (7717) | A supervisor | A per-Instance bearer credential, and a live lease for anything about a Session ([Link](link.md#authentication)). |
 | Webhooks (7717) | Any producer | The Integration's HMAC signing secret or shared secret. A refusal becomes no Event; the last one is kept on the Integration. |
 | Docker daemon | The control plane | socket-proxy's allowlist, on an internal network. |
 | Harness | Model output and Event text | Nothing at this layer: brief content is attacker-controlled, and policy is future work. |

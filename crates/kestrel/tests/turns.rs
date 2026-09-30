@@ -146,7 +146,7 @@ async fn a_workspace_holds_one_unfinished_session_even_while_it_waits() {
 }
 
 #[tokio::test]
-async fn stopping_a_session_while_waiting_ends_it_succeeded_and_its_supervisor_with_it() {
+async fn stopping_a_session_while_waiting_ends_it_succeeded_and_leaves_its_supervisor() {
     let (kestrel, workspace) = conversing(Script::Converses).await;
     let session = kestrel.post(workspace.id, "operator", "start").await;
     let answered = kestrel.answered(session.id, 1).await;
@@ -156,9 +156,14 @@ async fn stopping_a_session_while_waiting_ends_it_succeeded_and_its_supervisor_w
     let ended = kestrel.session(session.id).await;
     assert_eq!(ended.state, SessionState::Ended);
     assert_eq!(ended.exit, Some(Exit::Succeeded));
-    support::environment::Environment::named(answered.supervisor.as_deref().expect("a supervisor"))
-        .is_gone()
-        .await;
+    assert!(
+        support::environment::Environment::named(
+            answered.supervisor.as_deref().expect("a supervisor")
+        )
+        .is_running(Duration::from_millis(500))
+        .await,
+        "the supervisor went with the session"
+    );
     kestrel.teardown().await;
 }
 

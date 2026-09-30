@@ -51,7 +51,7 @@ async fn a_second_session_enqueued_in_a_workspace_that_already_has_one_is_refuse
 async fn a_session_that_is_slow_or_blocked_still_occupies_the_slot_and_nothing_else_takes_it() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (blocked, _) = kestrel.dispatch_session(workspace.id).await;
+    let blocked = kestrel.dispatch_session(workspace.id).await;
 
     assert_eq!(
         kestrel.session(blocked.id).await.state,
@@ -79,10 +79,7 @@ async fn a_session_in_one_workspace_leaves_every_other_workspace_free_to_take_on
     let session = kestrel.enqueue_session(elsewhere.id).await;
 
     assert_eq!(
-        kestrel
-            .claim_session()
-            .await
-            .map(|claimed| claimed.session.id),
+        kestrel.claim_session().await.map(|claimed| claimed.id),
         Some(session.id),
         "a session in another workspace was not dispatched"
     );
@@ -94,16 +91,13 @@ async fn a_session_in_one_workspace_leaves_every_other_workspace_free_to_take_on
 async fn a_session_that_ended_hands_its_workspaces_slot_to_the_next_one() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (first, _) = kestrel.dispatch_session(workspace.id).await;
+    let first = kestrel.dispatch_session(workspace.id).await;
 
     kestrel.complete_session(&first).await;
     let next = kestrel.enqueue_session(workspace.id).await;
 
     assert_eq!(
-        kestrel
-            .claim_session()
-            .await
-            .map(|claimed| claimed.session.id),
+        kestrel.claim_session().await.map(|claimed| claimed.id),
         Some(next.id)
     );
 
@@ -114,7 +108,7 @@ async fn a_session_that_ended_hands_its_workspaces_slot_to_the_next_one() {
 async fn sealing_a_workspace_with_a_session_still_in_flight_is_refused() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (in_flight, _) = kestrel.dispatch_session(workspace.id).await;
+    let in_flight = kestrel.dispatch_session(workspace.id).await;
 
     let refusal = kestrel
         .try_seal_workspace(workspace.id)
@@ -137,7 +131,7 @@ async fn sealing_a_workspace_with_a_session_still_in_flight_is_refused() {
 async fn a_workspace_whose_sessions_have_all_ended_seals() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
     kestrel.complete_session(&session).await;
 
     let sealed = kestrel.seal_workspace(workspace.id).await;
@@ -169,7 +163,7 @@ async fn a_workspace_that_never_ran_anything_seals() {
 async fn a_sealed_workspace_is_fully_readable_including_its_whole_transcript() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
     kestrel.said(&session, "what it did").await;
     kestrel.complete_session(&session).await;
     let before = kestrel.transcript(workspace.id).await;
@@ -224,12 +218,12 @@ async fn a_sealed_workspace_refuses_a_new_session() {
 async fn a_sealed_workspace_refuses_a_turn() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
     kestrel.complete_session(&session).await;
     kestrel.seal_workspace(workspace.id).await;
 
     let refusal = kestrel
-        .try_start(&session)
+        .try_start(&session, support::harness())
         .await
         .expect_err("a sealed workspace takes no turn");
 
@@ -245,7 +239,7 @@ async fn a_sealed_workspace_refuses_a_turn() {
 async fn a_sealed_workspace_refuses_a_new_transcript_entry() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
     kestrel.complete_session(&session).await;
     kestrel.seal_workspace(workspace.id).await;
     let transcript = kestrel.transcript(workspace.id).await.len();

@@ -291,11 +291,7 @@ async fn a_command_on_an_open_workspaces_issue_is_not_also_heard_as_a_remark() {
     let kestrel = Kestrel::boot().await;
     dogfooding(&kestrel, &stub).await;
     let workspace = workspaces(&kestrel, 1).await.remove(0);
-    let first = kestrel
-        .claim_session()
-        .await
-        .expect("the first session")
-        .session;
+    let first = kestrel.claim_session().await.expect("the first session");
     kestrel.complete_session(&first).await;
 
     stub.script_answer(
@@ -320,7 +316,7 @@ async fn a_command_on_an_open_workspaces_issue_is_not_also_heard_as_a_remark() {
             break heard;
         }
         if let Some(claimed) = kestrel.claim_session().await {
-            kestrel.complete_session(&claimed.session).await;
+            kestrel.complete_session(&claimed).await;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -357,11 +353,7 @@ async fn a_comment_on_a_sealed_workspaces_issue_starts_nothing_and_a_command_con
     let kestrel = Kestrel::boot().await;
     dogfooding(&kestrel, &stub).await;
     let sealed = workspaces(&kestrel, 1).await.remove(0);
-    let first = kestrel
-        .claim_session()
-        .await
-        .expect("the first session")
-        .session;
+    let first = kestrel.claim_session().await.expect("the first session");
     kestrel.complete_session(&first).await;
     kestrel.seal_workspace(sealed.id).await;
 
@@ -1138,11 +1130,7 @@ async fn a_blocker_added_after_a_workspace_opens_does_not_freeze_it() {
     let kestrel = Kestrel::boot().await;
     dogfooding(&kestrel, &stub).await;
     let workspace = workspaces(&kestrel, 1).await.remove(0);
-    let first = kestrel
-        .claim_session()
-        .await
-        .expect("the first session")
-        .session;
+    let first = kestrel.claim_session().await.expect("the first session");
     kestrel.complete_session(&first).await;
 
     for _ in 0..4 {
@@ -1162,7 +1150,7 @@ async fn a_blocker_added_after_a_workspace_opens_does_not_freeze_it() {
     let deadline = tokio::time::Instant::now() + PATIENCE;
     let next = loop {
         if let Some(claimed) = kestrel.claim_session().await {
-            break claimed.session;
+            break claimed;
         }
         assert!(
             tokio::time::Instant::now() < deadline,

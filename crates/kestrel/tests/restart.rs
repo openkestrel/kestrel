@@ -8,14 +8,13 @@ use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{Exit, Session, SessionId, SessionState, Workspace};
-use kestrel::link::credential::Secret;
 use kestrel::work::{Report, Reported};
 use reqwest::StatusCode;
 use serde_json::json;
-use support::Kestrel;
 use support::link_client::Link;
 use support::scripted_agent::Script;
 use support::supervisor::Supervisor;
+use support::{Kestrel, OnTheLink};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 const LONG_ENOUGH_TO_BE_SURE: Duration = Duration::from_secs(1);
@@ -70,12 +69,11 @@ async fn working(
     workspace: &Workspace,
     script: Script,
 ) -> (Session, Supervisor) {
-    let (session, credential) = kestrel.dispatch_session(workspace.id).await;
-    let mut supervisor =
-        Supervisor::provision_playing(&kestrel.link(), session.id, &credential, script);
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let mut supervisor = Supervisor::provision_playing(&kestrel.link(), &on, script);
 
     supervisor.wait_until_it_says("reported connected").await;
-    kestrel.start(&session).await;
+    kestrel.start(&session, supervisor.harness()).await;
     supervisor.wait_until_it_says("reported started").await;
 
     (session, supervisor)
@@ -96,18 +94,18 @@ async fn killed_mid_session() -> (Kestrel, Workspace, Session, Supervisor) {
 
 #[tokio::test]
 async fn a_turn_in_flight_when_the_control_plane_is_killed_is_answered_after_it_restarts() {
-    let (kestrel, _, session, supervisor) = killed_mid_session().await;
+    let (kestrel, _, session, mut supervisor) = killed_mid_session().await;
 
     let ended = kestrel.after_one_turn(session.id).await;
 
     assert_eq!(ended.exit, Some(Exit::Succeeded));
-    assert!(supervisor.finishes().await.success());
+    supervisor.lets_go_of(session.id).await;
     kestrel.teardown().await;
 }
 
 #[tokio::test]
 async fn the_transcript_of_a_session_that_outlived_a_restart_has_no_gap_and_no_duplicate() {
-    let (kestrel, workspace, session, supervisor) = killed_mid_session().await;
+    let (kestrel, workspace, session, mut supervisor) = killed_mid_session().await;
     kestrel.after_one_turn(session.id).await;
 
     assert_eq!(
@@ -131,7 +129,7 @@ async fn the_transcript_of_a_session_that_outlived_a_restart_has_no_gap_and_no_d
         (1..=6).collect::<Vec<_>>()
     );
 
-    assert!(supervisor.finishes().await.success());
+    supervisor.lets_go_of(session.id).await;
     kestrel.teardown().await;
 }
 
@@ -146,7 +144,7 @@ async fn the_environment_comes_back_on_its_own_carrying_the_cursor_it_held() {
         "the control plane that came back does not know an environment is on the link"
     );
     kestrel.after_one_turn(session.id).await;
-    assert!(supervisor.finishes().await.success());
+    supervisor.lets_go_of(session.id).await;
     kestrel.teardown().await;
 }
 
@@ -162,7 +160,7 @@ async fn a_lease_is_not_swept_while_the_environment_that_holds_it_out_is_reconne
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
     let (session, supervisor) = working(&kestrel, &workspace, Script::Dawdles).await;
-    let (abandoned, _) = kestrel
+    let abandoned = kestrel
         .dispatch_session(
             kestrel
                 .open_workspace("acme", "kestrel", "builder")
@@ -206,7 +204,7 @@ async fn a_lease_is_not_swept_while_the_environment_that_holds_it_out_is_reconne
 async fn restarting_with_no_session_in_flight_changes_nothing() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
     kestrel.complete_session(&session).await;
     let before = transcript(&kestrel, &workspace).await;
 
@@ -223,18 +221,19 @@ async fn restarting_with_no_session_in_flight_changes_nothing() {
     kestrel.teardown().await;
 }
 
-async fn a_session(kestrel: &Kestrel) -> (Session, Secret) {
+async fn a_session(kestrel: &Kestrel) -> (Session, OnTheLink) {
     let workspace = a_workspace(kestrel).await;
 
-    kestrel.dispatch_session(workspace.id).await
+    kestrel.dispatch_to_the_link(workspace.id).await
 }
 
 #[tokio::test]
 async fn a_report_whose_answer_never_arrived_is_taken_once_when_it_is_sent_again() {
     let kestrel = Kestrel::boot().await;
-    let (session, credential) = a_session(&kestrel).await;
+    let (session, on) = a_session(&kestrel).await;
     let link = Link::to(&kestrel.link());
     let said = Reported {
+        session: Some(session.id),
         seq: Some(1),
         report: Report::Said {
             message: "said once, and reported twice".to_owned(),
@@ -243,7 +242,7 @@ async fn a_report_whose_answer_never_arrived_is_taken_once_when_it_is_sent_again
 
     for _ in 0..2 {
         assert_eq!(
-            link.report(session.id, Some(&credential), &said)
+            link.report(&on.instance, Some(&on.credential), &said)
                 .await
                 .status(),
             StatusCode::ACCEPTED
@@ -269,14 +268,14 @@ async fn a_report_whose_answer_never_arrived_is_taken_once_when_it_is_sent_again
 #[tokio::test]
 async fn a_report_that_skips_one_the_environment_has_yet_to_send_is_refused() {
     let kestrel = Kestrel::boot().await;
-    let (session, credential) = a_session(&kestrel).await;
+    let (session, on) = a_session(&kestrel).await;
     let link = Link::to(&kestrel.link());
 
     let refused = link
         .report_body(
-            session.id,
-            Some(&credential),
-            &json!({"kind": "said", "seq": 2, "message": "the one before this is missing"}),
+            &on.instance,
+            Some(&on.credential),
+            &json!({"session": session.id, "kind": "said", "seq": 2, "message": "the one before this is missing"}),
         )
         .await;
 
@@ -289,14 +288,14 @@ async fn a_report_that_skips_one_the_environment_has_yet_to_send_is_refused() {
 #[tokio::test]
 async fn a_report_that_changes_the_sessions_record_and_is_not_numbered_is_refused() {
     let kestrel = Kestrel::boot().await;
-    let (session, credential) = a_session(&kestrel).await;
+    let (session, on) = a_session(&kestrel).await;
     let link = Link::to(&kestrel.link());
 
     let refused = link
         .report_body(
-            session.id,
-            Some(&credential),
-            &json!({"kind": "said", "message": "unnumbered"}),
+            &on.instance,
+            Some(&on.credential),
+            &json!({"session": session.id, "kind": "said", "message": "unnumbered"}),
         )
         .await;
 

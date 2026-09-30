@@ -177,7 +177,6 @@ impl Provisioned for Container {
                 container: self.container.clone(),
                 exec,
             }),
-            stopped: false,
         })
     }
 

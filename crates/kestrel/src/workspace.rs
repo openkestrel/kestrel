@@ -173,7 +173,7 @@ impl UnfinishedSession {
 
     pub async fn end_waiting(&self, tx: &mut Tx<'_>) -> Result<()> {
         if let Some(waiting) = self.waiting() {
-            work::stopping(tx, &waiting, Exit::Succeeded).await?;
+            work::ending(tx, &waiting, Exit::Succeeded).await?;
         }
 
         Ok(())

@@ -9,25 +9,15 @@ use crate::domain::{Exit, Session, SessionId, Turn, Usage, WorkspaceId};
 use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
 use crate::link;
-use crate::link::credential::Secret;
 use crate::log::{Entry, Message};
 use crate::store::workspace::{PendingMessage, Taken};
 use crate::store::{Store, Tx};
 use crate::workspace;
 
-const CREDENTIAL_LIFETIME: SignedDuration = SignedDuration::from_hours(12);
-
 /// A supervisor cannot say it is alive while the control plane is not listening, so this
 /// outlasts a restart under a live one by enough that an upgrade does not reap the Sessions it
 /// was carrying; a dead supervisor holds a Workspace's active-Session slot until it is up.
 pub(crate) const LEASE: SignedDuration = SignedDuration::from_mins(2);
-
-/// The Secret is returned once, to be handed to the Session's supervisor as it starts; `Store`
-/// keeps only its digest, so it cannot be recovered afterwards.
-pub struct Claimed {
-    pub session: Session,
-    pub credential: Secret,
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -59,8 +49,12 @@ impl Report {
     }
 }
 
+/// Addressed to the Instance; everything but `connected` and `heartbeat` names the Session it is
+/// about, and a numbered one is numbered within that Session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reported {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<SessionId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seq: Option<i64>,
     #[serde(flatten)]
@@ -69,6 +63,8 @@ pub struct Reported {
 
 #[derive(Debug)]
 pub enum ReportRefused {
+    MissingSession,
+    Gone(SessionId),
     MissingSequence,
     SkippedSequence(i64),
     Unavailable(anyhow::Error),
@@ -77,6 +73,17 @@ pub enum ReportRefused {
 impl fmt::Display for ReportRefused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MissingSession => {
+                write!(
+                    f,
+                    "a report of this kind names its session, and this one names none"
+                )
+            }
+            Self::Gone(session) => write!(
+                f,
+                "the session {session} is not one this instance carries: it has ended, or its \
+                 lease has passed and its control plane has let it go"
+            ),
             Self::MissingSequence => {
                 write!(
                     f,
@@ -144,7 +151,7 @@ pub async fn enqueue(
 
 /// A queued Session is dispatched at most once: what this hands back is already active, so a
 /// second claimant asking at the same moment is handed something else, or nothing.
-pub async fn claim(store: &Store, serialized: &[String]) -> Result<Option<Claimed>> {
+pub async fn claim(store: &Store, serialized: &[String]) -> Result<Option<Session>> {
     let mut tx = store.begin().await?;
     let claimed = claiming(&mut tx, serialized, None).await?;
     tx.commit().await?;
@@ -153,7 +160,7 @@ pub async fn claim(store: &Store, serialized: &[String]) -> Result<Option<Claime
 }
 
 pub enum Occupied {
-    Claimed(Claimed),
+    Claimed(Session),
     Resumed(Session),
 }
 
@@ -197,7 +204,7 @@ async fn claiming(
     tx: &mut Tx<'_>,
     serialized: &[String],
     input_since: Option<Timestamp>,
-) -> Result<Option<Claimed>> {
+) -> Result<Option<Session>> {
     let claimable = tx.workspaces().claimable_sessions(serialized).await?;
     for queued in claimable {
         if input_since.is_some_and(|since| !goes_before_input(&queued, since)) {
@@ -206,25 +213,13 @@ async fn claiming(
         let workspace = tx.workspaces().get(queued.workspace).await?;
         match crate::instance::admission(tx, &workspace).await? {
             Admission::Available => {
-                let Some(session) = tx
+                if let Some(session) = tx
                     .workspaces()
                     .claim_session(&queued, Timestamp::now() + LEASE)
                     .await?
-                else {
-                    continue;
-                };
-                let credential = Secret::mint();
-                tx.workspaces()
-                    .issue_credential(
-                        &session,
-                        &credential.digest(),
-                        Timestamp::now() + CREDENTIAL_LIFETIME,
-                    )
-                    .await?;
-                return Ok(Some(Claimed {
-                    session,
-                    credential,
-                }));
+                {
+                    return Ok(Some(session));
+                }
             }
             Admission::Archivable(kept) => crate::instance::reclaim(tx, &kept).await?,
             Admission::Archiving(_) | Admission::AtLimit(_) => {}
@@ -262,18 +257,73 @@ pub async fn sessions(store: &Store, workspace: WorkspaceId) -> Result<Vec<Sessi
 /// (ADR-0004).
 pub async fn report(
     store: &Store,
-    session: &Session,
-    Reported { seq, report }: Reported,
+    instance: &str,
+    Reported {
+        session,
+        seq,
+        report,
+    }: Reported,
 ) -> Result<(), ReportRefused> {
-    if let Report::Stderr { lines } = report {
-        for line in lines {
-            info!(session = %session.id, line, "its harness wrote to stderr");
+    match report {
+        Report::Stderr { lines } => {
+            for line in lines {
+                info!(instance, line, "a harness wrote to stderr");
+            }
+            return Ok(());
         }
-        return Ok(());
+        Report::Connected { version } => {
+            let mut tx = store.begin().await?;
+            tx.workspaces().record_connected(instance, &version).await?;
+            tx.commit().await?;
+            info!(instance, version, "a supervisor reported itself connected");
+            return Ok(());
+        }
+        Report::Heartbeat => {
+            let mut tx = store.begin().await?;
+            tx.workspaces().record_reached(instance).await?;
+            tx.workspaces()
+                .hold_leases_on(instance, Timestamp::now() + LEASE)
+                .await?;
+            tx.commit().await?;
+            debug!(instance, "a supervisor reported itself alive");
+            return Ok(());
+        }
+        _ => {}
     }
 
+    let session = session.ok_or(ReportRefused::MissingSession)?;
     let mut tx = store.begin().await?;
+    let session = tx
+        .workspaces()
+        .carried(instance, session)
+        .await?
+        .ok_or(ReportRefused::Gone(session))?;
+    reported(&mut tx, &session, seq, report).await?;
+    tx.commit().await?;
 
+    Ok(())
+}
+
+/// What a Session's own report does, reached here without asking which Instance carries it.
+pub async fn report_on(
+    store: &Store,
+    session: &Session,
+    seq: Option<i64>,
+    report: Report,
+) -> Result<(), ReportRefused> {
+    let mut tx = store.begin().await?;
+    reported(&mut tx, session, seq, report).await?;
+    tx.commit().await?;
+
+    Ok(())
+}
+
+async fn reported(
+    tx: &mut Tx<'_>,
+    session: &Session,
+    seq: Option<i64>,
+    report: Report,
+) -> Result<(), ReportRefused> {
     if report.numbered() {
         let seq = seq.ok_or(ReportRefused::MissingSequence)?;
         match tx.workspaces().take_report(session, seq).await? {
@@ -287,17 +337,9 @@ pub async fn report(
     }
 
     match report {
-        Report::Connected { version } => {
-            tx.workspaces().record_connected(session, &version).await?;
-            info!(session = %session.id, version, "a supervisor reported itself connected");
+        Report::Connected { .. } | Report::Heartbeat | Report::Stderr { .. } => {
+            unreachable!("a report about the instance is taken before one about its session")
         }
-        Report::Heartbeat => {
-            tx.workspaces()
-                .hold_lease(session, Timestamp::now() + LEASE)
-                .await?;
-            debug!(session = %session.id, "a supervisor reported itself alive");
-        }
-        Report::Stderr { .. } => unreachable!("stderr is reported without a transaction"),
         Report::Started => {
             if tx.workspaces().record_started(session).await? {
                 let workspace = tx.workspaces().get(session.workspace).await?;
@@ -342,7 +384,7 @@ pub async fn report(
                     .said_since(&workspace, from_seq, &session.agent.name)
                     .await?;
                 if !said.is_empty() {
-                    delivery::record_turn(&mut tx, session, &workspace, turn, &said).await?;
+                    delivery::record_turn(tx, session, &workspace, turn, &said).await?;
                 }
                 tx.workspaces()
                     .record_active(session.workspace, Timestamp::now())
@@ -357,11 +399,10 @@ pub async fn report(
             info!(session = %session.id, "a supervisor reported what its checkout holds");
         }
         Report::Finished { exit } => {
-            let stands = ending(&mut tx, session, exit).await?;
+            let stands = ending(tx, session, exit).await?;
             info!(session = %session.id, %stands, "a supervisor reported its session finished");
         }
     }
-    tx.commit().await?;
 
     Ok(())
 }
@@ -386,6 +427,9 @@ pub async fn executes_on(store: &Store, session: &Session, instance: &str) -> Re
 /// nothing can resume, and none is handed a fresh one before this Session says what was lost.
 pub async fn instance_lost(store: &Store, session: &Session, because: &str) -> Result<Exit> {
     let mut tx = store.begin().await?;
+    if let Some(instance) = tx.workspaces().instance(session.workspace).await? {
+        tx.workspaces().forget_supervisor(&instance).await?;
+    }
     tx.workspaces()
         .record_instance(session.workspace, None)
         .await?;
@@ -402,31 +446,33 @@ pub async fn instance_lost(store: &Store, session: &Session, because: &str) -> R
     Ok(stands)
 }
 
-pub async fn supervised(store: &Store, session: &Session, supervisor: &str) -> Result<()> {
+pub async fn supervised(
+    store: &Store,
+    session: &Session,
+    instance: &str,
+    supervisor: Option<&str>,
+) -> Result<()> {
     let mut tx = store.begin().await?;
     tx.workspaces()
-        .record_supervisor(session, supervisor)
+        .record_supervisor(session, instance, supervisor)
         .await?;
 
     tx.commit().await
 }
 
-pub async fn supervisors_to_stop(store: &Store) -> Result<Vec<(Session, String)>> {
-    store
-        .begin()
-        .await?
-        .workspaces()
-        .supervisors_to_stop()
-        .await
-}
-
-pub async fn supervisor_gone(store: &Store, session: &Session) -> Result<Option<Session>> {
+/// Forgotten with the Sessions it was carrying, so the next Session on the Instance starts
+/// another.
+pub async fn supervisor_exited(store: &Store, instance: &str, because: &str) -> Result<()> {
     let mut tx = store.begin().await?;
-    tx.workspaces().record_supervisor_gone(session).await?;
-    let continued = continue_pending(&mut tx, session.workspace).await?;
-    tx.commit().await?;
+    tx.workspaces().forget_supervisor(instance).await?;
+    for session in tx.workspaces().live_sessions_on(instance).await? {
+        let exit = Exit::Failed {
+            because: because.to_owned(),
+        };
+        ending(&mut tx, &session, exit).await?;
+    }
 
-    Ok(continued)
+    tx.commit().await
 }
 
 pub async fn turns(store: &Store, session: SessionId) -> Result<Vec<Turn>> {
@@ -441,20 +487,10 @@ pub async fn stop(store: &Store, id: SessionId) -> Result<Exit> {
     let Some(exit) = session.state.stop_exit() else {
         bail!("the session {id} has already ended");
     };
-    let stands = stopping(&mut tx, &session, exit).await?;
+    let stands = ending(&mut tx, &session, exit).await?;
     tx.commit().await?;
 
     Ok(stands)
-}
-
-/// Told as well as ended, so a supervisor leaves the link rather than dialling back in to be
-/// refused.
-pub(crate) async fn stopping(tx: &mut Tx<'_>, session: &Session, exit: Exit) -> Result<Exit> {
-    tx.workspaces()
-        .send_instruction(session, link::Instruction::Stop)
-        .await?;
-
-    ending(tx, session, exit).await
 }
 
 pub async fn complete(store: &Store, session: &Session) -> Result<Exit> {
@@ -482,7 +518,8 @@ async fn end(store: &Store, session: &Session, exit: Exit) -> Result<Exit> {
 
 /// A Session ends once. Whoever gets there first — the supervisor reporting itself finished, the
 /// claimant finding it gone, `timer` finding its lease expired — decides the exit status, and
-/// what comes back is the one that stands.
+/// what comes back is the one that stands. Its Instance's supervisor is told, so the next
+/// Session's `start` always follows this one's `stop` down the stream.
 pub(crate) async fn ending(tx: &mut Tx<'_>, session: &Session, exit: Exit) -> Result<Exit> {
     let workspace = tx.workspaces().get(session.workspace).await?;
     let said = tx
@@ -503,14 +540,14 @@ pub(crate) async fn ending(tx: &mut Tx<'_>, session: &Session, exit: Exit) -> Re
                 },
             )
             .await?;
-        tx.workspaces().invalidate_credentials(session).await?;
+        tx.workspaces()
+            .send_instruction(session, link::Instruction::Stop)
+            .await?;
         delivery::record_outcome(tx, session, &workspace, &exit, said.as_deref()).await?;
         if let Exit::Failed { .. } = exit {
             cascade_unreachable(tx, session.id).await?;
         }
-        if tx.workspaces().supervisor_is_gone(session).await? {
-            continue_pending(tx, session.workspace).await?;
-        }
+        continue_pending(tx, session.workspace).await?;
         exit
     } else {
         tx.workspaces()

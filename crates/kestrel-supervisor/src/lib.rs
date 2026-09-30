@@ -16,12 +16,12 @@ use crate::harness::{Conversation, Harness};
 use crate::link::{Checkout, Exit, Instruction, Link, Report};
 
 const RECONNECT_AFTER: Duration = Duration::from_millis(250);
-/// Often enough that the control plane keeps its hold on this Environment through a handful
-/// of these going missing, and through the control plane itself restarting under it.
+/// Often enough that the control plane keeps its hold on this Instance's Session through a
+/// handful of these going missing, and through the control plane itself restarting under it.
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(2);
-/// Waited past the lease the control plane holds on this Session before giving up on it. Longer
-/// than a heartbeat, so a reachable link resets the clock between two of them, and long enough
-/// that a control plane restarting inside its lease is still met.
+/// Waited past the lease the control plane holds on a Session before letting it go. Longer than a
+/// heartbeat, so a reachable link resets the clock between two of them, and long enough that a
+/// control plane restarting inside its lease is still met.
 const GIVE_UP_MARGIN: Duration = Duration::from_secs(5);
 const STDERR_LINES_PER_REPORT: usize = 64;
 const STDERR_REPORT_PATIENCE: Duration = Duration::from_secs(5);
@@ -36,35 +36,47 @@ pub struct Stderr;
 
 impl Diagnostics for Stderr {
     /// A control plane that dies takes the pipe it was reading these over with it, and an
-    /// Environment outlives a control-plane restart (ADR-0002) rather than dying into one.
+    /// Instance outlives a control-plane restart (ADR-0002) rather than dying into one.
     fn info(&self, message: &str) {
         let _ = writeln!(io::stderr(), "{message}");
     }
 }
 
-enum Attended {
-    Stopped,
-    Finished,
-    LostTheLink,
-    GaveUp,
+/// Held across a reconnect.
+struct Supervising {
+    cursor: Option<String>,
+    carrying: Option<Carrying>,
 }
 
-/// Held across a reconnect: the conversation goes on whether or not the link does, and what
-/// is left to say about it is what the supervisor comes back to.
-#[derive(Default)]
-struct Attending {
-    cursor: Option<String>,
-    started: bool,
-    checkout: Option<Checkout>,
+/// One Session's part of the supervisor's life. The conversation goes on whether or not the link
+/// does, and what is left to say about it is what the supervisor comes back to.
+struct Carrying {
+    session: String,
+    checkout: Checkout,
     prompt: String,
+    harness: Harness,
     conversation: Option<Conversation>,
     finished: bool,
     taken: i64,
     /// Handed back before anything is said, because saying the Session finished ends it and with it
-    /// this Environment's right to hand anything back.
+    /// this Instance's right to hand anything back for it.
     refreshed: BTreeMap<String, String>,
     written: Option<login::Written>,
     saying: VecDeque<Report>,
+}
+
+impl Carrying {
+    /// Ends the harness and takes the Subscription Profile's files with it, so nothing of the
+    /// Session's credentials outlives it on the Instance (ADR-0010).
+    async fn let_go(self, because: &str, diagnostics: &dyn Diagnostics) {
+        diagnostics.info(&format!("let the session {} go: {because}", self.session));
+        if let Some(conversation) = self.conversation {
+            conversation.end().await;
+        }
+        if let Some(written) = self.written {
+            written.remove();
+        }
+    }
 }
 
 pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, String>) -> i32 {
@@ -72,36 +84,38 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
 
     let Some(link) = dialled(variables) else {
         diagnostics.info(
-            "no link to dial: set KESTREL_LINK, KESTREL_SESSION and KESTREL_SESSION_CREDENTIAL",
+            "no link to dial: set KESTREL_LINK, KESTREL_INSTANCE and KESTREL_INSTANCE_CREDENTIAL",
         );
         return 1;
     };
     let link = Arc::new(link);
     let (stderr, written) = mpsc::unbounded_channel();
-    let harness = Harness {
-        command: set(variables, "KESTREL_HARNESS_COMMAND")
-            .unwrap_or_default()
-            .to_owned(),
-        auth: set(variables, "KESTREL_AGENT_AUTH").map(str::to_owned),
-        model: set(variables, "KESTREL_AGENT_MODEL").map(str::to_owned),
-        stderr,
-    };
     let home = set(variables, "HOME").map(PathBuf::from);
+    let mut supervising = Supervising {
+        cursor: set(variables, "KESTREL_INSTRUCTIONS_AFTER").map(str::to_owned),
+        carrying: None,
+    };
 
-    // Nothing else reaches the link while a turn is being worked, so this Environment says it
-    // is alive beside the work rather than between the steps of it.
+    // Nothing else reaches the link while a turn is being worked, so this Instance says it is
+    // alive beside the work rather than between the steps of it.
     let alive = tokio::spawn(saying_it_is_alive(Arc::clone(&link)));
     let mut relaying = tokio::spawn(relaying_stderr(Arc::clone(&link), written));
-    let status = attending(
+    let status = supervised(
         &link,
-        &harness,
+        &stderr,
         home.as_deref(),
+        &mut supervising,
         give_up_after(variables),
         diagnostics,
     )
     .await;
+    if let Some(carrying) = supervising.carrying.take() {
+        carrying
+            .let_go("this instance is off the link for good", diagnostics)
+            .await;
+    }
     alive.abort();
-    drop(harness);
+    drop(stderr);
     if tokio::time::timeout(STDERR_DRAINING, &mut relaying)
         .await
         .is_err()
@@ -117,7 +131,7 @@ async fn saying_it_is_alive(link: Arc<Link>) {
         tokio::time::sleep(HEARTBEAT_EVERY).await;
         // Whether the link is there at all is the attending loop's to notice and reconnect
         // through; this one says what it can, whenever it can.
-        let _ = link.report(&Report::Heartbeat, None).await;
+        let _ = link.report(&Report::Heartbeat, None, None).await;
     }
 }
 
@@ -128,92 +142,69 @@ async fn relaying_stderr(link: Arc<Link>, mut written: mpsc::UnboundedReceiver<S
         let report = Report::Stderr {
             lines: std::mem::take(&mut lines),
         };
-        let _ = tokio::time::timeout(STDERR_REPORT_PATIENCE, link.report(&report, None)).await;
+        let _ =
+            tokio::time::timeout(STDERR_REPORT_PATIENCE, link.report(&report, None, None)).await;
     }
 }
 
-async fn attending(
+/// Redials for as long as the Instance lives: only a link that refuses this Instance, which it
+/// does once the Instance has been let go, ends it.
+async fn supervised(
     link: &Link,
-    harness: &Harness,
+    stderr: &mpsc::UnboundedSender<String>,
     home: Option<&Path>,
-    give_up_after: Option<Duration>,
-    diagnostics: &dyn Diagnostics,
-) -> i32 {
-    let mut attending = Attending::default();
-    let status = attended(
-        link,
-        harness,
-        home,
-        &mut attending,
-        give_up_after,
-        diagnostics,
-    )
-    .await;
-    if let Some(conversation) = attending.conversation.take() {
-        conversation.end().await;
-    }
-
-    status
-}
-
-async fn attended(
-    link: &Link,
-    harness: &Harness,
-    home: Option<&Path>,
-    attending: &mut Attending,
+    supervising: &mut Supervising,
     give_up_after: Option<Duration>,
     diagnostics: &dyn Diagnostics,
 ) -> i32 {
     loop {
-        match attend(link, harness, home, attending, give_up_after, diagnostics).await {
-            Ok(Attended::Stopped) => {
-                diagnostics.info("supervisor stopped");
-                return 0;
-            }
-            Ok(Attended::Finished) => {
-                diagnostics.info("supervisor finished");
-                return 0;
-            }
-            Ok(Attended::LostTheLink) => diagnostics.info("lost the link"),
-            Ok(Attended::GaveUp) => {
-                give_up(link, diagnostics);
-                return 1;
-            }
+        match attend(link, stderr, home, supervising, give_up_after, diagnostics).await {
+            Ok(()) => diagnostics.info("lost the link"),
             Err(link::Error::Refused(why)) => {
-                diagnostics.info(&format!("the link refused this environment: {why}"));
+                diagnostics.info(&format!("the link refused this instance: {why}"));
                 return 1;
             }
-            Err(link::Error::Lost(why)) => diagnostics.info(&format!("lost the link: {why}")),
+            Err(link::Error::Lost(why) | link::Error::Session(why)) => {
+                diagnostics.info(&format!("lost the link: {why}"));
+            }
         }
 
-        if give_up_after.is_some_and(|bound| link.unreached_for() >= bound) {
-            give_up(link, diagnostics);
-            return 1;
+        if lapsed(link, supervising, give_up_after) {
+            give_up(link, supervising, diagnostics).await;
         }
 
         tokio::time::sleep(RECONNECT_AFTER).await;
     }
 }
 
-/// A control plane that is gone for good has already let this Session's lease go, so nothing is
-/// waiting for the work this Environment would keep its harness open for.
-fn give_up(link: &Link, diagnostics: &dyn Diagnostics) {
-    diagnostics.info(&format!(
-        "gave up on the link: it has not answered for {:?}, past the session's lease",
+fn lapsed(link: &Link, supervising: &Supervising, give_up_after: Option<Duration>) -> bool {
+    supervising.carrying.is_some()
+        && give_up_after.is_some_and(|bound| link.unreached_for() >= bound)
+}
+
+/// A control plane gone past the lease has already let the Session go, so nothing is waiting for
+/// the work its harness would be kept open for. The supervisor stays, for the Instance.
+async fn give_up(link: &Link, supervising: &mut Supervising, diagnostics: &dyn Diagnostics) {
+    let Some(carrying) = supervising.carrying.take() else {
+        return;
+    };
+    let because = format!(
+        "gave up on it, since the link has not answered for {:?}, past the session's lease",
         link.unreached_for()
-    ));
+    );
+    carrying.let_go(&because, diagnostics).await;
 }
 
 async fn attend(
     link: &Link,
-    harness: &Harness,
+    stderr: &mpsc::UnboundedSender<String>,
     home: Option<&Path>,
-    attending: &mut Attending,
+    supervising: &mut Supervising,
     give_up_after: Option<Duration>,
     diagnostics: &dyn Diagnostics,
-) -> Result<Attended, link::Error> {
-    let mut instructions = link.open(attending.cursor.as_deref()).await?;
-    match attending.cursor.as_deref() {
+) -> Result<(), link::Error> {
+    let mut instructions = link.open(supervising.cursor.as_deref()).await?;
+    match supervising.cursor.as_deref() {
         None => diagnostics.info("link open"),
         Some(held) => diagnostics.info(&format!("link open after {held}")),
     }
@@ -223,141 +214,225 @@ async fn attend(
             version: env!("CARGO_PKG_VERSION").to_owned(),
         },
         None,
+        None,
     )
     .await?;
     diagnostics.info("reported connected");
 
     loop {
-        if !attending.refreshed.is_empty() {
-            link.refresh(&attending.refreshed).await?;
-            diagnostics.info(&format!(
-                "handed back {}",
-                attending
-                    .refreshed
-                    .keys()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-            attending.refreshed.clear();
-        }
-        say(link, attending, diagnostics).await?;
-        if attending.finished {
-            return Ok(Attended::Finished);
-        }
-        if attending.started && attending.conversation.is_none() {
-            attending.conversation =
-                conversation(link, harness, home, attending, diagnostics).await?;
+        if let Some(carrying) = supervising.carrying.as_mut() {
+            match carried(link, home, carrying, diagnostics).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    if let Some(carrying) = supervising.carrying.take() {
+                        carrying.let_go("it is over", diagnostics).await;
+                    }
+                }
+                Err(link::Error::Session(why)) => {
+                    if let Some(carrying) = supervising.carrying.take() {
+                        carrying.let_go(&why, diagnostics).await;
+                    }
+                }
+                Err(error) => return Err(error),
+            }
         }
 
-        let give_up_timer = until_given_up(link, give_up_after);
+        let give_up_timer = until_given_up(link, supervising.carrying.is_some(), give_up_after);
         tokio::select! {
             delivered = instructions.next() => {
                 let Some(delivered) = delivered? else {
-                    return Ok(Attended::LostTheLink);
+                    return Ok(());
                 };
-                attending.cursor = Some(delivered.id.clone());
+                supervising.cursor = Some(delivered.id.clone());
                 diagnostics.info(&format!(
-                    "instruction {} {}",
+                    "instruction {} {} for session {}",
                     delivered.instruction.kind(),
-                    delivered.id
+                    delivered.id,
+                    delivered.session
                 ));
-
-                match delivered.instruction {
-                    // Stopped is told after the session has already ended, its credential
-                    // invalidated with it, so whatever a turn last refreshed was already handed
-                    // back before this arrived; only the local copy is left to clean up.
-                    Instruction::Stop => {
-                        if let Some(written) = attending.written.take() {
-                            written.remove();
-                        }
-                        return Ok(Attended::Stopped);
-                    }
-                    Instruction::Start { checkout, prompt } if !attending.started => {
-                        attending.started = true;
-                        attending.prompt = prompt;
-                        match checkout::check_out(&checkout).await {
-                            Ok(()) => attending.saying.push_back(Report::Started),
-                            Err(because) => {
-                                diagnostics.info(&because);
-                                attending.finished = true;
-                                attending.saying.push_back(Report::Checkout {
-                                    repositories: checkout::observe(&checkout).await,
-                                });
-                                attending.saying.push_back(Report::Finished {
-                                    exit: Exit::Failed { because },
-                                });
-                            }
-                        }
-                        attending.checkout = Some(checkout);
-                    }
-                    Instruction::Prompt { prompt } => match &attending.conversation {
-                        Some(conversation) => conversation.prompt(prompt),
-                        None => diagnostics.info("prompted before the session started"),
-                    },
-                    Instruction::Start { .. } | Instruction::Unrecognized => {}
-                }
+                instructed(stderr, supervising, delivered, diagnostics).await;
             }
-            worked = turn(&mut attending.conversation) => {
-                if let Some(on) = &worked.on {
-                    diagnostics.info(&format!("on the model {}", on.model));
+            worked = turn(&mut supervising.carrying) => {
+                if let Some(carrying) = supervising.carrying.as_mut() {
+                    worked_on(carrying, worked, diagnostics).await;
                 }
-                for subject in &worked.allowed {
-                    diagnostics.info(&format!("allowed once  {subject}"));
-                }
-                // Handed back after every turn, not only a finishing one: a login the harness
-                // rotates mid-conversation is refreshed while the session's credential still lets
-                // it through, not saved up for a Stop that arrives once that credential is gone.
-                if let Some(written) = &attending.written {
-                    attending.refreshed = written.refreshed();
-                }
-                if worked.failed.is_some() {
-                    attending.finished = true;
-                    attending.conversation = None;
-                    if let Some(written) = attending.written.take() {
-                        written.remove();
-                    }
-                }
-                // Reported after every turn, not only a finishing one: a Session waiting between
-                // turns may be stopped at any moment, and what it last observed is what decides
-                // whether its Instance is held.
-                let observed = match &attending.checkout {
-                    Some(checkout) => Some(checkout::observe(checkout).await),
-                    None => None,
-                };
-                attending.saying.extend(everything_left_to_say(worked, observed));
             }
             () = give_up_timer => {
                 // Re-checked here because a heartbeat may have reached the link since this was
                 // armed; a reachable link is not one to give up on.
-                if let Some(bound) = give_up_after
-                    && link.unreached_for() >= bound
-                {
-                    return Ok(Attended::GaveUp);
+                if lapsed(link, supervising, give_up_after) {
+                    give_up(link, supervising, diagnostics).await;
                 }
             }
         }
     }
 }
 
+/// Everything left to do for the Session before waiting on the link again: `false` once it has
+/// said all it has to say about a Session that is over.
+async fn carried(
+    link: &Link,
+    home: Option<&Path>,
+    carrying: &mut Carrying,
+    diagnostics: &dyn Diagnostics,
+) -> Result<bool, link::Error> {
+    if !carrying.refreshed.is_empty() {
+        link.refresh(&carrying.session, &carrying.refreshed).await?;
+        diagnostics.info(&format!(
+            "handed back {}",
+            carrying
+                .refreshed
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        carrying.refreshed.clear();
+    }
+    say(link, carrying, diagnostics).await?;
+    if carrying.finished {
+        return Ok(false);
+    }
+    if carrying.conversation.is_none() {
+        carrying.conversation = conversation(link, home, carrying, diagnostics).await?;
+    }
+
+    Ok(true)
+}
+
+async fn instructed(
+    stderr: &mpsc::UnboundedSender<String>,
+    supervising: &mut Supervising,
+    delivered: link::Delivered,
+    diagnostics: &dyn Diagnostics,
+) {
+    let carrying_it = supervising
+        .carrying
+        .as_ref()
+        .is_some_and(|carrying| carrying.session == delivered.session);
+
+    match delivered.instruction {
+        // Stopped is told after the session has already ended, so whatever a turn last refreshed
+        // was already handed back before this arrived; only the local copy is left to clean up.
+        Instruction::Stop if carrying_it => {
+            if let Some(carrying) = supervising.carrying.take() {
+                carrying.let_go("it was stopped", diagnostics).await;
+            }
+        }
+        Instruction::Start {
+            checkout,
+            prompt,
+            harness,
+        } if !carrying_it => {
+            // A Session's start follows the last one's stop down the stream, so one still carried
+            // here is over.
+            if let Some(carrying) = supervising.carrying.take() {
+                carrying
+                    .let_go("another session started", diagnostics)
+                    .await;
+            }
+            let mut carrying = Carrying {
+                session: delivered.session,
+                checkout,
+                prompt,
+                harness: Harness {
+                    command: harness.command,
+                    auth: harness.auth,
+                    model: harness.model,
+                    stderr: stderr.clone(),
+                },
+                conversation: None,
+                finished: false,
+                taken: 0,
+                refreshed: BTreeMap::new(),
+                written: None,
+                saying: VecDeque::new(),
+            };
+            match checkout::check_out(&carrying.checkout).await {
+                Ok(()) => carrying.saying.push_back(Report::Started),
+                Err(because) => {
+                    diagnostics.info(&because);
+                    carrying.finished = true;
+                    carrying.saying.push_back(Report::Checkout {
+                        repositories: checkout::observe(&carrying.checkout).await,
+                    });
+                    carrying.saying.push_back(Report::Finished {
+                        exit: Exit::Failed { because },
+                    });
+                }
+            }
+            supervising.carrying = Some(carrying);
+        }
+        Instruction::Prompt { prompt } if carrying_it => {
+            match supervising
+                .carrying
+                .as_ref()
+                .and_then(|carrying| carrying.conversation.as_ref())
+            {
+                Some(conversation) => conversation.prompt(prompt),
+                None => diagnostics.info("prompted before the session started"),
+            }
+        }
+        Instruction::Stop
+        | Instruction::Start { .. }
+        | Instruction::Prompt { .. }
+        | Instruction::Unrecognized => {}
+    }
+}
+
+async fn worked_on(
+    carrying: &mut Carrying,
+    worked: harness::Worked,
+    diagnostics: &dyn Diagnostics,
+) {
+    if let Some(on) = &worked.on {
+        diagnostics.info(&format!("on the model {}", on.model));
+    }
+    for subject in &worked.allowed {
+        diagnostics.info(&format!("allowed once  {subject}"));
+    }
+    // Handed back after every turn, not only a finishing one: a login the harness rotates
+    // mid-conversation is refreshed while the session is still carried, not saved up for a Stop
+    // that arrives once it is not.
+    if let Some(written) = &carrying.written {
+        carrying.refreshed = written.refreshed();
+    }
+    if worked.failed.is_some() {
+        carrying.finished = true;
+        if let Some(conversation) = carrying.conversation.take() {
+            conversation.end().await;
+        }
+        if let Some(written) = carrying.written.take() {
+            written.remove();
+        }
+    }
+    // Reported after every turn, not only a finishing one: a Session waiting between turns may be
+    // stopped at any moment, and what it last observed is what decides whether its Instance is
+    // held.
+    let observed = checkout::observe(&carrying.checkout).await;
+    carrying
+        .saying
+        .extend(everything_left_to_say(worked, observed));
+}
+
 /// Waits out whatever is left of the bound since the link last answered, so a stream that stays
-/// open while nothing answers does not hold a supervisor past its Session's lease.
-async fn until_given_up(link: &Link, give_up_after: Option<Duration>) {
+/// open while nothing answers does not hold a Session's harness past its lease.
+async fn until_given_up(link: &Link, carrying: bool, give_up_after: Option<Duration>) {
     match give_up_after {
-        Some(bound) => tokio::time::sleep(bound.saturating_sub(link.unreached_for())).await,
-        None => std::future::pending().await,
+        Some(bound) if carrying => {
+            tokio::time::sleep(bound.saturating_sub(link.unreached_for())).await;
+        }
+        _ => std::future::pending().await,
     }
 }
 
 async fn conversation(
     link: &Link,
-    harness: &Harness,
     home: Option<&Path>,
-    attending: &mut Attending,
+    carrying: &mut Carrying,
     diagnostics: &dyn Diagnostics,
 ) -> Result<Option<Conversation>, link::Error> {
-    let prompt = attending.prompt.clone();
-    let credentials = link.credentials().await?;
+    let credentials = link.credentials(&carrying.session).await?;
     let provider = credentials.variables;
     if !provider.is_empty() {
         diagnostics.info(&format!(
@@ -368,18 +443,18 @@ async fn conversation(
 
     match written(home, credentials.files, diagnostics) {
         Ok(written) => {
-            attending.written = written;
+            carrying.written = written;
             Ok(Some(Conversation::open(
-                harness,
+                &carrying.harness,
                 provider,
-                prompt,
-                checkout::root(attending.checkout.as_ref()),
+                carrying.prompt.clone(),
+                checkout::root(Some(&carrying.checkout)),
             )))
         }
         Err(because) => {
             diagnostics.info(&because);
-            attending.finished = true;
-            attending.saying.push_back(Report::Finished {
+            carrying.finished = true;
+            carrying.saying.push_back(Report::Finished {
                 exit: Exit::Failed { because },
             });
             Ok(None)
@@ -387,8 +462,11 @@ async fn conversation(
     }
 }
 
-async fn turn(conversation: &mut Option<Conversation>) -> harness::Worked {
-    match conversation {
+async fn turn(carrying: &mut Option<Carrying>) -> harness::Worked {
+    match carrying
+        .as_mut()
+        .and_then(|carrying| carrying.conversation.as_mut())
+    {
         Some(conversation) => conversation.turn().await,
         None => std::future::pending().await,
     }
@@ -425,15 +503,16 @@ fn written(
 /// says only what is left, and a replay carries the number the attempt that was lost carried.
 async fn say(
     link: &Link,
-    attending: &mut Attending,
+    carrying: &mut Carrying,
     diagnostics: &dyn Diagnostics,
 ) -> Result<(), link::Error> {
-    while let Some(report) = attending.saying.front() {
-        let seq = attending.taken + 1;
-        link.report(report, Some(seq)).await?;
+    while let Some(report) = carrying.saying.front() {
+        let seq = carrying.taken + 1;
+        link.report(report, Some(&carrying.session), Some(seq))
+            .await?;
         let kind = report.kind();
-        attending.taken = seq;
-        attending.saying.pop_front();
+        carrying.taken = seq;
+        carrying.saying.pop_front();
         diagnostics.info(&format!("reported {kind} {seq}"));
     }
 
@@ -442,7 +521,7 @@ async fn say(
 
 fn everything_left_to_say(
     worked: harness::Worked,
-    observed: Option<Vec<link::Observed>>,
+    observed: Vec<link::Observed>,
 ) -> impl Iterator<Item = Report> {
     worked
         .on
@@ -455,7 +534,9 @@ fn everything_left_to_say(
                 .map(|message| Report::Said { message }),
         )
         .chain(worked.usage.map(|usage| Report::Used { usage }))
-        .chain(observed.map(|repositories| Report::Checkout { repositories }))
+        .chain(std::iter::once(Report::Checkout {
+            repositories: observed,
+        }))
         .chain(std::iter::once(match worked.failed {
             Some(because) => Report::Finished {
                 exit: Exit::Failed { because },
@@ -466,15 +547,15 @@ fn everything_left_to_say(
 
 fn dialled(variables: &BTreeMap<String, String>) -> Option<Link> {
     let base = set(variables, "KESTREL_LINK")?;
-    let session = set(variables, "KESTREL_SESSION")?;
-    let credential = set(variables, "KESTREL_SESSION_CREDENTIAL")?;
+    let instance = set(variables, "KESTREL_INSTANCE")?;
+    let credential = set(variables, "KESTREL_INSTANCE_CREDENTIAL")?;
 
-    Some(Link::to(base, session, credential))
+    Some(Link::to(base, instance, credential))
 }
 
-/// How long the control plane holds this Session's lease out, in seconds, as it told this
-/// Environment when it was dispatched. A supervisor handed no lease has no bound to derive and
-/// reconnects until it is stopped.
+/// How long the control plane holds a Session's lease out, in seconds, as it told this Instance
+/// when it started its supervisor. A supervisor handed no lease has no bound to derive and keeps
+/// every Session's harness through any outage until it is stopped.
 fn give_up_after(variables: &BTreeMap<String, String>) -> Option<Duration> {
     let lease = set(variables, "KESTREL_LEASE")?.parse::<u64>().ok()?;
 
@@ -554,8 +635,11 @@ mod tests {
             &diagnostics,
             &variables(&[
                 ("KESTREL_LINK", ""),
-                ("KESTREL_SESSION", "01999cf2-0000-7000-8000-000000000000"),
-                ("KESTREL_SESSION_CREDENTIAL", "a-credential"),
+                (
+                    "KESTREL_INSTANCE",
+                    "local-exec/kestrel-01999cf2-0000-7000-8000-000000000000",
+                ),
+                ("KESTREL_INSTANCE_CREDENTIAL", "a-credential"),
             ]),
         )
         .await;
@@ -572,7 +656,10 @@ mod tests {
             &diagnostics,
             &variables(&[
                 ("KESTREL_LINK", "http://127.0.0.1:1"),
-                ("KESTREL_SESSION", "01999cf2-0000-7000-8000-000000000000"),
+                (
+                    "KESTREL_INSTANCE",
+                    "local-exec/kestrel-01999cf2-0000-7000-8000-000000000000",
+                ),
             ]),
         )
         .await;

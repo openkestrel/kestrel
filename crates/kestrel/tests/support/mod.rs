@@ -62,7 +62,7 @@ use kestrel::store::Store;
 use kestrel::timer::Wake;
 use kestrel::trigger::apply::Applied;
 use kestrel::trigger::{self, Against, Asked, Declaration, Tested};
-use kestrel::work::{self, Claimed};
+use kestrel::work;
 use kestrel::workspace;
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
@@ -186,6 +186,27 @@ fn spawning(harnesses: &[(&str, &str)]) -> Vec<HarnessCommand> {
             command: command.to_owned(),
         })
         .collect()
+}
+
+/// An Instance a test stands in for the work role on: the Session is recorded executing on it, and
+/// a supervisor's credential is issued for it.
+pub struct OnTheLink {
+    pub instance: String,
+    pub credential: Secret,
+    pub provisioned_by: SessionId,
+}
+
+/// What a Session's `start` has the supervisor spawn when a test does not say.
+pub fn harness() -> link::Harness {
+    harness_playing(scripted_agent::Script::Speaks)
+}
+
+pub fn harness_playing(script: scripted_agent::Script) -> link::Harness {
+    link::Harness {
+        command: scripted_agent::playing(script),
+        auth: None,
+        model: None,
+    }
 }
 
 /// Comes back on the address it was listening on, so what an Environment already dialled
@@ -1371,23 +1392,93 @@ impl Kestrel {
     }
 
     /// Claims what it enqueued, standing in for the work role a `boot`ed fixture leaves idle.
-    pub async fn dispatch_session(&self, workspace: WorkspaceId) -> (Session, Secret) {
+    pub async fn dispatch_session(&self, workspace: WorkspaceId) -> Session {
         self.enqueue_session(workspace).await;
-        let claimed = self
-            .claim_session()
+        self.claim_session()
             .await
-            .expect("a session was just enqueued to claim");
-
-        (claimed.session, claimed.credential)
+            .expect("a session was just enqueued to claim")
     }
 
-    pub async fn claim_session(&self) -> Option<Claimed> {
+    /// Claims what it enqueued and puts it on an Instance's link, for a supervisor the test starts.
+    pub async fn dispatch_to_the_link(&self, workspace: WorkspaceId) -> (Session, OnTheLink) {
+        let session = self.dispatch_session(workspace).await;
+        let on = self.on_the_link(&session).await;
+
+        (self.session(session.id).await, on)
+    }
+
+    /// The Workspace's Instance, or one named the way `LocalExec` names a fresh one, with a new
+    /// supervisor credential that replaces any the Instance had.
+    pub async fn on_the_link(&self, session: &Session) -> OnTheLink {
+        let instance = match self.instance(session.workspace).await {
+            Some(instance) => instance,
+            None => format!("local-exec/kestrel-{}", session.id),
+        };
+
+        self.on_the_link_at(session, &instance).await
+    }
+
+    /// On an Instance a test provisioned through the port itself.
+    pub async fn on_the_link_at(&self, session: &Session, instance: &str) -> OnTheLink {
+        let instance = instance.to_owned();
+        self.executes_on(session, &instance).await;
+        let credential = Secret::mint();
+        let mut tx = self.store.begin().await.expect("a transaction");
+        let workspace = tx
+            .workspaces()
+            .get(session.workspace)
+            .await
+            .expect("the workspace should read");
+        tx.workspaces()
+            .start_supervisor(&workspace, &instance, &credential.digest())
+            .await
+            .expect("the supervisor should be recorded");
+        tx.commit().await.expect("the supervisor should commit");
+        let provisioned_by = instance
+            .strip_prefix("local-exec/kestrel-")
+            .and_then(|session| session.parse().ok())
+            .unwrap_or(session.id);
+
+        OnTheLink {
+            instance,
+            credential,
+            provisioned_by,
+        }
+    }
+
+    /// An Instance a Workspace keeps with no Session on it, and a supervisor's credential for it.
+    pub async fn keep_an_instance(&self, workspace: WorkspaceId, instance: &str) -> OnTheLink {
+        let credential = Secret::mint();
+        let mut tx = self.store.begin().await.expect("a transaction");
+        let record = tx
+            .workspaces()
+            .get(workspace)
+            .await
+            .expect("the workspace should read");
+        tx.workspaces()
+            .record_instance(workspace, Some(instance))
+            .await
+            .expect("the instance should be recorded");
+        tx.workspaces()
+            .start_supervisor(&record, instance, &credential.digest())
+            .await
+            .expect("the supervisor should be recorded");
+        tx.commit().await.expect("the instance should commit");
+
+        OnTheLink {
+            instance: instance.to_owned(),
+            credential,
+            provisioned_by: SessionId::generate(),
+        }
+    }
+
+    pub async fn claim_session(&self) -> Option<Session> {
         work::claim(&self.store, &[SERIALIZED.to_owned()])
             .await
             .expect("the claim should ask")
     }
 
-    pub async fn occupy_session(&self) -> Option<Claimed> {
+    pub async fn occupy_session(&self) -> Option<Session> {
         match work::occupy(&self.store, 2, &[SERIALIZED.to_owned()])
             .await
             .expect("the occupancy should ask")
@@ -1427,19 +1518,13 @@ impl Kestrel {
     }
 
     pub async fn waits_after_its_first_turn(&self, session: &Session) -> Session {
-        link::start(&self.store, session)
+        self.on_the_link(session).await;
+        link::start(&self.store, session, harness())
             .await
             .expect("the session should start");
-        work::report(
-            &self.store,
-            session,
-            work::Reported {
-                seq: Some(1),
-                report: work::Report::Answered,
-            },
-        )
-        .await
-        .expect("the answer should be reported");
+        work::report_on(&self.store, session, Some(1), work::Report::Answered)
+            .await
+            .expect("the answer should be reported");
 
         self.session(session.id).await
     }
@@ -1564,12 +1649,6 @@ impl Kestrel {
         pool.close().await;
     }
 
-    pub async fn supervised(&self, session: &Session, supervisor: &str) {
-        work::supervised(&self.store, session, supervisor)
-            .await
-            .expect("the supervisor should be recorded");
-    }
-
     pub async fn executes_on(&self, session: &Session, instance: &str) {
         work::executes_on(&self.store, session, instance)
             .await
@@ -1577,13 +1656,11 @@ impl Kestrel {
     }
 
     pub async fn report_checkout(&self, session: &Session, repositories: Vec<instance::Observed>) {
-        work::report(
+        work::report_on(
             &self.store,
             session,
-            work::Reported {
-                seq: Some(1),
-                report: work::Report::Checkout { repositories },
-            },
+            Some(1),
+            work::Report::Checkout { repositories },
         )
         .await
         .expect("the checkout should be reported");
@@ -1599,43 +1676,6 @@ impl Kestrel {
         instance::archived(&self.store, instance)
             .await
             .expect("the instance should be recorded archived");
-    }
-
-    pub async fn supervisors_to_stop(&self) -> Vec<(Session, String)> {
-        work::supervisors_to_stop(&self.store)
-            .await
-            .expect("ended sessions' supervisors should read")
-    }
-
-    pub async fn supervisor_gone(&self, session: &Session) {
-        work::supervisor_gone(&self.store, session)
-            .await
-            .expect("the supervisor should be gone");
-    }
-
-    /// The claimant records a supervisor gone some time after its container exits, and until
-    /// then the Workspace still counts the ended Session as holding it.
-    pub async fn supervisor_recorded_gone(&self, session: &Session) {
-        let deadline = tokio::time::Instant::now() + PATIENCE;
-
-        loop {
-            let mut tx = self.store.begin().await.expect("a transaction");
-            let gone = tx
-                .workspaces()
-                .supervisor_is_gone(session)
-                .await
-                .expect("the supervisor's state should read");
-            drop(tx);
-            if gone {
-                return;
-            }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "the supervisor of session {} was never recorded gone",
-                session.id
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
     }
 
     pub async fn instance(&self, workspace: WorkspaceId) -> Option<String> {
@@ -1658,14 +1698,18 @@ impl Kestrel {
         link::instruct(&self.store, session, instruction).await
     }
 
-    pub async fn start(&self, session: &Session) {
-        self.try_start(session)
+    pub async fn start(&self, session: &Session, harness: link::Harness) {
+        self.try_start(session, harness)
             .await
             .expect("the session should start");
     }
 
-    pub async fn try_start(&self, session: &Session) -> anyhow::Result<link::SentInstruction> {
-        link::start(&self.store, session).await
+    pub async fn try_start(
+        &self,
+        session: &Session,
+        harness: link::Harness,
+    ) -> anyhow::Result<link::SentInstruction> {
+        link::start(&self.store, session, harness).await
     }
 
     /// A lease that is up when the caller says rather than when a real one would be. The only
@@ -1698,19 +1742,6 @@ impl Kestrel {
             .await
             .expect("the held firing should record when it was considered");
         tx.commit().await.expect("the record should commit");
-    }
-
-    /// A second credential for the same Session, with an expiry the caller chooses. The only way
-    /// to hold an expired one without waiting out a real credential's life.
-    pub async fn issue_credential(&self, session: &Session, expires_at: Timestamp) -> Secret {
-        let secret = Secret::mint();
-        let mut tx = self.store.begin().await.expect("a transaction");
-        tx.workspaces()
-            .issue_credential(session, &secret.digest(), expires_at)
-            .await
-            .expect("the credential should issue");
-        tx.commit().await.expect("the credential should commit");
-        secret
     }
 
     /// Simulates the process going away: every role and every stream it was holding open stops

@@ -95,10 +95,22 @@ impl Pid {
         panic!("the supervisor {} was never stopped", self.0);
     }
 
+    /// Still running some time on, for what should outlive the moment it is checked.
+    pub async fn is_running(&self, after: Duration) -> bool {
+        tokio::time::sleep(after).await;
+
+        self.exists()
+    }
+
+    /// A supervisor outlives the handle that spawned it, so one that dies unreaped is a zombie of
+    /// this process: reaped here, and gone.
     #[cfg(unix)]
     fn exists(&self) -> bool {
         #[allow(unsafe_code)]
         unsafe {
+            if libc::waitpid(self.0, std::ptr::null_mut(), libc::WNOHANG) == self.0 {
+                return false;
+            }
             libc::kill(self.0, 0) == 0
         }
     }
@@ -106,5 +118,9 @@ impl Pid {
     #[cfg(not(unix))]
     fn exists(&self) -> bool {
         false
+    }
+
+    pub fn pid(&self) -> i32 {
+        self.0
     }
 }

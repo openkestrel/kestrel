@@ -31,7 +31,7 @@ async fn an_open_workspace(kestrel: &Kestrel, said: usize) -> (String, kestrel::
         .declare_agent(&organization, "builder", "opencode", None)
         .await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
     for message in 1..=said {
         kestrel.said(&session, &format!("message {message}")).await;
     }
@@ -944,8 +944,8 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
         .claim_session()
         .await
         .expect("the posted session should wait for the worker");
-    assert_eq!(completed.session.id.to_string(), session);
-    kestrel.complete_session(&completed.session).await;
+    assert_eq!(completed.id.to_string(), session);
+    kestrel.complete_session(&completed).await;
     let sealed = recorded(
         &client(
             &kestrel,
@@ -1866,7 +1866,7 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
         .claim_session()
         .await
         .expect("the posted session should wait for the worker");
-    kestrel.complete_session(&session.session).await;
+    kestrel.complete_session(&session).await;
     let seal = workspace_seal_at("acme", workspace);
     let (status, _) = declared(&kestrel, &seal, &json!({})).await;
     assert_eq!(status, StatusCode::OK);
@@ -1916,8 +1916,7 @@ async fn sealing_a_workspace_whose_instance_holds_unpublished_work_is_a_conflict
     let claimed = kestrel
         .occupy_session()
         .await
-        .expect("the session should claim")
-        .session;
+        .expect("the session should claim");
     assert_eq!(claimed.id, queued.id);
     kestrel.executes_on(&claimed, "held").await;
     kestrel
@@ -3257,9 +3256,9 @@ async fn a_session_of_another_organization_occupying_the_shared_slots_is_counted
     }
 
     let ours = a_queued_workspace_in(&kestrel, "acme", "acme").await;
-    let (held, _) = kestrel.dispatch_session(ours).await;
+    let held = kestrel.dispatch_session(ours).await;
     let elsewhere = a_queued_workspace_in(&kestrel, "globex", "globex").await;
-    let (hit, _) = kestrel.dispatch_session(elsewhere).await;
+    let hit = kestrel.dispatch_session(elsewhere).await;
 
     let (status, queue) = got(&kestrel, &queue_of("acme")).await;
     assert_eq!(status, StatusCode::OK, "{queue}");
@@ -3299,7 +3298,7 @@ async fn the_queue_says_when_a_live_instance_limit_is_unbounded_and_what_counts_
     }
 
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let (held, _) = kestrel.dispatch_session(workspace.id).await;
+    let held = kestrel.dispatch_session(workspace.id).await;
     kestrel.executes_on(&held, "docker/kestrel-a").await;
     kestrel.complete_session(&held).await;
 
@@ -3564,7 +3563,7 @@ async fn at_the_instance_limit(kestrel: &Kestrel, maximum: usize, idle: usize) -
     let mut kept = Vec::new();
     for place in 0..idle {
         let workspace = a_queued_workspace_in(kestrel, "acme", "kestrel").await;
-        let (session, _) = kestrel.dispatch_session(workspace).await;
+        let session = kestrel.dispatch_session(workspace).await;
         kestrel
             .executes_on(&session, &format!("docker/kestrel-{place}"))
             .await;
@@ -3659,7 +3658,7 @@ async fn queue_read(kestrel: &Kestrel) -> Value {
 async fn a_queued_session_names_each_reason_that_holds_it_alone_and_together() {
     let kestrel = Kestrel::boot().await;
     sharing_a_serialized_profile(&kestrel, Some(2), 4).await;
-    let (holding, _) = kestrel
+    let holding = kestrel
         .dispatch_session(jacks_workspace(&kestrel).await)
         .await;
     kestrel.executes_on(&holding, "docker/holding").await;
@@ -3681,7 +3680,7 @@ async fn a_queued_session_names_each_reason_that_holds_it_alone_and_together() {
         json!([dependencies])
     );
 
-    let (filling, _) = kestrel
+    let filling = kestrel
         .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
         .await;
     kestrel.executes_on(&filling, "docker/filling").await;
@@ -3762,7 +3761,7 @@ async fn a_waiting_session_with_held_input_waits_on_full_slots_alone() {
 async fn a_ready_session_behind_full_slots_keeps_its_place() {
     let kestrel = Kestrel::boot().await;
     sharing_a_serialized_profile(&kestrel, None, 1).await;
-    let (working, _) = kestrel
+    let working = kestrel
         .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
         .await;
     let first = kestrel
@@ -3799,7 +3798,7 @@ async fn a_ready_session_behind_full_slots_keeps_its_place() {
 async fn the_session_dispatch_claims_next_is_the_queues_first_position() {
     let kestrel = Kestrel::boot().await;
     sharing_a_serialized_profile(&kestrel, None, 8).await;
-    let (holding, _) = kestrel
+    let holding = kestrel
         .dispatch_session(jacks_workspace(&kestrel).await)
         .await;
     let blocker = kestrel
@@ -3824,7 +3823,7 @@ async fn the_session_dispatch_claims_next_is_the_queues_first_position() {
             .find(|row| row["position"] == 1)
             .map(|row| row["name"].as_str().expect("a name").to_owned());
         let next = match kestrel.occupy_up_to(8).await {
-            Some(work::Occupied::Claimed(next)) => Some(next.session),
+            Some(work::Occupied::Claimed(next)) => Some(next),
             Some(work::Occupied::Resumed(_)) => panic!("nothing waits to resume"),
             None => None,
         };
@@ -3850,7 +3849,7 @@ async fn the_session_dispatch_claims_next_is_the_queues_first_position() {
 }
 
 async fn a_waiting_session(kestrel: &Kestrel, workspace: WorkspaceId) -> kestrel::domain::Session {
-    let (session, _) = kestrel.dispatch_session(workspace).await;
+    let session = kestrel.dispatch_session(workspace).await;
     kestrel.waits_after_its_first_turn(&session).await
 }
 
@@ -3927,7 +3926,7 @@ async fn a_waiting_session_with_held_input_says_why_its_next_turn_has_not_starte
     ];
     for expected in order {
         let taken = match kestrel.occupy_up_to(8).await {
-            Some(work::Occupied::Claimed(claimed)) => claimed.session,
+            Some(work::Occupied::Claimed(claimed)) => claimed,
             Some(work::Occupied::Resumed(resumed)) => resumed,
             None => panic!("a slot is free and {expected} is ahead"),
         };
@@ -3943,7 +3942,7 @@ async fn a_waiting_session_with_held_input_waits_on_full_slots_and_on_its_profil
     sharing_a_serialized_profile(&kestrel, None, 2).await;
     let jacks = jacks_workspace(&kestrel).await;
     let waiting = a_waiting_session(&kestrel, jacks).await;
-    let (holding, _) = kestrel
+    let holding = kestrel
         .dispatch_session(jacks_workspace(&kestrel).await)
         .await;
     kestrel
@@ -4026,7 +4025,7 @@ async fn a_queue_of_every_kind(kestrel: &Kestrel) -> EveryKind {
     .await;
     let jacks = jacks_workspace(kestrel).await;
     let prompted = a_waiting_session(kestrel, jacks).await;
-    let (holding, _) = kestrel
+    let holding = kestrel
         .dispatch_session(jacks_workspace(kestrel).await)
         .await;
     kestrel

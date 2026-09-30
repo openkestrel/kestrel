@@ -514,7 +514,7 @@ fn a_session_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn dropping_a_control_plane_with_a_waiting_session_stops_its_supervisor() {
+async fn a_supervisor_outlives_its_stopped_control_plane_and_goes_with_its_instance() {
     let kestrel = Kestrel::new();
     let booted = kestrel.booting("127.0.0.1:0", Script::Converses, "info");
     declared(&booted);
@@ -539,9 +539,15 @@ async fn dropping_a_control_plane_with_a_waiting_session_stops_its_supervisor() 
 
     drop(booted);
 
-    support::environment::Environment::named(&supervisor)
-        .is_gone()
-        .await;
+    let supervisor = support::environment::Environment::named(&supervisor);
+    assert!(
+        supervisor
+            .is_running(std::time::Duration::from_millis(500))
+            .await,
+        "the supervisor went with its control plane"
+    );
+    drop(kestrel);
+    supervisor.is_gone().await;
 }
 
 #[cfg(unix)]

@@ -94,7 +94,7 @@ impl Stub {
     fn link(&self) -> Link {
         Link::to(
             &format!("http://127.0.0.1:{}", self.port),
-            "a-session",
+            "local-exec/an-instance",
             "a-credential",
         )
     }
@@ -155,20 +155,22 @@ fn connected() -> Report {
     }
 }
 
-/// Numbered as the supervisor numbers them, so a report the document requires a seq on and
-/// the client sends without one fails here.
-fn everything_it_reports() -> Vec<(Option<i64>, Report)> {
+/// Numbered and addressed as the supervisor numbers and addresses them, so a report the document
+/// requires a seq or a session on and the client sends without one fails here.
+fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
     vec![
-        (None, connected()),
-        (None, Report::Heartbeat),
+        (None, None, connected()),
+        (None, None, Report::Heartbeat),
         (
+            None,
             None,
             Report::Stderr {
                 lines: vec!["level=INFO message=init".to_owned()],
             },
         ),
-        (Some(1), Report::Started),
+        (Some("a-session"), Some(1), Report::Started),
         (
+            Some("a-session"),
             Some(2),
             Report::Checkout {
                 repositories: vec![
@@ -192,6 +194,7 @@ fn everything_it_reports() -> Vec<(Option<i64>, Report)> {
             },
         ),
         (
+            Some("a-session"),
             Some(3),
             Report::Finished {
                 exit: Exit::Succeeded,
@@ -201,7 +204,7 @@ fn everything_it_reports() -> Vec<(Option<i64>, Report)> {
 }
 
 #[tokio::test]
-async fn opening_the_stream_presents_the_sessions_credential() {
+async fn opening_the_stream_presents_the_instances_credential() {
     let stub = Stub::streaming("");
 
     stub.link()
@@ -210,7 +213,10 @@ async fn opening_the_stream_presents_the_sessions_credential() {
         .expect("the stream should open");
 
     let asked = stub.asked();
-    assert_eq!(asked[0].path, "/link/sessions/a-session/instructions");
+    assert_eq!(
+        asked[0].path,
+        "/link/instances/local-exec%2Fan-instance/instructions"
+    );
     assert_eq!(
         asked[0].headers.get("authorization").map(String::as_str),
         Some("Bearer a-credential")
@@ -236,7 +242,7 @@ async fn a_first_connection_carries_no_cursor_and_a_reconnection_carries_the_one
 #[tokio::test]
 async fn the_instructions_delivered_are_the_ones_the_stream_carried() {
     let stub = Stub::streaming(
-        "id: 4\nevent: stop\ndata: {\"kind\":\"stop\"}\n\n:\n\nid: 5\nevent: stop\ndata: {\"kind\":\"stop\"}\n\n",
+        "id: 4\nevent: stop\ndata: {\"session\":\"a\",\"kind\":\"stop\"}\n\n:\n\nid: 5\nevent: stop\ndata: {\"session\":\"b\",\"kind\":\"stop\"}\n\n",
     );
 
     let mut instructions = stub
@@ -251,14 +257,14 @@ async fn the_instructions_delivered_are_the_ones_the_stream_carried() {
         .await
         .expect("the stream should deliver")
     {
-        delivered.push((next.id, next.instruction));
+        delivered.push((next.id, next.session, next.instruction));
     }
 
     assert_eq!(
         delivered,
         vec![
-            ("4".to_owned(), Instruction::Stop),
-            ("5".to_owned(), Instruction::Stop),
+            ("4".to_owned(), "a".to_owned(), Instruction::Stop),
+            ("5".to_owned(), "b".to_owned(), Instruction::Stop),
         ]
     );
 }
@@ -274,13 +280,13 @@ async fn a_refused_credential_is_not_something_to_reconnect_through() {
 
     assert!(matches!(link.open(None).await, Err(Error::Refused(_))));
     assert!(matches!(
-        link.report(&connected(), None).await,
+        link.report(&connected(), None, None).await,
         Err(Error::Refused(_))
     ));
 }
 
 /// A report the link would not take is not one to send again: the seq it carried is the seq
-/// a replay would carry, and the answer would be the same.
+/// a replay would carry, so the Session is let go rather than the Instance.
 #[tokio::test]
 async fn a_report_the_link_would_not_take_is_not_something_to_send_again() {
     let stub = Stub::answering(
@@ -290,25 +296,66 @@ async fn a_report_the_link_would_not_take_is_not_something_to_send_again() {
     );
 
     assert!(matches!(
-        stub.link().report(&Report::Started, Some(2)).await,
-        Err(Error::Refused(_))
+        stub.link()
+            .report(&Report::Started, Some("a-session"), Some(2))
+            .await,
+        Err(Error::Session(_))
+    ));
+}
+
+/// A Session the Instance no longer carries is let go, and the Instance stays on the link.
+#[tokio::test]
+async fn a_session_the_link_says_is_gone_is_not_a_refused_instance() {
+    let stub = Stub::answering(
+        410,
+        "application/json",
+        "{\"message\":\"the session a-session is not one this instance carries\"}",
+    );
+
+    assert!(matches!(
+        stub.link()
+            .report(&Report::Started, Some("a-session"), Some(1))
+            .await,
+        Err(Error::Session(_))
+    ));
+    assert!(matches!(
+        stub.link().credentials("a-session").await,
+        Err(Error::Session(_))
     ));
 }
 
 #[tokio::test]
-async fn reporting_posts_to_the_sessions_reports() {
-    let stub = Stub::answering(202, "application/json", "");
+async fn credentials_are_asked_for_one_session() {
+    let stub = Stub::answering(200, "application/json", "{\"variables\":{}}");
 
     stub.link()
-        .report(&connected(), None)
+        .credentials("a-session")
         .await
-        .expect("the report should be accepted");
+        .expect("the credentials should arrive");
 
-    assert_eq!(stub.asked()[0].path, "/link/sessions/a-session/reports");
+    assert_eq!(
+        stub.asked()[0].path,
+        "/link/instances/local-exec%2Fan-instance/credentials?session=a-session"
+    );
 }
 
 #[tokio::test]
-async fn a_session_id_the_environment_was_handed_cannot_rewrite_the_path_it_dials() {
+async fn reporting_posts_to_the_instances_reports() {
+    let stub = Stub::answering(202, "application/json", "");
+
+    stub.link()
+        .report(&connected(), None, None)
+        .await
+        .expect("the report should be accepted");
+
+    assert_eq!(
+        stub.asked()[0].path,
+        "/link/instances/local-exec%2Fan-instance/reports"
+    );
+}
+
+#[tokio::test]
+async fn an_instance_name_the_supervisor_was_handed_cannot_rewrite_the_path_it_dials() {
     let stub = Stub::streaming("");
 
     Link::to(
@@ -322,13 +369,14 @@ async fn a_session_id_the_environment_was_handed_cannot_rewrite_the_path_it_dial
 
     assert_eq!(
         stub.asked()[0].path,
-        "/link/sessions/..%2F..%2Felsewhere/instructions"
+        "/link/instances/..%2F..%2Felsewhere/instructions"
     );
 }
 
 #[tokio::test]
 async fn an_instruction_this_supervisor_predates_is_carried_past_rather_than_stalled_on() {
-    let stub = Stub::streaming("id: 4\nevent: pause\ndata: {\"kind\":\"pause\"}\n\n");
+    let stub =
+        Stub::streaming("id: 4\nevent: pause\ndata: {\"session\":\"a\",\"kind\":\"pause\"}\n\n");
 
     let mut instructions = stub
         .link()
@@ -347,7 +395,7 @@ async fn an_instruction_this_supervisor_predates_is_carried_past_rather_than_sta
 
 #[tokio::test]
 async fn a_character_split_across_two_chunks_survives_the_stream() {
-    let frame = "id: café\nevent: stop\ndata: {\"kind\":\"stop\"}\n\n".as_bytes();
+    let frame = "id: café\nevent: stop\ndata: {\"session\":\"a\",\"kind\":\"stop\"}\n\n".as_bytes();
     let split = frame
         .iter()
         .position(|byte| *byte == 0xc3)
@@ -355,7 +403,7 @@ async fn a_character_split_across_two_chunks_survives_the_stream() {
         + 1;
 
     let base = stream_in_two_writes(&frame[..split], &frame[split..]);
-    let mut instructions = Link::to(&base, "a-session", "a-credential")
+    let mut instructions = Link::to(&base, "local-exec/an-instance", "a-credential")
         .open(None)
         .await
         .expect("the stream should open");
@@ -393,6 +441,7 @@ fn the_client_recognises_every_instruction_the_published_document_declares() {
                 "kind": kind,
                 "checkout": {"repositories": [], "base": "main", "branch": "main"},
                 "prompt": "do the work",
+                "harness": {"command": "opencode acp"},
             }),
             "prompt" => serde_json::json!({"kind": kind, "prompt": "and the tests"}),
             _ => serde_json::json!({"kind": kind}),
@@ -411,8 +460,9 @@ fn the_client_recognises_every_instruction_the_published_document_declares() {
 fn every_report_the_client_sends_carries_what_the_published_document_requires() {
     let published = published();
 
-    for (seq, report) in everything_it_reports() {
+    for (session, seq, report) in everything_it_reports() {
         let sent = serde_json::to_value(Reported {
+            session,
             seq,
             report: &report,
         })

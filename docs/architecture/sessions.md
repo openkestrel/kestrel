@@ -45,9 +45,9 @@ stateDiagram-v2
 
 ## The unfinished Session
 
-A Workspace has at most one **Unfinished Session**: queued, working, waiting, or ended while its
-supervisor is still present (`session.supervisor_state = 'present'`). Its successor waits for the
-supervisor to be gone, so two supervisors never share a checkout.
+A Workspace has at most one **Unfinished Session**: queued, working or waiting. Its successor never
+shares the checkout with it: every ending sends the Session's `stop` down its Instance's stream, and
+the successor's `start` follows it ([Link](link.md#instructions)).
 
 What arrives while one exists is held, never interleaved:
 
@@ -56,7 +56,7 @@ What arrives while one exists is held, never interleaved:
 | A message (post, follow-up comment, a `continue` firing) | `pending_message` | A Waiting Session is prompted with it once a slot is free (`work::occupy`), or the next Session starts with it. |
 | A `new-session` firing | `pending_session` | The unfinished Session lets go. A Waiting one is ended (succeeded) to make way. |
 
-`work::continue_pending` runs when a supervisor is gone and releases the next thing. A pending
+`work::continue_pending` runs as the unfinished Session ends and releases the next thing. A pending
 Session wins over pending messages. Several held messages reach the agent as one attributed prompt
 (`work::follow_up`); a lone one reaches it verbatim so a leading skill invocation still works.
 
@@ -64,22 +64,31 @@ Session wins over pending messages. Several held messages reach the agent as one
 
 `role/work.rs::dispatching` loops every 100 ms:
 
-1. Stop supervisors of Sessions that ended more than 3 s ago (`stop_left_behind`).
-2. Destroy Instances queued in `instance_archive` (`archive`).
+1. Fail the Session of any supervisor this process started that has exited (`watch`), and forget
+   that supervisor so the next Session starts another.
+2. Stop the supervisor of, and destroy, each Instance queued in `instance_archive` (`archive`).
 3. `work::occupy`: if a slot is free, claim the oldest claimable queued Session, or, if held input
-   for a Waiting Session is older, prompt that instead. Claiming sets Working, starts a 2-minute
-   lease, and mints the link credential. The claim and the credential commit together, so a Session
-   is dispatched at most once.
+   for a Waiting Session is older, prompt that instead. Claiming sets Working and starts a 2-minute
+   lease in one guarded update, so a Session is dispatched at most once.
 4. For a claim, `execute` in its own task:
    - Fail early if nothing can reach a model (no Provider Credential, Subscription Profile, or
      configured ACP login), or the work role has no command for the Agent's harness.
    - Resume the Workspace's Instance, or provision one. An Instance that has vanished ends the
      Session failed and clears the Workspace's Instance so the next Session starts fresh from the
      remote branch.
-   - Commit the `start` instruction and Turn 1 before spawning the supervisor, so a supervisor that
-     outlives this process still finds its start on reconnect.
-   - Spawn the supervisor with the Session's `KESTREL_*` variables and relay its stdout and stderr
-     to the control plane's log.
+   - Commit the `start` instruction (checkout, prompt and the harness to spawn) and Turn 1 before
+     any supervisor is started, so one that outlives this process still finds its start.
+   - Begin the Session on the Instance's supervisor (`supervised`). One this process holds and is
+     running, or one that reached the link within 6 s, is used as it is. Otherwise a recorded one is
+     stopped by name, a new Instance credential is minted, and a new supervisor is started with
+     `KESTREL_LINK`, `KESTREL_INSTANCE`, `KESTREL_INSTANCE_CREDENTIAL`, `KESTREL_LEASE` and
+     `KESTREL_INSTRUCTIONS_AFTER`, the stream position before this `start`, so it never replays an
+     earlier Session. Its stdout and stderr are relayed to the control plane's log.
+
+The supervisor lives with the Instance, not the Session
+([ADR-0039](../adr/0039-the-supervisor-lives-with-its-instance.md)). Nothing stops it when a
+Session ends or the control plane stops; it goes when the Instance is destroyed. `LocalExec` kills
+its process tree, and on Docker it dies with the container.
 
 From there the Session is driven by what the supervisor reports ([Link](link.md)). The work role
 retries dispatch, never work: a Session that failed is not re-run.

@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use kestrel::compute::{Docker, Driver, Instance, Supervisor};
 use kestrel::domain::{Exit, Session, SessionId, Workspace};
-use kestrel::link::credential::Secret;
+use kestrel::link::Harness;
 use serde_json::json;
 use support::Kestrel;
 use support::diagnostics::Diagnostics;
@@ -45,13 +45,8 @@ struct Driven {
 impl Driven {
     async fn in_an_environment(kestrel: &Kestrel, model: &Model) -> Self {
         let workspace = a_workspace(kestrel).await;
-        let (session, credential) = kestrel.dispatch_session(workspace.id).await;
-        let (instance, supervisor, diagnostics) = provisioned(
-            kestrel,
-            session.id,
-            &credential,
-            session.agent.model.as_deref().unwrap_or_default(),
-        );
+        let session = kestrel.dispatch_session(workspace.id).await;
+        let (instance, supervisor, diagnostics) = provisioned(kestrel, &session).await;
 
         let mut driven = Self {
             session,
@@ -71,7 +66,16 @@ impl Driven {
             .instance
             .write_file("models.json", b"{}")
             .expect("the harness's model snapshot should be written");
-        kestrel.start(&driven.session).await;
+        kestrel
+            .start(
+                &driven.session,
+                Harness {
+                    command: HARNESS.to_owned(),
+                    auth: None,
+                    model: driven.session.agent.model.clone(),
+                },
+            )
+            .await;
 
         driven
     }
@@ -105,22 +109,16 @@ impl Driven {
     }
 }
 
-fn provisioned(
-    kestrel: &Kestrel,
-    session: SessionId,
-    credential: &Secret,
-    model: &str,
-) -> (Instance, Supervisor, Diagnostics) {
+async fn provisioned(kestrel: &Kestrel, session: &Session) -> (Instance, Supervisor, Diagnostics) {
     let mut instance = Driver::Docker(Docker::provisioning_from(image::built()))
-        .provision(session)
+        .provision(session.id)
         .expect("the instance should provision");
+    let on = kestrel.on_the_link_at(session, instance.name()).await;
     let mut supervisor = instance
         .supervise(&[
             ("KESTREL_LINK", &kestrel.link_from_an_environment()),
-            ("KESTREL_SESSION", &session.to_string()),
-            ("KESTREL_SESSION_CREDENTIAL", credential.as_str()),
-            ("KESTREL_HARNESS_COMMAND", HARNESS),
-            ("KESTREL_AGENT_MODEL", model),
+            ("KESTREL_INSTANCE", &on.instance),
+            ("KESTREL_INSTANCE_CREDENTIAL", on.credential.as_str()),
             ("OPENCODE_MODELS_PATH", MODEL_SNAPSHOT),
         ])
         .expect("the supervisor should start");

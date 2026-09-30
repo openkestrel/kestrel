@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::io::{BufRead as _, BufReader, Read};
 use std::num::NonZeroUsize;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
@@ -11,20 +13,21 @@ use tracing::{info, warn};
 
 use crate::cli::Role;
 use crate::compute::{Driver, Exited, Instance, Supervisor};
-use crate::domain::{Exit, Session, SessionId, Workspace};
+use crate::domain::{Session, Workspace};
 use crate::instance;
-use crate::link;
+use crate::link::{self, credential::Secret};
 use crate::profile;
 use crate::provider;
 use crate::store::{self, Store};
 use crate::timer;
-use crate::work::{self, Claimed, Occupied};
+use crate::work::{self, Occupied};
 use crate::workspace;
 
 /// Nothing subscribes to `Fanout` at 0.1 (ADR-0005), so a queued Session is found by asking
 /// `Store` again rather than by being told.
 const POLL: Duration = Duration::from_millis(100);
-const LEAVING: SignedDuration = SignedDuration::from_secs(3);
+/// A few of the supervisor's two-second heartbeats: one heard from within this is on the link.
+const ON_THE_LINK: SignedDuration = SignedDuration::from_secs(6);
 
 #[derive(Clone)]
 pub struct Dispatch {
@@ -72,11 +75,54 @@ impl Dispatch {
     }
 }
 
-/// What ended the attending, rather than how the Session went.
-enum Ended {
-    Supervisor(Exited),
-    TheSession(Exit),
-    ControlPlane,
+enum Held {
+    Running(String),
+    Gone,
+    Nothing,
+}
+
+/// The supervisors this process started, by Instance. A restart starts with none held, and finds
+/// the ones still running by what they last reported.
+#[derive(Clone, Default)]
+struct Supervisors(Arc<Mutex<HashMap<String, Supervisor>>>);
+
+impl Supervisors {
+    fn held(&self) -> std::sync::MutexGuard<'_, HashMap<String, Supervisor>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn held_on(&self, instance: &str) -> Held {
+        let mut held = self.held();
+        let Some(supervisor) = held.get_mut(instance) else {
+            return Held::Nothing;
+        };
+        if matches!(supervisor.status(), Ok(None)) {
+            return Held::Running(supervisor.name().to_owned());
+        }
+        held.remove(instance);
+
+        Held::Gone
+    }
+
+    fn exited(&self) -> Vec<(String, Exited)> {
+        let mut held = self.held();
+        let exited: Vec<_> = held
+            .iter_mut()
+            .filter_map(|(instance, supervisor)| match supervisor.status() {
+                Ok(Some(exited)) => Some((instance.clone(), exited)),
+                Ok(None) => None,
+                // Reaped by something else: gone, and what it exited with is not known here.
+                Err(_) => Some((instance.clone(), Exited::without_a_code())),
+            })
+            .collect();
+        for (instance, _) in &exited {
+            held.remove(instance);
+        }
+
+        exited
+    }
 }
 
 /// The wheel keeps time whether or not this role has anywhere to dispatch a Session, because a
@@ -119,12 +165,13 @@ async fn dispatching(
     shutdown: &CancellationToken,
 ) -> Result<()> {
     let mut active = JoinSet::new();
+    let supervisors = Supervisors::default();
 
     while !shutdown.is_cancelled() {
-        if let Err(error) = stop_left_behind(store, &dispatch.driver).await {
-            warn!(%error, "a pass over ended sessions' supervisors found nothing it could do");
+        if let Err(error) = watch(store, &supervisors).await {
+            warn!(%error, "a pass over instances' supervisors found nothing it could do");
         }
-        if let Err(error) = archive(store, &dispatch.driver).await {
+        if let Err(error) = archive(store, &dispatch.driver, &supervisors).await {
             warn!(%error, "an archiving pass found nothing it could do");
         }
         match work::occupy(
@@ -134,12 +181,13 @@ async fn dispatching(
         )
         .await
         {
-            Ok(Some(Occupied::Claimed(claimed))) => {
+            Ok(Some(Occupied::Claimed(session))) => {
                 let store = store.clone();
                 let dispatch = dispatch.clone();
+                let supervisors = supervisors.clone();
                 let shutdown = shutdown.clone();
                 active.spawn(async move {
-                    execute_or_fail(&store, &dispatch, claimed, &shutdown).await
+                    execute_or_fail(&store, &dispatch, &supervisors, session, &shutdown).await
                 });
                 continue;
             }
@@ -186,11 +234,11 @@ async fn record(store: &Store, dispatch: &Dispatch) -> Result<()> {
 async fn execute_or_fail(
     store: &Store,
     dispatch: &Dispatch,
-    claimed: Claimed,
+    supervisors: &Supervisors,
+    session: Session,
     shutdown: &CancellationToken,
 ) {
-    let session = claimed.session.clone();
-    let Err(error) = execute(store, dispatch, claimed, shutdown).await else {
+    let Err(error) = execute(store, dispatch, supervisors, &session, shutdown).await else {
         return;
     };
     warn!(session = %session.id, %error, "a session's execution failed");
@@ -222,10 +270,8 @@ where
 async fn execute(
     store: &Store,
     dispatch: &Dispatch,
-    Claimed {
-        session,
-        credential,
-    }: Claimed,
+    supervisors: &Supervisors,
+    session: &Session,
     shutdown: &CancellationToken,
 ) -> Result<()> {
     let workspace = match workspace::show(store, session.workspace).await {
@@ -233,7 +279,7 @@ async fn execute(
         Err(error) => {
             work::fail(
                 store,
-                &session,
+                session,
                 &format!("the session's workspace could not be read: {error}"),
             )
             .await?;
@@ -242,80 +288,140 @@ async fn execute(
     };
 
     if let Err(error) = a_way_to_reach_a_model(store, dispatch, &workspace).await {
-        work::fail(store, &session, &error.to_string()).await?;
+        work::fail(store, session, &error.to_string()).await?;
         return Ok(());
     }
     let command = match dispatch.spawns(&session.agent.harness) {
         Ok(command) => command,
         Err(error) => {
-            work::fail(store, &session, &error.to_string()).await?;
+            work::fail(store, session, &error.to_string()).await?;
             return Ok(());
         }
     };
 
-    let Some(mut instance) = instance(store, dispatch, &session, &workspace).await? else {
+    let Some(mut instance) = instance(store, dispatch, session, &workspace).await? else {
         return Ok(());
     };
     // An Instance provisioned and never recorded is one `archive` can never find.
     let name = instance.name().to_owned();
-    until_not_busy(shutdown, || work::executes_on(store, &session, &name)).await?;
+    until_not_busy(shutdown, || work::executes_on(store, session, &name)).await?;
 
-    // Committed before the supervisor is spawned, so one that outlives this process fetches its
-    // Start on reconnect rather than holding the lease out forever on a Session that cannot begin.
-    if let Err(error) = link::start(store, &session).await {
-        work::fail(
-            store,
-            &session,
-            &format!("the session could not be started: {error}"),
-        )
-        .await?;
-        return Ok(());
-    }
-
-    let lease = work::LEASE.as_secs().to_string();
-    let mut supervisor = match instance.supervise(&[
-        ("KESTREL_LINK", dispatch.link.as_str()),
-        ("KESTREL_SESSION", &session.id.to_string()),
-        ("KESTREL_SESSION_CREDENTIAL", credential.as_str()),
-        ("KESTREL_HARNESS_COMMAND", command),
-        (
-            "KESTREL_AGENT_AUTH",
-            dispatch.auth.as_deref().unwrap_or_default(),
-        ),
-        (
-            "KESTREL_AGENT_MODEL",
-            session.agent.model.as_deref().unwrap_or_default(),
-        ),
-        // How long the Session's lease is held out for, so a supervisor nothing answers can give
-        // up once it has certainly lapsed rather than reconnecting forever.
-        ("KESTREL_LEASE", &lease),
-    ]) {
-        Ok(supervisor) => supervisor,
+    // Committed before any supervisor is started, so one that outlives this process still finds
+    // it rather than holding the lease out forever on a Session that cannot begin.
+    let harness = link::Harness {
+        command: command.to_owned(),
+        auth: dispatch.auth.clone().filter(|method| !method.is_empty()),
+        model: session.agent.model.clone(),
+    };
+    let started = match link::start(store, session, harness).await {
+        Ok(started) => started,
         Err(error) => {
             work::fail(
                 store,
-                &session,
-                &format!(
-                    "the supervisor could not be started on the instance {}: {error}",
-                    instance.name()
-                ),
+                session,
+                &format!("the session could not be started: {error}"),
             )
             .await?;
             return Ok(());
         }
     };
-    work::supervised(store, &session, supervisor.name()).await?;
-    if let Some(out) = supervisor.take_stdout() {
-        relay(session.id, out);
-    }
-    if let Some(err) = supervisor.take_stderr() {
-        relay(session.id, err);
-    }
 
-    let exit = start(store, &session, supervisor, shutdown).await?;
-    info!(session = %session.id, %exit, "a session ended");
+    let supervisor = match supervised(
+        store,
+        dispatch,
+        supervisors,
+        &workspace,
+        &mut instance,
+        started.seq - 1,
+    )
+    .await
+    {
+        Ok(supervisor) => supervisor,
+        Err(error) => {
+            work::fail(
+                store,
+                session,
+                &format!("the supervisor could not be started on the instance {name}: {error:#}"),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+    work::supervised(store, session, &name, supervisor.as_deref()).await?;
+    info!(session = %session.id, instance = name, "a session was started on its instance's supervisor");
 
     Ok(())
+}
+
+/// A recorded supervisor off the link is stopped before another starts, so two never share the
+/// checkout; the new one reads the stream from `after`, so it never replays an earlier Session.
+async fn supervised(
+    store: &Store,
+    dispatch: &Dispatch,
+    supervisors: &Supervisors,
+    workspace: &Workspace,
+    instance: &mut Instance,
+    after: i64,
+) -> Result<Option<String>> {
+    let name = instance.name().to_owned();
+    let held = supervisors.held_on(&name);
+    if let Held::Running(running) = held {
+        return Ok(Some(running));
+    }
+    let recorded = store.read().await?.workspaces().supervisor(&name).await?;
+    if let Some(recorded) = recorded {
+        if matches!(held, Held::Nothing)
+            && recorded
+                .reached_at
+                .is_some_and(|reached| Timestamp::now().duration_since(reached) < ON_THE_LINK)
+        {
+            return Ok(recorded.name);
+        }
+        if let Some(supervisor) = &recorded.name {
+            dispatch.driver.stop_named(supervisor).with_context(|| {
+                format!("the supervisor {supervisor}, off the link, could not be stopped")
+            })?;
+        }
+    }
+
+    let credential = Secret::mint();
+    let mut tx = store.begin().await?;
+    tx.workspaces()
+        .start_supervisor(workspace, &name, &credential.digest())
+        .await?;
+    tx.commit().await?;
+
+    let lease = work::LEASE.as_secs().to_string();
+    let mut supervisor = instance.supervise(&[
+        ("KESTREL_LINK", dispatch.link.as_str()),
+        ("KESTREL_INSTANCE", &name),
+        ("KESTREL_INSTANCE_CREDENTIAL", credential.as_str()),
+        ("KESTREL_INSTRUCTIONS_AFTER", &after.to_string()),
+        // How long a Session's lease is held out for, so a supervisor nothing answers can let its
+        // Session go once the lease has certainly lapsed.
+        ("KESTREL_LEASE", &lease),
+    ])?;
+    let mut tx = store.begin().await?;
+    tx.workspaces()
+        .name_supervisor(&name, &credential.digest(), supervisor.name())
+        .await?;
+    tx.commit().await?;
+    info!(
+        instance = name,
+        supervisor = supervisor.name(),
+        "an instance's supervisor started"
+    );
+
+    if let Some(out) = supervisor.take_stdout() {
+        relay(&name, out);
+    }
+    if let Some(err) = supervisor.take_stderr() {
+        relay(&name, err);
+    }
+    let started = supervisor.name().to_owned();
+    supervisors.held().insert(name, supervisor);
+
+    Ok(Some(started))
 }
 
 /// The Workspace's own Instance, or a fresh one for a Workspace that has none. `None` once the
@@ -367,37 +473,39 @@ async fn instance(
 }
 
 /// A supervisor blocks once a pipe nobody reads is full, so what it says is read as it says it.
-fn relay(session: SessionId, said: impl Read + Send + 'static) {
+fn relay(instance: &str, said: impl Read + Send + 'static) {
+    let instance = instance.to_owned();
     std::thread::spawn(move || {
         for line in BufReader::new(said).lines().map_while(Result::ok) {
-            info!(session = %session, "{line}");
+            info!(instance, "{line}");
         }
     });
 }
 
-async fn stop_left_behind(store: &Store, driver: &Driver) -> Result<()> {
-    for (session, supervisor) in work::supervisors_to_stop(store).await? {
-        if session
-            .ended_at
-            .is_some_and(|ended| Timestamp::now().duration_since(ended) < LEAVING)
-        {
-            continue;
-        }
-        match driver.stop_named(&supervisor) {
-            Ok(()) => {
-                work::supervisor_gone(store, &session).await?;
-            }
-            Err(error) => {
-                warn!(session = %session.id, %error, "an ended session's supervisor resisted being stopped");
-            }
-        }
+/// A supervisor that exits takes the Session it was carrying with it, since nothing is left to
+/// report how that Session went.
+async fn watch(store: &Store, supervisors: &Supervisors) -> Result<()> {
+    for (instance, exited) in supervisors.exited() {
+        warn!(instance, %exited, "an instance's supervisor exited");
+        work::supervisor_exited(
+            store,
+            &instance,
+            &format!("the supervisor exited {exited} without reporting how the session went"),
+        )
+        .await?;
     }
 
     Ok(())
 }
 
-async fn archive(store: &Store, driver: &Driver) -> Result<()> {
+async fn archive(store: &Store, driver: &Driver, supervisors: &Supervisors) -> Result<()> {
     for instance in instance::to_archive(store).await? {
+        let held = supervisors.held().remove(&instance);
+        if let Some(supervisor) = held
+            && let Err(error) = supervisor.stop()
+        {
+            warn!(instance, %error, "an instance's supervisor resisted being stopped");
+        }
         match driver.destroy_named(&instance) {
             Ok(()) => {
                 instance::archived(store, &instance).await?;
@@ -437,93 +545,4 @@ async fn a_way_to_reach_a_model(
          given no other way to reach a model",
         workspace.organization.name
     )
-}
-
-async fn start(
-    store: &Store,
-    session: &Session,
-    mut supervisor: Supervisor,
-    shutdown: &CancellationToken,
-) -> Result<Exit> {
-    info!(session = %session.id, supervisor = supervisor.name(), "a session's supervisor started");
-
-    let exit = match attend(store, session, &mut supervisor, shutdown).await {
-        Ended::TheSession(exit) => {
-            left_the_link(&mut supervisor).await;
-            exit
-        }
-        Ended::Supervisor(exited) => {
-            let unreported =
-                format!("the supervisor exited {exited} without reporting how the session went");
-            work::fail(store, session, &unreported).await?
-        }
-        Ended::ControlPlane => {
-            work::fail(
-                store,
-                session,
-                "the control plane stopped while this session was in flight",
-            )
-            .await?
-        }
-    };
-
-    match supervisor.stop() {
-        Ok(()) => {
-            work::supervisor_gone(store, session).await?;
-        }
-        Err(error) => warn!(session = %session.id, %error, "a supervisor resisted being stopped"),
-    }
-
-    Ok(exit)
-}
-
-/// A Session stopped or sealed tells its supervisor to leave, and one that does closes its agent
-/// conversation on the way out; killed first, it would leave the agent's own process group
-/// running.
-async fn left_the_link(supervisor: &mut Supervisor) {
-    let deadline = tokio::time::Instant::now() + LEAVING.unsigned_abs();
-
-    while tokio::time::Instant::now() < deadline {
-        if !matches!(supervisor.status(), Ok(None)) {
-            return;
-        }
-        tokio::time::sleep(POLL).await;
-    }
-}
-
-/// The supervisor reports its own outcome over the link, so what this waits for is the
-/// supervisor being gone. It stops for a Session that ended some other way too — a lease the
-/// supervisor stopped holding out — because a supervisor that outlives its Session would otherwise
-/// hold this role's one dispatch forever.
-async fn attend(
-    store: &Store,
-    session: &Session,
-    supervisor: &mut Supervisor,
-    shutdown: &CancellationToken,
-) -> Ended {
-    loop {
-        match supervisor.status() {
-            Ok(Some(exited)) => return Ended::Supervisor(exited),
-            Ok(None) => {}
-            // A daemon that cannot answer is not a supervisor that is gone. The Session's lease
-            // ends it if this never clears.
-            Err(error) => {
-                warn!(session = %session.id, %error, "a supervisor could not be asked how it is")
-            }
-        }
-        match work::session(store, session.id).await {
-            Ok(Session {
-                exit: Some(exit), ..
-            }) => return Ended::TheSession(exit),
-            Ok(_) => {}
-            Err(error) => {
-                warn!(session = %session.id, %error, "a session could not be asked how it is")
-            }
-        }
-
-        tokio::select! {
-            () = tokio::time::sleep(POLL) => {}
-            () = shutdown.cancelled() => return Ended::ControlPlane,
-        }
-    }
 }

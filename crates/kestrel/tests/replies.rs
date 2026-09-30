@@ -7,12 +7,11 @@ use std::time::Duration;
 
 use jiff::SignedDuration;
 use kestrel::domain::{Direction, Exit, Session, SessionState, Workspace, WorkspaceId};
-use kestrel::link::credential::Secret;
 use kestrel::work::{Report, Reported};
 use support::HARNESS;
-use support::Kestrel;
 use support::github_stub::{self, GithubStub, RecordedRequest, ScriptedResponse};
 use support::link_client::Link;
+use support::{Kestrel, OnTheLink};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 const REPOSITORY: &str = "jtmthf/kestrel";
@@ -116,14 +115,15 @@ async fn a_workspace_from_the_issue(kestrel: &Kestrel, stub: &GithubStub) -> Wor
 }
 
 /// A Session claimed the way a work role claims it, with its first Turn prompted.
-async fn a_working_session(kestrel: &Kestrel, workspace: WorkspaceId) -> (Session, Secret) {
+async fn a_working_session(kestrel: &Kestrel, workspace: WorkspaceId) -> (Session, OnTheLink) {
     let deadline = tokio::time::Instant::now() + PATIENCE;
     loop {
         if kestrel.sessions(workspace).await.len() == 1
             && let Some(claimed) = kestrel.claim_session().await
         {
-            kestrel.start(&claimed.session).await;
-            return (claimed.session, claimed.credential);
+            let on = kestrel.on_the_link(&claimed).await;
+            kestrel.start(&claimed, support::harness()).await;
+            return (claimed, on);
         }
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -133,12 +133,13 @@ async fn a_working_session(kestrel: &Kestrel, workspace: WorkspaceId) -> (Sessio
     }
 }
 
-async fn report(link: &Link, session: &Session, credential: &Secret, seq: i64, report: Report) {
+async fn report(link: &Link, session: &Session, on: &OnTheLink, seq: i64, report: Report) {
     let answered = link
         .report(
-            session.id,
-            Some(credential),
+            &on.instance,
+            Some(&on.credential),
             &Reported {
+                session: Some(session.id),
                 seq: Some(seq),
                 report,
             },
@@ -157,21 +158,21 @@ async fn a_turns_response_reaches_the_issue_before_the_session_ends() {
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
-    let (session, credential) = a_working_session(&kestrel, workspace.id).await;
+    let (session, on) = a_working_session(&kestrel, workspace.id).await;
     let link = Link::to(&kestrel.link());
 
-    report(&link, &session, &credential, 1, Report::Started).await;
+    report(&link, &session, &on, 1, Report::Started).await;
     report(
         &link,
         &session,
-        &credential,
+        &on,
         2,
         Report::Said {
             message: "the first answer".to_owned(),
         },
     )
     .await;
-    report(&link, &session, &credential, 3, Report::Answered).await;
+    report(&link, &session, &on, 3, Report::Answered).await;
 
     let bodies = replies(&stub, 1).await;
     assert!(bodies[0].contains("the first answer"), "{}", bodies[0]);
@@ -200,15 +201,15 @@ async fn a_final_message_repeating_a_combined_turn_response_is_not_posted_again(
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
-    let (session, credential) = a_working_session(&kestrel, workspace.id).await;
+    let (session, on) = a_working_session(&kestrel, workspace.id).await;
     let link = Link::to(&kestrel.link());
 
-    report(&link, &session, &credential, 1, Report::Started).await;
+    report(&link, &session, &on, 1, Report::Started).await;
     for (seq, message) in [(2, "The investigation is complete."), (3, "CI is green.")] {
         report(
             &link,
             &session,
-            &credential,
+            &on,
             seq,
             Report::Said {
                 message: message.to_owned(),
@@ -216,12 +217,12 @@ async fn a_final_message_repeating_a_combined_turn_response_is_not_posted_again(
         )
         .await;
     }
-    report(&link, &session, &credential, 4, Report::Answered).await;
+    report(&link, &session, &on, 4, Report::Answered).await;
     replies(&stub, 1).await;
     report(
         &link,
         &session,
-        &credential,
+        &on,
         5,
         Report::Said {
             message: "The investigation is complete.\n\nCI is green.".to_owned(),
@@ -231,7 +232,7 @@ async fn a_final_message_repeating_a_combined_turn_response_is_not_posted_again(
     report(
         &link,
         &session,
-        &credential,
+        &on,
         6,
         Report::Finished {
             exit: Exit::Succeeded,
@@ -253,27 +254,27 @@ async fn new_final_information_after_a_turn_is_saved_and_reported_once() {
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
-    let (session, credential) = a_working_session(&kestrel, workspace.id).await;
+    let (session, on) = a_working_session(&kestrel, workspace.id).await;
     let link = Link::to(&kestrel.link());
 
-    report(&link, &session, &credential, 1, Report::Started).await;
+    report(&link, &session, &on, 1, Report::Started).await;
     report(
         &link,
         &session,
-        &credential,
+        &on,
         2,
         Report::Said {
             message: "The investigation is complete.".to_owned(),
         },
     )
     .await;
-    report(&link, &session, &credential, 3, Report::Answered).await;
+    report(&link, &session, &on, 3, Report::Answered).await;
     replies(&stub, 1).await;
 
     report(
         &link,
         &session,
-        &credential,
+        &on,
         4,
         Report::Said {
             message: "The follow-up found a regression.".to_owned(),
@@ -283,7 +284,7 @@ async fn new_final_information_after_a_turn_is_saved_and_reported_once() {
     report(
         &link,
         &session,
-        &credential,
+        &on,
         5,
         Report::Finished {
             exit: Exit::Succeeded,
@@ -315,21 +316,21 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
-    let (session, credential) = a_working_session(&kestrel, workspace.id).await;
+    let (session, on) = a_working_session(&kestrel, workspace.id).await;
     let link = Link::to(&kestrel.link());
 
-    report(&link, &session, &credential, 1, Report::Started).await;
+    report(&link, &session, &on, 1, Report::Started).await;
     report(
         &link,
         &session,
-        &credential,
+        &on,
         2,
         Report::Said {
             message: "the first answer".to_owned(),
         },
     )
     .await;
-    report(&link, &session, &credential, 3, Report::Answered).await;
+    report(&link, &session, &on, 3, Report::Answered).await;
     let bodies = replies(&stub, 1).await;
     assert!(bodies[0].contains("the first answer"), "{}", bodies[0]);
 
@@ -343,14 +344,14 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
     report(
         &link,
         &session,
-        &credential,
+        &on,
         4,
         Report::Said {
             message: "the second answer".to_owned(),
         },
     )
     .await;
-    report(&link, &session, &credential, 5, Report::Answered).await;
+    report(&link, &session, &on, 5, Report::Answered).await;
 
     let bodies = replies(&stub, 2).await;
     assert!(bodies[1].contains("the second answer"), "{}", bodies[1]);
@@ -367,7 +368,7 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
     report(
         &link,
         &session,
-        &credential,
+        &on,
         6,
         Report::Said {
             message: "the first answer".to_owned(),
@@ -377,7 +378,7 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
     report(
         &link,
         &session,
-        &credential,
+        &on,
         7,
         Report::Finished {
             exit: Exit::Succeeded,
@@ -395,14 +396,14 @@ async fn a_session_that_answered_no_turn_still_says_how_it_ended() {
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
-    let (session, credential) = a_working_session(&kestrel, workspace.id).await;
+    let (session, on) = a_working_session(&kestrel, workspace.id).await;
     let link = Link::to(&kestrel.link());
 
-    report(&link, &session, &credential, 1, Report::Started).await;
+    report(&link, &session, &on, 1, Report::Started).await;
     report(
         &link,
         &session,
-        &credential,
+        &on,
         2,
         Report::Finished {
             exit: Exit::Succeeded,
@@ -429,27 +430,27 @@ async fn a_failed_session_posts_its_turns_response_and_then_the_failure() {
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
-    let (session, credential) = a_working_session(&kestrel, workspace.id).await;
+    let (session, on) = a_working_session(&kestrel, workspace.id).await;
     let link = Link::to(&kestrel.link());
 
-    report(&link, &session, &credential, 1, Report::Started).await;
+    report(&link, &session, &on, 1, Report::Started).await;
     report(
         &link,
         &session,
-        &credential,
+        &on,
         2,
         Report::Said {
             message: "the first answer".to_owned(),
         },
     )
     .await;
-    report(&link, &session, &credential, 3, Report::Answered).await;
+    report(&link, &session, &on, 3, Report::Answered).await;
     replies(&stub, 1).await;
 
     report(
         &link,
         &session,
-        &credential,
+        &on,
         4,
         Report::Finished {
             exit: Exit::Failed {
@@ -476,21 +477,21 @@ async fn a_turn_response_that_landed_while_the_control_plane_died_is_not_posted_
     stub.script_answer("POST", COMMENTS, ScriptedResponse::answering(502));
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
-    let (session, credential) = a_working_session(&kestrel, workspace.id).await;
+    let (session, on) = a_working_session(&kestrel, workspace.id).await;
     let link = Link::to(&kestrel.link());
 
-    report(&link, &session, &credential, 1, Report::Started).await;
+    report(&link, &session, &on, 1, Report::Started).await;
     report(
         &link,
         &session,
-        &credential,
+        &on,
         2,
         Report::Said {
             message: "the answer that landed".to_owned(),
         },
     )
     .await;
-    report(&link, &session, &credential, 3, Report::Answered).await;
+    report(&link, &session, &on, 3, Report::Answered).await;
     let landed = replies(&stub, 1).await.remove(0);
     assert!(landed.contains("the answer that landed"), "{landed}");
 

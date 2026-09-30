@@ -1,7 +1,6 @@
-//! A supervisor carries an Environment through a control plane that comes back. One that is gone
-//! for good has let the Session's lease go, so past that the supervisor stops rather than
-//! reconnecting forever, and the control plane refuses a link held for a lease it has already
-//! let lapse.
+//! A supervisor carries a Session through a control plane that comes back. Past the Session's lease
+//! the control plane has let it go, so the supervisor ends its harness and keeps redialling for
+//! its Instance, and a control plane that returns takes no word for a lease it let lapse.
 
 mod support;
 
@@ -82,22 +81,22 @@ fn dawdling_harness() -> Environment {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn a_supervisor_whose_control_plane_is_gone_for_good_gives_up_and_stops_its_harness() {
+async fn a_lease_that_passes_while_the_control_plane_is_away_ends_the_harness_and_the_supervisor_redials()
+ {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, credential) = kestrel.dispatch_session(workspace.id).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
 
     let harness = dawdling_harness();
     let mut supervisor = Supervisor::provision_running(
         &kestrel.link(),
-        session.id,
-        &credential,
+        &on,
         harness.path().to_str().expect("a utf-8 path"),
         "",
         Some(LEASE),
     );
     supervisor.wait_until_it_says("reported connected").await;
-    kestrel.start(&session).await;
+    kestrel.start(&session, supervisor.harness()).await;
 
     // Past a start that only says the Session began, once the Harness has actually started.
     let deadline = tokio::time::Instant::now() + PATIENCE;
@@ -110,57 +109,74 @@ async fn a_supervisor_whose_control_plane_is_gone_for_good_gives_up_and_stops_it
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    // The process goes away and stays away: nothing answers the link again.
-    kestrel.kill().await;
-
-    let exited = supervisor.exits().await;
+    let stopped = kestrel.kill().await;
+    supervisor.lets_go_of(session.id).await;
     assert!(
-        !exited.success(),
-        "the supervisor exited {exited} instead of giving up; it said:\n{}",
+        supervisor.said("gave up") && supervisor.said("lease"),
+        "the supervisor let the session go for a reason other than the lapsed lease; it said:\n{}",
         supervisor.everything_it_said()
     );
-    assert!(
-        supervisor.everything_it_said().contains("gave up"),
-        "the supervisor did not say it gave up; it said:\n{}",
-        supervisor.everything_it_said()
-    );
-    assert!(
-        supervisor.everything_it_said().contains("lease"),
-        "the supervisor gave up for a reason other than the lapsed lease; it said:\n{}",
-        supervisor.everything_it_said()
-    );
-
     Environment::process(&harness.wrote("harness.pid"))
         .is_gone()
         .await;
-}
+    assert!(
+        supervisor.is_still_running(Duration::from_secs(1)).await,
+        "the supervisor left with its session; it said:\n{}",
+        supervisor.everything_it_said()
+    );
 
-#[tokio::test]
-async fn a_link_held_for_a_lease_that_has_passed_is_refused() {
-    let kestrel = Kestrel::boot_serving_alone().await;
-    let workspace = a_workspace(&kestrel).await;
-    let (session, credential) = kestrel.dispatch_session(workspace.id).await;
-
-    kestrel
+    // Where the real lease, which the supervisor's bound outlasts, would be by now.
+    stopped
         .lease_until(&session, Timestamp::now() - SignedDuration::from_secs(1))
         .await;
+    let kestrel = stopped.restart().await;
+    supervisor.wait_until_it_says("link open after").await;
+    let ended = until(&kestrel, session.id, "was swept", |session| {
+        session.state == SessionState::Ended
+    })
+    .await;
+    assert!(matches!(ended.exit, Some(Exit::Failed { .. })));
 
-    let refused = Link::to(&kestrel.link())
+    kestrel.teardown().await;
+}
+
+/// A control plane coming back takes no supervisor's word for a Session whose lease it has let
+/// lapse: a heartbeat holds nothing out for it, and a report about it is gone.
+#[tokio::test]
+async fn a_session_whose_lease_has_passed_is_not_held_out_again() {
+    let kestrel = Kestrel::boot_serving_alone().await;
+    let workspace = a_workspace(&kestrel).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let lapsed = Timestamp::now() - SignedDuration::from_secs(1);
+    kestrel.lease_until(&session, lapsed).await;
+    let link = Link::to(&kestrel.link());
+
+    let alive = link
         .report(
-            session.id,
-            Some(&credential),
+            &on.instance,
+            Some(&on.credential),
             &Reported {
+                session: None,
                 seq: None,
                 report: Report::Heartbeat,
             },
         )
         .await;
+    assert_eq!(alive.status(), StatusCode::ACCEPTED);
+    assert!(kestrel.session(session.id).await.lease_expires_at <= Some(Timestamp::now()));
 
-    assert_eq!(
-        refused.status(),
-        StatusCode::FORBIDDEN,
-        "the link did not refuse a report for a lapsed lease"
-    );
+    let refused = link
+        .report(
+            &on.instance,
+            Some(&on.credential),
+            &Reported {
+                session: Some(session.id),
+                seq: Some(1),
+                report: Report::Started,
+            },
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::GONE);
     let said = refused.text().await.expect("a refusal says why");
     assert!(
         said.contains("lease"),

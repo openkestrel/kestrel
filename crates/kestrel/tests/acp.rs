@@ -202,11 +202,11 @@ async fn what_the_agent_used_is_recorded_on_the_session_and_reaches_no_transcrip
 async fn a_permission_request_is_answered_and_the_round_trip_is_observable() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, credential) = kestrel.dispatch_session(workspace.id).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
 
-    let mut supervisor = Supervisor::provision(&kestrel.link(), session.id, &credential);
+    let mut supervisor = Supervisor::provision(&kestrel.link(), &on);
     supervisor.wait_until_it_says("reported connected").await;
-    kestrel.start(&session).await;
+    kestrel.start(&session, supervisor.harness()).await;
     supervisor.wait_until_it_says("reported answered").await;
     kestrel.stop_session(session.id).await;
 
@@ -221,7 +221,7 @@ async fn a_permission_request_is_answered_and_the_round_trip_is_observable() {
         "the agent was not allowed to go on"
     );
 
-    assert!(supervisor.finishes().await.success());
+    supervisor.lets_go_of(session.id).await;
     kestrel.teardown().await;
 }
 
@@ -358,17 +358,12 @@ async fn an_agent_that_will_not_work_until_it_is_logged_in_fails_the_session_rat
 async fn the_supervisor_sets_the_model_it_was_given() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, credential) = kestrel.dispatch_session(workspace.id).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
 
-    let mut supervisor = Supervisor::provision_selecting(
-        &kestrel.link(),
-        session.id,
-        &credential,
-        Script::Speaks,
-        OTHER_MODEL,
-    );
+    let mut supervisor =
+        Supervisor::provision_selecting(&kestrel.link(), &on, Script::Speaks, OTHER_MODEL);
     supervisor.wait_until_it_says("reported connected").await;
-    kestrel.start(&session).await;
+    kestrel.start(&session, supervisor.harness()).await;
     supervisor.wait_until_it_says("reported answered").await;
     kestrel.stop_session(session.id).await;
 
@@ -376,7 +371,7 @@ async fn the_supervisor_sets_the_model_it_was_given() {
     assert_eq!(ended.exit, Some(Exit::Succeeded));
     assert_eq!(ended.worked_model.as_deref(), Some(OTHER_MODEL));
 
-    assert!(supervisor.finishes().await.success());
+    supervisor.lets_go_of(session.id).await;
     kestrel.teardown().await;
 }
 

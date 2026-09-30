@@ -12,20 +12,23 @@ CREATE TABLE session (
     UNIQUE (organization_id, name)
 ) STRICT;
 
-CREATE TABLE session_credential (
-    token_hash TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES session (id),
+-- Starting another supervisor on an Instance replaces its row, and letting the Instance go deletes it.
+CREATE TABLE supervisor (
+    instance TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL REFERENCES organization (id),
-    issued_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    invalidated_at TEXT
+    token_hash TEXT NOT NULL UNIQUE,
+    name TEXT,
+    version TEXT,
+    started_at TEXT NOT NULL,
+    reached_at TEXT
 ) STRICT;
 
 CREATE TABLE link_instruction (
+    instance TEXT NOT NULL,
+    seq INTEGER NOT NULL,
     session_id TEXT NOT NULL REFERENCES session (id),
     organization_id TEXT NOT NULL REFERENCES organization (id),
-    seq INTEGER NOT NULL,
     body TEXT NOT NULL,
     sent_at TEXT NOT NULL,
-    PRIMARY KEY (session_id, seq)
+    PRIMARY KEY (instance, seq)
 ) STRICT;

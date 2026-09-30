@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{Session, SessionId, SessionState, Workspace, WorkspaceState};
-use kestrel::work::Claimed;
 use support::Kestrel;
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
@@ -27,11 +26,11 @@ async fn a_workspace(kestrel: &Kestrel) -> Workspace {
     kestrel.open_workspace("acme", "kestrel", "builder").await
 }
 
-fn claimed(first: Option<Claimed>, second: Option<Claimed>) -> Vec<SessionId> {
+fn claimed(first: Option<Session>, second: Option<Session>) -> Vec<SessionId> {
     [first, second]
         .into_iter()
         .flatten()
-        .map(|claimed| claimed.session.id)
+        .map(|claimed| claimed.id)
         .collect()
 }
 
@@ -43,7 +42,7 @@ struct Blocked {
 
 async fn a_session_blocked_on_an_active_one(kestrel: &Kestrel) -> Blocked {
     let workspace = a_workspace(kestrel).await;
-    let (blocker, _) = kestrel.dispatch_session(workspace.id).await;
+    let blocker = kestrel.dispatch_session(workspace.id).await;
     let waiting = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let dependent = kestrel.enqueue_session(waiting.id).await;
     kestrel.block_session(&dependent, &blocker).await;
@@ -86,10 +85,7 @@ async fn a_session_with_an_active_blocker_is_claimed_only_after_its_blocker_ends
     kestrel.complete_session(&blocker).await;
 
     assert_eq!(
-        kestrel
-            .claim_session()
-            .await
-            .map(|claimed| claimed.session.id),
+        kestrel.claim_session().await.map(|claimed| claimed.id),
         Some(dependent.id),
         "the session did not become claimable once its blocker ended successfully"
     );
@@ -101,9 +97,9 @@ async fn a_session_with_an_active_blocker_is_claimed_only_after_its_blocker_ends
 async fn a_session_blocked_on_many_is_not_claimed_until_every_blocker_has_ended_successfully() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (first, _) = kestrel.dispatch_session(workspace.id).await;
+    let first = kestrel.dispatch_session(workspace.id).await;
     let elsewhere = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let (second, _) = kestrel.dispatch_session(elsewhere.id).await;
+    let second = kestrel.dispatch_session(elsewhere.id).await;
     let waiting = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let dependent = kestrel.enqueue_session(waiting.id).await;
     kestrel.block_session(&dependent, &first).await;
@@ -122,10 +118,7 @@ async fn a_session_blocked_on_many_is_not_claimed_until_every_blocker_has_ended_
     kestrel.complete_session(&second).await;
 
     assert_eq!(
-        kestrel
-            .claim_session()
-            .await
-            .map(|claimed| claimed.session.id),
+        kestrel.claim_session().await.map(|claimed| claimed.id),
         Some(dependent.id),
         "the session did not become claimable once every blocker had ended successfully"
     );
@@ -150,30 +143,27 @@ async fn a_session_blocked_on_queued_blockers_is_claimed_only_after_they_are_cla
         .await
         .expect("a blocker was queued to claim");
     assert_eq!(
-        claimed.session.id, first.id,
+        claimed.id, first.id,
         "the dependent session was claimed before one of its blockers"
     );
     assert_eq!(
         kestrel.session(dependent.id).await.state,
         SessionState::Queued
     );
-    kestrel.complete_session(&claimed.session).await;
+    kestrel.complete_session(&claimed).await;
 
     let claimed = kestrel
         .claim_session()
         .await
         .expect("a blocker was queued to claim");
     assert_eq!(
-        claimed.session.id, second.id,
+        claimed.id, second.id,
         "the dependent session was claimed before its last blocker"
     );
-    kestrel.complete_session(&claimed.session).await;
+    kestrel.complete_session(&claimed).await;
 
     assert_eq!(
-        kestrel
-            .claim_session()
-            .await
-            .map(|claimed| claimed.session.id),
+        kestrel.claim_session().await.map(|claimed| claimed.id),
         Some(dependent.id),
         "the session did not become claimable once every blocker had ended successfully"
     );
@@ -185,7 +175,7 @@ async fn a_session_blocked_on_queued_blockers_is_claimed_only_after_they_are_cla
 async fn a_blocked_session_enqueued_first_is_skipped_and_never_reorders_the_sessions_behind_it() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (blocker, _) = kestrel.dispatch_session(workspace.id).await;
+    let blocker = kestrel.dispatch_session(workspace.id).await;
 
     let blocked_workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let blocked = kestrel.enqueue_session(blocked_workspace.id).await;
@@ -196,18 +186,12 @@ async fn a_blocked_session_enqueued_first_is_skipped_and_never_reorders_the_sess
     kestrel.block_session(&blocked, &blocker).await;
 
     assert_eq!(
-        kestrel
-            .claim_session()
-            .await
-            .map(|claimed| claimed.session.id),
+        kestrel.claim_session().await.map(|claimed| claimed.id),
         Some(first_eligible.id),
         "the blocked session enqueued first was claimed before a session enqueued after it"
     );
     assert_eq!(
-        kestrel
-            .claim_session()
-            .await
-            .map(|claimed| claimed.session.id),
+        kestrel.claim_session().await.map(|claimed| claimed.id),
         Some(second_eligible.id),
         "an eligible session and the one after it were claimed out of order"
     );
@@ -223,10 +207,7 @@ async fn a_blocked_session_enqueued_first_is_skipped_and_never_reorders_the_sess
     kestrel.complete_session(&blocker).await;
 
     assert_eq!(
-        kestrel
-            .claim_session()
-            .await
-            .map(|claimed| claimed.session.id),
+        kestrel.claim_session().await.map(|claimed| claimed.id),
         Some(blocked.id),
         "the session enqueued first did not keep its turn once its blocker ended"
     );
@@ -258,10 +239,7 @@ async fn a_session_blocked_on_a_failed_blocker_is_never_claimed() {
     let behind = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let next_in_line = kestrel.enqueue_session(behind.id).await;
     assert_eq!(
-        kestrel
-            .claim_session()
-            .await
-            .map(|claimed| claimed.session.id),
+        kestrel.claim_session().await.map(|claimed| claimed.id),
         Some(next_in_line.id),
         "a failed blocker let the session behind it take the next turn"
     );
@@ -320,10 +298,7 @@ async fn a_blocked_session_keeps_its_turn_however_long_it_waits() {
     kestrel.complete_session(&blocker).await;
 
     assert_eq!(
-        kestrel
-            .claim_session()
-            .await
-            .map(|claimed| claimed.session.id),
+        kestrel.claim_session().await.map(|claimed| claimed.id),
         Some(dependent.id),
         "a session that waited out the idle window did not become claimable once its blocker ended"
     );

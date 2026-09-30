@@ -8,7 +8,6 @@ use crate::domain::{
     SessionState, SubscriptionProfile, Turn, Usage, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::instance::Observed;
-use crate::link::credential::Credential;
 use crate::link::{Instruction, SentInstruction};
 use crate::reference::{self, Candidate, Reference};
 use crate::store::{agent, due, organization, profile, project, timestamp};
@@ -473,7 +472,7 @@ impl<'a> Workspaces<'a> {
                     OR EXISTS (SELECT 1 FROM pending_session p WHERE p.workspace_id = session.workspace_id)
                         AS held_input",
             "workspace_id = ?
-               AND (state NOT IN (?, ?) OR supervisor_state = 'present')
+               AND state NOT IN (?, ?)
              ORDER BY enqueued_at, id
              LIMIT 1"
         ))
@@ -915,23 +914,6 @@ impl<'a> Workspaces<'a> {
         .collect()
     }
 
-    pub async fn record_connected(&mut self, session: &Session, version: &str) -> Result<()> {
-        sqlx::query("UPDATE session SET connected_at = ?, supervisor_version = ? WHERE id = ?")
-            .bind(Timestamp::now().to_string())
-            .bind(version)
-            .bind(session.id.to_string())
-            .execute(&mut *self.connection)
-            .await
-            .with_context(|| {
-                format!(
-                    "recording the supervisor of session {} connected",
-                    session.id
-                )
-            })?;
-
-        Ok(())
-    }
-
     /// The figures are cumulative, so the last report of them is the one that stands.
     pub async fn record_usage(&mut self, session: &Session, usage: &Usage) -> Result<()> {
         sqlx::query(
@@ -1037,6 +1019,7 @@ impl<'a> Workspaces<'a> {
     /// destroyed.
     pub async fn archive_instance(&mut self, workspace: &Workspace, instance: &str) -> Result<()> {
         self.record_instance(workspace.id, None).await?;
+        self.forget_supervisor(instance).await?;
         sqlx::query(
             "INSERT INTO instance_archive (instance, organization_id, workspace_id, queued_at)
              VALUES (?, ?, ?, ?)",
@@ -1124,13 +1107,151 @@ impl<'a> Workspaces<'a> {
         Ok(())
     }
 
-    pub async fn record_supervisor(&mut self, session: &Session, supervisor: &str) -> Result<()> {
+    /// The Secret's digest is recorded before the supervisor that presents it is started, so its
+    /// first dial is never refused; the name follows once the driver has one.
+    pub async fn start_supervisor(
+        &mut self,
+        workspace: &Workspace,
+        instance: &str,
+        digest: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO supervisor (instance, organization_id, token_hash, started_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (instance) DO UPDATE
+             SET token_hash = excluded.token_hash, name = NULL, version = NULL,
+                 started_at = excluded.started_at, reached_at = NULL",
+        )
+        .bind(instance)
+        .bind(workspace.organization.id.to_string())
+        .bind(digest)
+        .bind(Timestamp::now().to_string())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("recording a supervisor started on the instance {instance}"))?;
+
+        Ok(())
+    }
+
+    pub async fn name_supervisor(
+        &mut self,
+        instance: &str,
+        digest: &str,
+        name: &str,
+    ) -> Result<()> {
+        sqlx::query("UPDATE supervisor SET name = ? WHERE instance = ? AND token_hash = ?")
+            .bind(name)
+            .bind(instance)
+            .bind(digest)
+            .execute(&mut *self.connection)
+            .await
+            .with_context(|| format!("naming the supervisor of the instance {instance}"))?;
+
+        Ok(())
+    }
+
+    pub async fn supervisor(&mut self, instance: &str) -> Result<Option<Supervisor>> {
+        sqlx::query("SELECT name, reached_at FROM supervisor WHERE instance = ?")
+            .bind(instance)
+            .fetch_optional(&mut *self.connection)
+            .await
+            .with_context(|| format!("reading the supervisor of the instance {instance}"))?
+            .map(|row| {
+                Ok(Supervisor {
+                    name: row.get("name"),
+                    reached_at: timestamp(&row, "reached_at")?,
+                })
+            })
+            .transpose()
+    }
+
+    /// Its credential goes with it, so nothing presenting that credential is let on the link again.
+    pub async fn forget_supervisor(&mut self, instance: &str) -> Result<()> {
+        sqlx::query("DELETE FROM supervisor WHERE instance = ?")
+            .bind(instance)
+            .execute(&mut *self.connection)
+            .await
+            .with_context(|| format!("forgetting the supervisor of the instance {instance}"))?;
+
+        Ok(())
+    }
+
+    /// Only while a Workspace still holds the Instance: one let go takes its link with it.
+    pub async fn linked(&mut self, digest: &str) -> Result<Option<Linked>> {
+        sqlx::query(
+            "SELECT supervisor.instance, workspace.id AS workspace_id
+             FROM supervisor
+             JOIN workspace ON workspace.instance = supervisor.instance
+             WHERE supervisor.token_hash = ?",
+        )
+        .bind(digest)
+        .fetch_optional(&mut *self.connection)
+        .await
+        .context("reading which instance a link credential belongs to")?
+        .map(|row| {
+            Ok(Linked {
+                instance: row.get("instance"),
+                workspace: row.get::<String, _>("workspace_id").parse()?,
+            })
+        })
+        .transpose()
+    }
+
+    pub async fn record_reached(&mut self, instance: &str) -> Result<()> {
+        sqlx::query("UPDATE supervisor SET reached_at = ? WHERE instance = ?")
+            .bind(Timestamp::now().to_string())
+            .bind(instance)
+            .execute(&mut *self.connection)
+            .await
+            .with_context(|| format!("recording the supervisor of {instance} reached the link"))?;
+
+        Ok(())
+    }
+
+    /// Recorded on the Sessions it is carrying too, since a Session reads which supervisor it ran
+    /// through and at what version.
+    pub async fn record_connected(&mut self, instance: &str, version: &str) -> Result<()> {
+        let now = Timestamp::now().to_string();
+        sqlx::query("UPDATE supervisor SET reached_at = ?, version = ? WHERE instance = ?")
+            .bind(&now)
+            .bind(version)
+            .bind(instance)
+            .execute(&mut *self.connection)
+            .await
+            .with_context(|| format!("recording the supervisor of {instance} connected"))?;
+        sqlx::query(
+            "UPDATE session SET connected_at = ?, supervisor_version = ?
+             WHERE instance = ? AND state IN (SELECT value FROM json_each(?))",
+        )
+        .bind(&now)
+        .bind(version)
+        .bind(instance)
+        .bind(live()?)
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("recording the supervisor of {instance} connected"))?;
+
+        Ok(())
+    }
+
+    /// What the supervisor last said of itself goes with it, so a Session begun over a link that
+    /// was already open still reads as connected.
+    pub async fn record_supervisor(
+        &mut self,
+        session: &Session,
+        instance: &str,
+        supervisor: Option<&str>,
+    ) -> Result<()> {
         sqlx::query(
             "UPDATE session
-             SET supervisor = ?, supervisor_state = 'present'
+             SET supervisor = ?,
+                 connected_at = (SELECT reached_at FROM supervisor WHERE instance = ?),
+                 supervisor_version = (SELECT version FROM supervisor WHERE instance = ?)
              WHERE id = ?",
         )
         .bind(supervisor)
+        .bind(instance)
+        .bind(instance)
         .bind(session.id.to_string())
         .execute(&mut *self.connection)
         .await
@@ -1139,49 +1260,53 @@ impl<'a> Workspaces<'a> {
         Ok(())
     }
 
-    pub async fn record_supervisor_gone(&mut self, session: &Session) -> Result<()> {
-        sqlx::query("UPDATE session SET supervisor_state = 'gone' WHERE id = ?")
-            .bind(session.id.to_string())
-            .execute(&mut *self.connection)
-            .await
-            .with_context(|| {
-                format!("recording that session {}'s supervisor is gone", session.id)
-            })?;
+    /// A lease that has already passed is not revived: the sweep is about to end its Session, and
+    /// a control plane coming back takes no supervisor's word for one it has let go.
+    pub async fn hold_leases_on(&mut self, instance: &str, until: Timestamp) -> Result<()> {
+        sqlx::query(
+            "UPDATE session SET lease_expires_at = ?
+             WHERE instance = ? AND state IN (SELECT value FROM json_each(?))
+               AND lease_expires_at > ?",
+        )
+        .bind(due(until))
+        .bind(instance)
+        .bind(live()?)
+        .bind(due(Timestamp::now()))
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("holding the leases of the sessions on {instance}"))?;
 
         Ok(())
     }
 
-    pub async fn supervisor_is_gone(&mut self, session: &Session) -> Result<bool> {
-        let row = sqlx::query(
-            "SELECT supervisor_state != 'present' AS is_gone
-             FROM session
-             WHERE id = ?",
-        )
-        .bind(session.id.to_string())
-        .fetch_one(&mut *self.connection)
-        .await?;
-
-        Ok(row.get("is_gone"))
+    pub async fn carried(&mut self, instance: &str, id: SessionId) -> Result<Option<Session>> {
+        sqlx::query(sessions_where!(
+            "id = ? AND instance = ? AND state IN (SELECT value FROM json_each(?))
+               AND lease_expires_at > ?"
+        ))
+        .bind(id.to_string())
+        .bind(instance)
+        .bind(live()?)
+        .bind(due(Timestamp::now()))
+        .fetch_optional(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading whether {instance} carries the session {id}"))?
+        .map(|row| session(&row))
+        .transpose()
     }
 
-    pub async fn supervisors_to_stop(&mut self) -> Result<Vec<(Session, String)>> {
-        let rows = sqlx::query(
-            "SELECT id, supervisor
-             FROM session
-             WHERE state = ? AND supervisor_state = 'present'
-             ORDER BY ended_at, id",
-        )
-        .bind(SessionState::Ended.as_str())
+    pub async fn live_sessions_on(&mut self, instance: &str) -> Result<Vec<Session>> {
+        sqlx::query(sessions_where!(
+            "instance = ? AND state IN (SELECT value FROM json_each(?)) ORDER BY enqueued_at, id"
+        ))
+        .bind(instance)
+        .bind(live()?)
         .fetch_all(&mut *self.connection)
-        .await?;
-
-        let mut supervisors = Vec::with_capacity(rows.len());
-        for row in rows {
-            let session = self.session(row.get::<String, _>("id").parse()?).await?;
-            supervisors.push((session, row.get("supervisor")));
-        }
-
-        Ok(supervisors)
+        .await
+        .with_context(|| format!("reading the sessions on {instance}"))?
+        .iter()
+        .map(session)
+        .collect()
     }
 
     pub async fn hold_lease(&mut self, session: &Session, until: Timestamp) -> Result<()> {
@@ -1287,111 +1412,49 @@ impl<'a> Workspaces<'a> {
         Ok(true)
     }
 
-    pub async fn issue_credential(
-        &mut self,
-        session: &Session,
-        digest: &str,
-        expires_at: Timestamp,
-    ) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO session_credential (token_hash, session_id, organization_id, issued_at, expires_at)
-             VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(digest)
-        .bind(session.id.to_string())
-        .bind(session.organization.to_string())
-        .bind(Timestamp::now().to_string())
-        .bind(expires_at.to_string())
-        .execute(&mut *self.connection)
-        .await
-        .with_context(|| format!("issuing a credential for the session {}", session.id))?;
-
-        Ok(())
-    }
-
-    pub async fn invalidate_credentials(&mut self, session: &Session) -> Result<()> {
-        sqlx::query(
-            "UPDATE session_credential
-             SET invalidated_at = ?
-             WHERE session_id = ? AND invalidated_at IS NULL",
-        )
-        .bind(Timestamp::now().to_string())
-        .bind(session.id.to_string())
-        .execute(&mut *self.connection)
-        .await
-        .with_context(|| format!("invalidating the credentials of session {}", session.id))?;
-
-        Ok(())
-    }
-
-    pub async fn credential(&mut self, digest: &str) -> Result<Option<Credential>> {
-        let found = sqlx::query(
-            "SELECT session_id, organization_id, expires_at, invalidated_at
-             FROM session_credential
-             WHERE token_hash = ?",
-        )
-        .bind(digest)
-        .fetch_optional(&mut *self.connection)
-        .await?;
-
-        found
-            .map(|row| {
-                Ok(Credential {
-                    session: row.get::<String, _>("session_id").parse()?,
-                    organization: row.get::<String, _>("organization_id").parse()?,
-                    expires_at: row.get::<String, _>("expires_at").parse()?,
-                    invalidated_at: row
-                        .get::<Option<String>, _>("invalidated_at")
-                        .map(|at| at.parse())
-                        .transpose()?,
-                })
-            })
-            .transpose()
-    }
-
+    /// Down the stream of the Instance the Session executes on; `None` for a Session that never
+    /// reached one, which has nothing listening for it.
     pub async fn send_instruction(
         &mut self,
         session: &Session,
         instruction: Instruction,
-    ) -> Result<SentInstruction> {
+    ) -> Result<Option<SentInstruction>> {
         let sent = sqlx::query(
-            "INSERT INTO link_instruction (session_id, organization_id, seq, body, sent_at)
-             VALUES (
-                 ?,
-                 ?,
-                 (SELECT COALESCE(MAX(seq), 0) + 1 FROM link_instruction WHERE session_id = ?),
-                 ?,
-                 ?
-             )
+            "INSERT INTO link_instruction (instance, seq, session_id, organization_id, body, sent_at)
+             SELECT instance,
+                    (SELECT COALESCE(MAX(seq), 0) + 1 FROM link_instruction
+                      WHERE link_instruction.instance = session.instance),
+                    id, organization_id, ?, ?
+             FROM session
+             WHERE id = ? AND instance IS NOT NULL
              RETURNING seq",
         )
-        .bind(session.id.to_string())
-        .bind(session.organization.to_string())
-        .bind(session.id.to_string())
         .bind(serde_json::to_string(&instruction)?)
         .bind(Timestamp::now().to_string())
-        .fetch_one(&mut *self.connection)
+        .bind(session.id.to_string())
+        .fetch_optional(&mut *self.connection)
         .await
         .with_context(|| format!("sending an instruction to the session {}", session.id))?;
 
-        Ok(SentInstruction {
+        Ok(sent.map(|sent| SentInstruction {
             seq: sent.get("seq"),
+            session: session.id,
             instruction,
-        })
+        }))
     }
 
     pub async fn instructions_after(
         &mut self,
-        session: SessionId,
+        instance: &str,
         cursor: i64,
     ) -> Result<Vec<SentInstruction>> {
         sqlx::query(
-            "SELECT seq, body
+            "SELECT seq, session_id, body
              FROM link_instruction
-             WHERE session_id = ? AND seq > ?
+             WHERE instance = ? AND seq > ?
              ORDER BY seq",
         )
-        .bind(session.to_string())
+        .bind(instance)
         .bind(cursor)
         .fetch_all(&mut *self.connection)
         .await?
@@ -1399,6 +1462,7 @@ impl<'a> Workspaces<'a> {
         .map(|row| {
             Ok(SentInstruction {
                 seq: row.get("seq"),
+                session: row.get::<String, _>("session_id").parse()?,
                 instruction: serde_json::from_str(row.get("body"))?,
             })
         })
@@ -1534,6 +1598,16 @@ impl<'a> Workspaces<'a> {
             since,
         )))
     }
+}
+
+pub struct Supervisor {
+    pub name: Option<String>,
+    pub reached_at: Option<Timestamp>,
+}
+
+pub struct Linked {
+    pub instance: String,
+    pub workspace: WorkspaceId,
 }
 
 pub(crate) struct Unfinished {

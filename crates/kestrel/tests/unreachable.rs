@@ -30,7 +30,7 @@ async fn a_workspace(kestrel: &Kestrel) -> Workspace {
 
 async fn a_dependent_blocked_on_an_active_session(kestrel: &Kestrel) -> (Session, Session) {
     let workspace = a_workspace(kestrel).await;
-    let (blocker, _) = kestrel.dispatch_session(workspace.id).await;
+    let blocker = kestrel.dispatch_session(workspace.id).await;
     let waiting = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let dependent = kestrel.enqueue_session(waiting.id).await;
     kestrel.block_session(&dependent, &blocker).await;
@@ -61,9 +61,9 @@ async fn a_session_blocked_on_a_failed_blocker_becomes_unreachable() {
 async fn one_blocker_failing_is_enough_however_many_others_have_not_resolved() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (succeeds, _) = kestrel.dispatch_session(workspace.id).await;
+    let succeeds = kestrel.dispatch_session(workspace.id).await;
     let elsewhere = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let (fails, _) = kestrel.dispatch_session(elsewhere.id).await;
+    let fails = kestrel.dispatch_session(elsewhere.id).await;
     let waiting = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let dependent = kestrel.enqueue_session(waiting.id).await;
     kestrel.block_session(&dependent, &succeeds).await;

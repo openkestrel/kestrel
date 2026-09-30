@@ -14,7 +14,6 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{BoxError, Json, Router};
 use futures_core::Stream;
-use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -25,16 +24,17 @@ use crate::log::{self, Cursor, Unreadable, Window};
 use crate::profile;
 use crate::provider;
 use crate::role::serve;
+use crate::store::workspace::Linked;
 use crate::store::{self, Store, Tx};
 use crate::work::{self, ReportRefused, Reported};
 use crate::workspace;
 
-pub const CREDENTIALS: &str = "/link/sessions/{session}/credentials";
-/// The Transcript of the Workspace the Session belongs to. Named for what crosses the link rather
+pub const CREDENTIALS: &str = "/link/instances/{instance}/credentials";
+/// The Transcript of the Workspace holding the Instance. Named for what crosses the link rather
 /// than for what it is, because the supervisor is a courier and may not know (ADR-0002).
-pub const ENTRIES: &str = "/link/sessions/{session}/entries";
-pub const INSTRUCTIONS: &str = "/link/sessions/{session}/instructions";
-pub const REPORTS: &str = "/link/sessions/{session}/reports";
+pub const ENTRIES: &str = "/link/instances/{instance}/entries";
+pub const INSTRUCTIONS: &str = "/link/instances/{instance}/instructions";
+pub const REPORTS: &str = "/link/instances/{instance}/reports";
 
 /// Nothing subscribes to `Fanout` at 0.1 (ADR-0005), so a held-open stream learns of a new
 /// instruction by asking `Store` again rather than by being told.
@@ -44,8 +44,15 @@ const KEEP_ALIVE: Duration = Duration::from_secs(15);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Instruction {
-    Start { checkout: Checkout, prompt: String },
-    Prompt { prompt: String },
+    Start {
+        checkout: Checkout,
+        prompt: String,
+        harness: Harness,
+    },
+    Prompt {
+        prompt: String,
+    },
+    /// Ends the Session's harness; the supervisor stays on the link.
     Stop,
 }
 
@@ -59,10 +66,29 @@ impl Instruction {
     }
 }
 
+/// What the supervisor spawns for one Session, since each Session in a Workspace may choose its
+/// own Agent (ADR-0031).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Harness {
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SentInstruction {
     pub seq: i64,
+    pub session: SessionId,
     pub instruction: Instruction,
+}
+
+#[derive(Serialize)]
+struct Carried<'a> {
+    session: SessionId,
+    #[serde(flatten)]
+    instruction: &'a Instruction,
 }
 
 #[derive(Clone)]
@@ -73,7 +99,12 @@ struct ControlPlane {
 
 struct Waiting {
     instructions: Vec<SentInstruction>,
-    the_session_ended: bool,
+    still_linked: bool,
+}
+
+#[derive(Deserialize)]
+struct Asking {
+    session: String,
 }
 
 #[derive(Deserialize)]
@@ -120,7 +151,7 @@ pub fn router(store: Store, shutdown: CancellationToken) -> Router {
 /// recognises the skill invocation it may lead with. Otherwise the instruction is the message or
 /// messages that started this Session; a Session the control plane finds neither for is not
 /// started with an improvised one.
-pub async fn start(store: &Store, session: &Session) -> Result<SentInstruction> {
+pub async fn start(store: &Store, session: &Session, harness: Harness) -> Result<SentInstruction> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(session.workspace).await?;
     workspace.accepts("turn")?;
@@ -131,16 +162,16 @@ pub async fn start(store: &Store, session: &Session) -> Result<SentInstruction> 
             workspace.id
         )
     })?;
-    let sent = tx
-        .workspaces()
-        .send_instruction(
-            session,
-            Instruction::Start {
-                checkout: workspace.checkout.clone(),
-                prompt,
-            },
-        )
-        .await?;
+    let sent = sent_on(
+        &mut tx,
+        session,
+        Instruction::Start {
+            checkout: workspace.checkout.clone(),
+            prompt,
+            harness,
+        },
+    )
+    .await?;
     tx.workspaces().first_turn(session).await?;
     tx.commit().await?;
 
@@ -178,9 +209,7 @@ async fn instruction(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Option<St
 
 /// The next turn of a waiting Session, in the same agent conversation (ADR-0024).
 pub(crate) async fn prompt(tx: &mut Tx<'_>, session: &Session, prompt: String) -> Result<()> {
-    tx.workspaces()
-        .send_instruction(session, Instruction::Prompt { prompt })
-        .await?;
+    sent_on(tx, session, Instruction::Prompt { prompt }).await?;
     tx.workspaces()
         .prompt_turn(session)
         .await?
@@ -189,53 +218,59 @@ pub(crate) async fn prompt(tx: &mut Tx<'_>, session: &Session, prompt: String) -
     Ok(())
 }
 
+/// Sealing needs every Session ended first, which is what makes this refusal unreachable.
 pub async fn instruct(
     store: &Store,
     session: &Session,
     instruction: Instruction,
 ) -> Result<SentInstruction> {
-    sent(store, session, |_| instruction).await
-}
-
-/// Sealing needs every Session ended first, which is what makes this refusal unreachable.
-async fn sent(
-    store: &Store,
-    session: &Session,
-    instruction: impl FnOnce(&Workspace) -> Instruction,
-) -> Result<SentInstruction> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(session.workspace).await?;
     workspace.accepts("turn")?;
-    let sent = tx
-        .workspaces()
-        .send_instruction(session, instruction(&workspace))
-        .await?;
+    let sent = sent_on(&mut tx, session, instruction).await?;
     tx.commit().await?;
 
     Ok(sent)
 }
 
+async fn sent_on(
+    tx: &mut Tx<'_>,
+    session: &Session,
+    instruction: Instruction,
+) -> Result<SentInstruction> {
+    tx.workspaces()
+        .send_instruction(session, instruction)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("the session {} is on no instance to instruct", session.id))
+}
+
 async fn instructions(
     State(control_plane): State<ControlPlane>,
-    Path(session): Path<String>,
+    Path(instance): Path<String>,
     headers: HeaderMap,
 ) -> Result<Sse<impl Stream<Item = Result<Event, BoxError>>>, Refused> {
-    let session = authenticated(&control_plane, &headers, &session).await?;
+    let (linked, digest) = authenticated(&control_plane, &headers, &instance).await?;
     let mut cursor = last_event_id(&headers);
-    info!(session = %session.id, cursor, "an environment is on the link");
+    info!(
+        instance = linked.instance,
+        cursor, "a supervisor is on the link"
+    );
 
     let stream = async_stream::try_stream! {
         loop {
-            let waiting = waiting(&control_plane.store, session.id, cursor).await?;
+            let waiting = waiting(&control_plane.store, &linked.instance, &digest, cursor).await?;
             for sent in waiting.instructions {
                 cursor = sent.seq;
                 yield Event::default()
                     .id(sent.seq.to_string())
                     .event(sent.instruction.kind())
-                    .json_data(&sent.instruction)?;
+                    .json_data(Carried {
+                        session: sent.session,
+                        instruction: &sent.instruction,
+                    })?;
             }
 
-            if waiting.the_session_ended {
+            if !waiting.still_linked {
                 break;
             }
 
@@ -250,14 +285,16 @@ async fn instructions(
 }
 
 /// The Provider Credentials of the Session's Organization and the Subscription Profile its
-/// Workspace names, decrypted here and held nowhere else: a supervisor asks as it spawns its
-/// Harness, and an idle one never asks.
+/// Workspace names, decrypted here and held nowhere else: a supervisor asks as it spawns a
+/// Session's Harness, and one between Sessions has nothing to ask for (ADR-0010).
 async fn credentials(
     State(control_plane): State<ControlPlane>,
-    Path(session): Path<String>,
+    Path(instance): Path<String>,
+    Query(asking): Query<Asking>,
     headers: HeaderMap,
 ) -> Result<Json<Credentials>, Refused> {
-    let session = authenticated(&control_plane, &headers, &session).await?;
+    let (linked, _) = authenticated(&control_plane, &headers, &instance).await?;
+    let session = carried(&control_plane, &linked, &asking.session).await?;
     let mut variables = provider::reaching(&control_plane.store, session.organization).await?;
     let mut files = BTreeMap::new();
     if let Some(named) = workspace::show(&control_plane.store, session.workspace)
@@ -270,9 +307,10 @@ async fn credentials(
     }
     info!(
         session = %session.id,
+        instance = linked.instance,
         variables = variables.keys().cloned().collect::<Vec<_>>().join(", "),
         files = files.keys().cloned().collect::<Vec<_>>().join(", "),
-        "an environment took the credentials its session needs"
+        "an instance took the credentials its session needs"
     );
 
     Ok(Json(Credentials { variables, files }))
@@ -280,11 +318,13 @@ async fn credentials(
 
 async fn refresh_credentials(
     State(control_plane): State<ControlPlane>,
-    Path(session): Path<String>,
+    Path(instance): Path<String>,
+    Query(asking): Query<Asking>,
     headers: HeaderMap,
     Json(refreshed): Json<Refreshed>,
 ) -> Result<StatusCode, Refused> {
-    let session = authenticated(&control_plane, &headers, &session).await?;
+    let (linked, _) = authenticated(&control_plane, &headers, &instance).await?;
+    let session = carried(&control_plane, &linked, &asking.session).await?;
     let Some(named) = workspace::show(&control_plane.store, session.workspace)
         .await?
         .profile
@@ -298,7 +338,7 @@ async fn refresh_credentials(
         session = %session.id,
         profile = %named.name,
         files = taken.join(", "),
-        "an environment handed back the logins its harness refreshed"
+        "an instance handed back the logins its harness refreshed"
     );
 
     Ok(StatusCode::NO_CONTENT)
@@ -306,11 +346,11 @@ async fn refresh_credentials(
 
 async fn entries(
     State(control_plane): State<ControlPlane>,
-    Path(session): Path<String>,
+    Path(instance): Path<String>,
     Query(paging): Query<Paging>,
     headers: HeaderMap,
 ) -> Result<Json<Entries>, Refused> {
-    let session = authenticated(&control_plane, &headers, &session).await?;
+    let (linked, _) = authenticated(&control_plane, &headers, &instance).await?;
     let from = paging
         .cursor
         .as_deref()
@@ -320,7 +360,7 @@ async fn entries(
     let window = Window::or_default(paging.window)
         .map_err(|error| Refused::BadRequest(error.to_string()))?;
 
-    let page = workspace::transcript(&control_plane.store, session.workspace, from, window).await?;
+    let page = workspace::transcript(&control_plane.store, linked.workspace, from, window).await?;
 
     Ok(Json(Entries {
         entries: page
@@ -339,65 +379,75 @@ async fn entries(
 
 async fn report(
     State(control_plane): State<ControlPlane>,
-    Path(session): Path<String>,
+    Path(instance): Path<String>,
     headers: HeaderMap,
     Json(reported): Json<Reported>,
 ) -> Result<StatusCode, Refused> {
-    let session = authenticated(&control_plane, &headers, &session).await?;
-    work::report(&control_plane.store, &session, reported).await?;
+    let (linked, _) = authenticated(&control_plane, &headers, &instance).await?;
+    work::report(&control_plane.store, &linked.instance, reported).await?;
 
     Ok(StatusCode::ACCEPTED)
 }
 
-async fn waiting(store: &Store, session: SessionId, cursor: i64) -> Result<Waiting> {
-    let mut tx = store.begin().await?;
-    let the_session_ended = tx.workspaces().session(session).await?.ended_at.is_some();
+async fn waiting(store: &Store, instance: &str, digest: &str, cursor: i64) -> Result<Waiting> {
+    let mut tx = store.read().await?;
+    let still_linked = tx
+        .workspaces()
+        .linked(digest)
+        .await?
+        .is_some_and(|linked| linked.instance == instance);
 
     Ok(Waiting {
-        instructions: tx.workspaces().instructions_after(session, cursor).await?,
-        the_session_ended,
+        instructions: tx.workspaces().instructions_after(instance, cursor).await?,
+        still_linked,
     })
 }
 
 async fn authenticated(
     control_plane: &ControlPlane,
     headers: &HeaderMap,
+    instance: &str,
+) -> Result<(Linked, String), Refused> {
+    let secret = bearer(headers).ok_or(Refused::Unauthorized("no credential presented"))?;
+    let digest = secret.digest();
+
+    let linked = control_plane
+        .store
+        .read()
+        .await?
+        .workspaces()
+        .linked(&digest)
+        .await?
+        .ok_or(Refused::Unauthorized(
+            "no credential kestrel issued for an instance it still holds",
+        ))?;
+    if linked.instance != instance {
+        return Err(Refused::Forbidden(
+            "the credential belongs to another instance",
+        ));
+    }
+
+    Ok((linked, digest))
+}
+
+/// A Session whose lease has lapsed is refused as if it had ended, since the sweep is about to end it.
+async fn carried(
+    control_plane: &ControlPlane,
+    linked: &Linked,
     session: &str,
 ) -> Result<Session, Refused> {
-    let session: SessionId = session.parse().map_err(|_| Refused::NoSuchSession)?;
-    let secret = bearer(headers).ok_or(Refused::Unauthorized("no credential presented"))?;
+    let id: SessionId = session
+        .parse()
+        .map_err(|_| Refused::BadRequest(format!("{session} is not a session")))?;
 
-    let mut tx = control_plane.store.begin().await?;
-    let credential = tx
-        .workspaces()
-        .credential(&secret.digest())
+    control_plane
+        .store
+        .read()
         .await?
-        .ok_or(Refused::Unauthorized("no credential kestrel issued"))?;
-
-    if !credential.is_live_at(Timestamp::now()) {
-        return Err(Refused::Unauthorized("the credential is no longer live"));
-    }
-    if credential.session != session {
-        return Err(Refused::Forbidden(
-            "the credential belongs to another session",
-        ));
-    }
-
-    let session = tx.workspaces().session(session).await?;
-    // A lease is held out by the Environment reaching the link, so one that has lapsed means
-    // nothing is holding it out. The sweep is about to end this Session anyway; refusing here
-    // closes the window where a control plane coming back would take a supervisor's word for a
-    // Session it has already let go.
-    if session
-        .lease_expires_at
-        .is_some_and(|expires| expires <= Timestamp::now())
-    {
-        return Err(Refused::Forbidden(
-            "the session's lease has passed, and its control plane has let it go",
-        ));
-    }
-
-    Ok(session)
+        .workspaces()
+        .carried(&linked.instance, id)
+        .await?
+        .ok_or_else(|| Refused::Gone(ReportRefused::Gone(id).to_string()))
 }
 
 fn bearer(headers: &HeaderMap) -> Option<Secret> {
@@ -419,9 +469,9 @@ fn last_event_id(headers: &HeaderMap) -> i64 {
 
 enum Refused {
     BadRequest(String),
-    NoSuchSession,
     Unauthorized(&'static str),
     Forbidden(&'static str),
+    Gone(String),
     Unavailable(anyhow::Error),
 }
 
@@ -443,9 +493,10 @@ impl From<Unreadable> for Refused {
 impl From<ReportRefused> for Refused {
     fn from(refused: ReportRefused) -> Self {
         match refused {
-            ReportRefused::MissingSequence | ReportRefused::SkippedSequence(_) => {
-                Self::BadRequest(refused.to_string())
-            }
+            ReportRefused::MissingSession
+            | ReportRefused::MissingSequence
+            | ReportRefused::SkippedSequence(_) => Self::BadRequest(refused.to_string()),
+            ReportRefused::Gone(_) => Self::Gone(refused.to_string()),
             ReportRefused::Unavailable(error) => Self::Unavailable(error),
         }
     }
@@ -456,9 +507,9 @@ impl IntoResponse for Refused {
         let busy = matches!(&self, Refused::Unavailable(error) if store::busy(error));
         let (status, message) = match self {
             Refused::BadRequest(why) => (StatusCode::BAD_REQUEST, why),
-            Refused::NoSuchSession => (StatusCode::NOT_FOUND, "no such session".to_owned()),
             Refused::Unauthorized(why) => (StatusCode::UNAUTHORIZED, why.to_owned()),
             Refused::Forbidden(why) => (StatusCode::FORBIDDEN, why.to_owned()),
+            Refused::Gone(why) => (StatusCode::GONE, why),
             Refused::Unavailable(error) => {
                 warn!(%error, busy, "the link could not answer");
                 (

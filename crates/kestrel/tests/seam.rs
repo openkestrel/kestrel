@@ -195,7 +195,7 @@ async fn two_kestrels_running_at_once_do_not_share_state() {
 async fn a_transcript_of(kestrel: &Kestrel, said: usize) -> (Workspace, Session) {
     declare_fixture(kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
 
     for message in 1..=said {
         kestrel.said(&session, &format!("message {message}")).await;

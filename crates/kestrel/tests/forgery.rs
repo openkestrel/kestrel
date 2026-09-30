@@ -35,7 +35,7 @@ async fn an_idle_workspace_a_working_session_and_triggers(
     }
     kestrel.disable_trigger("acme", "disabled").await;
     let working = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let (session, _) = kestrel.dispatch_session(working.id).await;
+    let session = kestrel.dispatch_session(working.id).await;
     let idle = kestrel.open_workspace("acme", "kestrel", "builder").await;
 
     (idle, session)
