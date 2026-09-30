@@ -1,6 +1,6 @@
 # Architecture
 
-How kestrel's pieces fit together as the code stands. Terms are [`CONTEXT.md`](../../CONTEXT.md)'s;
+How kestrel's pieces fit together as the code stands. Terms are [`GLOSSARY.md`](../../GLOSSARY.md)'s;
 the reasons behind each shape are in [`docs/adr/`](../adr/), cited inline. This page is the map;
 each area has its own page.
 
@@ -18,7 +18,7 @@ each area has its own page.
 ADRs 0001–0029 predate the rename in [ADR-0030](../adr/0030-a-session-is-what-a-harness-user-calls-one.md)
 and are not rewritten. Translate as you read:
 
-| ADR 0001–0029 says | The code and `CONTEXT.md` say |
+| ADR 0001–0029 says | The code and `GLOSSARY.md` say |
 | --- | --- |
 | Run | Session |
 | Session | Workspace |
@@ -157,6 +157,6 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
 - **Pull request state** ([ADR-0032](../adr/0032-a-pull-request-event-updates-workspace-state-without-a-firing.md)):
   nothing records a pull request against a Workspace; `pull_request` Events reach Triggers only.
 - **Split roles**: `serve` and `work` parse separately but run correctly only in one process.
-- **Policy, Approvals, Questions, Workflows, Campaigns** exist in `CONTEXT.md` and
+- **Policy, Approvals, Questions, Workflows, Campaigns** exist in `GLOSSARY.md` and
   [`ROADMAP.md`](../../ROADMAP.md), not in code. `session_dependency` and the Unreachable state are
   the only Workflow machinery built.

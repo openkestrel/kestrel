@@ -17,7 +17,7 @@ almost the inverse of a per-session box, and the word would import that expectat
 `Template` both survive only as qualifiers: Ona ships "environment class" and says "environment"
 whenever it means either, which is the compromise this decision exists to avoid.
 
-**Renaming the instance** is what shipped, and `CONTEXT.md` had already narrowed the field for us.
+**Renaming the instance** is what shipped, and `GLOSSARY.md` had already narrowed the field for us.
 The Environment entry's `_Avoid_` line read "sandbox, container, machine, box" — four candidates
 rejected in writing — and its own definition reached for the fifth unprompted: "the isolated compute
 **instance** a run executes in." Promoting the word the glossary was already using descriptively is

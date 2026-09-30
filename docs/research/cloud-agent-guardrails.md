@@ -11,7 +11,7 @@ policy layer (`ROADMAP.md`, "0.4 — kestrel asks before it acts") and for the b
 each product it asks three questions: where enforcement sits, what the policy is written in and
 who reviews it, and what is recorded. Where a product's docs are silent, this file says so. Some
 features a vendor documents only for its local client are cited here when they sit next to the
-cloud product; each such case is labelled local. Terms follow `CONTEXT.md`: *policy*,
+cloud product; each such case is labelled local. Terms follow `GLOSSARY.md`: *policy*,
 *disposition*, *approval*, *question*, *run*, *session* and *audit record*.
 
 ## Findings

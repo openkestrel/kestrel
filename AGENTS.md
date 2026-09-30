@@ -10,7 +10,7 @@ Five canonical triage labels (needs-triage, needs-info, ready-for-agent, ready-f
 
 ### Domain docs
 
-Single-context layout (root `CONTEXT.md` + `docs/adr/`). See `docs/agents/domain.md`.
+Single-context layout (root `GLOSSARY.md` + `docs/adr/`). See `docs/agents/domain.md`.
 
 ### Architecture
 

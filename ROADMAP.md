@@ -8,7 +8,7 @@
 > further Turns. Declaring a Trigger replays no recorded history. The acceptance runs and what they
 > found are [`docs/acceptance-0.1.md`](docs/acceptance-0.1.md) and
 > [`docs/acceptance-0.2.md`](docs/acceptance-0.2.md). The repo holds the vocabulary in
-> [`CONTEXT.md`](CONTEXT.md) and the direction in [`README.md`](README.md). A Session that runs out of
+> [`GLOSSARY.md`](GLOSSARY.md) and the direction in [`README.md`](README.md). A Session that runs out of
 > credits still ends failed and waits on an operator to resume it.
 
 Seven rungs from an empty repository to v1, and no dates. Each is a `0.N` release, and each is named

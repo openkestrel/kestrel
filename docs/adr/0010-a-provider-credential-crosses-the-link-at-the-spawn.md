@@ -62,7 +62,7 @@ discover it inside a model call.
   value.
 - **An Organization is the only scope there is.** Every Run in an Organization is spawned with
   everything that Organization holds. Narrowing a credential to an Agent, a Workspace or a
-  Workflow is a boundary nothing yet needs, and `CONTEXT.md` says an Agent does not hold one.
+  Workflow is a boundary nothing yet needs, and `GLOSSARY.md` says an Agent does not hold one.
 - **The supervisor holds a secret in memory for the length of the turn.** It is in the supervisor's
   process and in the agent's, and a core dump of either would carry it. That is the floor for
   anything that spawns a process with a key: what this buys over the alternative is that neither

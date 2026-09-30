@@ -41,7 +41,7 @@ and the v1 gate would prove nothing.
 
 ## Interception is a driver capability, never a `Policy` disposition
 
-[`CONTEXT.md`](../../CONTEXT.md)'s four dispositions — allow, deny, judge, human — stay four. If
+[`GLOSSARY.md`](../../GLOSSARY.md)'s four dispositions — allow, deny, judge, human — stay four. If
 kestrel ever rewrites a tool's input or narrows a shell command, that is the *driver* narrowing an
 operation the policy already allowed: opencode's plugin API on one side, Claude's `PreToolUse` hooks
 on the other, and a driver that supports neither simply does not offer the capability. The control
