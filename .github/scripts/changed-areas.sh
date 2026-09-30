@@ -23,7 +23,7 @@ area_inputs() {
   esac
 }
 readonly inputs=(
-  'crates/** Cargo.toml Cargo.lock rust-toolchain.toml mise.toml openapi/** .kestrel/** .github/**'
+  'crates/** Cargo.toml Cargo.lock rust-toolchain.toml mise.toml .config/** openapi/** .kestrel/** .github/**'
   'images/** crates/** Cargo.toml Cargo.lock rust-toolchain.toml .dockerignore openapi/** .kestrel/** .github/**'
   'images/** .dockerignore .github/**'
   'compose.yaml crates/** Cargo.toml Cargo.lock rust-toolchain.toml images/** .dockerignore openapi/** .kestrel/** .github/**'

@@ -1,0 +1,48 @@
+name: Flakes
+
+# The gate fails a test that passes only on retry, and a queue entry whose tree already passed is
+# not run again (ADR-0042), so neither catches a flake the suite has not shown yet. This does: the
+# default suite, over and over, on the runners the gate uses.
+on:
+  schedule:
+    - cron: "29 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  stress:
+    name: default suite under stress
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v4
+        with:
+          install_args: rust github:nextest-rs/nextest
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-dependencies
+          save-if: false
+
+      - name: Run the suite until the time is up
+        run: |
+          set -o pipefail
+          cargo nextest run --locked --workspace --profile stress --stress-duration 45m 2>&1 | tee nextest.log
+
+      - name: Name the tests that failed
+        if: failure()
+        run: |
+          {
+            echo "| Failures | Test |"
+            echo "| --- | --- |"
+            grep -E '^\s+FAIL ' nextest.log | sort -u | sed -E 's/.*\([0-9]+\/[0-9]+\) //' \
+              | sort | uniq -c | sort -rn | awk '{ n = $1; $1 = ""; print "| " n " |" $0 " |" }'
+          } >> "$GITHUB_STEP_SUMMARY"

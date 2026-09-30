@@ -43,6 +43,29 @@ jobs:
             .github/scripts/changed-areas.sh < /dev/null
           fi
 
+  # The only writer of the cache every CI job restores: CI never runs on a push, so a save there
+  # conditioned on one never fires (ADR-0027).
+  rust-cache:
+    name: rust (cache)
+    if: github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v4
+        with:
+          install_args: rust
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-dependencies
+
+      - name: Build what the gate builds
+        run: |
+          cargo clippy --locked --workspace --all-targets
+          cargo build --locked --workspace
+          cargo test --locked --workspace --no-run
+
   supervisor-size:
     name: supervisor size
     if: github.ref_type == 'branch'
