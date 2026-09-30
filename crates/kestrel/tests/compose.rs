@@ -351,7 +351,7 @@ fn the_commands_usage_documents_are_the_commands_that_work() {
     let transcript = stack.client(&["workspace", "transcript", "latest"]);
     assert!(
         transcript.out[0]
-            .ends_with("\t{\"kind\":\"participant_joined\",\"participant\":\"builder\"}"),
+            .ends_with("\t{\"type\":\"participant_joined\",\"participant\":\"builder\"}"),
         "USAGE.md shows the Agent joining as the first entry, and the transcript was:\n{:?}",
         transcript.out
     );
