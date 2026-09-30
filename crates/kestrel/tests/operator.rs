@@ -911,6 +911,8 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
                 "workspace",
                 "post",
                 &workspace,
+                "--as-participant",
+                "operator",
                 "start with the operator boundary",
                 "--json",
                 SESSION,
@@ -1843,7 +1845,7 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     let (status, posted) = declared(
         &kestrel,
         &messages,
-        &json!({ "message": "start with the operator boundary" }),
+        &json!({ "participant": "operator", "message": "start with the operator boundary" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1893,6 +1895,116 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 
     kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_post_names_its_participant_and_refuses_an_agents_name() {
+    let kestrel = Kestrel::boot().await;
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    kestrel
+        .declare_agent(&organization, "reviewer", "opencode", None)
+        .await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let messages = workspace_messages_at("acme", &workspace.id.to_string());
+
+    for participant in [
+        Value::Null,
+        json!("   "),
+        json!("x".repeat(65)),
+        json!("con\u{7}trol"),
+        json!("builder"),
+        json!("reviewer"),
+    ] {
+        let mut body = json!({ "message": "hello" });
+        if !participant.is_null() {
+            body["participant"] = participant;
+        }
+
+        let (status, refusal) = declared(&kestrel, &messages, &body).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{body}: {refusal}"
+        );
+        assert_eq!(refusal["field"], "participant", "{body}: {refusal}");
+    }
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_names_first_turn_joins_once_and_a_later_turn_does_not() {
+    let kestrel = Kestrel::boot().await;
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+
+    kestrel.post(workspace.id, "alice", "the first thing").await;
+    kestrel
+        .post_while_busy(workspace.id, "alice", "the second thing")
+        .await;
+
+    let entries: Vec<Entry> = kestrel
+        .transcript(workspace.id)
+        .await
+        .into_iter()
+        .map(|recorded| recorded.entry)
+        .collect();
+    assert_eq!(
+        entries,
+        vec![
+            Entry::ParticipantJoined {
+                participant: "builder".to_owned(),
+            },
+            Entry::ParticipantJoined {
+                participant: "alice".to_owned(),
+            },
+            Entry::Said {
+                participant: "alice".to_owned(),
+                message: "the first thing".to_owned(),
+            },
+            Entry::Said {
+                participant: "alice".to_owned(),
+                message: "the second thing".to_owned(),
+            },
+        ]
+    );
+
+    kestrel.teardown().await;
+}
+
+#[test]
+fn the_published_document_requires_a_participant_on_a_post() {
+    let document = published();
+    let required = document["components"]["schemas"]["WorkspaceMessage"]["required"]
+        .as_array()
+        .expect("an array of required fields");
+
+    assert!(
+        required.iter().any(|field| field == "participant"),
+        "the document does not require a participant: {required:?}"
+    );
 }
 
 #[tokio::test]

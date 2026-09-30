@@ -229,6 +229,68 @@ async fn a_message_arriving_during_a_session_waits_for_that_session_to_end() {
 }
 
 #[tokio::test]
+async fn held_messages_join_their_new_authors_once_in_message_order() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let active = kestrel.dispatch_session(workspace.id).await;
+
+    assert!(
+        kestrel
+            .post_while_busy(workspace.id, "alice", "one")
+            .await
+            .is_none()
+    );
+    assert!(
+        kestrel
+            .post_while_busy(workspace.id, "bob", "two")
+            .await
+            .is_none()
+    );
+    assert!(
+        kestrel
+            .post_while_busy(workspace.id, "alice", "three")
+            .await
+            .is_none()
+    );
+
+    kestrel.complete_session(&active).await;
+
+    let entries: Vec<Entry> = kestrel
+        .transcript(workspace.id)
+        .await
+        .into_iter()
+        .map(|recorded| recorded.entry)
+        .collect();
+    let messages_at = entries
+        .iter()
+        .position(|entry| matches!(entry, Entry::Messages { .. }))
+        .expect("a turn took the held messages");
+    assert_eq!(
+        entries[messages_at - 2..messages_at],
+        [
+            Entry::ParticipantJoined {
+                participant: "alice".to_owned(),
+            },
+            Entry::ParticipantJoined {
+                participant: "bob".to_owned(),
+            },
+        ],
+        "each new author joins once, in message order, directly before the batch"
+    );
+
+    let joins = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::ParticipantJoined { participant } => Some(participant.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(joins, vec!["builder", "alice", "bob"]);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_cold_session_is_seeded_with_every_page_of_earlier_context() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
@@ -438,6 +500,25 @@ async fn comments_arriving_during_a_turn_wait_in_order_with_their_authors() {
                         ],
                     }
             })
+    );
+
+    let entries: Vec<Entry> = kestrel
+        .transcript(workspace.id)
+        .await
+        .into_iter()
+        .map(|recorded| recorded.entry)
+        .collect();
+    let joins = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::ParticipantJoined { participant } => Some(participant.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        joins,
+        vec!["builder", "jack", "jill"],
+        "each commenter joins under their login, once"
     );
 
     kestrel.teardown().await;

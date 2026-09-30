@@ -596,13 +596,10 @@ async fn continue_pending(tx: &mut Tx<'_>, workspace: WorkspaceId) -> Result<Opt
         return Ok(None);
     }
 
+    let messages = messages(pending);
+    workspace::join_authors(tx, &workspace, &messages).await?;
     tx.log()
-        .append(
-            &workspace,
-            Entry::Messages {
-                messages: messages(pending),
-            },
-        )
+        .append(&workspace, Entry::Messages { messages })
         .await?;
 
     Ok(Some(
@@ -620,6 +617,7 @@ async fn prompt_pending(tx: &mut Tx<'_>, session: &Session) -> Result<()> {
     }
 
     let messages = messages(pending);
+    workspace::join_authors(tx, &workspace, &messages).await?;
     let prompt = follow_up(&messages);
     tx.log()
         .append(&workspace, Entry::Messages { messages })

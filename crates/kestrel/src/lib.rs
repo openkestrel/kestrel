@@ -15,6 +15,7 @@ pub mod keyring;
 pub mod link;
 pub mod log;
 pub mod operator;
+pub mod participant;
 pub mod profile;
 pub mod provider;
 pub mod queue;

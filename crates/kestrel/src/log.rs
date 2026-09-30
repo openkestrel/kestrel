@@ -149,6 +149,26 @@ impl<'a> Log<'a> {
         })
     }
 
+    /// Whether a name has taken a turn here, answered from the Transcript and never a set kept
+    /// beside it.
+    pub async fn has_joined(&mut self, workspace: &Workspace, participant: &str) -> Result<bool> {
+        let joined = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                 SELECT 1 FROM transcript_entry
+                 WHERE workspace_id = ?
+                   AND json_extract(body, '$.kind') = 'participant_joined'
+                   AND json_extract(body, '$.participant') = ?
+             )",
+        )
+        .bind(workspace.id.to_string())
+        .bind(participant)
+        .fetch_one(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading the participants of workspace {}", workspace.id))?;
+
+        Ok(joined)
+    }
+
     pub async fn last_said_for_session(
         &mut self,
         workspace: &Workspace,
