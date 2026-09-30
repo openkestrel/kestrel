@@ -71,6 +71,12 @@ pub enum Read {
         #[serde(default)]
         raw: bool,
     },
+    Changes {
+        scope: String,
+        paths: Vec<String>,
+    },
+    Commits,
+    Stashes,
     #[serde(other)]
     Unrecognized,
 }
@@ -88,12 +94,42 @@ pub enum Answer {
         path: String,
         text: String,
     },
+    Changes {
+        repositories: Vec<RepositoryDiff>,
+    },
+    Commits {
+        repositories: Vec<RepositoryText>,
+    },
+    Stashes {
+        repositories: Vec<RepositoryText>,
+    },
     Refused {
         message: String,
     },
     Missing {
         message: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RepositoryDiff {
+    pub repository: String,
+    pub diff: String,
+    pub files: Vec<FileStat>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FileStat {
+    pub path: String,
+    pub added: Option<u64>,
+    pub removed: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RepositoryText {
+    pub repository: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

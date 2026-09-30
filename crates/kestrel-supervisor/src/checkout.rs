@@ -239,35 +239,44 @@ fn numstat(output: &str) -> Result<crate::link::Changes, String> {
         removed: 0,
     };
     let mut paths = std::collections::HashSet::new();
+    for file in file_stats(output)? {
+        paths.insert(file.path);
+        stats.added += file.added.unwrap_or_default();
+        stats.removed += file.removed.unwrap_or_default();
+    }
+    stats.files = paths.len() as u64;
+    Ok(stats)
+}
+
+pub(crate) fn file_stats(output: &str) -> Result<Vec<crate::link::FileStat>, String> {
+    let mut files = Vec::new();
     let mut records = output.split('\0').filter(|record| !record.is_empty());
     while let Some(record) = records.next() {
         let mut fields = record.trim_start_matches('\n').splitn(3, '\t');
         let added = fields.next().unwrap_or_default();
-        let removed = fields
-            .next()
-            .ok_or_else(|| format!("git returned an invalid numstat: {record:?}"))?;
-        let mut path = fields
-            .next()
-            .ok_or_else(|| format!("git returned an invalid numstat: {record:?}"))?;
+        let removed = fields.next().ok_or("git omitted a line count")?;
+        let mut path = fields.next().ok_or("git omitted a path")?;
         if path.is_empty() {
-            records
-                .next()
-                .ok_or_else(|| "git omitted a renamed file's old path".to_owned())?;
-            path = records
-                .next()
-                .ok_or_else(|| "git omitted a renamed file's new path".to_owned())?;
+            records.next().ok_or("git omitted a rename's old path")?;
+            path = records.next().ok_or("git omitted a rename's new path")?;
         }
-        paths.insert(path);
-        for (number, count) in [(added, &mut stats.added), (removed, &mut stats.removed)] {
-            if number != "-" {
-                *count += number
-                    .parse::<u64>()
-                    .map_err(|_| format!("git returned an invalid line count: {number:?}"))?;
+        let count = |value: &str| {
+            if value == "-" {
+                Ok(None)
+            } else {
+                value
+                    .parse()
+                    .map(Some)
+                    .map_err(|_| "git returned an invalid line count".to_owned())
             }
-        }
+        };
+        files.push(crate::link::FileStat {
+            path: path.to_owned(),
+            added: count(added)?,
+            removed: count(removed)?,
+        });
     }
-    stats.files = paths.len() as u64;
-    Ok(stats)
+    Ok(files)
 }
 
 pub fn root(checkout: Option<&Checkout>) -> PathBuf {

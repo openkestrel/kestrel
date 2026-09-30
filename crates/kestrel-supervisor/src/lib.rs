@@ -1,3 +1,4 @@
+pub mod changes;
 pub mod checkout;
 pub mod completer;
 pub mod files;
@@ -300,12 +301,16 @@ async fn attend(
 fn answer(link: &Arc<Link>, checkout: Option<&Checkout>, asked: link::Asked) {
     let link = Arc::clone(link);
     let checkouts = files::Checkouts::of(checkout);
+    let checkout = checkout.cloned();
     tokio::spawn(async move {
         let answered = match asked.read {
             Read::Files { path } => {
                 AnswerBody::Json(files::list(&checkouts, path.as_deref()).await)
             }
             Read::File { path, raw } => files::read(&checkouts, &path, raw).await,
+            read @ (Read::Changes { .. } | Read::Commits | Read::Stashes) => {
+                AnswerBody::Json(changes::read(&checkouts, checkout.as_ref(), read).await)
+            }
             Read::Unrecognized => AnswerBody::Json(Answer::Refused {
                 message: "this Instance's supervisor does not know that read".to_owned(),
             }),
