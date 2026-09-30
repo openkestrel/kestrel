@@ -152,7 +152,7 @@ async fn posting_a_message_into_an_idle_workspace_enqueues_its_next_session() {
             .any(|recorded| {
                 matches!(
                     &recorded.entry,
-                    Entry::Said { participant, message }
+                    Entry::Said { participant, message, .. }
                         if participant == "operator" && message == "please add the missing test"
                 )
             })

@@ -1,4 +1,6 @@
 pub mod checkout;
+pub mod completer;
+pub mod files;
 pub mod harness;
 pub mod link;
 pub mod login;
@@ -13,7 +15,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::harness::{Conversation, Harness};
-use crate::link::{Checkout, Exit, Instruction, Link, Report};
+use crate::link::{Answer, AnswerBody, Checkout, Down, Exit, Instruction, Link, Read, Report};
 
 const RECONNECT_AFTER: Duration = Duration::from_millis(250);
 /// Often enough that the control plane keeps its hold on this Instance's Session through a
@@ -46,6 +48,8 @@ impl Diagnostics for Stderr {
 struct Supervising {
     cursor: Option<String>,
     carrying: Option<Carrying>,
+    checkout: Option<Checkout>,
+    summary: Option<Vec<link::WorkRepository>>,
 }
 
 /// One Session's part of the supervisor's life. The conversation goes on whether or not the link
@@ -57,6 +61,7 @@ struct Carrying {
     harness: Harness,
     conversation: Option<Conversation>,
     finished: bool,
+    working: bool,
     taken: i64,
     /// Handed back before anything is said, because saying the Session finished ends it and with it
     /// this Instance's right to hand anything back for it.
@@ -94,10 +99,10 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
     let mut supervising = Supervising {
         cursor: set(variables, "KESTREL_INSTRUCTIONS_AFTER").map(str::to_owned),
         carrying: None,
+        checkout: None,
+        summary: None,
     };
 
-    // Nothing else reaches the link while a turn is being worked, so this Instance says it is
-    // alive beside the work rather than between the steps of it.
     let alive = tokio::spawn(saying_it_is_alive(Arc::clone(&link)));
     let mut relaying = tokio::spawn(relaying_stderr(Arc::clone(&link), written));
     let status = supervised(
@@ -150,7 +155,7 @@ async fn relaying_stderr(link: Arc<Link>, mut written: mpsc::UnboundedReceiver<S
 /// Redials for as long as the Instance lives: only a link that refuses this Instance, which it
 /// does once the Instance has been let go, ends it.
 async fn supervised(
-    link: &Link,
+    link: &Arc<Link>,
     stderr: &mpsc::UnboundedSender<String>,
     home: Option<&Path>,
     supervising: &mut Supervising,
@@ -196,7 +201,7 @@ async fn give_up(link: &Link, supervising: &mut Supervising, diagnostics: &dyn D
 }
 
 async fn attend(
-    link: &Link,
+    link: &Arc<Link>,
     stderr: &mpsc::UnboundedSender<String>,
     home: Option<&Path>,
     supervising: &mut Supervising,
@@ -209,14 +214,15 @@ async fn attend(
         Some(held) => diagnostics.info(&format!("link open after {held}")),
     }
 
-    link.report(
-        &Report::Connected {
-            version: env!("CARGO_PKG_VERSION").to_owned(),
-        },
-        None,
-        None,
-    )
-    .await?;
+    if let Some(checkout) = link.connected().await? {
+        supervising.checkout = Some(checkout);
+    }
+    report_work(link, supervising, true).await?;
+    let mut checking = tokio::time::interval_at(
+        tokio::time::Instant::now() + HEARTBEAT_EVERY,
+        HEARTBEAT_EVERY,
+    );
+    checking.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     diagnostics.info("reported connected");
 
     loop {
@@ -240,8 +246,13 @@ async fn attend(
         let give_up_timer = until_given_up(link, supervising.carrying.is_some(), give_up_after);
         tokio::select! {
             delivered = instructions.next() => {
-                let Some(delivered) = delivered? else {
-                    return Ok(());
+                let delivered = match delivered? {
+                    None => return Ok(()),
+                    Some(Down::Read(asked)) => {
+                        answer(link, supervising.checkout.as_ref(), asked);
+                        continue;
+                    }
+                    Some(Down::Instruction(delivered)) => delivered,
                 };
                 supervising.cursor = Some(delivered.id.clone());
                 diagnostics.info(&format!(
@@ -250,11 +261,28 @@ async fn attend(
                     delivered.id,
                     delivered.session
                 ));
+                let closing = matches!(&delivered.instruction, Instruction::Stop)
+                    && supervising.carrying.as_ref().is_some_and(|carrying| carrying.session == delivered.session);
                 instructed(stderr, supervising, delivered, diagnostics).await;
+                if closing {
+                    report_work(link, supervising, true).await?;
+                }
             }
-            worked = turn(&mut supervising.carrying) => {
+            event = next(&mut supervising.carrying) => {
                 if let Some(carrying) = supervising.carrying.as_mut() {
-                    worked_on(carrying, worked, diagnostics).await;
+                    match event {
+                        harness::ConversationEvent::Report(report) => carrying.saying.push_back(report),
+                        harness::ConversationEvent::Worked(worked) => {
+                            carrying.working = false;
+                            worked_on(carrying, worked, diagnostics).await;
+                            report_work(link, supervising, true).await?;
+                        }
+                    }
+                }
+            }
+            _ = checking.tick() => {
+                if supervising.carrying.as_ref().is_some_and(|carrying| carrying.working) {
+                    report_work(link, supervising, false).await?;
                 }
             }
             () = give_up_timer => {
@@ -266,6 +294,48 @@ async fn attend(
             }
         }
     }
+}
+
+/// Answered beside whatever the Session is doing, so a read never waits on a turn.
+fn answer(link: &Arc<Link>, checkout: Option<&Checkout>, asked: link::Asked) {
+    let link = Arc::clone(link);
+    let checkouts = files::Checkouts::of(checkout);
+    tokio::spawn(async move {
+        let answered = match asked.read {
+            Read::Files { path } => {
+                AnswerBody::Json(files::list(&checkouts, path.as_deref()).await)
+            }
+            Read::File { path, raw } => files::read(&checkouts, &path, raw).await,
+            Read::Unrecognized => AnswerBody::Json(Answer::Refused {
+                message: "this Instance's supervisor does not know that read".to_owned(),
+            }),
+        };
+        // An answer the link does not take is one the operator has already given up on.
+        let _ = link.answer(&asked.request, answered).await;
+    });
+}
+
+async fn report_work(
+    link: &Link,
+    supervising: &mut Supervising,
+    force: bool,
+) -> Result<(), link::Error> {
+    let Some(checkout) = &supervising.checkout else {
+        return Ok(());
+    };
+    let repositories = checkout::work(checkout).await;
+    if force || supervising.summary.as_ref() != Some(&repositories) {
+        link.report(
+            &Report::Work {
+                repositories: repositories.clone(),
+            },
+            None,
+            None,
+        )
+        .await?;
+        supervising.summary = Some(repositories);
+    }
+    Ok(())
 }
 
 /// Everything left to do for the Session before waiting on the link again: `false` once it has
@@ -331,6 +401,7 @@ async fn instructed(
                     .let_go("another session started", diagnostics)
                     .await;
             }
+            supervising.checkout = Some(checkout.clone());
             let mut carrying = Carrying {
                 session: delivered.session,
                 checkout,
@@ -343,6 +414,7 @@ async fn instructed(
                 },
                 conversation: None,
                 finished: false,
+                working: true,
                 taken: 0,
                 refreshed: BTreeMap::new(),
                 written: None,
@@ -364,6 +436,9 @@ async fn instructed(
             supervising.carrying = Some(carrying);
         }
         Instruction::Prompt { prompt } if carrying_it => {
+            if let Some(carrying) = supervising.carrying.as_mut() {
+                carrying.working = true;
+            }
             match supervising
                 .carrying
                 .as_ref()
@@ -462,12 +537,12 @@ async fn conversation(
     }
 }
 
-async fn turn(carrying: &mut Option<Carrying>) -> harness::Worked {
+async fn next(carrying: &mut Option<Carrying>) -> harness::ConversationEvent {
     match carrying
         .as_mut()
         .and_then(|carrying| carrying.conversation.as_mut())
     {
-        Some(conversation) => conversation.turn().await,
+        Some(conversation) => conversation.next().await,
         None => std::future::pending().await,
     }
 }
@@ -523,26 +598,15 @@ fn everything_left_to_say(
     worked: harness::Worked,
     observed: Vec<link::Observed>,
 ) -> impl Iterator<Item = Report> {
-    worked
-        .on
-        .map(|on| Report::Model { model: on.model })
-        .into_iter()
-        .chain(
-            worked
-                .said
-                .into_iter()
-                .map(|message| Report::Said { message }),
-        )
-        .chain(worked.usage.map(|usage| Report::Used { usage }))
-        .chain(std::iter::once(Report::Checkout {
-            repositories: observed,
-        }))
-        .chain(std::iter::once(match worked.failed {
-            Some(because) => Report::Finished {
-                exit: Exit::Failed { because },
-            },
-            None => Report::Answered,
-        }))
+    std::iter::once(Report::Checkout {
+        repositories: observed,
+    })
+    .chain(std::iter::once(match worked.failed {
+        Some(because) => Report::Finished {
+            exit: Exit::Failed { because },
+        },
+        None => Report::Answered,
+    }))
 }
 
 fn dialled(variables: &BTreeMap<String, String>) -> Option<Link> {

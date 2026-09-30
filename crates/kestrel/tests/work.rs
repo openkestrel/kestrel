@@ -424,6 +424,7 @@ async fn located(kestrel: &Kestrel, workspace: &Workspace) -> Vec<PathBuf> {
             Entry::Said {
                 participant,
                 message,
+                ..
             } if participant == "builder" => Some(PathBuf::from(message)),
             _ => None,
         })

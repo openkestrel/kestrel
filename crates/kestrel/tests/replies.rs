@@ -169,6 +169,7 @@ async fn a_turns_response_reaches_the_issue_before_the_session_ends() {
         2,
         Report::Said {
             message: "the first answer".to_owned(),
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
     )
     .await;
@@ -213,6 +214,7 @@ async fn a_final_message_repeating_a_combined_turn_response_is_not_posted_again(
             seq,
             Report::Said {
                 message: message.to_owned(),
+                completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
             },
         )
         .await;
@@ -226,6 +228,7 @@ async fn a_final_message_repeating_a_combined_turn_response_is_not_posted_again(
         5,
         Report::Said {
             message: "The investigation is complete.\n\nCI is green.".to_owned(),
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
     )
     .await;
@@ -265,6 +268,7 @@ async fn new_final_information_after_a_turn_is_saved_and_reported_once() {
         2,
         Report::Said {
             message: "The investigation is complete.".to_owned(),
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
     )
     .await;
@@ -278,6 +282,7 @@ async fn new_final_information_after_a_turn_is_saved_and_reported_once() {
         4,
         Report::Said {
             message: "The follow-up found a regression.".to_owned(),
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
     )
     .await;
@@ -327,6 +332,7 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
         2,
         Report::Said {
             message: "the first answer".to_owned(),
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
     )
     .await;
@@ -348,6 +354,7 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
         4,
         Report::Said {
             message: "the second answer".to_owned(),
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
     )
     .await;
@@ -372,6 +379,7 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
         6,
         Report::Said {
             message: "the first answer".to_owned(),
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
     )
     .await;
@@ -441,6 +449,7 @@ async fn a_failed_session_posts_its_turns_response_and_then_the_failure() {
         2,
         Report::Said {
             message: "the first answer".to_owned(),
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
     )
     .await;
@@ -488,6 +497,7 @@ async fn a_turn_response_that_landed_while_the_control_plane_died_is_not_posted_
         2,
         Report::Said {
             message: "the answer that landed".to_owned(),
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
     )
     .await;

@@ -77,6 +77,12 @@ pub const APPLIED_TRIGGERS_PREVIEW: &str =
 pub const INSTANCES: &str = "/operator/organizations/{organization}/instances";
 pub const WORKSPACES: &str = "/operator/organizations/{organization}/workspaces";
 pub const WORKSPACE: &str = "/operator/organizations/{organization}/workspaces/{workspace}";
+pub const WORKSPACE_WORK: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/work";
+pub const WORKSPACE_FILES: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/files";
+pub const WORKSPACE_FILE: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/file";
 pub const WORKSPACE_MESSAGES: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/messages";
 pub const WORKSPACE_SEAL: &str =
@@ -101,15 +107,32 @@ const KEEP_ALIVE: Duration = Duration::from_secs(15);
 struct ControlPlane {
     store: Store,
     shutdown: CancellationToken,
+    summaries: crate::live_work::Summaries,
+    reads: crate::live_read::Reads,
+}
+
+#[derive(Deserialize)]
+struct Browsing {
+    path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Reading {
+    path: String,
+    #[serde(default)]
+    raw: bool,
 }
 
 #[derive(Deserialize)]
 struct Following {
     follow: Option<bool>,
+    kinds: Option<String>,
 }
 
 #[derive(Serialize)]
 struct Recorded {
+    kind: log::Kind,
+    session_id: Option<crate::domain::SessionId>,
     seq: i64,
     appended_at: String,
     entry: log::Entry,
@@ -132,7 +155,12 @@ struct Read {
     sealed: bool,
 }
 
-pub fn router(store: Store, shutdown: CancellationToken) -> Router {
+pub fn router(
+    store: Store,
+    shutdown: CancellationToken,
+    summaries: crate::live_work::Summaries,
+    reads: crate::live_read::Reads,
+) -> Router {
     Router::new()
         .route(ORGANIZATIONS, get(organizations).post(declare_organization))
         .route(STARTS, post(start))
@@ -168,6 +196,9 @@ pub fn router(store: Store, shutdown: CancellationToken) -> Router {
         .route(QUEUE, get(show_queue))
         .route(WORKSPACES, get(workspaces).post(open_workspace))
         .route(WORKSPACE, get(show_workspace))
+        .route(WORKSPACE_WORK, get(work_summary))
+        .route(WORKSPACE_FILES, get(workspace_files))
+        .route(WORKSPACE_FILE, get(workspace_file))
         .route(WORKSPACE_MESSAGES, post(post_to_workspace))
         .route(WORKSPACE_SEAL, post(seal_workspace))
         .route(WORKSPACE_INSTANCE_RELEASE, post(release_instance))
@@ -175,7 +206,12 @@ pub fn router(store: Store, shutdown: CancellationToken) -> Router {
         .route(SESSION, get(show_session))
         .route(SESSION_STOP, post(stop_session))
         .route(TRANSCRIPT, get(transcript))
-        .with_state(ControlPlane { store, shutdown })
+        .with_state(ControlPlane {
+            store,
+            shutdown,
+            summaries,
+            reads,
+        })
         .layer(middleware::from_fn(addressed_here))
 }
 
@@ -1773,6 +1809,56 @@ async fn open_workspace(
     ))
 }
 
+async fn work_summary(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, reference)): Path<(String, String)>,
+) -> Result<Json<crate::live_work::Work>, Refused> {
+    Ok(Json(
+        crate::live_work::read(
+            &control_plane.store,
+            &control_plane.summaries,
+            &organization,
+            &reference,
+        )
+        .await?,
+    ))
+}
+
+async fn workspace_files(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, reference)): Path<(String, String)>,
+    Query(browsing): Query<Browsing>,
+) -> Result<crate::live_read::AnswerBody, Refused> {
+    Ok(crate::live_read::read(
+        &control_plane.store,
+        &control_plane.reads,
+        &organization,
+        &reference,
+        crate::live_read::Read::Files {
+            path: browsing.path.filter(|path| !path.is_empty()),
+        },
+    )
+    .await?)
+}
+
+async fn workspace_file(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, reference)): Path<(String, String)>,
+    Query(reading): Query<Reading>,
+) -> Result<crate::live_read::AnswerBody, Refused> {
+    Ok(crate::live_read::read(
+        &control_plane.store,
+        &control_plane.reads,
+        &organization,
+        &reference,
+        crate::live_read::Read::File {
+            path: reading.path,
+            raw: reading.raw,
+        },
+    )
+    .await?)
+}
+
 async fn show_workspace(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
@@ -1957,20 +2043,35 @@ async fn transcript(
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     let workspace = workspace.id;
     let follow = following.follow.unwrap_or(true);
+    let kinds = following
+        .kinds
+        .as_deref()
+        .map(str::parse::<log::Kinds>)
+        .transpose()
+        .map_err(|error| Refused::BadRequest(error.to_string()))?
+        .unwrap_or_default();
     let from = last_event_id(&headers)?;
-    let mut read = reading(&control_plane.store, workspace, from).await?;
+    let mut read = reading(&control_plane.store, workspace, from, &kinds).await?;
 
     let stream = async_stream::try_stream! {
+        let mut delivered = from;
         loop {
             for entry in read.page.entries {
+                delivered = Some(Cursor::at(workspace, entry.seq));
                 yield Event::default()
                     .id(Cursor::at(workspace, entry.seq).to_string())
                     .event("entry")
                     .json_data(Recorded {
+                        kind: entry.kind,
+                        session_id: entry.session_id,
                         seq: entry.seq,
                         appended_at: entry.appended_at.to_string(),
                         entry: entry.entry,
                     })?;
+            }
+            if let Some(cursor) = read.page.cursor && delivered != Some(cursor) {
+                delivered = Some(cursor);
+                yield Event::default().event("cursor").id(cursor.to_string()).json_data(cursor.to_string())?;
             }
             if !read.page.more {
                 let because = match (read.sealed, follow) {
@@ -1989,7 +2090,7 @@ async fn transcript(
                 }
             }
 
-            read = reading(&control_plane.store, workspace, read.page.cursor)
+            read = reading(&control_plane.store, workspace, read.page.cursor, &kinds)
                 .await
                 .map_err(Refused::into_error)?;
         }
@@ -2000,14 +2101,22 @@ async fn transcript(
 
 /// The state is read in the transaction the page is, so a Workspace sealed between the two
 /// cannot end the stream short of its last entry.
-async fn reading(store: &Store, id: WorkspaceId, from: Option<Cursor>) -> Result<Read, Refused> {
+async fn reading(
+    store: &Store,
+    id: WorkspaceId,
+    from: Option<Cursor>,
+    kinds: &log::Kinds,
+) -> Result<Read, Refused> {
     let mut tx = store.begin().await?;
     let workspace = tx
         .workspaces()
         .find(id)
         .await?
         .ok_or_else(|| Refused::NotFound("no workspace".to_owned()))?;
-    let page = tx.log().page(&workspace, from, Window::DEFAULT).await?;
+    let page = tx
+        .log()
+        .page(&workspace, from, Window::DEFAULT, kinds)
+        .await?;
 
     Ok(Read {
         page,
@@ -2039,6 +2148,7 @@ enum Refused {
         field: &'static str,
         why: String,
     },
+    NotAnswering(String),
     Unavailable(anyhow::Error),
 }
 
@@ -2050,7 +2160,8 @@ impl Refused {
             | Refused::NotFound(why)
             | Refused::Conflict(why)
             | Refused::Unprocessable(why)
-            | Refused::Named { why, .. } => why.into(),
+            | Refused::Named { why, .. }
+            | Refused::NotAnswering(why) => why.into(),
             Refused::Unavailable(error) => error.into(),
         }
     }
@@ -2066,6 +2177,9 @@ impl From<anyhow::Error> for Refused {
                 field: named.field,
                 why: named.message.clone(),
             };
+        }
+        if let Some(silent) = error.downcast_ref::<crate::live_read::NotAnswering>() {
+            return Refused::NotAnswering(silent.to_string());
         }
         match error.downcast::<Declined>() {
             Ok(Declined::Unacceptable(why)) => Refused::Unprocessable(why),
@@ -2101,6 +2215,7 @@ impl IntoResponse for Refused {
             Refused::Conflict(why) => (StatusCode::CONFLICT, why, None),
             Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why, None),
             Refused::Named { field, why } => (StatusCode::UNPROCESSABLE_ENTITY, why, Some(field)),
+            Refused::NotAnswering(why) => (StatusCode::GATEWAY_TIMEOUT, why, None),
             Refused::Unavailable(error) => {
                 warn!(%error, busy, "the operator boundary could not answer");
                 (

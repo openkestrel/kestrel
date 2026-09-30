@@ -1,12 +1,14 @@
 mod api;
 mod corrective;
 mod exit;
+mod files;
 mod output;
 mod scope;
 mod sse;
 mod start;
 mod transcript;
 mod view;
+mod work;
 
 use std::io::{IsTerminal as _, Read as _, Write as _};
 use std::process::ExitCode;
@@ -66,7 +68,7 @@ struct Client {
 
     /// Emit these fields and no others, as JSON, one record a line; without it a terminal
     /// gets the presentation chosen for the command and anything else gets it tab-delimited
-    #[arg(long, global = true, value_name = "FIELDS")]
+    #[arg(long, global = true, value_name = "FIELDS", num_args = 0..=1, default_missing_value = "")]
     json: Option<String>,
 }
 
@@ -556,6 +558,23 @@ enum WorkspaceCommand {
     },
     /// List every Workspace in the Organization
     List,
+    #[command(alias = "status")]
+    Work { workspace: String },
+    /// List one directory of a Workspace's live Instance, each entry marked tracked, untracked
+    /// or ignored; with no path, its repositories
+    #[command(alias = "ls")]
+    Files {
+        workspace: String,
+        /// `<repo>/<path>`
+        path: Option<String>,
+    },
+    /// Write a file in a Workspace's live Instance to standard output, byte for byte
+    #[command(alias = "cat")]
+    Read {
+        workspace: String,
+        /// `<repo>/<path>`
+        path: String,
+    },
     /// Show a Workspace
     Show {
         /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
@@ -591,6 +610,8 @@ enum WorkspaceCommand {
         /// Keep reading as entries are appended, until the Workspace is sealed
         #[arg(long)]
         follow: bool,
+        #[arg(long, default_value = "shared_state")]
+        kinds: String,
     },
 }
 
@@ -648,7 +669,20 @@ async fn run() -> Result<()> {
         .try_get_matches()
         .unwrap_or_else(|error| exit_after(&error));
     let client = Client::from_arg_matches(&matches).unwrap_or_else(|error| exit_after(&error));
-    let presentation = Presentation::chosen(client.json.as_deref())?;
+    let presentation = Presentation::chosen(
+        if matches!(
+            &client.command,
+            Command::Workspace(
+                WorkspaceCommand::Work { .. }
+                    | WorkspaceCommand::Files { .. }
+                    | WorkspaceCommand::Read { .. }
+            )
+        ) {
+            None
+        } else {
+            client.json.as_deref()
+        },
+    )?;
 
     let named = client.organization.map(|organization| Scope {
         organization,
@@ -1145,6 +1179,52 @@ async fn run() -> Result<()> {
                     .await?,
             )?;
         }
+        Command::Workspace(WorkspaceCommand::Work { workspace }) => {
+            let organization = scoping.resolve().await?.organization;
+            let answer = api
+                .get(&[
+                    "organizations",
+                    &organization,
+                    "workspaces",
+                    &workspace,
+                    "work",
+                ])
+                .await?;
+            work::show(answer, client.json.is_some())?;
+        }
+        Command::Workspace(WorkspaceCommand::Files { workspace, path }) => {
+            let organization = scoping.resolve().await?.organization;
+            let path = path.unwrap_or_default();
+            let answer = api
+                .get_where(
+                    &[
+                        "organizations",
+                        &organization,
+                        "workspaces",
+                        &workspace,
+                        "files",
+                    ],
+                    &[("path", &path)],
+                )
+                .await?;
+            files::list(answer, client.json.is_some())?;
+        }
+        Command::Workspace(WorkspaceCommand::Read { workspace, path }) => {
+            let organization = scoping.resolve().await?.organization;
+            let response = api
+                .get_response(
+                    &[
+                        "organizations",
+                        &organization,
+                        "workspaces",
+                        &workspace,
+                        "file",
+                    ],
+                    &[("path", &path)],
+                )
+                .await?;
+            files::read(response, client.json.is_some()).await?;
+        }
         Command::Workspace(WorkspaceCommand::Show { workspace }) => {
             let organization = scoping.resolve().await?.organization;
             show(
@@ -1199,6 +1279,7 @@ async fn run() -> Result<()> {
             workspace,
             cursor,
             follow,
+            kinds,
         }) => {
             let organization = scoping.resolve().await?.organization;
             let read = transcript::read(
@@ -1207,6 +1288,7 @@ async fn run() -> Result<()> {
                 &workspace,
                 cursor,
                 follow,
+                &kinds,
                 &presentation,
             )
             .await?;

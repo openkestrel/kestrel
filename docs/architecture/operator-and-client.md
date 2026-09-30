@@ -44,7 +44,31 @@ several matching is `Declined::Missing` or `Declined::Ambiguous`, naming the can
 `GET …/workspaces/{workspace}/transcript` is SSE. Each entry is an event whose id is a cursor; the
 stream ends with an `end` event when the Workspace seals or, with `follow=false`, when it reaches
 the last entry. A stream that closes without `end` was cut off; the Client resumes from the last
-id it printed (`kestrel-client/src/transcript.rs`) and gives up after 30 s unreachable.
+id it received (`kestrel-client/src/transcript.rs`) and gives up after 30 s unreachable.
+
+`kinds` selects `shared_state`, `narration` or `detail`, defaulting to shared state. The CLI passes
+`workspace transcript --kinds` through to this read. Both the link page and this stream advance
+across omitted entries: the page returns the highest examined seq, and the stream sends a `cursor`
+event when omitted entries advance it beyond the last delivered entry. The cursor remains global.
+
+### Reading live work
+
+`GET …/workspaces/{workspace}/work` returns `state: reported`, per-repository summaries and
+`reported_at`. It reads Store without taking its write lock and never writes history. With no
+Instance it returns `state: no_instance` and the declared branch; `pull_request` remains null until
+pull request state is built. A supervisor off the link, or one that has not supplied a summary,
+returns `state: not_answering` rather than a durable checkout observation.
+
+`kestrel workspace work <workspace>` (alias `status`) prints a heading per repository and how long
+ago its supervisor reported it. `--json` returns the whole operator response.
+
+`GET …/workspaces/{workspace}/files?path=` lists one directory of the live Instance and
+`GET …/file?path=&raw=` reads one file, both asked of the supervisor over the link ([Link](link.md#reads)).
+`file` answers JSON for inline text and `application/octet-stream` otherwise. A path outside the
+checkouts is `422`, a missing one `404`, a Workspace with no Instance `422` naming its branch, and
+an Instance that does not answer within 10 s `504`. `kestrel workspace files` (alias `ls`) prints one
+entry a line with its git mark; `kestrel workspace read` (alias `cat`) writes the file's bytes to
+stdout. `--json` returns the operator response, except for bytes, which are always written raw.
 
 ### Declarations
 
@@ -60,9 +84,10 @@ id it printed (`kestrel-client/src/transcript.rs`) and gives up after 30 s unrea
   `scope.rs`): `--organization`, then `KESTREL_ORGANIZATION`, then a `.kestrel/organization` file
   found walking up from the working directory, then the only Organization that exists. Several
   Organizations and no binding is an error that lists them.
-- **Output** (`output.rs`, `view.rs`): each command declares a `View` of dotted paths into the
-  answer. A terminal gets aligned columns; a pipe gets delimited rows; `--json a,b` gets exactly
-  those fields in that order.
+- **Output** (`output.rs`, `view.rs`): most commands declare a `View` of dotted paths into the
+  answer. Live work inspection follows git-style prose even when piped, and its `--json` returns
+  the whole response. For commands with a `View`, a terminal gets aligned columns; a pipe gets
+  delimited rows; `--json a,b` gets exactly those fields in that order.
 - **Nothing is prompted for.** Whatever drives the Client may have no terminal. Secrets are read
   from standard input, never from arguments.
 - **Corrections** (`corrective.rs`): a refusal the Client recognises is followed by the command

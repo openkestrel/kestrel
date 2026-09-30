@@ -8,7 +8,8 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use kestrel_supervisor::link::{
-    Error, Exit, Git, INSTRUCTIONS, Instruction, Link, Observed, REPORTS, Report, Reported,
+    self, Down, Error, Exit, Git, INSTRUCTIONS, Instruction, Link, Observed, REPORTS, Read, Report,
+    Reported,
 };
 
 mod support;
@@ -164,6 +165,13 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
         (
             None,
             None,
+            Report::Work {
+                repositories: vec![],
+            },
+        ),
+        (
+            None,
+            None,
             Report::Stderr {
                 lines: vec!["level=INFO message=init".to_owned()],
             },
@@ -257,6 +265,7 @@ async fn the_instructions_delivered_are_the_ones_the_stream_carried() {
         .await
         .expect("the stream should deliver")
     {
+        let next = instruction(next);
         delivered.push((next.id, next.session, next.instruction));
     }
 
@@ -383,14 +392,48 @@ async fn an_instruction_this_supervisor_predates_is_carried_past_rather_than_sta
         .open(None)
         .await
         .expect("the stream should open");
-    let delivered = instructions
-        .next()
-        .await
-        .expect("an unknown instruction is not a broken stream")
-        .expect("the stream should deliver it");
+    let delivered = instruction(
+        instructions
+            .next()
+            .await
+            .expect("an unknown instruction is not a broken stream")
+            .expect("the stream should deliver it"),
+    );
 
     assert_eq!(delivered.id, "4");
     assert_eq!(delivered.instruction, Instruction::Unrecognized);
+}
+
+#[tokio::test]
+async fn a_read_arrives_with_no_id_and_leaves_the_instruction_cursor_alone() {
+    let stub = Stub::streaming(
+        "event: read\ndata: {\"request\":\"r1\",\"read\":\"file\",\"path\":\"widgets/a.rs\"}\n\nid: 5\nevent: stop\ndata: {\"session\":\"b\",\"kind\":\"stop\"}\n\n",
+    );
+    let mut instructions = stub
+        .link()
+        .open(None)
+        .await
+        .expect("the stream should open");
+
+    let Some(Down::Read(asked)) = instructions.next().await.expect("a read") else {
+        panic!("the read was not delivered as one");
+    };
+    assert_eq!(asked.request, "r1");
+    assert_eq!(
+        asked.read,
+        Read::File {
+            path: "widgets/a.rs".to_owned(),
+            raw: false
+        }
+    );
+    let next = instruction(
+        instructions
+            .next()
+            .await
+            .expect("an instruction")
+            .expect("the stream should deliver it"),
+    );
+    assert_eq!(next.id, "5");
 }
 
 #[tokio::test]
@@ -408,11 +451,13 @@ async fn a_character_split_across_two_chunks_survives_the_stream() {
         .await
         .expect("the stream should open");
 
-    let delivered = instructions
-        .next()
-        .await
-        .expect("the stream should deliver a whole frame")
-        .expect("the stream should deliver it");
+    let delivered = instruction(
+        instructions
+            .next()
+            .await
+            .expect("the stream should deliver a whole frame")
+            .expect("the stream should deliver it"),
+    );
 
     assert_eq!(delivered.id, "café");
     assert_eq!(delivered.instruction, Instruction::Stop);
@@ -427,6 +472,7 @@ fn the_client_dials_the_paths_the_published_document_describes() {
         .keys()
         .collect();
 
+    assert!(described.contains(&&link::ANSWERS.to_owned()));
     assert!(described.contains(&&INSTRUCTIONS.to_owned()));
     assert!(described.contains(&&REPORTS.to_owned()));
 }
@@ -452,6 +498,24 @@ fn the_client_recognises_every_instruction_the_published_document_declares() {
             instruction.kind(),
             kind,
             "the document declares the instruction {kind}, which this client does not recognise"
+        );
+    }
+}
+
+#[test]
+fn the_client_recognises_every_read_the_published_document_declares() {
+    let published = published();
+
+    for (kind, _) in declared(&published, "Read") {
+        let asked: link::Asked = serde_json::from_value(serde_json::json!({
+            "request": "r1", "read": kind, "path": "widgets/src", "raw": false,
+        }))
+        .expect("a read");
+
+        assert_ne!(
+            asked.read,
+            Read::Unrecognized,
+            "the document declares the read {kind}, which this client does not recognise"
         );
     }
 }
@@ -483,6 +547,13 @@ fn every_report_the_client_sends_carries_what_the_published_document_requires() 
                 "the document requires {field} on a {kind} report, and the client does not send it"
             );
         }
+    }
+}
+
+fn instruction(down: Down) -> link::Delivered {
+    match down {
+        Down::Instruction(delivered) => delivered,
+        Down::Read(asked) => panic!("a read where an instruction was expected: {asked:?}"),
     }
 }
 

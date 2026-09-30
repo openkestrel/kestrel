@@ -44,3 +44,4 @@ reqwest = { version = "0.13", default-features = false, features = ["stream"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
 tempfile = "3"
 tiny_http = "0.12"
+tokio = { version = "1", features = ["test-util"] }

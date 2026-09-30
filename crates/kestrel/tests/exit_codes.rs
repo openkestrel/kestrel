@@ -107,12 +107,12 @@ fn guessed_workspace_and_session_verbs_explain_the_domain_verbs_without_running_
         (
             &["workspace", "create"][..],
             "workspace open",
-            "open, list, show, post, seal, transcript",
+            "open, list, work, files, read, show, post, seal, transcript",
         ),
         (
             &["workspace", "close"],
             "workspace seal",
-            "open, list, show, post, seal, transcript",
+            "open, list, work, files, read, show, post, seal, transcript",
         ),
         (
             &["session", "start"],
@@ -127,12 +127,12 @@ fn guessed_workspace_and_session_verbs_explain_the_domain_verbs_without_running_
         (
             &["workspace", "opne"],
             "workspace open",
-            "open, list, show, post, seal, transcript",
+            "open, list, work, files, read, show, post, seal, transcript",
         ),
         (
             &["workspace", "sael"],
             "workspace seal",
-            "open, list, show, post, seal, transcript",
+            "open, list, work, files, read, show, post, seal, transcript",
         ),
     ] {
         let finished = ran(&nowhere(), args);

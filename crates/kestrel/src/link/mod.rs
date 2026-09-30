@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::Result;
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -29,6 +30,9 @@ use crate::store::{self, Store, Tx};
 use crate::work::{self, ReportRefused, Reported};
 use crate::workspace;
 
+pub(crate) const ON_THE_LINK: jiff::SignedDuration = jiff::SignedDuration::from_secs(6);
+
+pub const ANSWERS: &str = "/link/instances/{instance}/answers/{request}";
 pub const CREDENTIALS: &str = "/link/instances/{instance}/credentials";
 /// The Transcript of the Workspace holding the Instance. Named for what crosses the link rather
 /// than for what it is, because the supervisor is a courier and may not know (ADR-0002).
@@ -95,6 +99,8 @@ struct Carried<'a> {
 struct ControlPlane {
     store: Store,
     shutdown: CancellationToken,
+    summaries: crate::live_work::Summaries,
+    reads: crate::live_read::Reads,
 }
 
 struct Waiting {
@@ -109,6 +115,7 @@ struct Asking {
 
 #[derive(Deserialize)]
 struct Paging {
+    kinds: Option<String>,
     cursor: Option<String>,
     window: Option<usize>,
 }
@@ -133,18 +140,31 @@ struct Entries {
 
 #[derive(Serialize)]
 struct Recorded {
+    kind: crate::log::Kind,
+    session_id: Option<SessionId>,
     seq: i64,
     appended_at: String,
     entry: log::Entry,
 }
 
-pub fn router(store: Store, shutdown: CancellationToken) -> Router {
+pub fn router(
+    store: Store,
+    shutdown: CancellationToken,
+    summaries: crate::live_work::Summaries,
+    reads: crate::live_read::Reads,
+) -> Router {
     Router::new()
+        .route(ANSWERS, post(answer))
         .route(CREDENTIALS, get(credentials).patch(refresh_credentials))
         .route(ENTRIES, get(entries))
         .route(INSTRUCTIONS, get(instructions))
         .route(REPORTS, post(report))
-        .with_state(ControlPlane { store, shutdown })
+        .with_state(ControlPlane {
+            store,
+            shutdown,
+            summaries,
+            reads,
+        })
 }
 
 /// A Brief nothing has followed is the agent's whole prompt, verbatim, so a harness still
@@ -256,7 +276,11 @@ async fn instructions(
         cursor, "a supervisor is on the link"
     );
 
+    let connection = control_plane.summaries.connected(&linked.instance);
+    let (mut asked, reading) = control_plane.reads.connected(&linked.instance);
     let stream = async_stream::try_stream! {
+        let _connection = connection;
+        let _reading = reading;
         loop {
             let waiting = waiting(&control_plane.store, &linked.instance, &digest, cursor).await?;
             for sent in waiting.instructions {
@@ -274,9 +298,13 @@ async fn instructions(
                 break;
             }
 
-            tokio::select! {
-                () = tokio::time::sleep(POLL) => {}
+            let read = tokio::select! {
+                () = tokio::time::sleep(POLL) => None,
+                read = asked.recv() => read,
                 () = control_plane.shutdown.cancelled() => break,
+            };
+            if let Some(read) = read {
+                yield Event::default().event("read").json_data(&read)?;
             }
         }
     };
@@ -360,13 +388,23 @@ async fn entries(
     let window = Window::or_default(paging.window)
         .map_err(|error| Refused::BadRequest(error.to_string()))?;
 
-    let page = workspace::transcript(&control_plane.store, linked.workspace, from, window).await?;
+    let kinds = paging
+        .kinds
+        .as_deref()
+        .map(str::parse::<crate::log::Kinds>)
+        .transpose()
+        .map_err(|error| Refused::BadRequest(error.to_string()))?
+        .unwrap_or_default();
+    let page =
+        workspace::transcript(&control_plane.store, linked.workspace, from, window, &kinds).await?;
 
     Ok(Json(Entries {
         entries: page
             .entries
             .into_iter()
             .map(|entry| Recorded {
+                kind: entry.kind,
+                session_id: entry.session_id,
                 seq: entry.seq,
                 appended_at: entry.appended_at.to_string(),
                 entry: entry.entry,
@@ -382,11 +420,49 @@ async fn report(
     Path(instance): Path<String>,
     headers: HeaderMap,
     Json(reported): Json<Reported>,
-) -> Result<StatusCode, Refused> {
+) -> Result<Response, Refused> {
     let (linked, _) = authenticated(&control_plane, &headers, &instance).await?;
+    if let work::Report::Work { repositories } = reported.report {
+        control_plane.summaries.report(&instance, repositories);
+        return Ok(StatusCode::ACCEPTED.into_response());
+    }
+    let connected = matches!(reported.report, work::Report::Connected { .. });
     work::report(&control_plane.store, &linked.instance, reported).await?;
+    if connected {
+        let checkout = control_plane
+            .store
+            .read()
+            .await?
+            .workspaces()
+            .get(linked.workspace)
+            .await?
+            .checkout;
+        return Ok((StatusCode::ACCEPTED, Json(checkout)).into_response());
+    }
+    Ok(StatusCode::ACCEPTED.into_response())
+}
 
-    Ok(StatusCode::ACCEPTED)
+async fn answer(
+    State(control_plane): State<ControlPlane>,
+    Path((instance, request)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<StatusCode, Refused> {
+    authenticated(&control_plane, &headers, &instance).await?;
+    let request = request
+        .parse()
+        .map_err(|_| Refused::BadRequest(format!("{request} is not a read")))?;
+    let json = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|kind| kind.to_str().ok())
+        .is_some_and(|kind| kind.starts_with("application/json"));
+    let taken = control_plane
+        .reads
+        .answer(&instance, request, body, json)
+        .ok_or_else(|| Refused::Gone("no read is waiting on this answer".to_owned()))?;
+    let _ = taken.await;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn waiting(store: &Store, instance: &str, digest: &str, cursor: i64) -> Result<Waiting> {
@@ -535,7 +611,7 @@ mod tests {
 
     #[test]
     fn a_numbered_report_carries_its_seq_beside_its_kind() {
-        let sent = serde_json::json!({"kind": "said", "seq": 3, "message": "what it said"});
+        let sent = serde_json::json!({"kind": "said", "completion": {"started_at": "2026-09-29T12:00:00Z", "finished_at": "2026-09-29T12:00:00Z", "turn_outcome": null}, "seq": 3, "message": "what it said"});
 
         let reported: Reported = serde_json::from_value(sent.clone()).expect("a report");
 
@@ -543,7 +619,8 @@ mod tests {
         assert_eq!(
             reported.report,
             Report::Said {
-                message: "what it said".to_owned()
+                message: "what it said".to_owned(),
+                completion: crate::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap())
             }
         );
         assert_eq!(serde_json::to_value(&reported).expect("a report"), sent);

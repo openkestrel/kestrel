@@ -87,6 +87,7 @@ async fn said(kestrel: &Kestrel, workspace: WorkspaceId) -> Vec<(String, String)
             Entry::Said {
                 participant,
                 message,
+                ..
             } => vec![(participant, message)],
             Entry::Messages { messages } => messages
                 .into_iter()

@@ -17,10 +17,42 @@ segment:
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/instructions` | SSE stream of the Instance's instructions after `Last-Event-ID`. Closes once the Instance is let go. |
-| `POST` | `/reports` | One report. `202` when taken, including a replay. |
+| `POST` | `/reports` | One report. `202` when taken, including a replay. `connected` returns the Workspace checkout declaration. |
 | `GET` | `/credentials?session=` | Provider Credentials and Subscription Profile contents for a Session the Instance carries, decrypted for this request. |
 | `PATCH` | `/credentials?session=` | Hands back profile files the harness refreshed. |
 | `GET` | `/entries` | Pages the Workspace's Transcript. The supervisor does not currently call it. |
+| `POST` | `/answers/{request}` | The streamed answer to a read. `204` once the operator has taken it; `410` when nobody waits on it. |
+
+## Live work reports
+
+The unnumbered `work` report carries each repository's current branch, changed and staged file
+and line counts, commits no remote-tracking branch reaches on any branch or detached HEAD with
+line counts, `origin/<declared>`'s commit, and untracked and stash counts. The supervisor sends it
+on connect, at turn close, and when a two-second check during a working turn finds a change.
+Every supervisor git command sets `GIT_OPTIONAL_LOCKS=0`.
+
+`live_work::Summaries` belongs to the serve role and is shared by its link and operator routers.
+It holds reports with their arrival times only while the Instance has an open instruction stream.
+The operator also checks the supervisor's heartbeat freshness before serving a summary. The
+separate numbered `checkout` report remains durable and supplies the reaping gate only.
+
+## Reads
+
+An operator's read of an Instance's files goes down the Instance's stream as a transient `read`
+event with a request id and no event id: it is never stored and a reconnect never replays it. The
+supervisor answers each in its own task, so a working turn never holds one up, by POSTing to
+`/answers/{request}`: JSON for a listing, inline text or a refusal, or the raw bytes of a file.
+
+`live_read::Reads` belongs to the serve role and is where requests and answers meet. A read with no
+answer begun within 10 s, or on an Instance with no open stream, fails as "the Instance didn't
+answer". Identical reads in flight share one request, and a JSON answer up to 2 MiB is reused for
+5 s; raw bytes are piped through unbuffered and never shared. Nothing about a read is written to
+Store.
+
+The supervisor resolves `<repo>/<path>` through symlinks and refuses anything outside that
+repository's checkout (`files.rs`). A listing is one level, at most 5,000 entries, each marked
+tracked, untracked or ignored from `git ls-files`. Text up to 1 MiB is answered inline; a binary
+file, a larger one, or a `raw` read is streamed.
 
 ## A Session over the link
 
@@ -47,11 +79,13 @@ sequenceDiagram
         S->>L: POST heartbeat (the carried Session's lease +2 min)
     end
     H-->>S: session updates, permission requests (allowed once)
-    S->>L: POST model, said…, used, checkout, answered
+    S->>L: POST model, said/thought/plan as units complete, used as it arrives
+    S->>L: POST checkout, answered
     Note over L: Session is Waiting
     L-->>S: prompt {session, prompt}
     S->>H: ACP prompt, same conversation
-    S->>L: POST said…, checkout, answered
+    S->>L: POST said/thought/plan as units complete
+    S->>L: POST checkout, answered
     L-->>S: stop {session}
     S->>S: remove profile files, end the harness, stay on the link
 ```
@@ -88,7 +122,9 @@ effects (ADR-0004).
 | `stderr {lines}` | no | Logged to the operator, never the Transcript. |
 | `started` | yes | Appends `SessionStarted`. |
 | `model {model}` | yes | Records the model the harness is actually on. |
-| `said {message}` | yes | Appends `Said`. |
+| `said {message, completion}` | yes | Appends shared-state `Said`, naming its Session. |
+| `thought {text, completion}` | yes | Appends narration `Thought`. |
+| `plan {entries, completion}` | yes | Appends one narration plan replacement. |
 | `used {usage}` | yes | Records cumulative context use and cost. |
 | `checkout {repositories}` | yes | Replaces the Workspace's observed git state (decides Unpublished Work). |
 | `answered` | yes | Closes the open Turn, moves the Session to Waiting, records a delivery. |
@@ -97,8 +133,8 @@ effects (ADR-0004).
 **Numbered reports are exactly-once.** The supervisor numbers each Session's reports from 1 and
 resends from the first one not acknowledged. The control plane keeps `session.reports_taken`: the
 next number is applied, an old one is acknowledged and ignored, and a gap is refused with `400`. A
-supervisor reports `model`, `said`, `used`, `checkout` and then `answered` or `finished` after every
-Turn.
+supervisor sends completed units immediately, and `model` and `used` as they arrive. It reports
+`checkout` and then `answered` or `finished` at the Turn boundary.
 
 ## Authentication
 
@@ -156,8 +192,9 @@ with no branch on which harness it drives.
   environment.
 - `session/request_permission` is answered with the agent's own allow-once option
   (`permission.rs`). There is no policy yet.
-- Only message chunks and usage are kept; thoughts, plans and tool calls are dropped
-  ([ADR-0020](../adr/0020-the-transcript-records-what-the-runtime-emits-in-kinds.md) is not built).
+- The pure completer buffers messages and thoughts independently by ID, completes chunks without
+  IDs immediately, and records each plan replacement. ID changes and Turn boundaries close text
+  units; late updates become operator diagnostics. Tool calls are still dropped.
 - A Turn in which the agent produced no message, thought, plan or tool call fails the Session.
 - `checkout.rs` clones each repository side by side under `/workspace`, cuts the declared branch
   from the base when the remote lacks it, and leaves an existing checkout as an earlier Session

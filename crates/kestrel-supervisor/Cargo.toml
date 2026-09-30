@@ -13,11 +13,13 @@ workspace = true
 # The schema keeps `terminal` authentication behind this flag, and without it an agent that
 # offers only that is indistinguishable from one kestrel can drive.
 agent-client-protocol = { version = "2", features = ["unstable_auth_methods"] }
+jiff = { version = "0.2", features = ["serde"] }
 percent-encoding = "2"
-reqwest = { version = "0.13", default-features = false, features = ["json"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "process", "rt", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["io"] }
 
 [dev-dependencies]
 tempfile = "3"

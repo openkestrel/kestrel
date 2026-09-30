@@ -21,6 +21,25 @@ you are changing.
 
 ## Code
 
+### Checks
+
+CI is the full gate: it runs fmt, clippy, the build and every test on every pull request
+(`.github/workflows/ci.yml`). Locally, run the **narrowest check** that answers the question
+you have right now, and only when you have one. This machine's CPU and memory are shared with
+other agents, so each local cargo run has a real cost.
+
+- Compiles? `cargo check -p <crate>`.
+- Behaves? One test target, filtered to the test: `cargo test -p kestrel --test <file> <name>`.
+  Each file in `crates/*/tests/` is its own binary, and the suite builds the supervisor and
+  scripted agent itself, so a whole-package or workspace run is many builds, not one.
+- Batch edits before checking; one check after a coherent change, never one per line.
+- Before pushing, `cargo fmt --all`. Leave clippy, the workspace suite and the `#[ignore]`d
+  suites to CI, then read what failed with `gh pr checks` and `gh run view --log-failed`.
+- Documentation, skill and agent-guidance changes need no local check.
+
+Where a skill says "the full test suite" or "the project's automated checks", in this repo
+that means pushing and reading CI.
+
 ### Compatibility
 
 Kestrel is an unreleased early prototype with no users. Do not preserve backward compatibility or

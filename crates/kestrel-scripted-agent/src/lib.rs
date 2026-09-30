@@ -28,6 +28,9 @@ pub const LAST_MEMORY: &str = "the last remembered message";
 pub enum Script {
     /// Plans, thinks, calls a tool it asks permission for, says two messages and ends the turn.
     Speaks,
+    ReportsThenWaits,
+    CancelledText,
+    FailedText,
     /// Says one thing and ends the turn without having finished.
     Refuses,
     /// Says which Provider Credentials reached its own process, and nothing else.
@@ -55,6 +58,7 @@ pub enum Script {
     Insists,
     /// Works at a turn that never ends, so nothing the agent does is what ends the Session.
     Dawdles,
+    Writes,
     /// Writes to stderr as it works at a turn that never ends.
     Mutters,
     /// Writes to stderr several times a second through each turn, as a harness running `git` does.
@@ -85,6 +89,9 @@ impl Script {
     pub const fn as_str(self) -> &'static str {
         match self {
             Script::Speaks => "speaks",
+            Script::ReportsThenWaits => "reports-then-waits",
+            Script::CancelledText => "cancelled-text",
+            Script::FailedText => "failed-text",
             Script::Refuses => "refuses",
             Script::Confides => "confides",
             Script::InspectsEnvironment => "inspects-environment",
@@ -98,6 +105,7 @@ impl Script {
             Script::Decides => "decides",
             Script::Insists => "insists",
             Script::Dawdles => "dawdles",
+            Script::Writes => "writes",
             Script::Mutters => "mutters",
             Script::Chatters => "chatters",
             Script::Lingers => "lingers",

@@ -74,13 +74,19 @@ impl Fixture {
     }
 
     async fn entries(&self) -> Vec<Entry> {
-        workspace::transcript(&self.store, self.session.workspace, None, Window::DEFAULT)
-            .await
-            .unwrap()
-            .entries
-            .into_iter()
-            .map(|entry| entry.entry)
-            .collect()
+        workspace::transcript(
+            &self.store,
+            self.session.workspace,
+            None,
+            Window::DEFAULT,
+            &Default::default(),
+        )
+        .await
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|entry| entry.entry)
+        .collect()
     }
 }
 
@@ -281,6 +287,7 @@ async fn reports_record_the_session_and_its_transcript_together() {
             Some(3),
             Report::Said {
                 message: "done".to_owned(),
+                completion: crate::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
             },
         )
         .await
@@ -318,7 +325,11 @@ async fn reports_record_the_session_and_its_transcript_together() {
             },
             Entry::Said {
                 participant: "builder".to_owned(),
-                message: "done".to_owned()
+                message: "done".to_owned(),
+                session_id: Some(fixture.session.id),
+                completion: Some(crate::log::Completion::at(
+                    "2026-09-29T12:00:00Z".parse().unwrap()
+                ))
             },
             Entry::SessionEnded {
                 session: fixture.session.id,
@@ -333,6 +344,7 @@ async fn concurrent_reports_and_a_replay_after_reopening_the_store_append_once()
     let mut fixture = Fixture::new().await;
     let said = Report::Said {
         message: "said once".to_owned(),
+        completion: crate::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
     };
     let (first, second) = tokio::join!(
         fixture.report(Some(1), said.clone()),
@@ -347,6 +359,7 @@ async fn concurrent_reports_and_a_replay_after_reopening_the_store_append_once()
             Some(2),
             Report::Said {
                 message: "next".to_owned(),
+                completion: crate::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
             },
         )
         .await
@@ -360,11 +373,19 @@ async fn concurrent_reports_and_a_replay_after_reopening_the_store_append_once()
             },
             Entry::Said {
                 participant: "builder".to_owned(),
-                message: "said once".to_owned()
+                message: "said once".to_owned(),
+                session_id: Some(fixture.session.id),
+                completion: Some(crate::log::Completion::at(
+                    "2026-09-29T12:00:00Z".parse().unwrap()
+                ))
             },
             Entry::Said {
                 participant: "builder".to_owned(),
-                message: "next".to_owned()
+                message: "next".to_owned(),
+                session_id: Some(fixture.session.id),
+                completion: Some(crate::log::Completion::at(
+                    "2026-09-29T12:00:00Z".parse().unwrap()
+                ))
             },
         ]
     );
@@ -381,6 +402,7 @@ async fn numbered_reports_refuse_missing_and_invalid_numbers_without_effects() {
         },
         Report::Said {
             message: "refused".to_owned(),
+            completion: crate::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
         Report::Used { usage: usage() },
         Report::Finished {

@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, AuthMethod, AuthenticateRequest, ContentBlock, ContentChunk, ErrorCode,
-    InitializeRequest, InitializeResponse, LoadSessionRequest, NewSessionRequest, PromptRequest,
+    AgentCapabilities, AuthMethod, AuthenticateRequest, ContentBlock, ErrorCode, InitializeRequest,
+    InitializeResponse, LoadSessionRequest, NewSessionRequest, PromptRequest,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigId, SessionConfigKind,
     SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOptions,
@@ -25,7 +25,8 @@ use agent_client_protocol::{
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::link::{Cost, Usage};
+use crate::completer::{Completed, Completer};
+use crate::link::{Report, TurnOutcome};
 use crate::permission::{self, Subject};
 
 /// What this Environment was configured to drive, what the Session asks of it, and where what the
@@ -48,8 +49,6 @@ const LINE_LIMIT: usize = 4 * 1024;
 /// One turn's account. `failed` says why the conversation is over; without it, the agent
 /// answered and waits for another prompt.
 pub struct Worked {
-    pub said: Vec<String>,
-    pub usage: Option<Usage>,
     pub allowed: Vec<Subject>,
     pub on: Option<On>,
     pub failed: Option<String>,
@@ -75,7 +74,7 @@ const CLOSING: Duration = Duration::from_millis(500);
 /// loses nothing of it (ADR-0024). Dropping it kills the agent.
 pub struct Conversation {
     prompts: mpsc::UnboundedSender<String>,
-    turns: mpsc::UnboundedReceiver<Worked>,
+    turns: mpsc::UnboundedReceiver<ConversationEvent>,
     task: JoinHandle<()>,
 }
 
@@ -114,9 +113,13 @@ impl Conversation {
     }
 
     /// Cancel-safe, so a caller may stop waiting on it and come back.
-    pub async fn turn(&mut self) -> Worked {
+    pub async fn next(&mut self) -> ConversationEvent {
         self.turns.recv().await.unwrap_or_else(|| {
-            Heard::default().worked(Some("the agent conversation ended unannounced".to_owned()))
+            ConversationEvent::Worked(Worked {
+                allowed: Vec::new(),
+                on: None,
+                failed: Some("the agent conversation ended unannounced".to_owned()),
+            })
         })
     }
 
@@ -212,9 +215,16 @@ async fn conversing(
     provider: BTreeMap<String, String>,
     root: PathBuf,
     mut prompts: mpsc::UnboundedReceiver<String>,
-    turns: mpsc::UnboundedSender<Worked>,
+    turns: mpsc::UnboundedSender<ConversationEvent>,
 ) {
-    let heard = Arc::new(Mutex::new(Heard::default()));
+    let heard = Arc::new(Mutex::new(Hearing {
+        completer: Completer::default(),
+        allowed: Vec::new(),
+        on: None,
+        reports: turns.clone(),
+        diagnostics: harness.stderr.clone(),
+        replaying: false,
+    }));
     let mut continuity = Continuity::default();
 
     let because = loop {
@@ -244,7 +254,12 @@ async fn conversing(
             Err(because) => break because,
         }
     };
-    let _ = turns.send(taken(&heard).worked(Some(because)));
+    let _ = turns.send(ConversationEvent::Worked(
+        heard
+            .lock()
+            .expect("the observation lock")
+            .worked(Some(because)),
+    ));
 }
 
 /// An `Err` is the connection itself failing, which is a loss.
@@ -253,8 +268,8 @@ async fn living(
     provider: &BTreeMap<String, String>,
     root: &Path,
     prompts: &mut mpsc::UnboundedReceiver<String>,
-    turns: &mpsc::UnboundedSender<Worked>,
-    heard: &Arc<Mutex<Heard>>,
+    turns: &mpsc::UnboundedSender<ConversationEvent>,
+    heard: &Arc<Mutex<Hearing>>,
     continuity: &mut Continuity,
 ) -> Result<Ended, Error> {
     let spawn = match AcpAgent::from_str(&harness.command) {
@@ -312,7 +327,7 @@ async fn living(
                     let mut heard = heard
                         .lock()
                         .expect("what the agent said should not be poisoned");
-                    heard.produced = true;
+                    heard.completer.produced = true;
                     let outcome = match permission::allow_once(&request.options) {
                         Some(option) => {
                             heard.allowed.push(Subject::from(&request));
@@ -366,6 +381,11 @@ async fn living(
                         },
                     };
                     continuity.in_flight = Some(prompt.clone());
+                    heard
+                        .lock()
+                        .expect("the observation lock")
+                        .completer
+                        .begin();
                     let answered = match connection
                         .send_request(PromptRequest::new(
                             conversed.clone(),
@@ -380,13 +400,21 @@ async fn living(
                     continuity.answered();
 
                     if let Some(because) = stopped_short(answered.stop_reason) {
+                        if answered.stop_reason == StopReason::Cancelled {
+                            let mut heard = heard.lock().expect("the observation lock");
+                            let completed = heard
+                                .completer
+                                .boundary(TurnOutcome::Cancelled, jiff::Timestamp::now());
+                            heard.emit(completed);
+                        }
                         return Ok(Ended::Over(because));
                     }
-                    let this_turn = taken(heard);
-                    let failed = this_turn
-                        .produced_nothing()
+                    let mut this_turn = heard.lock().expect("the observation lock");
+                    let failed = (!this_turn.completer.produced)
                         .then(|| "the agent answered the prompt with nothing".to_owned());
-                    if turns.send(this_turn.worked(failed)).is_err() {
+                    let worked = this_turn.worked(failed);
+                    drop(this_turn);
+                    if turns.send(ConversationEvent::Worked(worked)).is_err() {
                         return Ok(Ended::HungUp);
                     }
                 }
@@ -410,14 +438,6 @@ fn described(error: &Error) -> String {
         .or(data)
         .and_then(serde_json::Value::as_str)
         .map_or_else(|| error.to_string(), str::to_owned)
-}
-
-fn taken(heard: &Mutex<Heard>) -> Heard {
-    std::mem::take(
-        &mut *heard
-            .lock()
-            .expect("what the agent said should not be poisoned"),
-    )
 }
 
 async fn initialized(
@@ -466,7 +486,7 @@ async fn set_up(
     connection: &ConnectionTo<agent_client_protocol::Agent>,
     harness: &Harness,
     root: &Path,
-    heard: &Mutex<Heard>,
+    heard: &Mutex<Hearing>,
 ) -> Result<(SessionId, Option<Recovery>), Error> {
     let initialized = initialized(connection, harness.auth.as_deref()).await?;
 
@@ -483,10 +503,7 @@ async fn set_up(
         harness.model.as_deref(),
     )
     .await?;
-    heard
-        .lock()
-        .expect("what the agent said should not be poisoned")
-        .on = on;
+    heard.lock().expect("the observation lock").model(on);
 
     Ok((
         set_up.session_id,
@@ -494,18 +511,27 @@ async fn set_up(
     ))
 }
 
-/// What the lost process said mid-turn is dropped, because that turn is prompted again, and so
-/// is whatever a loaded conversation replays; what it used and was allowed still happened.
+// Loaded history was already reported and must not be sent again.
 async fn recover(
     connection: &ConnectionTo<agent_client_protocol::Agent>,
     harness: &Harness,
     root: &Path,
-    heard: &Mutex<Heard>,
+    heard: &Mutex<Hearing>,
     conversed: &SessionId,
     recovery: Recovery,
 ) -> Result<(), Error> {
     initialized(connection, harness.auth.as_deref()).await?;
-    let lost = taken(heard);
+    {
+        let mut heard = heard.lock().expect("the observation lock");
+        let completed = heard.completer.boundary(
+            TurnOutcome::Failed {
+                because: "the harness connection was lost".to_owned(),
+            },
+            jiff::Timestamp::now(),
+        );
+        heard.emit(completed);
+        heard.replaying = true;
+    }
 
     let config_options = match recovery {
         Recovery::Resume => {
@@ -527,12 +553,7 @@ async fn recover(
         let mut heard = heard
             .lock()
             .expect("what the agent said should not be poisoned");
-        *heard = Heard {
-            on: lost.on,
-            usage: lost.usage,
-            allowed: lost.allowed,
-            ..Heard::default()
-        };
+        heard.replaying = false;
     }
 
     select(
@@ -697,88 +718,58 @@ fn stopped_short(stop: StopReason) -> Option<String> {
     Some(because)
 }
 
-/// An Agent's reasoning, its plan and its tool calls are the Session's business, and are dropped
-/// here.
-#[derive(Default)]
-struct Heard {
-    open: Option<Message>,
-    said: Vec<String>,
-    usage: Option<Usage>,
+pub enum ConversationEvent {
+    Report(Report),
+    Worked(Worked),
+}
+
+struct Hearing {
+    completer: Completer,
     allowed: Vec<Subject>,
     on: Option<On>,
-    /// Whether this turn produced anything at all; a usage, command, mode or config update does
-    /// not.
-    produced: bool,
+    reports: mpsc::UnboundedSender<ConversationEvent>,
+    diagnostics: mpsc::UnboundedSender<String>,
+    replaying: bool,
 }
 
-#[derive(Default)]
-struct Message {
-    id: Option<String>,
-    said: String,
-}
-
-impl Heard {
+impl Hearing {
+    fn emit(&self, completed: Completed) {
+        for report in completed.reports {
+            let _ = self.reports.send(ConversationEvent::Report(report));
+        }
+        for diagnostic in completed.diagnostics {
+            let _ = self.diagnostics.send(diagnostic);
+        }
+    }
+    fn model(&mut self, on: Option<On>) {
+        if let Some(on) = &on {
+            let _ = self.reports.send(ConversationEvent::Report(Report::Model {
+                model: on.model.clone(),
+            }));
+        }
+        self.on = on;
+    }
     fn update(&mut self, update: SessionUpdate) {
-        match update {
-            SessionUpdate::AgentMessageChunk(chunk) => {
-                self.produced = true;
-                self.chunk(&chunk);
-            }
-            SessionUpdate::AgentThoughtChunk(_)
-            | SessionUpdate::Plan(_)
-            | SessionUpdate::ToolCall(_)
-            | SessionUpdate::ToolCallUpdate(_) => self.produced = true,
-            SessionUpdate::UsageUpdate(usage) => {
-                self.usage = Some(Usage {
-                    context_used: usage.used,
-                    context_size: usage.size,
-                    cost: usage.cost.map(|cost| Cost {
-                        amount: cost.amount,
-                        currency: cost.currency,
-                    }),
-                });
-            }
-            _ => {}
-        }
-    }
-
-    /// A change of `messageId` starts a new message; chunks that share one are one message.
-    fn chunk(&mut self, chunk: &ContentChunk) {
-        let ContentBlock::Text(text) = &chunk.content else {
+        if self.replaying {
             return;
+        }
+        let completed = self.completer.update(update, jiff::Timestamp::now());
+        self.emit(completed);
+    }
+    fn worked(&mut self, failed: Option<String>) -> Worked {
+        let outcome = match &failed {
+            Some(because) => TurnOutcome::Failed {
+                because: because.clone(),
+            },
+            None => TurnOutcome::Answered {
+                stop_reason: "end_turn".to_owned(),
+            },
         };
-        let id = chunk.message_id.as_ref().map(|id| id.0.to_string());
-
-        match &mut self.open {
-            Some(open) if open.id == id => open.said.push_str(&text.text),
-            _ => {
-                self.close();
-                self.open = Some(Message {
-                    id,
-                    said: text.text.clone(),
-                });
-            }
-        }
-    }
-
-    fn close(&mut self) {
-        if let Some(open) = self.open.take() {
-            self.said.push(open.said);
-        }
-    }
-
-    fn produced_nothing(&self) -> bool {
-        !self.produced
-    }
-
-    fn worked(mut self, failed: Option<String>) -> Worked {
-        self.close();
-
+        let completed = self.completer.boundary(outcome, jiff::Timestamp::now());
+        self.emit(completed);
         Worked {
-            said: self.said,
-            usage: self.usage,
-            allowed: self.allowed,
-            on: self.on,
+            allowed: std::mem::take(&mut self.allowed),
+            on: self.on.take(),
             failed,
         }
     }
@@ -787,119 +778,11 @@ impl Heard {
 #[cfg(test)]
 mod tests {
     use agent_client_protocol::schema::v1::{
-        AuthMethodAgent, AuthMethodTerminal, AvailableCommandsUpdate, ConfigOptionUpdate,
-        CurrentModeUpdate, Plan, SessionCapabilities, SessionConfigSelect,
-        SessionConfigSelectGroup, SessionConfigSelectOption, SessionModeId,
-        SessionResumeCapabilities, ToolCall, ToolCallUpdate, ToolCallUpdateFields, UsageUpdate,
+        AuthMethodAgent, AuthMethodTerminal, SessionCapabilities, SessionConfigSelect,
+        SessionConfigSelectGroup, SessionConfigSelectOption, SessionResumeCapabilities,
     };
 
     use super::*;
-
-    fn chunk(message: Option<&str>, said: &str) -> ContentChunk {
-        ContentChunk::new(ContentBlock::Text(TextContent::new(said)))
-            .message_id(message.map(agent_client_protocol::schema::v1::MessageId::new))
-    }
-
-    fn heard(updates: Vec<SessionUpdate>) -> Worked {
-        let mut heard = Heard::default();
-        for update in updates {
-            heard.update(update);
-        }
-
-        heard.worked(None)
-    }
-
-    fn produced_something(updates: Vec<SessionUpdate>) -> bool {
-        let mut heard = Heard::default();
-        for update in updates {
-            heard.update(update);
-        }
-
-        !heard.produced_nothing()
-    }
-
-    #[test]
-    fn chunks_that_share_a_message_are_one_thing_said() {
-        let worked = heard(vec![
-            SessionUpdate::AgentMessageChunk(chunk(Some("one"), "half, ")),
-            SessionUpdate::AgentMessageChunk(chunk(Some("one"), "and half")),
-        ]);
-
-        assert_eq!(worked.said, vec!["half, and half".to_owned()]);
-    }
-
-    #[test]
-    fn a_new_message_starts_a_new_thing_said() {
-        let worked = heard(vec![
-            SessionUpdate::AgentMessageChunk(chunk(Some("one"), "the first")),
-            SessionUpdate::AgentMessageChunk(chunk(Some("two"), "the second")),
-        ]);
-
-        assert_eq!(
-            worked.said,
-            vec!["the first".to_owned(), "the second".to_owned()]
-        );
-    }
-
-    #[test]
-    fn a_plan_a_tool_call_and_a_thought_are_heard_and_never_said() {
-        let worked = heard(vec![
-            SessionUpdate::Plan(Plan::new(Vec::new())),
-            SessionUpdate::AgentThoughtChunk(chunk(Some("one"), "thinking")),
-            SessionUpdate::ToolCall(ToolCall::new("call-1", "read README.md")),
-        ]);
-
-        assert!(worked.said.is_empty());
-    }
-
-    #[test]
-    fn a_turn_that_produced_nothing_produced_nothing() {
-        assert!(!produced_something(Vec::new()));
-    }
-
-    #[test]
-    fn bookkeeping_updates_alone_are_not_something_produced() {
-        assert!(!produced_something(vec![
-            SessionUpdate::UsageUpdate(UsageUpdate::new(12, 100)),
-            SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(Vec::new())),
-            SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(SessionModeId::new("build"))),
-            SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(Vec::new())),
-        ]));
-    }
-
-    #[test]
-    fn a_message_a_thought_a_plan_and_a_tool_call_are_each_something_produced() {
-        assert!(produced_something(vec![SessionUpdate::AgentMessageChunk(
-            chunk(Some("one"), "said")
-        )]));
-        assert!(produced_something(vec![SessionUpdate::AgentThoughtChunk(
-            chunk(Some("one"), "thinking")
-        )]));
-        assert!(produced_something(vec![SessionUpdate::Plan(Plan::new(
-            Vec::new()
-        ))]));
-        assert!(produced_something(vec![SessionUpdate::ToolCall(
-            ToolCall::new("call-1", "read README.md")
-        )]));
-        assert!(produced_something(vec![SessionUpdate::ToolCallUpdate(
-            ToolCallUpdate::new("call-1", ToolCallUpdateFields::new())
-        )]));
-    }
-
-    #[test]
-    fn what_the_agent_used_is_kept_and_never_said() {
-        let worked = heard(vec![SessionUpdate::UsageUpdate(UsageUpdate::new(12, 100))]);
-
-        assert!(worked.said.is_empty());
-        assert_eq!(
-            worked.usage,
-            Some(Usage {
-                context_used: 12,
-                context_size: 100,
-                cost: None,
-            })
-        );
-    }
 
     #[test]
     fn an_agent_offering_only_a_terminal_to_log_in_at_cannot_be_driven() {

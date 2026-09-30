@@ -9,6 +9,7 @@ use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::{Client, Response, StatusCode, header};
 use serde::{Deserialize, Serialize};
 
+pub const ANSWERS: &str = "/link/instances/{instance}/answers/{request}";
 pub const CREDENTIALS: &str = "/link/instances/{instance}/credentials";
 pub const INSTRUCTIONS: &str = "/link/instances/{instance}/instructions";
 pub const REPORTS: &str = "/link/instances/{instance}/reports";
@@ -50,6 +51,83 @@ impl Instruction {
     }
 }
 
+/// A read of the Instance's checkouts. It carries no event id, so a reconnect never replays it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Asked {
+    pub request: String,
+    #[serde(flatten)]
+    pub read: Read,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "read", rename_all = "snake_case")]
+pub enum Read {
+    Files {
+        #[serde(default)]
+        path: Option<String>,
+    },
+    File {
+        path: String,
+        #[serde(default)]
+        raw: bool,
+    },
+    #[serde(other)]
+    Unrecognized,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "answer", rename_all = "snake_case")]
+pub enum Answer {
+    Listing {
+        path: String,
+        entries: Vec<Entry>,
+        total: u64,
+        truncated: bool,
+    },
+    Text {
+        path: String,
+        text: String,
+    },
+    Refused {
+        message: String,
+    },
+    Missing {
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Entry {
+    pub name: String,
+    pub kind: EntryKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git: Option<Tracking>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryKind {
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tracking {
+    Tracked,
+    Untracked,
+    Ignored,
+}
+
+pub enum AnswerBody {
+    Json(Answer),
+    Raw(reqwest::Body),
+}
+
 /// What to spawn for the Session, which may be another Agent's than the last Session's.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Harness {
@@ -70,16 +148,42 @@ pub struct Checkout {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Report {
-    Connected { version: String },
+    Connected {
+        version: String,
+    },
     Heartbeat,
-    Stderr { lines: Vec<String> },
+    Work {
+        repositories: Vec<WorkRepository>,
+    },
+    Stderr {
+        lines: Vec<String>,
+    },
     Started,
-    Model { model: String },
-    Said { message: String },
-    Used { usage: Usage },
+    Model {
+        model: String,
+    },
+    Said {
+        message: String,
+        completion: Completion,
+    },
+    Thought {
+        text: String,
+        completion: Completion,
+    },
+    Plan {
+        entries: Vec<PlanEntry>,
+        completion: Completion,
+    },
+    Used {
+        usage: Usage,
+    },
     Answered,
-    Checkout { repositories: Vec<Observed> },
-    Finished { exit: Exit },
+    Checkout {
+        repositories: Vec<Observed>,
+    },
+    Finished {
+        exit: Exit,
+    },
 }
 
 impl Report {
@@ -87,10 +191,13 @@ impl Report {
         match self {
             Report::Connected { .. } => "connected",
             Report::Heartbeat => "heartbeat",
+            Report::Work { .. } => "work",
             Report::Stderr { .. } => "stderr",
             Report::Started => "started",
             Report::Model { .. } => "model",
             Report::Said { .. } => "said",
+            Report::Thought { .. } => "thought",
+            Report::Plan { .. } => "plan",
             Report::Used { .. } => "used",
             Report::Answered => "answered",
             Report::Checkout { .. } => "checkout",
@@ -119,6 +226,44 @@ pub enum Git {
     Unreadable {
         because: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkRepository {
+    pub repository: String,
+    #[serde(flatten)]
+    pub git: WorkGit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "git", rename_all = "snake_case")]
+pub enum WorkGit {
+    Read {
+        branch: Option<String>,
+        changed: Changes,
+        staged: Changes,
+        committed: Commits,
+        pushed: Option<String>,
+        untracked: u64,
+        stashed: u64,
+    },
+    Unreadable {
+        because: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Changes {
+    pub files: u64,
+    pub added: u64,
+    pub removed: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Commits {
+    pub commits: u64,
+    pub added: u64,
+    pub removed: u64,
 }
 
 /// A report as it goes on the wire: the seq is what lets the control plane take it once
@@ -168,6 +313,12 @@ pub struct Credentials {
 #[derive(Serialize)]
 struct Refreshed<'a> {
     files: &'a BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Down {
+    Instruction(Delivered),
+    Read(Asked),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,12 +417,41 @@ impl Link {
         self.reached.elapsed()
     }
 
+    pub async fn connected(&self) -> Result<Option<Checkout>, Error> {
+        let response = self
+            .post_report(
+                &Report::Connected {
+                    version: env!("CARGO_PKG_VERSION").to_owned(),
+                },
+                None,
+                None,
+            )
+            .await?;
+        let body = response.bytes().await?;
+        if body.is_empty() {
+            return Ok(None);
+        }
+        serde_json::from_slice(&body)
+            .map(Some)
+            .map_err(|error| Error::Lost(error.to_string()))
+    }
+
     pub async fn report(
         &self,
         report: &Report,
         session: Option<&str>,
         seq: Option<i64>,
     ) -> Result<(), Error> {
+        self.post_report(report, session, seq).await?;
+        Ok(())
+    }
+
+    async fn post_report(
+        &self,
+        report: &Report,
+        session: Option<&str>,
+        seq: Option<i64>,
+    ) -> Result<Response, Error> {
         let response = self
             .client
             .post(self.url(REPORTS))
@@ -293,7 +473,7 @@ impl Link {
         }
         self.reached.touched();
 
-        Ok(())
+        Ok(response)
     }
 
     pub async fn credentials(&self, session: &str) -> Result<Credentials, Error> {
@@ -333,6 +513,31 @@ impl Link {
         if !response.status().is_success() {
             return Err(Error::Lost(format!(
                 "the link answered {} to the logins this session refreshed",
+                response.status().as_u16()
+            )));
+        }
+        self.reached.touched();
+
+        Ok(())
+    }
+
+    pub async fn answer(&self, request: &str, body: AnswerBody) -> Result<(), Error> {
+        let request = utf8_percent_encode(request, SEGMENT).to_string();
+        let sending = self
+            .client
+            .post(self.url(ANSWERS).replace("{request}", &request))
+            .bearer_auth(&self.credential);
+        let sending = match body {
+            AnswerBody::Json(answer) => sending.json(&answer),
+            AnswerBody::Raw(raw) => sending
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .body(raw),
+        };
+
+        let response = refuse_if_declined(sending.send().await?).await?;
+        if !response.status().is_success() {
+            return Err(Error::Lost(format!(
+                "the link answered {} to the answer to a read",
                 response.status().as_u16()
             )));
         }
@@ -381,9 +586,18 @@ impl Link {
 }
 
 impl Instructions {
-    pub async fn next(&mut self) -> Result<Option<Delivered>, Error> {
+    pub async fn next(&mut self) -> Result<Option<Down>, Error> {
         loop {
             if let Some((id, data)) = self.take_frame() {
+                let Some(id) = id else {
+                    let asked = serde_json::from_str(&data).map_err(|error| {
+                        Error::Lost(format!(
+                            "the stream carried {data}, which is not a read: {error}"
+                        ))
+                    })?;
+                    self.reached.touched();
+                    return Ok(Some(Down::Read(asked)));
+                };
                 let Carried {
                     session,
                     instruction,
@@ -394,11 +608,11 @@ impl Instructions {
                 })?;
                 self.reached.touched();
 
-                return Ok(Some(Delivered {
+                return Ok(Some(Down::Instruction(Delivered {
                     id,
                     session,
                     instruction,
-                }));
+                })));
             }
 
             match self.response.chunk().await? {
@@ -409,25 +623,29 @@ impl Instructions {
     }
 
     /// A frame is everything up to a blank line; the keep-alive is a frame with only a comment.
-    fn take_frame(&mut self) -> Option<(String, String)> {
+    fn take_frame(&mut self) -> Option<(Option<String>, String)> {
         loop {
             let end = self.buffered.windows(2).position(|pair| pair == b"\n\n")?;
             let frame: Vec<u8> = self.buffered.drain(..end + 2).collect();
             let frame = String::from_utf8_lossy(&frame);
 
             let mut id = None;
+            let mut event = None;
             let mut data = String::new();
             for line in frame.lines() {
                 if let Some(carried) = line.strip_prefix("id:") {
                     id = Some(carried.trim().to_owned());
+                } else if let Some(carried) = line.strip_prefix("event:") {
+                    event = Some(carried.trim().to_owned());
                 } else if let Some(carried) = line.strip_prefix("data:") {
                     data.push_str(carried.trim());
                 }
             }
 
-            if let Some(id) = id
-                && !data.is_empty()
-            {
+            if data.is_empty() {
+                continue;
+            }
+            if id.is_some() || event.as_deref() == Some("read") {
                 return Some((id, data));
             }
         }
@@ -441,5 +659,37 @@ async fn refuse_if_declined(response: Response) -> Result<Response, Error> {
             Err(Error::Refused(response.text().await?))
         }
         _ => Ok(response),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Completion {
+    pub started_at: jiff::Timestamp,
+    pub finished_at: jiff::Timestamp,
+    pub turn_outcome: Option<TurnOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlanEntry {
+    pub content: String,
+    pub priority: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum TurnOutcome {
+    Answered { stop_reason: String },
+    Cancelled,
+    Failed { because: String },
+}
+
+impl Completion {
+    pub fn at(now: jiff::Timestamp) -> Self {
+        Self {
+            started_at: now,
+            finished_at: now,
+            turn_outcome: None,
+        }
     }
 }

@@ -345,7 +345,7 @@ fn transcribed(kestrel: &Booted, workspace: &str) -> Vec<String> {
         .iter()
         .map(|recorded| {
             let entry = &recorded["entry"];
-            let said = match entry["kind"].as_str().expect("an entry kind") {
+            let said = match entry["type"].as_str().expect("an entry kind") {
                 "participant_joined" => format!("participant joined {}", entry["participant"]),
                 "session_started" => {
                     format!("session started {} {}", entry["session"], entry["agent"])
@@ -480,7 +480,7 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
     );
     assert_eq!(
         transcribed(&booted, &workspace).last(),
-        Some(&format!("8 instance released operator {instance}")),
+        Some(&format!("10 instance released operator {instance}")),
         "the release is not on the record"
     );
     assert!(
@@ -650,7 +650,7 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
         |transcribed| {
             transcribed
                 .iter()
-                .any(|recorded| recorded["entry"]["kind"] == "session_started")
+                .any(|recorded| recorded["entry"]["type"] == "session_started")
         },
         "started its turn",
     );
@@ -692,9 +692,9 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
             "2 participant joined operator".to_owned(),
             "3 said operator go".to_owned(),
             format!("4 session started {session} builder"),
-            "5 said builder half of one message, and the other half".to_owned(),
-            "6 said builder a second message".to_owned(),
-            format!("7 session ended {session} succeeded"),
+            "7 said builder half of one message, and the other half".to_owned(),
+            "8 said builder a second message".to_owned(),
+            format!("9 session ended {session} succeeded"),
         ]
     );
 }
@@ -1297,4 +1297,53 @@ fn only_one_of_a_filter_and_a_brief_is_read_from_standard_input() {
     ]);
 
     assert!(refusal.contains("standard input"), "{refusal}");
+}
+
+#[test]
+fn transcript_kinds_select_the_entries_the_client_streams() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.boot();
+    declared(&booted);
+    let workspace = opened(&booted);
+    booted.run(&["workspace", "post", &workspace, "go"]);
+    dispatched(&booted, &workspace);
+    let shared = booted.records(&[
+        "workspace",
+        "transcript",
+        &workspace,
+        "--json",
+        "kind,entry",
+    ]);
+    assert!(shared.iter().all(|record| record["kind"] == "shared_state"));
+    let narration = booted.records(&[
+        "workspace",
+        "transcript",
+        &workspace,
+        "--kinds",
+        "narration",
+        "--json",
+        "seq,kind,session_id,entry",
+    ]);
+    assert_eq!(narration.len(), 2);
+    assert_eq!(narration[0]["entry"]["type"], "plan");
+    assert_eq!(narration[1]["entry"]["type"], "thought");
+    assert!(
+        narration
+            .iter()
+            .all(|record| record["kind"] == "narration" && record["session_id"].is_string())
+    );
+    let all = booted.records(&[
+        "workspace",
+        "transcript",
+        &workspace,
+        "--kinds",
+        "narration,shared_state",
+        "--json",
+        "seq,kind,entry",
+    ]);
+    assert_eq!(all.len(), shared.len() + narration.len());
+    assert!(
+        all.windows(2)
+            .all(|pair| pair[0]["seq"].as_i64() < pair[1]["seq"].as_i64())
+    );
 }

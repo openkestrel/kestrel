@@ -9,7 +9,7 @@ use crate::domain::{Exit, Session, SessionId, Turn, Usage, WorkspaceId};
 use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
 use crate::link;
-use crate::log::{Entry, Message};
+use crate::log::{Completion, Entry, Message, PlanEntry};
 use crate::store::workspace::{PendingMessage, Taken};
 use crate::store::{Store, Tx};
 use crate::workspace;
@@ -22,25 +22,56 @@ pub(crate) const LEASE: SignedDuration = SignedDuration::from_mins(2);
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Report {
-    Connected { version: String },
+    Connected {
+        version: String,
+    },
     Heartbeat,
-    Stderr { lines: Vec<String> },
+    Work {
+        repositories: Vec<crate::live_work::Repository>,
+    },
+    Stderr {
+        lines: Vec<String>,
+    },
     Started,
-    Model { model: String },
-    Said { message: String },
-    Used { usage: Usage },
+    Model {
+        model: String,
+    },
+    Said {
+        message: String,
+        completion: Completion,
+    },
+    Thought {
+        text: String,
+        completion: Completion,
+    },
+    Plan {
+        entries: Vec<PlanEntry>,
+        completion: Completion,
+    },
+    Used {
+        usage: Usage,
+    },
     Answered,
-    Checkout { repositories: Vec<Observed> },
-    Finished { exit: Exit },
+    Checkout {
+        repositories: Vec<Observed>,
+    },
+    Finished {
+        exit: Exit,
+    },
 }
 
 impl Report {
     const fn numbered(&self) -> bool {
         match self {
-            Report::Connected { .. } | Report::Heartbeat | Report::Stderr { .. } => false,
+            Report::Connected { .. }
+            | Report::Heartbeat
+            | Report::Stderr { .. }
+            | Report::Work { .. } => false,
             Report::Started
             | Report::Model { .. }
             | Report::Said { .. }
+            | Report::Thought { .. }
+            | Report::Plan { .. }
             | Report::Used { .. }
             | Report::Answered
             | Report::Checkout { .. }
@@ -49,8 +80,6 @@ impl Report {
     }
 }
 
-/// Addressed to the Instance; everything but `connected` and `heartbeat` names the Session it is
-/// about, and a numbered one is numbered within that Session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reported {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -265,6 +294,7 @@ pub async fn report(
     }: Reported,
 ) -> Result<(), ReportRefused> {
     match report {
+        Report::Work { .. } => return Ok(()),
         Report::Stderr { lines } => {
             for line in lines {
                 info!(instance, line, "a harness wrote to stderr");
@@ -337,7 +367,10 @@ async fn reported(
     }
 
     match report {
-        Report::Connected { .. } | Report::Heartbeat | Report::Stderr { .. } => {
+        Report::Connected { .. }
+        | Report::Heartbeat
+        | Report::Stderr { .. }
+        | Report::Work { .. } => {
             unreachable!("a report about the instance is taken before one about its session")
         }
         Report::Started => {
@@ -359,7 +392,10 @@ async fn reported(
             tx.workspaces().record_worked_model(session, &model).await?;
             info!(session = %session.id, model, "a supervisor reported the model its agent is on");
         }
-        Report::Said { message } => {
+        Report::Said {
+            message,
+            completion,
+        } => {
             let workspace = tx.workspaces().get(session.workspace).await?;
             tx.log()
                 .append(
@@ -367,10 +403,41 @@ async fn reported(
                     Entry::Said {
                         participant: session.agent.name.clone(),
                         message,
+                        session_id: Some(session.id),
+                        completion: Some(completion),
                     },
                 )
                 .await?;
             info!(session = %session.id, "a supervisor reported what its agent said");
+        }
+        Report::Thought { text, completion } => {
+            let workspace = tx.workspaces().get(session.workspace).await?;
+            tx.log()
+                .append(
+                    &workspace,
+                    Entry::Thought {
+                        session_id: session.id,
+                        text,
+                        completion,
+                    },
+                )
+                .await?;
+        }
+        Report::Plan {
+            entries,
+            completion,
+        } => {
+            let workspace = tx.workspaces().get(session.workspace).await?;
+            tx.log()
+                .append(
+                    &workspace,
+                    Entry::Plan {
+                        session_id: session.id,
+                        entries,
+                        completion,
+                    },
+                )
+                .await?;
         }
         Report::Used { usage } => {
             info!(session = %session.id, %usage, "a supervisor reported what its agent used");
