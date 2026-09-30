@@ -13,7 +13,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use support::compose::{self, CONTROL_PLANE, FILTER, Stack};
+use support::compose::{self, CLIENT, CONTROL_PLANE, FILTER, Stack};
 use support::docker;
 use support::image::Container;
 
@@ -37,8 +37,25 @@ fn one_command_brings_up_a_working_kestrel() {
     );
 }
 
+/// A browser on the host opens the Client and reaches the operator interface on the one
+/// origin, through the Client's port alone (ADR-0043).
+#[test]
+#[ignore = "builds images and brings a stack up"]
+fn the_client_port_serves_the_client_and_the_operator_interface() {
+    let stack = Stack::up();
+    stack.ran(&["organization", "declare", "acme"]);
+
+    let (opened, shell) = stack.what_the_client_serves("/organizations/acme");
+    assert_eq!(opened, 200, "{shell}");
+    assert!(shell.contains("<title>kestrel</title>"), "{shell}");
+
+    let (listed, organizations) = stack.what_the_client_serves("/operator/organizations");
+    assert_eq!(listed, 200, "{organizations}");
+    assert!(organizations.contains("\"acme\""), "{organizations}");
+}
+
 /// The compose file must be the stable operator-facing stack with nothing set: one project,
-/// one volume, one link network and two images, under the names an operator already knows.
+/// one volume, one link network and its images, under the names an operator already knows.
 #[test]
 #[ignore = "renders the compose file with docker"]
 fn the_operator_supplies_nothing() {
@@ -61,6 +78,7 @@ fn the_operator_supplies_nothing() {
     assert_eq!(model["networks"]["link"]["name"], "kestrel-link");
     assert_eq!(model["services"]["kestrel"]["image"], "kestrel");
     assert_eq!(model["services"]["kestrel-env"]["image"], "kestrel-env");
+    assert_eq!(model["services"][CLIENT]["image"], "kestrel-client");
     assert_eq!(
         model["services"]["kestrel"]["environment"]["KESTREL_NETWORK"],
         "kestrel-link"
@@ -76,6 +94,16 @@ fn the_operator_supplies_nothing() {
             "host_ip": "127.0.0.1",
             "target": 7718,
             "published": "7718",
+            "protocol": "tcp",
+        }])
+    );
+    assert_eq!(
+        model["services"][CLIENT]["ports"],
+        serde_json::json!([{
+            "mode": "ingress",
+            "host_ip": "127.0.0.1",
+            "target": 8080,
+            "published": "7719",
             "protocol": "tcp",
         }])
     );
@@ -133,6 +161,7 @@ fn a_checkout_namespaces_every_resource_its_stack_runs() {
         model["services"]["kestrel-env"]["image"],
         namespace.environment
     );
+    assert_eq!(model["services"][CLIENT]["image"], namespace.client);
     assert_eq!(
         model["services"]["kestrel"]["environment"]["KESTREL_NETWORK"],
         namespace.link
@@ -157,11 +186,12 @@ fn the_suite_namespace_is_stable_for_one_checkout_and_distinct_for_another() {
     assert_ne!(a_checkout.link, another_checkout.link);
     assert_ne!(a_checkout.control_plane, another_checkout.control_plane);
     assert_ne!(a_checkout.environment, another_checkout.environment);
+    assert_ne!(a_checkout.client, another_checkout.client);
 }
 
 #[test]
 #[ignore = "builds the images the compose file names"]
-fn the_stack_is_the_control_plane_the_filter_and_the_image_a_session_executes_in() {
+fn the_stack_is_the_control_plane_the_filter_the_client_and_the_image_a_session_executes_in() {
     let namespace = compose::namespace_for(&docker::repository());
     let mut images = compose::built()
         .iter()
@@ -169,10 +199,11 @@ fn the_stack_is_the_control_plane_the_filter_and_the_image_a_session_executes_in
         .collect::<Vec<_>>();
     images.sort_unstable();
 
-    let [control_plane, environment, filter] = images[..] else {
-        panic!("the compose file ships {images:?}, and it ships three images");
+    let [control_plane, client, environment, filter] = images[..] else {
+        panic!("the compose file ships {images:?}, and it ships four images");
     };
     assert_eq!(control_plane, namespace.control_plane);
+    assert_eq!(client, namespace.client);
     assert_eq!(environment, namespace.environment);
     assert!(
         filter.contains("socket-proxy") && filter.contains("@sha256:"),

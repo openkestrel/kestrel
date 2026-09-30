@@ -29,6 +29,7 @@ jobs:
       images: ${{ steps.detect.outputs.images }}
       arm64: ${{ steps.detect.outputs.arm64 }}
       compose: ${{ steps.detect.outputs.compose }}
+      client: ${{ steps.detect.outputs.client }}
       tree: ${{ steps.tree.outputs.sha }}
       reused: ${{ steps.earlier.outputs.run != '' }}
     steps:
@@ -69,7 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -n "${EARLIER}" ]]; then
-            for area in rust images arm64 compose; do
+            for area in rust images arm64 compose client client-image; do
               echo "${area}=false" >> "$GITHUB_OUTPUT"
             done
           elif [[ -n "${BASE}" && -n "${HEAD}" ]]; then
@@ -108,6 +109,52 @@ jobs:
 
       - name: Test
         run: cargo nextest run --locked --workspace --profile ci
+
+  # The e2e suite drives the built Client through the Client image's Caddyfile and a control plane
+  # it compiles, so it needs Caddy and Rust too.
+  client:
+    name: client
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/client
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v4
+        with:
+          install_args: rust bun caddy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-dependencies
+          save-if: false
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run check
+
+      - name: Test the transport
+        run: bun run test
+
+      - name: Install the browser
+        run: bunx playwright install --with-deps chromium
+
+      - name: Test the built Client against a control plane
+        run: bun run e2e
 
   # Each image is built once for the change and pushed tagged by the commit, so every job that
   # needs one pulls rather than builds it (ADR-0027). Layer caching is restored on every run and
@@ -188,6 +235,44 @@ jobs:
           docker push "${IMAGE}"
           size=$(docker image inspect "${IMAGE}" --format '{{.Size}}')
           echo "kestrel: $((size / 1024 / 1024)) MiB, built in $(($(date +%s) - started))s" >> "$GITHUB_STEP_SUMMARY"
+
+  build-client:
+    name: kestrel-client (build)
+    needs: changes
+    if: needs.changes.outputs.compose == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build the image once for this change
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}-client:${{ github.sha }}
+          TRUSTED: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: |
+          started=$(date +%s)
+          cache=(--cache-from "type=gha,scope=kestrel-client")
+          if [[ "${TRUSTED}" == "true" ]]; then
+            cache+=(--cache-to "type=gha,mode=max,scope=kestrel-client")
+          fi
+          docker buildx build \
+            --file images/kestrel-client/Dockerfile \
+            --tag "${IMAGE}" \
+            "${cache[@]}" \
+            --load .
+          docker push "${IMAGE}"
+          size=$(docker image inspect "${IMAGE}" --format '{{.Size}}')
+          echo "kestrel-client: $((size / 1024 / 1024)) MiB, built in $(($(date +%s) - started))s" >> "$GITHUB_STEP_SUMMARY"
 
   image:
     name: kestrel-env (image)
@@ -281,12 +366,13 @@ jobs:
 
   compose:
     name: kestrel (compose)
-    needs: [changes, build-env, build-control-plane]
+    needs: [changes, build-env, build-control-plane, build-client]
     if: needs.changes.outputs.compose == 'true'
     runs-on: ubuntu-latest
     env:
       KESTREL_ENV_IMAGE_SOURCE: ghcr.io/${{ github.repository }}-env:${{ github.sha }}
       KESTREL_CONTROL_IMAGE_SOURCE: ghcr.io/${{ github.repository }}:${{ github.sha }}
+      KESTREL_CLIENT_IMAGE_SOURCE: ghcr.io/${{ github.repository }}-client:${{ github.sha }}
     steps:
       - uses: actions/checkout@v5
 
@@ -303,6 +389,7 @@ jobs:
         run: |
           docker pull "${KESTREL_ENV_IMAGE_SOURCE}"
           docker pull "${KESTREL_CONTROL_IMAGE_SOURCE}"
+          docker pull "${KESTREL_CLIENT_IMAGE_SOURCE}"
 
       # A checkout's compose suite is scoped to a namespace derived from its path, so the
       # stack comes up once at a time per checkout rather than once per machine.
@@ -346,10 +433,12 @@ jobs:
       - workspace
       - build-env
       - build-control-plane
+      - build-client
       - image
       - development
       - control-plane
       - compose
+      - client
       - architectures
     if: always()
     runs-on: ubuntu-latest

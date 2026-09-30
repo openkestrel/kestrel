@@ -1,8 +1,8 @@
 name: Main
 
 # What a push to main does that a pull request does not (ADR-0027): it publishes the control-plane
-# image when the image's inputs changed — `latest` tracks those inputs, not every commit that
-# lands — and publishes it under its version on a release tag. It is not a required check, so it
+# and Client images when their inputs changed — `latest` tracks those inputs, not every commit
+# that lands — and publishes them under their version on a release tag. It is not a required check, so it
 # may name the branches and tags it runs on, and it builds from a clean checkout so what is
 # published is what the Dockerfile yields on its own.
 on:
@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       images: ${{ steps.detect.outputs.images }}
+      client-image: ${{ steps.detect.outputs.client-image }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -43,7 +44,7 @@ jobs:
             .github/scripts/changed-areas.sh < /dev/null
           fi
 
-  # The only writer of the cache every CI job restores: CI never runs on a push, so a save there
+  # The only writers of the caches CI restores: CI never runs on a push, so a save there
   # conditioned on one never fires (ADR-0027).
   rust-cache:
     name: rust (cache)
@@ -65,6 +66,25 @@ jobs:
           cargo clippy --locked --workspace --all-targets
           cargo build --locked --workspace
           cargo test --locked --workspace --no-run
+
+  bun-cache:
+    name: bun (cache)
+    if: github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v4
+        with:
+          install_args: bun
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ hashFiles('bun.lock') }}
+
+      - name: Install
+        run: bun install --frozen-lockfile
 
   supervisor-size:
     name: supervisor size
@@ -88,7 +108,7 @@ jobs:
   publish:
     name: kestrel (publish)
     needs: changes
-    if: needs.changes.outputs.images == 'true'
+    if: needs.changes.outputs.images == 'true' || needs.changes.outputs.client-image == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -102,22 +122,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish the control-plane image
+      - name: Publish the control-plane and Client images
         env:
-          IMAGE: ghcr.io/${{ github.repository }}
+          REPOSITORY: ghcr.io/${{ github.repository }}
+          CONTROL_PLANE_CHANGED: ${{ needs.changes.outputs.images }}
+          CLIENT_CHANGED: ${{ needs.changes.outputs.client-image }}
         run: |
           set -euo pipefail
-          # A release is published under its version; a push to main moves `latest` and pins the
-          # commit it was built from.
-          image_refs=("${IMAGE}:latest" "${IMAGE}:${GITHUB_SHA}")
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            image_refs=("${IMAGE}:${GITHUB_REF_NAME}")
-          fi
-          tags=()
-          for ref in "${image_refs[@]}"; do
-            tags+=(--tag "$ref")
-          done
-          docker build --file images/kestrel/Dockerfile "${tags[@]}" .
-          for ref in "${image_refs[@]}"; do
-            docker push "$ref"
+          changed=()
+          [[ "${CONTROL_PLANE_CHANGED}" == "true" ]] && changed+=("kestrel:${REPOSITORY}")
+          [[ "${CLIENT_CHANGED}" == "true" ]] && changed+=("kestrel-client:${REPOSITORY}-client")
+          for published in "${changed[@]}"; do
+            dockerfile="images/${published%%:*}/Dockerfile"
+            image="${published#*:}"
+            # A release is published under its version; a push to main moves `latest` and pins
+            # the commit it was built from.
+            image_refs=("${image}:latest" "${image}:${GITHUB_SHA}")
+            if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+              image_refs=("${image}:${GITHUB_REF_NAME}")
+            fi
+            tags=()
+            for ref in "${image_refs[@]}"; do
+              tags+=(--tag "$ref")
+            done
+            docker build --file "${dockerfile}" "${tags[@]}" .
+            for ref in "${image_refs[@]}"; do
+              docker push "$ref"
+            done
           done

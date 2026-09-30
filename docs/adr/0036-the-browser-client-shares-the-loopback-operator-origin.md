@@ -1,5 +1,9 @@
 # The browser Client shares the loopback operator origin
 
+> **Amended by [ADR-0043](0043-a-web-server-serves-the-browser-client.md).** A web server in front of
+> the control plane serves the Client, and writes carry no `X-Kestrel-Operator` header; the shared
+> origin and the listener's Host and Origin checks stand.
+
 The `0.3` browser Client is a static TanStack Start SPA with TanStack Query, built in `packages/client` and copied into the control-plane image. The control plane serves its assets from a fixed runtime directory on the operator listener; `/operator/*` remains reserved for the operator interface, and other Client routes fall back to the SPA shell. This keeps the Client on the same origin as the operator interface without another runtime process or a Client-side store. The SPA does not use Start server functions or server routes to make operator decisions.
 
 `openapi/operator.json` is the source for generated TypeScript types. A small Client transport owns fetch, refusal handling, SSE cursors and reconnects; it uses relative operator URLs. Generating endpoint methods would obscure the stream and error behavior that the CLI and browser must share at the published interface. The built assets, not a source-tree path or a compile-time path, are what the image serves.

@@ -43,7 +43,7 @@ services:
       RUST_LOG: info
     volumes:
       - kestrel:/var/lib/kestrel
-    networks: [daemon, link]
+    networks: [daemon, link, operator]
     # Where the `kestrel` Client reaches it. The operator boundary authenticates nobody, so it
     # is published on the host's loopback and on no other interface (ADR-0015).
     ports:
@@ -55,6 +55,21 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  # The browser Client, on the operator boundary's origin: its assets, and `/operator` forwarded
+  # to the control plane. It adds no trust, so it is published on the host's loopback too.
+  client:
+    image: ${KESTREL_CLIENT_IMAGE:-kestrel-client}
+    build:
+      context: .
+      dockerfile: images/kestrel-client/Dockerfile
+    depends_on:
+      kestrel:
+        condition: service_healthy
+    networks: [operator]
+    ports:
+      - 127.0.0.1:${KESTREL_CLIENT_PORT-7719}:8080
+    restart: unless-stopped
 
   # Built here and started by nothing: an Instance is a container the control plane
   # provisions for one Workspace, never a service beside it.
@@ -75,6 +90,8 @@ networks:
   # because the control plane hands the name to the daemon when it provisions one.
   link:
     name: ${KESTREL_LINK_NETWORK:-kestrel-link}
+  # The Client and the operator boundary it forwards to. Off `link`, so an Instance cannot reach it.
+  operator:
 
 volumes:
   kestrel:

@@ -6,7 +6,7 @@ set -euo pipefail
 # shell tries to expand against the checkout.
 set -f
 
-readonly areas="rust images arm64 compose docs"
+readonly areas="rust images arm64 compose client client-image docs"
 
 # Each area declares the paths that make it run, in one table: `inputs` and `matches` walk the
 # same list, so neither can name an area the other misses. `docs` declares what no heavy area
@@ -19,15 +19,19 @@ area_inputs() {
   images) echo 1 ;;
   arm64) echo 2 ;;
   compose) echo 3 ;;
-  docs) echo 4 ;;
+  client) echo 4 ;;
+  client-image) echo 5 ;;
+  docs) echo 6 ;;
   esac
 }
 readonly inputs=(
   'crates/** Cargo.toml Cargo.lock rust-toolchain.toml mise.toml .config/** openapi/** .kestrel/** .github/**'
-  'images/** crates/** Cargo.toml Cargo.lock rust-toolchain.toml .dockerignore openapi/** .kestrel/** .github/**'
-  'images/** .dockerignore .github/**'
-  'compose.yaml crates/** Cargo.toml Cargo.lock rust-toolchain.toml images/** .dockerignore openapi/** .kestrel/** .github/**'
-  'docs/** *.md LICENSE .gitignore .agents/** .claude/** skills-lock.json package.json bun.lock'
+  'images/kestrel/** images/kestrel-env/** images/kestrel-dev/** crates/** Cargo.toml Cargo.lock rust-toolchain.toml .dockerignore openapi/** .kestrel/** .github/**'
+  'images/kestrel-env/** images/kestrel-dev/** .dockerignore .github/**'
+  'compose.yaml crates/** Cargo.toml Cargo.lock rust-toolchain.toml images/** .dockerignore openapi/** .kestrel/** .github/** packages/** package.json bun.lock'
+  'packages/** package.json bun.lock mise.toml openapi/** crates/** Cargo.toml Cargo.lock rust-toolchain.toml images/kestrel-client/** .github/**'
+  'images/kestrel-client/** .dockerignore packages/** package.json bun.lock openapi/** .github/**'
+  'docs/** *.md LICENSE .gitignore .agents/** .claude/** skills-lock.json'
 )
 
 matches() {
@@ -68,7 +72,7 @@ fi
 
 # A path no area declares, or no readable change at all, is a reason to run everything: a
 # required check that silently does not run is worse than a slow one.
-for area in rust images arm64 compose; do
+for area in rust images arm64 compose client client-image; do
   changed=$unrecognised
   [[ " $touched " == *" $area "* ]] && changed=true
 

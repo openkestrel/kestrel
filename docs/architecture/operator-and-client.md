@@ -108,3 +108,20 @@ headings. Each command's `--json` returns the operator response.
   that would fix it.
 - `kestrel start` (`start.rs`) infers an Organization, Project and Agent from the local clone and
   explains every inferred value on stderr before changing anything.
+
+## The browser Client
+
+`packages/client` ([README](../../packages/client/README.md)) is a static SPA. The control plane
+does not serve it: a web server in front does, on the operator interface's origin
+([ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md)). In compose that is
+`images/kestrel-client`, Caddy on the host's loopback at 7719, whose Caddyfile answers:
+
+| Path | Answer |
+| --- | --- |
+| `/operator` or under it | Forwarded to the control plane with `Host` and `Origin` unchanged |
+| Under `/assets/` | That file, cached for good, or 404 when absent |
+| Anything else | The file if it exists, else `index.html`, uncached, so a deep link survives a refresh |
+
+The Client's types come from
+`openapi/operator.json`; its transport (`src/operator/transport.ts`) parses a refusal's `message`
+and, when present, `field` and `phase`, and reads SSE with `Last-Event-ID` as the cursor.

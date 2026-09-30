@@ -7,3 +7,13 @@
 !rust-toolchain.toml
 !images/kestrel-dev/package.json
 !images/kestrel-dev/package-lock.json
+!package.json
+!bun.lock
+!openapi/operator.json
+!images/kestrel-client/Caddyfile
+!packages/client
+packages/client/node_modules
+packages/client/dist
+packages/client/src/operator/generated
+packages/client/src/routeTree.gen.ts
+packages/client/test-results

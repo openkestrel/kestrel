@@ -33,6 +33,8 @@ A superseded ADR carries a banner naming its successor; 0001 and 0003 are supers
 ```mermaid
 flowchart LR
     client["kestrel Client<br/>crates/kestrel-client"]
+    browser["browser Client<br/>packages/client"]
+    front[":7719 kestrel-client<br/>Caddy in compose"]
     producer["GitHub / any producer"]
 
     subgraph cp["kestrel-control-plane (crates/kestrel)"]
@@ -60,6 +62,8 @@ flowchart LR
     end
 
     client -- HTTP --> operator
+    browser -- "same-origin HTTP, SSE" --> front
+    front -- "/operator, Host unchanged" --> operator
     producer -- POST --> webhooks
     roles -- "poll, comment" --> producer
     roles -- DOCKER_HOST --> proxy --> dockerd
@@ -88,6 +92,10 @@ flowchart LR
 | `kestrel-supervisor` | `kestrel-supervisor` | Runs inside an Instance: dials the link, checks out, drives the harness as an ACP client. |
 | `kestrel-client` | `kestrel` | The CLI Client. |
 | `kestrel-scripted-agent` | `kestrel-scripted-agent` | A scripted ACP agent the tests drive the supervisor against. |
+
+`packages/client` is the browser Client, a bun workspace package built into the `kestrel-client`
+image and served beside the control plane on the operator interface's origin
+([ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md)).
 
 No crate depends on another. The two HTTP contracts are `openapi/link.json` and
 `openapi/operator.json`; each side defines its own types, and tests on both sides read the
