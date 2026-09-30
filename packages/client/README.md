@@ -1,16 +1,16 @@
 # `@kestrel/client`
 
-The browser Client: a static TanStack Start SPA with TanStack Query, served by the control plane's
-operator listener ([ADR-0036](../../docs/adr/0036-the-browser-client-shares-the-loopback-operator-origin.md)).
+The browser Client: a static TanStack Start SPA with TanStack Query, served by a web server on the
+operator interface's origin ([ADR-0043](../../docs/adr/0043-a-web-server-serves-the-browser-client.md)).
 It reaches the control plane only through the operator interface, on its own origin.
 
 ```sh
 bun install
 bun run dev        # Vite on :3000, proxying /operator to a control plane on 127.0.0.1:7718
-bun run build      # dist/client, which KESTREL_CLIENT_DIR names
+bun run build      # dist/client, which images/kestrel-client serves
 bun run typecheck
 bun run test       # the transport
-bun run e2e        # builds, then drives the built Client against `kestrel-control-plane serve`
+bun run e2e        # builds, then drives it through images/kestrel-client/Caddyfile and `kestrel-control-plane serve`
 bun run check      # oxlint and oxfmt
 ```
 

@@ -2,8 +2,6 @@
 //! It authenticates nobody, so it is served apart from the link and on loopback (ADR-0015).
 
 use std::net::IpAddr;
-use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::rejection::JsonRejection;
@@ -23,7 +21,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::agent;
-use crate::browser;
 use crate::cron::Cron;
 use crate::declaration;
 use crate::declined::{Declined, FieldRefusal};
@@ -111,7 +108,6 @@ struct ControlPlane {
     store: Store,
     shutdown: CancellationToken,
     summaries: crate::live_work::Summaries,
-    client: Option<Arc<PathBuf>>,
     reads: crate::live_read::Reads,
 }
 
@@ -163,7 +159,6 @@ pub fn router(
     store: Store,
     shutdown: CancellationToken,
     summaries: crate::live_work::Summaries,
-    client: Option<PathBuf>,
     reads: crate::live_read::Reads,
 ) -> Router {
     Router::new()
@@ -211,27 +206,13 @@ pub fn router(
         .route(SESSION, get(show_session))
         .route(SESSION_STOP, post(stop_session))
         .route(TRANSCRIPT, get(transcript))
-        .fallback(unrouted)
         .with_state(ControlPlane {
             store,
             shutdown,
             summaries,
-            client: client.map(Arc::new),
             reads,
         })
         .layer(middleware::from_fn(addressed_here))
-}
-
-async fn unrouted(State(control_plane): State<ControlPlane>, request: Request) -> Response {
-    let path = request.uri().path();
-    if path == "/operator" || path.starts_with("/operator/") {
-        return Refused::NotFound(format!("no operator route answers {path}")).into_response();
-    }
-
-    match control_plane.client {
-        Some(built) => browser::served(&built, request).await,
-        None => StatusCode::NOT_FOUND.into_response(),
-    }
 }
 
 async fn addressed_here(request: Request, next: Next) -> Response {

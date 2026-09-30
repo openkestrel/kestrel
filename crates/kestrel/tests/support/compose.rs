@@ -8,6 +8,8 @@
 //! without bringing its stack down can be swept by the next suite that runs.
 
 use std::fs::{File, OpenOptions};
+use std::io::{Read as _, Write as _};
+use std::net::TcpStream;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::process::Command;
@@ -22,6 +24,7 @@ use super::images;
 
 pub const CONTROL_PLANE: &str = "kestrel";
 pub const FILTER: &str = "socket-proxy";
+pub const CLIENT: &str = "client";
 /// What the suite adds to the shipped compose file: the label naming the checkout every resource
 /// belongs to, so a sweep can take back a deleted checkout's. An operator renders `compose.yaml`
 /// alone and never sees it.
@@ -36,20 +39,23 @@ pub struct Namespace {
     pub link: String,
     pub control_plane: String,
     pub environment: String,
+    pub client: String,
 }
 
 impl Namespace {
     /// What a `docker compose` invocation must inherit for every resource it touches to be
-    /// this checkout's. The operator port is left for the daemon to choose, so no two
+    /// this checkout's. The published ports are left for the daemon to choose, so no two
     /// checkouts' stacks contend for the host's.
-    pub fn environment(&self) -> [(&str, &str); 6] {
+    pub fn environment(&self) -> [(&str, &str); 8] {
         [
             ("COMPOSE_PROJECT_NAME", &self.project),
             ("KESTREL_VOLUME", &self.volume),
             ("KESTREL_LINK_NETWORK", &self.link),
             ("KESTREL_CONTROL_IMAGE", &self.control_plane),
             ("KESTREL_ENV_IMAGE", &self.environment),
+            ("KESTREL_CLIENT_IMAGE", &self.client),
             ("KESTREL_OPERATOR_PORT", ""),
+            ("KESTREL_CLIENT_PORT", ""),
         ]
     }
 }
@@ -73,6 +79,7 @@ pub fn namespace_for(checkout: &Path) -> Namespace {
         link: format!("kestrel-{digest}-link"),
         control_plane: format!("kestrel-{digest}"),
         environment: format!("kestrel-{digest}-env"),
+        client: format!("kestrel-{digest}-client"),
     }
 }
 
@@ -141,6 +148,36 @@ impl Stack {
         );
 
         format!("http://{published}")
+    }
+
+    /// What the browser Client's port answers `path` with, as a browser on this host asks it.
+    pub fn what_the_client_serves(&self, path: &str) -> (u16, String) {
+        let address = completed(
+            &["port", CLIENT, "8080"],
+            "finding the published Client port",
+        );
+        let mut client =
+            TcpStream::connect(&address).expect("the published Client port should accept");
+        write!(
+            client,
+            "GET {path} HTTP/1.0\r\nHost: {address}\r\nOrigin: http://{address}\r\n\r\n"
+        )
+        .expect("the published Client port should take a request");
+
+        let mut answered = String::new();
+        client
+            .read_to_string(&mut answered)
+            .expect("the Client should answer");
+        let (head, body) = answered
+            .split_once("\r\n\r\n")
+            .unwrap_or_else(|| panic!("{path} was answered with no body: {answered}"));
+        let status = head
+            .split_whitespace()
+            .nth(1)
+            .and_then(|status| status.parse().ok())
+            .unwrap_or_else(|| panic!("{path} was answered with no status: {head}"));
+
+        (status, body.to_owned())
     }
 
     pub fn client(&self, command: &[&str]) -> Finished {
@@ -215,30 +252,33 @@ impl Drop for Stack {
     }
 }
 
-/// Every image the compose file names. A run CI built for has both images pushed tagged by
+/// Every image the compose file names. A run CI built for has each image pushed tagged by
 /// commit, so this tags them into the checkout's namespace rather than building what a sibling
-/// job already built; a local run, which names neither, builds them once for this binary.
+/// job already built; a local run, which names none, builds them once for this binary.
 pub fn built() -> &'static [String] {
     static BUILT: OnceLock<Vec<String>> = OnceLock::new();
 
     BUILT.get_or_init(|| {
         host_lock();
         sweep_deleted_checkouts();
-        match (
-            images::sourced(images::ENV),
-            images::sourced(images::CONTROL_PLANE),
-        ) {
-            (Some(environment), Some(control_plane)) => pulled(&environment, &control_plane),
-            (None, None) => {
-                completed(&["build"], "building the images the compose file names");
+        let namespace = namespace();
+        let wanted = [
+            (images::ENV, &namespace.environment),
+            (images::CONTROL_PLANE, &namespace.control_plane),
+            (images::CLIENT, &namespace.client),
+        ];
+        let sourced = wanted.map(|(variable, _)| images::sourced(variable));
+        if sourced.iter().all(Option::is_none) {
+            completed(&["build"], "building the images the compose file names");
+        } else {
+            // Some named and some not means a half-built stack, and the missing ones would be
+            // built from source while their siblings are pulled. Fail rather than quietly diverge.
+            for ((variable, named), source) in wanted.iter().zip(&sourced) {
+                let source = source.as_deref().unwrap_or_else(|| {
+                    panic!("some images were named and {variable} was not: {sourced:?}")
+                });
+                tagged(source, named);
             }
-            // Half a pair means a half-built stack, and the missing half would be built from
-            // source while its sibling is pulled. Fail rather than quietly diverge.
-            (environment, control_plane) => panic!(
-                "one image was named and the other was not: {}={environment:?}, {}={control_plane:?}",
-                images::ENV,
-                images::CONTROL_PLANE
-            ),
         }
 
         completed(&["config", "--images"], "listing the images")
@@ -251,19 +291,13 @@ pub fn built() -> &'static [String] {
 /// What CI built is named for the repository and the commit, and what the compose file names is
 /// this checkout's namespace, so each is tagged into it rather than referenced directly: the
 /// compose file keeps naming the images an operator's stack uses.
-fn pulled(environment: &str, control_plane: &str) {
-    let namespace = namespace();
-    for (source, named) in [
-        (environment, &namespace.environment),
-        (control_plane, &namespace.control_plane),
-    ] {
-        let tagged = super::docker::ran(&["tag", source, named]);
-        assert_eq!(
-            tagged.code, 0,
-            "tagging {source} as {named} failed:\n{}",
-            tagged.err
-        );
-    }
+fn tagged(source: &str, named: &str) {
+    let tagged = super::docker::ran(&["tag", source, named]);
+    assert_eq!(
+        tagged.code, 0,
+        "tagging {source} as {named} failed:\n{}",
+        tagged.err
+    );
 }
 
 fn rendered(variables: &[(&str, &str)]) -> Ran {

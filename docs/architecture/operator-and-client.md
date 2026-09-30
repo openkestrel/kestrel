@@ -97,19 +97,17 @@ stdout. `--json` returns the operator response, except for bytes, which are alwa
 
 ## The browser Client
 
-`packages/client` ([README](../../packages/client/README.md)) is a static SPA the control plane
-serves from `KESTREL_CLIENT_DIR` (`/usr/share/kestrel/client` in the image) on the operator
-listener ([ADR-0036](../adr/0036-the-browser-client-shares-the-loopback-operator-origin.md)).
-The operator router's fallback (`operator::unrouted`, then `browser::served`) decides what an
-unrouted path is:
+`packages/client` ([README](../../packages/client/README.md)) is a static SPA. The control plane
+does not serve it: a web server in front does, on the operator interface's origin
+([ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md)). In compose that is
+`images/kestrel-client`, Caddy on the host's loopback at 7719, whose Caddyfile answers:
 
 | Path | Answer |
 | --- | --- |
-| `/operator` or under it | The operator interface's 404 refusal, never the shell |
-| Under `/assets/`, or a file at the root (`/favicon.ico`) | That file, or 404 when absent |
-| Anything else | `index.html`, uncached, so a deep link survives a refresh |
-| Any method but `GET`/`HEAD` outside `/operator` | 405 |
+| `/operator` or under it | Forwarded to the control plane with `Host` and `Origin` unchanged |
+| Under `/assets/` | That file, cached for good, or 404 when absent |
+| Anything else | The file if it exists, else `index.html`, uncached, so a deep link survives a refresh |
 
-With no `KESTREL_CLIENT_DIR`, every non-operator path is 404. The Client's types come from
+The Client's types come from
 `openapi/operator.json`; its transport (`src/operator/transport.ts`) parses a refusal's `message`
 and, when present, `field` and `phase`, and reads SSE with `Last-Event-ID` as the cursor.

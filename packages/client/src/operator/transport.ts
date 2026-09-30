@@ -50,33 +50,23 @@ export function transport(fetch: Fetch = (url, init) => globalThis.fetch(url, in
 		return response;
 	}
 
-	async function body<T>(response: Response): Promise<T> {
-		const text = await response.text();
-		return (text ? JSON.parse(text) : undefined) as T;
-	}
-
 	return {
 		async read<T>(path: string, { signal }: { signal?: AbortSignal } = {}): Promise<T> {
-			return body<T>(await answered(path, { method: "GET", signal }));
+			return decoded<T>(await answered(path, { method: "GET", signal }));
 		},
 
-		// The header is what a cross-origin form cannot send (ADR-0036).
 		async write<T>(
 			method: Write,
 			path: string,
 			payload?: unknown,
 			{ signal }: { signal?: AbortSignal } = {},
 		): Promise<T> {
-			const headers = new Headers({ "X-Kestrel-Operator": "1" });
-			if (payload !== undefined) headers.set("content-type", "application/json");
-			return body<T>(
-				await answered(path, {
-					method,
-					headers,
-					body: payload === undefined ? undefined : JSON.stringify(payload),
-					signal,
-				}),
-			);
+			const init: RequestInit = { method, signal };
+			if (payload !== undefined) {
+				init.headers = { "content-type": "application/json" };
+				init.body = JSON.stringify(payload);
+			}
+			return decoded<T>(await answered(path, init));
 		},
 
 		async *stream(
@@ -93,6 +83,12 @@ export function transport(fetch: Fetch = (url, init) => globalThis.fetch(url, in
 }
 
 export type Transport = ReturnType<typeof transport>;
+
+async function decoded<T>(response: Response): Promise<T> {
+	const text = await response.text();
+	// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the generated OpenAPI types are the contract; the transport does not validate bodies.
+	return (text ? JSON.parse(text) : undefined) as T;
+}
 
 async function refusal(response: Response): Promise<Refused> {
 	const retry = Number(response.headers.get("retry-after"));
@@ -114,37 +110,34 @@ async function refusal(response: Response): Promise<Refused> {
 	);
 }
 
-async function* parsed(body: ReadableStream<Uint8Array>): AsyncGenerator<StreamEvent> {
-	const decoder = new TextDecoder();
-	let buffered = "";
+async function* parsed(body: ReadableStream<BufferSource>): AsyncGenerator<StreamEvent> {
 	let event = "";
 	let id: string | undefined;
 	let data: string[] = [];
 
-	for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
-		buffered += decoder.decode(chunk, { stream: true });
-		let end = buffered.search(/\r\n|\r|\n/);
-		while (end !== -1) {
-			const line = buffered.slice(0, end);
-			const breakLength = buffered.startsWith("\r\n", end) ? 2 : 1;
-			// A lone \r at a chunk's end may be the first half of \r\n.
-			if (buffered[end] === "\r" && end + 1 === buffered.length) break;
-			buffered = buffered.slice(end + breakLength);
-
-			if (line === "") {
-				if (data.length > 0) yield { event: event || "message", id, data: data.join("\n") };
-				event = "";
-				id = undefined;
-				data = [];
-			} else if (!line.startsWith(":")) {
-				const colon = line.indexOf(":");
-				const field = colon === -1 ? line : line.slice(0, colon);
-				const value = colon === -1 ? "" : line.slice(colon + 1).replace(/^ /, "");
-				if (field === "event") event = value;
-				else if (field === "id") id = value;
-				else if (field === "data") data.push(value);
-			}
-			end = buffered.search(/\r\n|\r|\n/);
+	for await (const line of lines(body)) {
+		if (line === "") {
+			if (data.length > 0) yield { event: event || "message", id, data: data.join("\n") };
+			event = "";
+			id = undefined;
+			data = [];
+			continue;
 		}
+		const colon = line.indexOf(":");
+		const field = colon === -1 ? line : line.slice(0, colon);
+		const value = colon === -1 ? "" : line.slice(colon + 1).replace(/^ /, "");
+		if (field === "event") event = value;
+		else if (field === "id") id = value;
+		else if (field === "data") data.push(value);
+	}
+}
+
+// A \r ending a chunk stays buffered: it may be the first half of a \r\n.
+async function* lines(body: ReadableStream<BufferSource>): AsyncGenerator<string> {
+	let rest = "";
+	for await (const text of body.pipeThrough(new TextDecoderStream())) {
+		const complete = (rest + text).split(/\r\n|\n|\r(?!$)/);
+		rest = complete.pop() ?? "";
+		yield* complete;
 	}
 }

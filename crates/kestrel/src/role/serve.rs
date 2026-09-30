@@ -1,5 +1,4 @@
 use std::net::SocketAddr;
-use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
 use axum::http::{StatusCode, header};
@@ -28,19 +27,11 @@ pub struct Listening {
     bound: Listen,
     store: Store,
     wake: Wake,
-    client: Option<PathBuf>,
 }
 
 impl Listening {
     pub fn bound(&self) -> Listen {
         self.bound
-    }
-
-    pub fn serving_client(self, built: Option<PathBuf>) -> Self {
-        Self {
-            client: built,
-            ..self
-        }
     }
 }
 
@@ -64,7 +55,6 @@ pub async fn bind(store: Store, listen: Listen, wake: Wake) -> Result<Listening>
         bound,
         store,
         wake,
-        client: None,
     })
 }
 
@@ -75,7 +65,6 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         bound,
         store,
         wake,
-        client,
     } = listening;
 
     info!(role = %Role::Serve, link = %bound.link, operator = %bound.operator, "role started");
@@ -95,7 +84,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         reads.clone(),
     )
     .merge(webhook::router(store.clone(), wake));
-    let operator_router = operator::router(store, shutdown.clone(), summaries, client, reads);
+    let operator_router = operator::router(store, shutdown.clone(), summaries, reads);
 
     let serving_link = axum::serve(link_listener, link_router)
         .with_graceful_shutdown(shutdown.clone().cancelled_owned());

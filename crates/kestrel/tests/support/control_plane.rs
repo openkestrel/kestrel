@@ -189,32 +189,6 @@ impl Started {
         answered
     }
 
-    pub fn what_the_operator_serves(&self, path: &str) -> (u16, String) {
-        let address = self.operator().trim_start_matches("http://").to_owned();
-        let mut operator =
-            TcpStream::connect(&address).expect("the published operator listener should accept");
-        write!(
-            operator,
-            "GET {path} HTTP/1.0\r\nHost: {address}\r\nAccept: text/html\r\n\r\n"
-        )
-        .expect("the published operator listener should take a request");
-
-        let mut answered = String::new();
-        operator
-            .read_to_string(&mut answered)
-            .expect("the operator listener should answer");
-        let (head, body) = answered
-            .split_once("\r\n\r\n")
-            .unwrap_or_else(|| panic!("{path} was answered with no body: {answered}"));
-        let status = head
-            .split_whitespace()
-            .nth(1)
-            .and_then(|status| status.parse().ok())
-            .unwrap_or_else(|| panic!("{path} was answered with no status: {head}"));
-
-        (status, body.to_owned())
-    }
-
     /// A `SIGTERM` and the wait for it, so what the role said on the way down is in the logs
     /// before anything reads them.
     pub fn stop(&self) {

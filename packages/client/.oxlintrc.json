@@ -3,10 +3,16 @@
 	"plugins": ["typescript", "unicorn", "oxc", "react", "jsx-a11y", "import", "vitest"],
 	"jsPlugins": ["@shadcn/lint"],
 	"categories": {
-		"correctness": "error"
+		"correctness": "error",
+		"suspicious": "error",
+		"perf": "error"
 	},
 	"ignorePatterns": ["src/routeTree.gen.ts", "src/operator/generated"],
 	"rules": {
+		"react/react-in-jsx-scope": "off",
+		"react/rules-of-hooks": "error",
+		"react/exhaustive-deps": "error",
+		"typescript/no-explicit-any": "error",
 		"shadcn/no-restyle": [
 			"error",
 			{

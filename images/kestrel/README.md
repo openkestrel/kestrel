@@ -4,9 +4,7 @@ The control plane: one image, every role selected by argv
 ([ADR-0002](../../docs/adr/0002-two-deployables-the-environment-dials-out.md)). With no command it
 starts every role in one process, which at `0.1` is the only supported topology.
 
-It carries the `kestrel-control-plane` binary, the built browser Client under
-`/usr/share/kestrel/client` (named by `KESTREL_CLIENT_DIR`, and served on the operator listener),
-a `docker` client, and `curl` for a healthcheck to
+It carries the `kestrel-control-plane` binary, a `docker` client, and `curl` for a healthcheck to
 ask the operator boundary with. It does not carry the `kestrel` Client: an operator installs that
 where they are, and it reaches the control plane over the operator boundary rather than from
 inside this container ([ADR-0015](../../docs/adr/0015-the-cli-is-a-client-not-a-role.md)). The client is not a convenience: the default

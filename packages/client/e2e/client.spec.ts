@@ -1,11 +1,8 @@
-import AxeBuilder from "@axe-core/playwright";
+import { AxeBuilder } from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
 test.beforeAll(async ({ request }) => {
-	const declared = await request.post("/operator/organizations", {
-		data: { name: "acme" },
-		headers: { "X-Kestrel-Operator": "1" },
-	});
+	const declared = await request.post("/operator/organizations", { data: { name: "acme" } });
 	expect(declared.ok(), await declared.text()).toBe(true);
 });
 

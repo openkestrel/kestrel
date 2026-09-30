@@ -11,6 +11,10 @@ services:
     labels: *checkout
     build:
       labels: *checkout
+  client:
+    labels: *checkout
+    build:
+      labels: *checkout
   kestrel-env:
     labels: *checkout
     build:
@@ -24,4 +28,6 @@ networks:
   daemon:
     labels: *checkout
   link:
+    labels: *checkout
+  operator:
     labels: *checkout

@@ -38,7 +38,7 @@ pub fn crate_root() -> std::path::PathBuf {
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use jiff::{SignedDuration, Timestamp};
 use kestrel::agent;
@@ -326,23 +326,13 @@ impl Kestrel {
         listen: Listen,
         environment: Option<Provisions>,
     ) -> Self {
-        Self::boot_against_serving(data_dir, listen, environment, None).await
-    }
-
-    async fn boot_against_serving(
-        data_dir: TempDir,
-        listen: Listen,
-        environment: Option<Provisions>,
-        client: Option<PathBuf>,
-    ) -> Self {
         let store = Store::open(data_dir.path())
             .await
             .expect("the control plane should boot against a fresh data directory");
         let shutdown = CancellationToken::new();
         let all_in_one = kestrel::role::bind(store.clone(), listen)
             .await
-            .expect("the control plane should bind its link")
-            .serving_client(client);
+            .expect("the control plane should bind its link");
         let bound = all_in_one.bound();
         let address = bound.link;
         let dispatch = environment.clone().map(|provisions| Dispatch {
@@ -359,20 +349,6 @@ impl Kestrel {
         let roles = tokio::spawn(all_in_one.run(dispatch, shutdown.clone()));
 
         Self::running(data_dir, store, bound, environment, shutdown, roles)
-    }
-
-    pub async fn boot_serving_client(built: &Path) -> Self {
-        let data_dir = TempDir::new().expect("a temporary data directory");
-        Self::boot_against_serving(
-            data_dir,
-            Listen {
-                link: LOOPBACK,
-                operator: LOOPBACK,
-            },
-            None,
-            Some(built.to_path_buf()),
-        )
-        .await
     }
 
     /// Serves the link with no work role behind it, so nothing sweeps a lease a test has let

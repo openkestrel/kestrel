@@ -10,6 +10,7 @@
 !package.json
 !bun.lock
 !openapi/operator.json
+!images/kestrel-client/Caddyfile
 !packages/client
 packages/client/node_modules
 packages/client/dist

@@ -80,10 +80,6 @@ pub struct Cli {
     )]
     operator_listen: SocketAddr,
 
-    /// The built browser Client, served on the operator listener beside the operator interface
-    #[arg(long, env = "KESTREL_CLIENT_DIR", global = true, value_name = "DIR")]
-    pub client_dir: Option<PathBuf>,
-
     /// Where a supervisor reaches the link, if not the address the control plane bound
     #[arg(long, env = "KESTREL_LINK", global = true, value_name = "URL")]
     link: Option<String>,

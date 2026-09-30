@@ -29,13 +29,6 @@ impl AllInOne {
         self.listening.bound()
     }
 
-    pub fn serving_client(self, built: Option<std::path::PathBuf>) -> Self {
-        Self {
-            listening: self.listening.serving_client(built),
-            ..self
-        }
-    }
-
     pub async fn run(
         self,
         dispatch: Option<work::Dispatch>,

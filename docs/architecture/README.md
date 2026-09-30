@@ -34,6 +34,7 @@ A superseded ADR carries a banner naming its successor; 0001 and 0003 are supers
 flowchart LR
     client["kestrel Client<br/>crates/kestrel-client"]
     browser["browser Client<br/>packages/client"]
+    front[":7719 kestrel-client<br/>Caddy in compose"]
     producer["GitHub / any producer"]
 
     subgraph cp["kestrel-control-plane (crates/kestrel)"]
@@ -61,7 +62,8 @@ flowchart LR
     end
 
     client -- HTTP --> operator
-    browser -- "same-origin HTTP, SSE" --> operator
+    browser -- "same-origin HTTP, SSE" --> front
+    front -- "/operator, Host unchanged" --> operator
     producer -- POST --> webhooks
     roles -- "poll, comment" --> producer
     roles -- DOCKER_HOST --> proxy --> dockerd
@@ -91,8 +93,9 @@ flowchart LR
 | `kestrel-client` | `kestrel` | The CLI Client. |
 | `kestrel-scripted-agent` | `kestrel-scripted-agent` | A scripted ACP agent the tests drive the supervisor against. |
 
-`packages/client` is the browser Client, a bun workspace package built into the control-plane
-image and served by the operator listener ([ADR-0036](../adr/0036-the-browser-client-shares-the-loopback-operator-origin.md)).
+`packages/client` is the browser Client, a bun workspace package built into the `kestrel-client`
+image and served beside the control plane on the operator interface's origin
+([ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md)).
 
 No crate depends on another. The two HTTP contracts are `openapi/link.json` and
 `openapi/operator.json`; each side defines its own types, and tests on both sides read the
@@ -161,9 +164,6 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   is no GitHub App. The Integration and the agent's `gh` both use tokens an operator supplies.
 - **Pull request state** ([ADR-0032](../adr/0032-a-pull-request-event-updates-workspace-state-without-a-firing.md)):
   nothing records a pull request against a Workspace; `pull_request` Events reach Triggers only.
-- **Operator write header** ([ADR-0036](../adr/0036-the-browser-client-shares-the-loopback-operator-origin.md)):
-  the listener checks Host and Origin, but does not yet require `X-Kestrel-Operator` on writes.
-  The browser Client sends it; the CLI does not.
 - **Split roles**: `serve` and `work` parse separately but run correctly only in one process.
 - **Policy, Approvals, Questions, Workflows, Campaigns** exist in `CONTEXT.md` and
   [`ROADMAP.md`](../../ROADMAP.md), not in code. `session_dependency` and the Unreachable state are

@@ -6,7 +6,7 @@ type Seen = { url: string; init: RequestInit };
 function answering(respond: (seen: Seen) => Response) {
 	const seen: Seen[] = [];
 	const fetch = async (url: string, init: RequestInit = {}) => {
-		const request = { url: String(url), init };
+		const request = { url, init };
 		seen.push(request);
 		return respond(request);
 	};
@@ -49,7 +49,6 @@ describe("a read", () => {
 
 		expect(await operator.read("/operator/organizations")).toEqual([{ name: "acme" }]);
 		expect(seen[0].url).toBe("/operator/organizations");
-		expect(new Headers(seen[0].init.headers).has("X-Kestrel-Operator")).toBe(false);
 	});
 
 	it("is refused with the status and the reason the control plane gave", async () => {
@@ -106,14 +105,13 @@ describe("a read", () => {
 });
 
 describe("a write", () => {
-	it("says it comes from an operator and sends its body as JSON", async () => {
+	it("sends its body as JSON", async () => {
 		const { operator, seen } = answering(() => json(201, { name: "acme" }));
 
 		await operator.write("POST", "/operator/organizations", { name: "acme" });
 
 		const headers = new Headers(seen[0].init.headers);
 		expect(seen[0].init.method).toBe("POST");
-		expect(headers.has("X-Kestrel-Operator")).toBe(true);
 		expect(headers.get("content-type")).toBe("application/json");
 		expect(seen[0].init.body).toBe('{"name":"acme"}');
 	});
@@ -154,6 +152,15 @@ describe("a stream", () => {
 
 	it("joins the lines of one event's data", async () => {
 		const { operator } = answering(() => events("data: one\ndata: two\n\n"));
+
+		const delivered = [];
+		for await (const event of operator.stream("/s")) delivered.push(event);
+
+		expect(delivered).toEqual([{ event: "message", id: undefined, data: "one\ntwo" }]);
+	});
+
+	it("reads a \\r\\n split across chunks as one line break", async () => {
+		const { operator } = answering(() => events("data: one\r", "\ndata: two\r", "\n\r", "\n"));
 
 		const delivered = [];
 		for await (const event of operator.stream("/s")) delivered.push(event);
