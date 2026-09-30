@@ -13,6 +13,7 @@ pub mod instance;
 pub mod integration;
 pub mod keyring;
 pub mod link;
+pub mod live_read;
 pub mod live_work;
 pub mod log;
 pub mod operator;

@@ -1195,6 +1195,74 @@
         }
       }
     },
+    "/operator/organizations/{organization}/workspaces/{workspace}/files": {
+      "get": {
+        "operationId": "workspaceFiles",
+        "summary": "List one directory of a Workspace's live Instance.",
+        "description": "Asked of the Instance's supervisor over the link and answered live; never written to the Store, Transcript or Event log. Each entry is marked tracked, untracked or ignored. A directory past 5,000 entries is truncated, and `total` says how many it holds. Symlinks are resolved, and a path outside the Workspace's checkouts is refused. Concurrent identical reads share one request, and an answer is reused for about 5 s.",
+        "parameters": [
+          { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "description": "`<repo>/<path>`. Absent or empty lists the Workspace's repositories.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The directory's entries.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/FileListing" } }
+            }
+          },
+          "404": { "$ref": "#/components/responses/Refused" },
+          "422": { "$ref": "#/components/responses/Refused" },
+          "503": { "$ref": "#/components/responses/Refused" },
+          "504": { "$ref": "#/components/responses/Refused" }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/file": {
+      "get": {
+        "operationId": "workspaceFile",
+        "summary": "Read one file of a Workspace's live Instance.",
+        "description": "Asked of the Instance's supervisor over the link and answered live; never written to the Store, Transcript or Event log. UTF-8 text up to 1 MiB is answered inline as JSON. A binary file, a file past 1 MiB, or a `raw` read is streamed as `application/octet-stream`, unbuffered and with no cap, and never shared or cached. Symlinks are resolved, and a path outside the Workspace's checkouts is refused.",
+        "parameters": [
+          { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "description": "`<repo>/<path>`.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "raw",
+            "in": "query",
+            "required": false,
+            "description": "Stream the bytes even when the file is text under the inline bound.",
+            "schema": { "type": "boolean", "default": false }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file, inline or raw.",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/FileText" } },
+              "application/octet-stream": { "schema": { "type": "string", "contentMediaType": "application/octet-stream" } }
+            }
+          },
+          "404": { "$ref": "#/components/responses/Refused" },
+          "422": { "$ref": "#/components/responses/Refused" },
+          "503": { "$ref": "#/components/responses/Refused" },
+          "504": { "$ref": "#/components/responses/Refused" }
+        }
+      }
+    },
     "/operator/organizations/{organization}/workspaces/{workspace}/messages": {
       "post": {
         "operationId": "postToWorkspace",
@@ -1586,7 +1654,7 @@
   "components": {
     "responses": {
       "Refused": {
-        "description": "The control plane refused the request. 400 is a request it could not read; 404 is a name or reference that resolves to no record, or to more than one; 409 and 422 are an operation it declined; 503 is a control plane that could not answer.",
+        "description": "The control plane refused the request. 400 is a request it could not read; 404 is a name or reference that resolves to no record, or to more than one; 409 and 422 are an operation it declined; 503 is a control plane that could not answer; 504 is an Instance that did not answer a read within 10 s.",
         "headers": {
           "Retry-After": {
             "description": "Seconds to wait before asking again. Present on a 503 only when the database was busy, which asking again can clear.",
@@ -1793,6 +1861,34 @@
           "state",
           "message"
         ]
+      },
+      "FileListing": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "The directory listed, or empty for the Workspace's repositories." },
+          "entries": { "type": "array", "items": { "$ref": "#/components/schemas/FileEntry" } },
+          "total": { "type": "integer", "minimum": 0, "description": "How many entries the directory holds, including any not listed." },
+          "truncated": { "type": "boolean" }
+        },
+        "required": ["path", "entries", "total", "truncated"]
+      },
+      "FileEntry": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "kind": { "enum": ["file", "directory", "symlink", "other"] },
+          "size": { "type": "integer", "minimum": 0, "description": "Bytes, for a file." },
+          "git": { "enum": ["tracked", "untracked", "ignored"], "description": "Absent for a repository in the Workspace's list of them." }
+        },
+        "required": ["name", "kind"]
+      },
+      "FileText": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "text": { "type": "string" }
+        },
+        "required": ["path", "text"]
       },
       "WorkspaceWork": {
         "oneOf": [

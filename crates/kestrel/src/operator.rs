@@ -79,6 +79,10 @@ pub const WORKSPACES: &str = "/operator/organizations/{organization}/workspaces"
 pub const WORKSPACE: &str = "/operator/organizations/{organization}/workspaces/{workspace}";
 pub const WORKSPACE_WORK: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/work";
+pub const WORKSPACE_FILES: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/files";
+pub const WORKSPACE_FILE: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/file";
 pub const WORKSPACE_MESSAGES: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/messages";
 pub const WORKSPACE_SEAL: &str =
@@ -104,6 +108,19 @@ struct ControlPlane {
     store: Store,
     shutdown: CancellationToken,
     summaries: crate::live_work::Summaries,
+    reads: crate::live_read::Reads,
+}
+
+#[derive(Deserialize)]
+struct Browsing {
+    path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Reading {
+    path: String,
+    #[serde(default)]
+    raw: bool,
 }
 
 #[derive(Deserialize)]
@@ -142,6 +159,7 @@ pub fn router(
     store: Store,
     shutdown: CancellationToken,
     summaries: crate::live_work::Summaries,
+    reads: crate::live_read::Reads,
 ) -> Router {
     Router::new()
         .route(ORGANIZATIONS, get(organizations).post(declare_organization))
@@ -179,6 +197,8 @@ pub fn router(
         .route(WORKSPACES, get(workspaces).post(open_workspace))
         .route(WORKSPACE, get(show_workspace))
         .route(WORKSPACE_WORK, get(work_summary))
+        .route(WORKSPACE_FILES, get(workspace_files))
+        .route(WORKSPACE_FILE, get(workspace_file))
         .route(WORKSPACE_MESSAGES, post(post_to_workspace))
         .route(WORKSPACE_SEAL, post(seal_workspace))
         .route(WORKSPACE_INSTANCE_RELEASE, post(release_instance))
@@ -190,6 +210,7 @@ pub fn router(
             store,
             shutdown,
             summaries,
+            reads,
         })
         .layer(middleware::from_fn(addressed_here))
 }
@@ -1804,6 +1825,41 @@ async fn work_summary(
     ))
 }
 
+async fn workspace_files(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, reference)): Path<(String, String)>,
+    Query(browsing): Query<Browsing>,
+) -> Result<crate::live_read::AnswerBody, Refused> {
+    Ok(crate::live_read::read(
+        &control_plane.store,
+        &control_plane.reads,
+        &organization,
+        &reference,
+        crate::live_read::Read::Files {
+            path: browsing.path.filter(|path| !path.is_empty()),
+        },
+    )
+    .await?)
+}
+
+async fn workspace_file(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, reference)): Path<(String, String)>,
+    Query(reading): Query<Reading>,
+) -> Result<crate::live_read::AnswerBody, Refused> {
+    Ok(crate::live_read::read(
+        &control_plane.store,
+        &control_plane.reads,
+        &organization,
+        &reference,
+        crate::live_read::Read::File {
+            path: reading.path,
+            raw: reading.raw,
+        },
+    )
+    .await?)
+}
+
 async fn show_workspace(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
@@ -2088,6 +2144,7 @@ enum Refused {
     NotFound(String),
     Conflict(String),
     Unprocessable(String),
+    NotAnswering(String),
     Unavailable(anyhow::Error),
 }
 
@@ -2098,7 +2155,8 @@ impl Refused {
             | Refused::Forbidden(why)
             | Refused::NotFound(why)
             | Refused::Conflict(why)
-            | Refused::Unprocessable(why) => why.into(),
+            | Refused::Unprocessable(why)
+            | Refused::NotAnswering(why) => why.into(),
             Refused::Unavailable(error) => error.into(),
         }
     }
@@ -2108,6 +2166,9 @@ impl From<anyhow::Error> for Refused {
     fn from(error: anyhow::Error) -> Self {
         if let Some(missing) = error.downcast_ref::<NoSuchOrganization>() {
             return Refused::NotFound(missing.to_string());
+        }
+        if let Some(silent) = error.downcast_ref::<crate::live_read::NotAnswering>() {
+            return Refused::NotAnswering(silent.to_string());
         }
         match error.downcast::<Declined>() {
             Ok(Declined::Unacceptable(why)) => Refused::Unprocessable(why),
@@ -2142,6 +2203,7 @@ impl IntoResponse for Refused {
             Refused::NotFound(why) => (StatusCode::NOT_FOUND, why),
             Refused::Conflict(why) => (StatusCode::CONFLICT, why),
             Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why),
+            Refused::NotAnswering(why) => (StatusCode::GATEWAY_TIMEOUT, why),
             Refused::Unavailable(error) => {
                 warn!(%error, busy, "the operator boundary could not answer");
                 (

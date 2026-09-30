@@ -1,5 +1,6 @@
 pub mod checkout;
 pub mod completer;
+pub mod files;
 pub mod harness;
 pub mod link;
 pub mod login;
@@ -14,7 +15,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::harness::{Conversation, Harness};
-use crate::link::{Checkout, Exit, Instruction, Link, Report};
+use crate::link::{Answer, AnswerBody, Checkout, Down, Exit, Instruction, Link, Read, Report};
 
 const RECONNECT_AFTER: Duration = Duration::from_millis(250);
 /// Often enough that the control plane keeps its hold on this Instance's Session through a
@@ -154,7 +155,7 @@ async fn relaying_stderr(link: Arc<Link>, mut written: mpsc::UnboundedReceiver<S
 /// Redials for as long as the Instance lives: only a link that refuses this Instance, which it
 /// does once the Instance has been let go, ends it.
 async fn supervised(
-    link: &Link,
+    link: &Arc<Link>,
     stderr: &mpsc::UnboundedSender<String>,
     home: Option<&Path>,
     supervising: &mut Supervising,
@@ -200,7 +201,7 @@ async fn give_up(link: &Link, supervising: &mut Supervising, diagnostics: &dyn D
 }
 
 async fn attend(
-    link: &Link,
+    link: &Arc<Link>,
     stderr: &mpsc::UnboundedSender<String>,
     home: Option<&Path>,
     supervising: &mut Supervising,
@@ -245,8 +246,13 @@ async fn attend(
         let give_up_timer = until_given_up(link, supervising.carrying.is_some(), give_up_after);
         tokio::select! {
             delivered = instructions.next() => {
-                let Some(delivered) = delivered? else {
-                    return Ok(());
+                let delivered = match delivered? {
+                    None => return Ok(()),
+                    Some(Down::Read(asked)) => {
+                        answer(link, supervising.checkout.as_ref(), asked);
+                        continue;
+                    }
+                    Some(Down::Instruction(delivered)) => delivered,
                 };
                 supervising.cursor = Some(delivered.id.clone());
                 diagnostics.info(&format!(
@@ -288,6 +294,25 @@ async fn attend(
             }
         }
     }
+}
+
+/// Answered beside whatever the Session is doing, so a read never waits on a turn.
+fn answer(link: &Arc<Link>, checkout: Option<&Checkout>, asked: link::Asked) {
+    let link = Arc::clone(link);
+    let checkouts = files::Checkouts::of(checkout);
+    tokio::spawn(async move {
+        let answered = match asked.read {
+            Read::Files { path } => {
+                AnswerBody::Json(files::list(&checkouts, path.as_deref()).await)
+            }
+            Read::File { path, raw } => files::read(&checkouts, &path, raw).await,
+            Read::Unrecognized => AnswerBody::Json(Answer::Refused {
+                message: "this Instance's supervisor does not know that read".to_owned(),
+            }),
+        };
+        // An answer the link does not take is one the operator has already given up on.
+        let _ = link.answer(&asked.request, answered).await;
+    });
 }
 
 async fn report_work(

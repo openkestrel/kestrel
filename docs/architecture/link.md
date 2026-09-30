@@ -21,6 +21,7 @@ segment:
 | `GET` | `/credentials?session=` | Provider Credentials and Subscription Profile contents for a Session the Instance carries, decrypted for this request. |
 | `PATCH` | `/credentials?session=` | Hands back profile files the harness refreshed. |
 | `GET` | `/entries` | Pages the Workspace's Transcript. The supervisor does not currently call it. |
+| `POST` | `/answers/{request}` | The streamed answer to a read. `204` once the operator has taken it; `410` when nobody waits on it. |
 
 ## Live work reports
 
@@ -34,6 +35,24 @@ Every supervisor git command sets `GIT_OPTIONAL_LOCKS=0`.
 It holds reports with their arrival times only while the Instance has an open instruction stream.
 The operator also checks the supervisor's heartbeat freshness before serving a summary. The
 separate numbered `checkout` report remains durable and supplies the reaping gate only.
+
+## Reads
+
+An operator's read of an Instance's files goes down the Instance's stream as a transient `read`
+event with a request id and no event id: it is never stored and a reconnect never replays it. The
+supervisor answers each in its own task, so a working turn never holds one up, by POSTing to
+`/answers/{request}`: JSON for a listing, inline text or a refusal, or the raw bytes of a file.
+
+`live_read::Reads` belongs to the serve role and is where requests and answers meet. A read with no
+answer begun within 10 s, or on an Instance with no open stream, fails as "the Instance didn't
+answer". Identical reads in flight share one request, and a JSON answer up to 2 MiB is reused for
+5 s; raw bytes are piped through unbuffered and never shared. Nothing about a read is written to
+Store.
+
+The supervisor resolves `<repo>/<path>` through symlinks and refuses anything outside that
+repository's checkout (`files.rs`). A listing is one level, at most 5,000 entries, each marked
+tracked, untracked or ignored from `git ls-files`. Text up to 1 MiB is answered inline; a binary
+file, a larger one, or a `raw` read is streamed.
 
 ## A Session over the link
 

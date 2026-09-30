@@ -1,6 +1,7 @@
 mod api;
 mod corrective;
 mod exit;
+mod files;
 mod output;
 mod scope;
 mod sse;
@@ -559,6 +560,21 @@ enum WorkspaceCommand {
     List,
     #[command(alias = "status")]
     Work { workspace: String },
+    /// List one directory of a Workspace's live Instance, each entry marked tracked, untracked
+    /// or ignored; with no path, its repositories
+    #[command(alias = "ls")]
+    Files {
+        workspace: String,
+        /// `<repo>/<path>`
+        path: Option<String>,
+    },
+    /// Write a file in a Workspace's live Instance to standard output, byte for byte
+    #[command(alias = "cat")]
+    Read {
+        workspace: String,
+        /// `<repo>/<path>`
+        path: String,
+    },
     /// Show a Workspace
     Show {
         /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
@@ -656,7 +672,11 @@ async fn run() -> Result<()> {
     let presentation = Presentation::chosen(
         if matches!(
             &client.command,
-            Command::Workspace(WorkspaceCommand::Work { .. })
+            Command::Workspace(
+                WorkspaceCommand::Work { .. }
+                    | WorkspaceCommand::Files { .. }
+                    | WorkspaceCommand::Read { .. }
+            )
         ) {
             None
         } else {
@@ -1171,6 +1191,39 @@ async fn run() -> Result<()> {
                 ])
                 .await?;
             work::show(answer, client.json.is_some())?;
+        }
+        Command::Workspace(WorkspaceCommand::Files { workspace, path }) => {
+            let organization = scoping.resolve().await?.organization;
+            let path = path.unwrap_or_default();
+            let answer = api
+                .get_where(
+                    &[
+                        "organizations",
+                        &organization,
+                        "workspaces",
+                        &workspace,
+                        "files",
+                    ],
+                    &[("path", &path)],
+                )
+                .await?;
+            files::list(answer, client.json.is_some())?;
+        }
+        Command::Workspace(WorkspaceCommand::Read { workspace, path }) => {
+            let organization = scoping.resolve().await?.organization;
+            let response = api
+                .get_response(
+                    &[
+                        "organizations",
+                        &organization,
+                        "workspaces",
+                        &workspace,
+                        "file",
+                    ],
+                    &[("path", &path)],
+                )
+                .await?;
+            files::read(response, client.json.is_some()).await?;
         }
         Command::Workspace(WorkspaceCommand::Show { workspace }) => {
             let organization = scoping.resolve().await?.organization;

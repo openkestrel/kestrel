@@ -9,6 +9,7 @@ use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::{Client, Response, StatusCode, header};
 use serde::{Deserialize, Serialize};
 
+pub const ANSWERS: &str = "/link/instances/{instance}/answers/{request}";
 pub const CREDENTIALS: &str = "/link/instances/{instance}/credentials";
 pub const INSTRUCTIONS: &str = "/link/instances/{instance}/instructions";
 pub const REPORTS: &str = "/link/instances/{instance}/reports";
@@ -48,6 +49,83 @@ impl Instruction {
             Instruction::Unrecognized => "unrecognized",
         }
     }
+}
+
+/// A read of the Instance's checkouts. It carries no event id, so a reconnect never replays it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Asked {
+    pub request: String,
+    #[serde(flatten)]
+    pub read: Read,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "read", rename_all = "snake_case")]
+pub enum Read {
+    Files {
+        #[serde(default)]
+        path: Option<String>,
+    },
+    File {
+        path: String,
+        #[serde(default)]
+        raw: bool,
+    },
+    #[serde(other)]
+    Unrecognized,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "answer", rename_all = "snake_case")]
+pub enum Answer {
+    Listing {
+        path: String,
+        entries: Vec<Entry>,
+        total: u64,
+        truncated: bool,
+    },
+    Text {
+        path: String,
+        text: String,
+    },
+    Refused {
+        message: String,
+    },
+    Missing {
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Entry {
+    pub name: String,
+    pub kind: EntryKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git: Option<Tracking>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryKind {
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tracking {
+    Tracked,
+    Untracked,
+    Ignored,
+}
+
+pub enum AnswerBody {
+    Json(Answer),
+    Raw(reqwest::Body),
 }
 
 /// What to spawn for the Session, which may be another Agent's than the last Session's.
@@ -235,6 +313,12 @@ pub struct Credentials {
 #[derive(Serialize)]
 struct Refreshed<'a> {
     files: &'a BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Down {
+    Instruction(Delivered),
+    Read(Asked),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -437,6 +521,31 @@ impl Link {
         Ok(())
     }
 
+    pub async fn answer(&self, request: &str, body: AnswerBody) -> Result<(), Error> {
+        let request = utf8_percent_encode(request, SEGMENT).to_string();
+        let sending = self
+            .client
+            .post(self.url(ANSWERS).replace("{request}", &request))
+            .bearer_auth(&self.credential);
+        let sending = match body {
+            AnswerBody::Json(answer) => sending.json(&answer),
+            AnswerBody::Raw(raw) => sending
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .body(raw),
+        };
+
+        let response = refuse_if_declined(sending.send().await?).await?;
+        if !response.status().is_success() {
+            return Err(Error::Lost(format!(
+                "the link answered {} to the answer to a read",
+                response.status().as_u16()
+            )));
+        }
+        self.reached.touched();
+
+        Ok(())
+    }
+
     pub async fn open(&self, cursor: Option<&str>) -> Result<Instructions, Error> {
         let mut request = self
             .client
@@ -477,9 +586,18 @@ impl Link {
 }
 
 impl Instructions {
-    pub async fn next(&mut self) -> Result<Option<Delivered>, Error> {
+    pub async fn next(&mut self) -> Result<Option<Down>, Error> {
         loop {
             if let Some((id, data)) = self.take_frame() {
+                let Some(id) = id else {
+                    let asked = serde_json::from_str(&data).map_err(|error| {
+                        Error::Lost(format!(
+                            "the stream carried {data}, which is not a read: {error}"
+                        ))
+                    })?;
+                    self.reached.touched();
+                    return Ok(Some(Down::Read(asked)));
+                };
                 let Carried {
                     session,
                     instruction,
@@ -490,11 +608,11 @@ impl Instructions {
                 })?;
                 self.reached.touched();
 
-                return Ok(Some(Delivered {
+                return Ok(Some(Down::Instruction(Delivered {
                     id,
                     session,
                     instruction,
-                }));
+                })));
             }
 
             match self.response.chunk().await? {
@@ -505,25 +623,29 @@ impl Instructions {
     }
 
     /// A frame is everything up to a blank line; the keep-alive is a frame with only a comment.
-    fn take_frame(&mut self) -> Option<(String, String)> {
+    fn take_frame(&mut self) -> Option<(Option<String>, String)> {
         loop {
             let end = self.buffered.windows(2).position(|pair| pair == b"\n\n")?;
             let frame: Vec<u8> = self.buffered.drain(..end + 2).collect();
             let frame = String::from_utf8_lossy(&frame);
 
             let mut id = None;
+            let mut event = None;
             let mut data = String::new();
             for line in frame.lines() {
                 if let Some(carried) = line.strip_prefix("id:") {
                     id = Some(carried.trim().to_owned());
+                } else if let Some(carried) = line.strip_prefix("event:") {
+                    event = Some(carried.trim().to_owned());
                 } else if let Some(carried) = line.strip_prefix("data:") {
                     data.push_str(carried.trim());
                 }
             }
 
-            if let Some(id) = id
-                && !data.is_empty()
-            {
+            if data.is_empty() {
+                continue;
+            }
+            if id.is_some() || event.as_deref() == Some("read") {
                 return Some((id, data));
             }
         }
