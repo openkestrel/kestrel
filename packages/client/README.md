@@ -11,7 +11,7 @@ bun run build      # dist/client, which KESTREL_CLIENT_DIR names
 bun run typecheck
 bun run test       # the transport
 bun run e2e        # builds, then drives the built Client against `kestrel-control-plane serve`
-bun run check      # biome
+bun run check      # oxlint and oxfmt
 ```
 
 - **Types** are generated from `openapi/operator.json` by `@hey-api/openapi-ts` into

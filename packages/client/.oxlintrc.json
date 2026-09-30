@@ -1,0 +1,8 @@
+{
+	"$schema": "./node_modules/oxlint/configuration_schema.json",
+	"plugins": ["typescript", "unicorn", "oxc", "react", "jsx-a11y", "import", "vitest"],
+	"categories": {
+		"correctness": "error"
+	},
+	"ignorePatterns": ["src/routeTree.gen.ts", "src/operator/generated"]
+}
