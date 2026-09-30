@@ -596,7 +596,6 @@ impl Instructions {
     }
 
     /// A frame is everything up to a blank line; the keep-alive is a frame with only a comment.
-    /// A read is the one frame that carries no id.
     fn take_frame(&mut self) -> Option<(Option<String>, String)> {
         loop {
             let end = self.buffered.windows(2).position(|pair| pair == b"\n\n")?;

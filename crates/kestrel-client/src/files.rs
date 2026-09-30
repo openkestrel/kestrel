@@ -60,7 +60,6 @@ pub fn list(answer: Value, json: bool) -> Result<()> {
     Ok(out.flush()?)
 }
 
-/// The file's bytes as they are, whether the control plane answered them inline or raw.
 pub async fn read(mut response: Response, json: bool) -> Result<()> {
     let inline = response
         .headers()

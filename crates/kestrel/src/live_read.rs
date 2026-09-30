@@ -34,7 +34,6 @@ pub enum Read {
     },
 }
 
-/// Sent down an Instance's stream as a transient event: never stored, so never replayed.
 #[derive(Debug, Clone, Serialize)]
 pub struct Request {
     pub request: Uuid,
@@ -186,8 +185,6 @@ impl Reads {
         )
     }
 
-    /// `None` when no read by this id awaits an answer from this Instance. The receiver resolves
-    /// once the answer has been taken, or given up on.
     pub fn answer(
         &self,
         instance: &str,
@@ -315,7 +312,6 @@ fn answered(outcome: Outcome, raw: Option<Body>) -> Result<Answer, anyhow::Error
     }
 }
 
-/// Reads Store without its write lock and writes nothing anywhere: a read is never recorded.
 pub async fn read(
     store: &Store,
     reads: &Reads,
@@ -328,7 +324,7 @@ pub async fn read(
     let workspace = tx.workspaces().resolved(&organization, reference).await?;
     let Some(instance) = tx.workspaces().instance(workspace.id).await? else {
         return Err(Declined::Unacceptable(format!(
-            "the workspace {} has no Instance to read; its work is on the branch {}",
+            "the Workspace {} has no Instance to read; its work is on the branch {}",
             workspace.name, workspace.checkout.branch
         ))
         .into());

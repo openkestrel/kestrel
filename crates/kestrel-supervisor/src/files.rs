@@ -106,9 +106,7 @@ pub async fn read(checkouts: &Checkouts, path: &str, raw: bool) -> Answered {
     let file = match tokio::fs::File::open(&resolved.target).await {
         Ok(file) => file,
         Err(error) => {
-            return Answered::Json(Answer::Refused {
-                message: format!("{path} could not be read: {error}"),
-            });
+            return unreadable(&path, &error);
         }
     };
     if raw {
@@ -117,16 +115,12 @@ pub async fn read(checkouts: &Checkouts, path: &str, raw: bool) -> Answered {
 
     let mut held = Vec::new();
     if let Err(error) = file.take(INLINE + 1).read_to_end(&mut held).await {
-        return Answered::Json(Answer::Refused {
-            message: format!("{path} could not be read: {error}"),
-        });
+        return unreadable(&path, &error);
     }
     if held.len() as u64 > INLINE {
         return match tokio::fs::File::open(&resolved.target).await {
             Ok(file) => streamed(file),
-            Err(error) => Answered::Json(Answer::Refused {
-                message: format!("{path} could not be read: {error}"),
-            }),
+            Err(error) => unreadable(&path, &error),
         };
     }
     if held.contains(&0) {
@@ -136,6 +130,12 @@ pub async fn read(checkouts: &Checkouts, path: &str, raw: bool) -> Answered {
         Ok(text) => Answered::Json(Answer::Text { path, text }),
         Err(binary) => Answered::Raw(binary.into_bytes().into()),
     }
+}
+
+fn unreadable(path: &str, error: &std::io::Error) -> Answered {
+    Answered::Json(Answer::Refused {
+        message: format!("{path} could not be read: {error}"),
+    })
 }
 
 fn streamed(file: tokio::fs::File) -> Answered {
