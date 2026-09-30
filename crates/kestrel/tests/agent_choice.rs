@@ -344,7 +344,6 @@ async fn a_session_naming_another_agent_runs_it_where_the_workspaces_last_sessio
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let first = kestrel.post(workspace.id, "operator", "build it").await;
     let first = ended(&kestrel, first.id).await;
-    kestrel.supervisor_recorded_gone(&first).await;
 
     let second = kestrel.enqueue_session_as(workspace.id, "codex").await;
     let second = ended(&kestrel, second.id).await;
@@ -357,6 +356,7 @@ async fn a_session_naming_another_agent_runs_it_where_the_workspaces_last_sessio
     assert_eq!(second.worked_model.as_deref(), Some(OTHER_MODEL));
     assert!(first.instance.is_some());
     assert_eq!(second.instance, first.instance);
+    assert_eq!(second.supervisor, first.supervisor);
     let transcript = kestrel.transcript(workspace.id).await;
     let started: Vec<(SessionId, String)> = transcript
         .iter()

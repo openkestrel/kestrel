@@ -185,9 +185,11 @@ async fn the_active_session_limit_queues_excess_work_and_releases_it_as_sessions
     kestrel.teardown().await;
 }
 
+/// The supervisor outlives a control plane that goes away (ADR-0002), and a Session in flight is
+/// left to it and its lease rather than failed on the way out.
 #[cfg(unix)]
 #[tokio::test]
-async fn stopping_with_several_sessions_in_flight_ends_each_and_stops_their_supervisors() {
+async fn a_control_plane_that_stops_leaves_each_session_in_flight_to_its_supervisor() {
     let environment = Environment::executing("sleep 300");
     let kestrel = Kestrel::dispatching_up_to(environment.path(), "unused", 2).await;
     let first_workspace = a_workspace(&kestrel).await;
@@ -203,15 +205,19 @@ async fn stopping_with_several_sessions_in_flight_ends_each_and_stops_their_supe
     })
     .await;
 
-    let stopped = kestrel.teardown().await;
+    let stopped = kestrel.kill().await;
 
     for session in [first, second] {
-        let ended = stopped.session(session.id).await;
-        assert_eq!(ended.state, SessionState::Ended);
-        assert!(matches!(ended.exit, Some(Exit::Failed { .. })));
-        Environment::named(session.supervisor.as_deref().expect("a supervisor"))
-            .is_gone()
-            .await;
+        assert_eq!(
+            stopped.session(session.id).await.state,
+            SessionState::Working
+        );
+        assert!(
+            Environment::named(session.supervisor.as_deref().expect("a supervisor"))
+                .is_running(Duration::from_millis(200))
+                .await,
+            "the supervisor went with the control plane"
+        );
     }
 }
 
@@ -265,16 +271,19 @@ async fn a_session_that_reaches_an_instance_starts_and_ends_in_the_transcript() 
 }
 
 #[tokio::test]
-async fn a_finished_sessions_supervisor_is_stopped_and_its_instance_kept_for_the_workspace() {
+async fn a_finished_sessions_supervisor_stays_with_the_instance_kept_for_the_workspace() {
     let kestrel = Kestrel::dispatching(supervisor::binary()).await;
     let workspace = a_workspace(&kestrel).await;
 
     let session = kestrel.enqueue_session(workspace.id).await;
     let ended = ended(&kestrel, session.id).await;
 
-    Environment::named(ended.supervisor.as_deref().expect("a supervisor"))
-        .is_gone()
-        .await;
+    assert!(
+        Environment::named(ended.supervisor.as_deref().expect("a supervisor"))
+            .is_running(Duration::from_millis(500))
+            .await,
+        "the supervisor went with the session"
+    );
     let instance = ended.instance.expect("an instance");
     assert_eq!(
         kestrel.instance(workspace.id).await.as_ref(),
@@ -546,8 +555,6 @@ fn leaving_work_behind() -> Environment {
     ))
 }
 
-/// The slot is held until the last Session's supervisor is stopped, a moment after the Session
-/// ends.
 async fn enqueued_once_free(kestrel: &Kestrel, workspace: &Workspace) -> Session {
     let deadline = tokio::time::Instant::now() + PATIENCE;
 
@@ -592,7 +599,7 @@ async fn a_later_session_finds_the_checkout_exactly_as_the_session_before_it_lef
 
 #[cfg(unix)]
 #[tokio::test]
-async fn each_session_has_a_supervisor_of_its_own_and_leaves_no_process_to_the_next() {
+async fn a_workspaces_sessions_share_one_supervisor_and_leave_no_harness_process_to_the_next() {
     let harness = leaving_work_behind();
     let kestrel = noted(&harness, 1).await;
     let workspace = a_workspace(&kestrel).await;
@@ -602,14 +609,13 @@ async fn each_session_has_a_supervisor_of_its_own_and_leaves_no_process_to_the_n
     Environment::process(&harness.wrote("lingering"))
         .is_gone()
         .await;
-    let first_supervisor = first.supervisor.expect("a supervisor");
-    Environment::named(&first_supervisor).is_gone().await;
 
     let second = enqueued_once_free(&kestrel, &workspace).await;
     let second = ended(&kestrel, second.id).await;
 
     assert_eq!(first.instance, second.instance);
-    assert_ne!(Some(first_supervisor), second.supervisor);
+    assert!(first.supervisor.is_some());
+    assert_eq!(first.supervisor, second.supervisor);
 
     kestrel.teardown().await;
 }
@@ -623,9 +629,6 @@ async fn a_session_whose_instance_is_gone_fails_saying_so_and_the_next_starts_fr
 
     let first = kestrel.enqueue_session(workspace.id).await;
     let first = ended(&kestrel, first.id).await;
-    Environment::named(first.supervisor.as_deref().expect("a supervisor"))
-        .is_gone()
-        .await;
     let lost = first.instance.clone().expect("an instance");
     std::fs::remove_dir_all(Environment::root_of(&lost)).expect("the instance should go");
 
@@ -645,6 +648,10 @@ async fn a_session_whose_instance_is_gone_fails_saying_so_and_the_next_starts_fr
     );
     assert_eq!(second.started_at, None);
     assert_eq!(kestrel.instance(workspace.id).await, None);
+    // Forgotten with its Instance, so the link refuses it and it leaves.
+    Environment::named(first.supervisor.as_deref().expect("a supervisor"))
+        .is_gone()
+        .await;
 
     let third = enqueued_once_free(&kestrel, &workspace).await;
     let third = ended(&kestrel, third.id).await;
@@ -655,9 +662,6 @@ async fn a_session_whose_instance_is_gone_fails_saying_so_and_the_next_starts_fr
         "fresh\nfresh",
         "the session after a lost instance found work that was lost with it"
     );
-    Environment::named(third.supervisor.as_deref().expect("a supervisor"))
-        .is_gone()
-        .await;
 
     kestrel.teardown().await;
 }
@@ -744,13 +748,14 @@ async fn a_supervisor_that_ends_without_saying_how_the_session_went_leaves_it_fa
 async fn a_supervisor_that_reports_its_session_failed_ends_it_failed() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, credential) = kestrel.dispatch_session(workspace.id).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
 
     Link::to(&kestrel.link())
         .report(
-            session.id,
-            Some(&credential),
+            &on.instance,
+            Some(&on.credential),
             &Reported {
+                session: Some(session.id),
                 seq: Some(1),
                 report: Report::Finished {
                     exit: Exit::Failed {
@@ -783,30 +788,6 @@ async fn a_supervisor_that_reports_its_session_failed_ends_it_failed() {
     );
 
     kestrel.teardown().await;
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn a_session_still_in_flight_when_the_control_plane_stops_ends_and_its_supervisor_is_stopped()
-{
-    let environment = Environment::executing("sleep 300");
-    let kestrel = Kestrel::dispatching(environment.path()).await;
-    let workspace = a_workspace(&kestrel).await;
-
-    let session = kestrel.enqueue_session(workspace.id).await;
-    let in_flight = until(&kestrel, session.id, "reached a supervisor", |session| {
-        session.supervisor.is_some() && session.state == SessionState::Working
-    })
-    .await;
-
-    let stopped = kestrel.teardown().await;
-
-    let ended = stopped.session(session.id).await;
-    assert_eq!(ended.state, SessionState::Ended);
-    assert!(matches!(ended.exit, Some(Exit::Failed { .. })));
-    Environment::named(in_flight.supervisor.as_deref().expect("a supervisor"))
-        .is_gone()
-        .await;
 }
 
 #[tokio::test]
@@ -843,7 +824,7 @@ async fn a_queued_session_is_claimed_once_however_many_claimants_ask_at_once() {
     let claimed: Vec<SessionId> = [first, second]
         .into_iter()
         .flatten()
-        .map(|claimed| claimed.session.id)
+        .map(|claimed| claimed.id)
         .collect();
     assert_eq!(claimed, vec![session.id]);
 
@@ -854,7 +835,7 @@ async fn a_queued_session_is_claimed_once_however_many_claimants_ask_at_once() {
 async fn a_session_being_executed_is_never_claimed_again() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
 
     assert_eq!(
         kestrel.session(session.id).await.state,
@@ -872,7 +853,7 @@ async fn a_session_being_executed_is_never_claimed_again() {
 async fn a_session_that_ended_is_never_claimed_again() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
 
     kestrel.complete_session(&session).await;
 

@@ -39,26 +39,20 @@ impl Link {
         }
     }
 
-    pub async fn instructions(
-        &self,
-        session: SessionId,
-        credential: Option<&Secret>,
-        cursor: Option<i64>,
-    ) -> Response {
-        self.instructions_for(&session.to_string(), credential, cursor)
-            .await
+    /// The Instance's name as one path segment, the way a supervisor dials it.
+    fn at(&self, instance: &str, path: &str) -> String {
+        let instance = instance.replace('/', "%2F");
+
+        format!("{}/link/instances/{instance}/{path}", self.base)
     }
 
-    pub async fn instructions_for(
+    pub async fn instructions(
         &self,
-        session: &str,
+        instance: &str,
         credential: Option<&Secret>,
         cursor: Option<i64>,
     ) -> Response {
-        let mut request = self.client.get(format!(
-            "{}/link/sessions/{session}/instructions",
-            self.base
-        ));
+        let mut request = self.client.get(self.at(instance, "instructions"));
         if let Some(credential) = credential {
             request = request.bearer_auth(credential.as_str());
         }
@@ -69,13 +63,8 @@ impl Link {
         request.send().await.expect("the link should answer")
     }
 
-    pub async fn open(
-        &self,
-        session: SessionId,
-        credential: &Secret,
-        cursor: Option<i64>,
-    ) -> Events {
-        let response = self.instructions(session, Some(credential), cursor).await;
+    pub async fn open(&self, instance: &str, credential: &Secret, cursor: Option<i64>) -> Events {
+        let response = self.instructions(instance, Some(credential), cursor).await;
         assert_eq!(
             response.status(),
             StatusCode::OK,
@@ -99,7 +88,7 @@ impl Link {
     /// was handed it would give it back.
     pub async fn entries(
         &self,
-        session: SessionId,
+        instance: &str,
         credential: Option<&Secret>,
         cursor: Option<&str>,
         window: Option<usize>,
@@ -114,10 +103,9 @@ impl Link {
             false => format!("?{}", asked.join("&")),
         };
 
-        let mut request = self.client.get(format!(
-            "{}/link/sessions/{session}/entries{query}",
-            self.base
-        ));
+        let mut request = self
+            .client
+            .get(format!("{}{query}", self.at(instance, "entries")));
         if let Some(credential) = credential {
             request = request.bearer_auth(credential.as_str());
         }
@@ -125,10 +113,16 @@ impl Link {
         request.send().await.expect("the link should answer")
     }
 
-    pub async fn credentials(&self, session: SessionId, credential: Option<&Secret>) -> Response {
-        let mut request = self
-            .client
-            .get(format!("{}/link/sessions/{session}/credentials", self.base));
+    pub async fn credentials(
+        &self,
+        instance: &str,
+        session: SessionId,
+        credential: Option<&Secret>,
+    ) -> Response {
+        let mut request = self.client.get(format!(
+            "{}?session={session}",
+            self.at(instance, "credentials")
+        ));
         if let Some(credential) = credential {
             request = request.bearer_auth(credential.as_str());
         }
@@ -138,6 +132,7 @@ impl Link {
 
     pub async fn refresh(
         &self,
+        instance: &str,
         session: SessionId,
         credential: &Secret,
         files: &[(&str, &str)],
@@ -148,7 +143,10 @@ impl Link {
             .collect();
 
         self.client
-            .patch(format!("{}/link/sessions/{session}/credentials", self.base))
+            .patch(format!(
+                "{}?session={session}",
+                self.at(instance, "credentials")
+            ))
             .bearer_auth(credential.as_str())
             .json(&serde_json::json!({ "files": files }))
             .send()
@@ -158,12 +156,12 @@ impl Link {
 
     pub async fn report(
         &self,
-        session: SessionId,
+        instance: &str,
         credential: Option<&Secret>,
         reported: &Reported,
     ) -> Response {
         self.report_body(
-            session,
+            instance,
             credential,
             &serde_json::to_value(reported).expect("a report"),
         )
@@ -174,14 +172,11 @@ impl Link {
     /// hold the link to what `openapi/link.json` says it accepts.
     pub async fn report_body(
         &self,
-        session: SessionId,
+        instance: &str,
         credential: Option<&Secret>,
         body: &serde_json::Value,
     ) -> Response {
-        let mut request = self
-            .client
-            .post(format!("{}/link/sessions/{session}/reports", self.base))
-            .json(body);
+        let mut request = self.client.post(self.at(instance, "reports")).json(body);
         if let Some(credential) = credential {
             request = request.bearer_auth(credential.as_str());
         }

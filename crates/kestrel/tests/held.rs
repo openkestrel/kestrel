@@ -65,8 +65,7 @@ async fn dispatching_to(harness: &Environment) -> Kestrel {
     .await
 }
 
-/// Ended, and with its supervisor gone, so nothing but what its checkout holds keeps its Workspace.
-/// A Session that answers rather than failing waits between turns until something stops it
+/// Ended, so nothing but what its checkout holds keeps its Workspace. A Session that answers rather than failing waits between turns until something stops it
 /// (ADR-0024), so this stops it itself once it has answered, the way a person or a seal would.
 async fn over(kestrel: &Kestrel, workspace: &Workspace) -> Session {
     let session = kestrel.enqueue_session(workspace.id).await;
@@ -78,7 +77,7 @@ async fn over(kestrel: &Kestrel, workspace: &Workspace) -> Session {
     let deadline = tokio::time::Instant::now() + PATIENCE;
     loop {
         let ended = kestrel.session(session.id).await;
-        if ended.state == SessionState::Ended && kestrel.supervisors_to_stop().await.is_empty() {
+        if ended.state == SessionState::Ended {
             return ended;
         }
         assert!(

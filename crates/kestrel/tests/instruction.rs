@@ -29,20 +29,16 @@ async fn prompted(kestrel: &Kestrel) -> String {
         .claim_session()
         .await
         .expect("a session should be queued to claim");
-    let mut supervisor = Supervisor::provision_playing(
-        &kestrel.link(),
-        claimed.session.id,
-        &claimed.credential,
-        Script::Echoes,
-    );
+    let on = kestrel.on_the_link(&claimed).await;
+    let mut supervisor = Supervisor::provision_playing(&kestrel.link(), &on, Script::Echoes);
     supervisor.wait_until_it_says("reported connected").await;
-    kestrel.start(&claimed.session).await;
+    kestrel.start(&claimed, supervisor.harness()).await;
     supervisor.wait_until_it_says("reported answered").await;
-    kestrel.stop_session(claimed.session.id).await;
-    assert!(supervisor.finishes().await.success());
+    kestrel.stop_session(claimed.id).await;
+    supervisor.lets_go_of(claimed.id).await;
 
     kestrel
-        .transcript(claimed.session.workspace)
+        .transcript(claimed.workspace)
         .await
         .into_iter()
         .find_map(|recorded| match recorded.entry {
@@ -87,7 +83,7 @@ async fn a_session_with_neither_a_brief_nor_a_starting_message_fails_rather_than
         .await;
 
     let refusal = kestrel
-        .try_start(&session)
+        .try_start(&session, support::harness())
         .await
         .expect_err("a session with no instruction cannot start");
 

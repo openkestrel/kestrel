@@ -257,12 +257,12 @@ fn an_operation_outside_the_filter_is_refused_and_the_refusal_says_what_it_was()
 }
 
 /// Every request the driver makes goes through the filter, so a Session that reaches an Instance
-/// and leaves no supervisor behind is the whole list a Session makes exercised. The Instance is
-/// provisioned from this checkout's own image onto this checkout's own link network, so it
-/// can neither find another checkout's control plane nor be found by it.
+/// and a release that destroys it is the whole list exercised. The Instance is provisioned from
+/// this checkout's own image onto this checkout's own link network, so it can neither find another
+/// checkout's control plane nor be found by it.
 #[tokio::test]
 #[ignore = "builds images and brings a stack up"]
-async fn a_session_provisions_an_instance_and_stops_its_supervisor_through_the_filter() {
+async fn a_session_provisions_an_instance_and_releasing_it_destroys_it_through_the_filter() {
     let stack = Stack::up();
     let namespace = compose::namespace_for(&docker::repository());
     let workspace = a_workspace(&stack);
@@ -290,22 +290,20 @@ async fn a_session_provisions_an_instance_and_stops_its_supervisor_through_the_f
             .then_some(())
     });
 
-    // The credential this stack holds reaches no provider, so what ends this Session is the control
-    // plane stopping under it rather than anything the agent did.
-    stack.comes_back();
-
-    let went = listed(&stack, &session).exit;
+    // The credential this stack holds reaches no provider, so the agent ends this Session.
+    let went = compose::until("the session to end", || {
+        let exit = listed(&stack, &session).exit;
+        (!exit.is_null()).then_some(exit)
+    });
     assert_eq!(went["status"], "failed");
-    assert_eq!(
-        went["because"],
-        "the control plane stopped while this session was in flight"
-    );
     let left = container.processes();
     assert!(
-        !left.contains("kestrel-supervisor"),
-        "the session left its supervisor on its instance: {left}"
+        left.contains("kestrel-supervisor"),
+        "the supervisor went with its session: {left}"
     );
-    container.destroy();
+
+    stack.ran(&["instance", "release", &workspace]);
+    container.is_gone().await;
 }
 
 #[test]

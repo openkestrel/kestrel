@@ -5,8 +5,6 @@ mod support;
 
 use std::time::Duration;
 
-use jiff::{SignedDuration, Timestamp};
-
 use kestrel::domain::{SessionId, SessionState, Workspace};
 use reqwest::StatusCode;
 use reqwest::header::RETRY_AFTER;
@@ -80,8 +78,9 @@ async fn a_database_locked_past_the_busy_timeout_stops_neither_the_control_plane
     let working = kestrel.enqueue_session(first.id).await;
     in_flight(&kestrel, working.id).await;
 
-    let credential = kestrel
-        .issue_credential(&working, Timestamp::now() + SignedDuration::from_mins(5))
+    let kept = a_workspace(&kestrel, "initech").await;
+    let on = kestrel
+        .keep_an_instance(kept.id, "local-exec/kestrel-kept")
         .await;
 
     let answers = kestrel
@@ -97,12 +96,14 @@ async fn a_database_locked_past_the_busy_timeout_stops_neither_the_control_plane
                     ))
                     .send(),
                 client
-                    .get(format!(
+                    .post(format!(
                         "{}{}",
                         kestrel.link(),
-                        kestrel::link::CREDENTIALS.replace("{session}", &working.id.to_string())
+                        kestrel::link::REPORTS
+                            .replace("{instance}", &on.instance.replace('/', "%2F"))
                     ))
-                    .bearer_auth(credential.as_str())
+                    .bearer_auth(on.credential.as_str())
+                    .json(&serde_json::json!({"kind": "heartbeat"}))
                     .send(),
             );
             // Every pass of the dispatch loop has run into the lock by the time this is over.

@@ -1,5 +1,5 @@
 //! The same artifact `kestrel-env` ships, on a local-exec Instance, dialling out over the same
-//! link an operator would.
+//! link the work role's would.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use kestrel::compute::{Driver, Exited, Instance, LocalExec, Supervisor as Supervising};
 use kestrel::domain::SessionId;
-use kestrel::link::credential::Secret;
+use kestrel::link::Harness;
 
 use super::diagnostics::Diagnostics;
-use super::{built, scripted_agent};
+use super::{OnTheLink, built, scripted_agent};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 
@@ -28,55 +28,55 @@ pub struct Supervisor {
     instance: Instance,
     supervising: Supervising,
     diagnostics: Diagnostics,
+    harness: String,
+    model: String,
 }
 
 impl Supervisor {
-    pub fn provision(link: &str, session: SessionId, credential: &Secret) -> Self {
-        Self::provision_playing(link, session, credential, scripted_agent::Script::Speaks)
+    pub fn provision(link: &str, on: &OnTheLink) -> Self {
+        Self::provision_playing(link, on, scripted_agent::Script::Speaks)
     }
 
-    pub fn provision_playing(
-        link: &str,
-        session: SessionId,
-        credential: &Secret,
-        script: scripted_agent::Script,
-    ) -> Self {
-        Self::provision_selecting(link, session, credential, script, "")
+    pub fn provision_playing(link: &str, on: &OnTheLink, script: scripted_agent::Script) -> Self {
+        Self::provision_selecting(link, on, script, "")
     }
 
     pub fn provision_selecting(
         link: &str,
-        session: SessionId,
-        credential: &Secret,
+        on: &OnTheLink,
         script: scripted_agent::Script,
         model: &str,
     ) -> Self {
         let harness = scripted_agent::playing(script);
 
-        Self::provision_running(link, session, credential, &harness, model, None)
+        Self::provision_running(link, on, &harness, model, None)
     }
 
-    /// An Environment told how long its Session's lease is held out for, so a control plane that
-    /// is gone for good can be given up on. `None` is a supervisor with no bound to derive.
+    /// A supervisor told how long a Session's lease is held out for, so a control plane that is
+    /// gone past it can be given up on. `None` is a supervisor with no bound to derive. The harness
+    /// and model are what `harness` hands the Session's `start` to carry.
     pub fn provision_running(
         link: &str,
-        session: SessionId,
-        credential: &Secret,
+        on: &OnTheLink,
         harness: &str,
         model: &str,
         lease: Option<Duration>,
     ) -> Self {
-        let mut instance = driver()
-            .provision(session)
-            .expect("the instance should provision");
-        let session = session.to_string();
+        let mut instance = match driver()
+            .resume(&on.instance)
+            .expect("the instance should resume")
+        {
+            Some(instance) => instance,
+            None => driver()
+                .provision(on.provisioned_by)
+                .expect("the instance should provision"),
+        };
+        assert_eq!(instance.name(), on.instance);
         let lease = lease.map(|lease| lease.as_secs().to_string());
         let mut variables = vec![
             ("KESTREL_LINK", link),
-            ("KESTREL_SESSION", session.as_str()),
-            ("KESTREL_SESSION_CREDENTIAL", credential.as_str()),
-            ("KESTREL_HARNESS_COMMAND", harness),
-            ("KESTREL_AGENT_MODEL", model),
+            ("KESTREL_INSTANCE", on.instance.as_str()),
+            ("KESTREL_INSTANCE_CREDENTIAL", on.credential.as_str()),
         ];
         if let Some(lease) = lease.as_deref() {
             variables.push(("KESTREL_LEASE", lease));
@@ -93,7 +93,25 @@ impl Supervisor {
             instance,
             supervising,
             diagnostics: Diagnostics::pumped("the supervisor", pipe),
+            harness: harness.to_owned(),
+            model: model.to_owned(),
         }
+    }
+
+    /// What a Session's `start` carries for this supervisor to spawn.
+    pub fn harness(&self) -> Harness {
+        Harness {
+            command: self.harness.clone(),
+            auth: None,
+            model: (!self.model.is_empty()).then(|| self.model.clone()),
+        }
+    }
+
+    /// Once the supervisor has ended the Session's harness, for whatever reason; it stays on the
+    /// link for the Instance.
+    pub async fn lets_go_of(&mut self, session: SessionId) {
+        self.wait_until_it_says(&format!("let the session {session} go"))
+            .await;
     }
 
     pub async fn wait_until_it_says(&mut self, what: &str) {
@@ -132,13 +150,12 @@ impl Supervisor {
 
     pub fn destroy(self) {}
 
-    /// Signals nothing: a supervisor that reported itself finished is on its way out, and
-    /// reaping it is the whole of the cleanup left.
-    pub async fn finishes(mut self) -> Exited {
-        self.exits().await
+    pub fn instance(&self) -> &str {
+        self.instance.name()
     }
 }
 
+/// The supervisor outlives any Session, so it goes with its Instance.
 impl Drop for Supervisor {
     fn drop(&mut self) {
         let _ = driver().destroy_named(self.instance.name());

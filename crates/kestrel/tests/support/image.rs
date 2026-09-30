@@ -6,12 +6,9 @@ use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use kestrel::domain::SessionId;
-use kestrel::link::credential::Secret;
-
 use super::diagnostics::Diagnostics;
 use super::docker::{self, Ran, removed};
-use super::images;
+use super::{OnTheLink, images};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 
@@ -258,9 +255,9 @@ pub struct Environment {
 }
 
 impl Environment {
-    pub fn provision(link: &str, session: SessionId, credential: &Secret) -> Self {
+    pub fn provision(link: &str, on: &OnTheLink) -> Self {
         let image = built();
-        let name = format!("kestrel-env-{session}");
+        let name = format!("kestrel-env-{}", on.provisioned_by);
         removed(&name);
 
         let mut running = Command::new("docker")
@@ -273,11 +270,9 @@ impl Environment {
                 "--env",
                 &format!("KESTREL_LINK={link}"),
                 "--env",
-                &format!("KESTREL_SESSION={session}"),
+                &format!("KESTREL_INSTANCE={}", on.instance),
                 "--env",
-                &format!("KESTREL_SESSION_CREDENTIAL={}", credential.as_str()),
-                "--env",
-                "KESTREL_HARNESS_COMMAND=opencode acp",
+                &format!("KESTREL_INSTANCE_CREDENTIAL={}", on.credential.as_str()),
                 image,
             ])
             .stdin(Stdio::null())

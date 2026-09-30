@@ -165,7 +165,7 @@ async fn posting_a_message_into_an_idle_workspace_enqueues_its_next_session() {
 async fn a_message_arriving_during_a_session_waits_for_that_session_to_end() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (active, _) = kestrel.dispatch_session(workspace.id).await;
+    let active = kestrel.dispatch_session(workspace.id).await;
     let before: Vec<Entry> = kestrel
         .transcript(workspace.id)
         .await
@@ -229,36 +229,10 @@ async fn a_message_arriving_during_a_session_waits_for_that_session_to_end() {
 }
 
 #[tokio::test]
-async fn cleanup_left_by_a_stopped_worker_is_found_before_the_workspace_continues() {
-    let kestrel = Kestrel::boot().await;
-    let workspace = a_workspace(&kestrel).await;
-    let (active, _) = kestrel.dispatch_session(workspace.id).await;
-    kestrel
-        .supervised(&active, "local-exec/2147483647@kestrel-missing")
-        .await;
-    assert!(
-        kestrel
-            .post_while_busy(workspace.id, "operator", "continue after cleanup")
-            .await
-            .is_none()
-    );
-
-    kestrel.complete_session(&active).await;
-    assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
-    let reapable = kestrel.supervisors_to_stop().await;
-    assert_eq!(reapable.len(), 1);
-    assert_eq!(reapable[0].0.id, active.id);
-
-    kestrel.supervisor_gone(&active).await;
-    assert_eq!(kestrel.sessions(workspace.id).await.len(), 2);
-    kestrel.teardown().await;
-}
-
-#[tokio::test]
 async fn a_cold_session_is_seeded_with_every_page_of_earlier_context() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (first, _) = kestrel.dispatch_session(workspace.id).await;
+    let first = kestrel.dispatch_session(workspace.id).await;
 
     for index in 0..105 {
         let message = match index {
@@ -276,16 +250,13 @@ async fn a_cold_session_is_seeded_with_every_page_of_earlier_context() {
         .claim_session()
         .await
         .expect("the second session should claim");
-    assert_eq!(claimed.session.id, second.id);
+    assert_eq!(claimed.id, second.id);
 
-    let mut supervisor = Supervisor::provision_playing(
-        &kestrel.link(),
-        second.id,
-        &claimed.credential,
-        Script::Recalls,
-    );
+    let on = kestrel.on_the_link(&claimed).await;
+
+    let mut supervisor = Supervisor::provision_playing(&kestrel.link(), &on, Script::Recalls);
     supervisor.wait_until_it_says("reported connected").await;
-    kestrel.start(&second).await;
+    kestrel.start(&second, supervisor.harness()).await;
     supervisor.wait_until_it_says("reported answered").await;
     kestrel.stop_session(second.id).await;
 
@@ -302,13 +273,12 @@ async fn a_cold_session_is_seeded_with_every_page_of_earlier_context() {
             })
     );
 
-    assert!(supervisor.finishes().await.success());
+    supervisor.lets_go_of(second.id).await;
     kestrel.teardown().await;
 }
 
 #[tokio::test]
-async fn the_second_session_starts_a_fresh_supervisor_on_the_same_instance_after_the_first_is_gone()
-{
+async fn the_second_session_runs_through_the_supervisor_the_first_left_on_the_instance() {
     let kestrel = Kestrel::dispatching_to(
         support::supervisor::binary(),
         &support::scripted_agent::playing(Script::Lingers),
@@ -331,22 +301,15 @@ async fn the_second_session_starts_a_fresh_supervisor_on_the_same_instance_after
     kestrel.stop_session(first.id).await;
     let first = kestrel.session(first.id).await;
     let first_supervisor = first.supervisor.as_deref().expect("a supervisor");
-    support::environment::Environment::named(first_supervisor)
-        .is_gone()
-        .await;
-    kestrel.supervisor_recorded_gone(&first).await;
 
     let second = kestrel.post(workspace.id, "operator", LAST_MEMORY).await;
     kestrel.answered(second.id, 1).await;
     let second = kestrel.session(second.id).await;
     let second_supervisor = second.supervisor.as_deref().expect("a supervisor");
 
-    assert_ne!(first_supervisor, second_supervisor);
+    assert_eq!(first_supervisor, second_supervisor);
     assert_eq!(first.instance, second.instance);
     kestrel.stop_session(second.id).await;
-    support::environment::Environment::named(second_supervisor)
-        .is_gone()
-        .await;
 
     kestrel.teardown().await;
 }
@@ -365,8 +328,7 @@ async fn a_github_comment_enqueues_a_second_session_in_the_originating_workspace
     let first = kestrel
         .claim_session()
         .await
-        .expect("the first session should claim")
-        .session;
+        .expect("the first session should claim");
 
     let comments_before = stub
         .requests()
@@ -432,8 +394,7 @@ async fn comments_arriving_during_a_turn_wait_in_order_with_their_authors() {
     let first = kestrel
         .claim_session()
         .await
-        .expect("the first session should claim")
-        .session;
+        .expect("the first session should claim");
 
     let comments_before = stub
         .requests()
@@ -601,8 +562,7 @@ async fn a_comment_on_a_sealed_workspace_feeds_the_open_one_holding_its_correlat
     let first = kestrel
         .claim_session()
         .await
-        .expect("the first session should claim")
-        .session;
+        .expect("the first session should claim");
     kestrel.complete_session(&first).await;
     kestrel.seal_workspace(sealed.id).await;
 
@@ -726,8 +686,7 @@ async fn a_remark_from_a_stranger_does_not_feed_an_open_workspace() {
     let session = kestrel
         .claim_session()
         .await
-        .expect("the command should have opened a session")
-        .session;
+        .expect("the command should have opened a session");
     a_remark_from(&stub, "a-stranger", "please also change the parser");
 
     the_remark_was_recorded(&kestrel, "please also change the parser").await;
@@ -758,8 +717,7 @@ async fn a_remark_from_the_trigger_actor_feeds_an_open_workspace() {
     let session = kestrel
         .claim_session()
         .await
-        .expect("the command should have opened a session")
-        .session;
+        .expect("the command should have opened a session");
     a_remark_from(&stub, MAINTAINER, "please also change the parser");
 
     pending_arrived(&kestrel, workspace.id).await;

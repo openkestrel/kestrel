@@ -244,17 +244,13 @@ async fn prompted(kestrel: &Kestrel, workspace: &Workspace) -> String {
         .claim_session()
         .await
         .expect("the firing's session should claim");
-    let mut supervisor = Supervisor::provision_playing(
-        &kestrel.link(),
-        claimed.session.id,
-        &claimed.credential,
-        Script::Echoes,
-    );
+    let on = kestrel.on_the_link(&claimed).await;
+    let mut supervisor = Supervisor::provision_playing(&kestrel.link(), &on, Script::Echoes);
     supervisor.wait_until_it_says("reported connected").await;
-    kestrel.start(&claimed.session).await;
+    kestrel.start(&claimed, supervisor.harness()).await;
     supervisor.wait_until_it_says("reported answered").await;
-    kestrel.stop_session(claimed.session.id).await;
-    assert!(supervisor.finishes().await.success());
+    kestrel.stop_session(claimed.id).await;
+    supervisor.lets_go_of(claimed.id).await;
 
     kestrel
         .transcript(workspace.id)
@@ -523,8 +519,7 @@ async fn a_correlation_miss_opens_a_continuation_of_the_sealed_workspace() {
     let active = kestrel
         .claim_session()
         .await
-        .expect("the firing enqueued a session")
-        .session;
+        .expect("the firing enqueued a session");
     kestrel.complete_session(&active).await;
     kestrel.seal_workspace(sealed.id).await;
 
@@ -587,8 +582,7 @@ async fn an_ignoring_trigger_still_continues_a_sealed_workspace_it_correlates_to
     let active = kestrel
         .claim_session()
         .await
-        .expect("the firing enqueued a session")
-        .session;
+        .expect("the firing enqueued a session");
     kestrel.complete_session(&active).await;
     kestrel.seal_workspace(sealed.id).await;
 
@@ -629,8 +623,7 @@ async fn correlated_events_arriving_during_a_session_drain_into_one_entry_and_on
     let active = kestrel
         .claim_session()
         .await
-        .expect("the firing enqueued a session")
-        .session;
+        .expect("the firing enqueued a session");
     stub.script(github_stub::page(&[
         github_stub::labelled(9, 43, READY),
         github_stub::labelled(8, 43, READY),

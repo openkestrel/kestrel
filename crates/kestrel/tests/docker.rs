@@ -82,15 +82,14 @@ async fn ended(kestrel: &Kestrel, session: SessionId) -> Session {
     kestrel.after_one_turn_within(session, PATIENCE).await
 }
 
-/// A stopped Session's exit is recorded before its supervisor has actually left (ADR-0024), so its
-/// container is given a moment to catch up before this looks for what it left behind.
-async fn without_its_processes(container: &Container) -> String {
+/// A stopped Session's exit is recorded before its supervisor has ended its harness (ADR-0024), so
+/// the container is given a moment to catch up before this looks for what the Session left behind.
+async fn without_its_harness(container: &Container) -> String {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
 
     loop {
         let left = container.processes();
-        let clean =
-            !left.contains("kestrel-supervisor") && !left.contains("kestrel-scripted-agent");
+        let clean = !left.contains("kestrel-scripted-agent");
         if clean || tokio::time::Instant::now() >= deadline {
             return left;
         }
@@ -105,9 +104,6 @@ async fn started(kestrel: &Kestrel, session: SessionId) -> Session {
     .await
 }
 
-/// A Session's exit is recorded as soon as it is decided, before its supervisor is confirmed gone;
-/// a workspace does not free its slot until that confirmation lands, which for a dead container
-/// can take a reconciliation pass rather than the commit that ended the Session (ADR-0002).
 async fn enqueue_when_free(kestrel: &Kestrel, workspace: WorkspaceId) -> Session {
     let deadline = tokio::time::Instant::now() + PATIENCE;
 
@@ -156,7 +152,7 @@ async fn the_scripted_session_ends_the_same_way_in_a_container_as_it_does_in_a_p
 
 #[tokio::test]
 #[ignore = "builds and runs the kestrel-env image"]
-async fn an_instance_is_a_container_that_outlives_its_session_but_not_its_supervisor() {
+async fn an_instance_is_a_container_whose_supervisor_outlives_its_session_and_goes_with_it() {
     let kestrel = working(Script::Speaks).await;
     let workspace = a_workspace(&kestrel).await;
 
@@ -170,14 +166,20 @@ async fn an_instance_is_a_container_that_outlives_its_session_but_not_its_superv
         "a session names the container it executed on"
     );
     let container = Container::named(instance);
-    let left = without_its_processes(&container).await;
+    let left = without_its_harness(&container).await;
     assert!(
-        !left.contains("kestrel-supervisor") && !left.contains("kestrel-scripted-agent"),
-        "the session left processes on its instance: {left}"
+        !left.contains("kestrel-scripted-agent"),
+        "the session left its harness on its instance: {left}"
+    );
+    assert!(
+        left.contains("kestrel-supervisor"),
+        "the supervisor went with its session: {left}"
     );
 
-    kestrel.teardown().await;
+    kestrel.release_instance(workspace.id).await;
     container.is_gone().await;
+
+    kestrel.teardown().await;
 }
 
 #[tokio::test]
@@ -258,8 +260,8 @@ async fn a_projects_repositories_and_its_branch_are_in_the_container() {
 }
 
 /// A container that dies takes the supervisor holding the Session's lease out with it, so the
-/// Session cannot go on; the work role attending it sees the supervisor gone before the lease it
-/// stopped holding out is due, and that is what ends it.
+/// Session cannot go on; the work role sees its supervisor gone before the lease it stopped holding
+/// out is due, and that is what ends it.
 #[tokio::test]
 #[ignore = "builds and runs the kestrel-env image"]
 async fn a_container_that_dies_mid_session_is_detected_and_the_next_session_starts_it_again() {
@@ -312,7 +314,7 @@ async fn a_container_that_dies_mid_session_is_detected_and_the_next_session_star
 async fn every_operation_in_the_contract_works_against_a_container() {
     let kestrel = Kestrel::boot_reachable_from_an_environment().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, credential) = kestrel.dispatch_session(workspace.id).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
 
     // Provisioned through the port rather than through the work role, so the operations no
     // Session makes are exercised on the same Instance as the ones it does.
@@ -321,12 +323,12 @@ async fn every_operation_in_the_contract_works_against_a_container() {
         .provision(session.id)
         .expect("the instance should provision");
     let container = Container::named(instance.name());
+    let on = kestrel.on_the_link_at(&session, instance.name()).await;
     let mut supervisor = instance
         .supervise(&[
             ("KESTREL_LINK", &kestrel.link_from_an_environment()),
-            ("KESTREL_SESSION", &session.id.to_string()),
-            ("KESTREL_SESSION_CREDENTIAL", credential.as_str()),
-            ("KESTREL_HARNESS_COMMAND", "opencode acp"),
+            ("KESTREL_INSTANCE", &on.instance),
+            ("KESTREL_INSTANCE_CREDENTIAL", on.credential.as_str()),
         ])
         .expect("the supervisor should start");
 
@@ -341,10 +343,10 @@ async fn every_operation_in_the_contract_works_against_a_container() {
     supervisor.stop().expect("the supervisor should stop");
     assert!(
         container
-            .exec(&["sh", "-c", "env | grep KESTREL_SESSION_CREDENTIAL"])
+            .exec(&["sh", "-c", "env | grep KESTREL_INSTANCE_CREDENTIAL"])
             .code
             != 0,
-        "the session's credential outlived its supervisor"
+        "the instance's credential outlived its supervisor"
     );
 
     let mut instance = driver

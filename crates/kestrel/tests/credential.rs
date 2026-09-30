@@ -174,7 +174,7 @@ async fn nothing_a_supervisor_is_started_with_carries_a_credential() {
 
     let provisioned = environment.wrote("variables");
     assert!(
-        provisioned.contains("KESTREL_SESSION="),
+        provisioned.contains("KESTREL_INSTANCE="),
         "the supervisor wrote down no variables to look through:\n{provisioned}"
     );
     assert!(
@@ -191,9 +191,9 @@ async fn nothing_a_supervisor_is_started_with_carries_a_credential() {
 async fn an_environment_that_is_never_told_to_start_takes_no_credential() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel, "acme", Some(A_PROVIDER_KEY)).await;
-    let (session, credential) = kestrel.dispatch_session(workspace.id).await;
+    let (_, on) = kestrel.dispatch_to_the_link(workspace.id).await;
 
-    let mut supervisor = Supervisor::provision(&kestrel.link(), session.id, &credential);
+    let mut supervisor = Supervisor::provision(&kestrel.link(), &on);
     supervisor.wait_until_it_says("reported connected").await;
     tokio::time::sleep(LONG_ENOUGH_TO_BE_SURE).await;
 
@@ -211,36 +211,38 @@ async fn an_environment_that_is_never_told_to_start_takes_no_credential() {
 async fn the_credentials_a_session_needs_reach_nobody_but_that_session() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel, "acme", Some(A_PROVIDER_KEY)).await;
-    let (session, credential) = kestrel.dispatch_session(workspace.id).await;
-    let (elsewhere, _) = kestrel
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let elsewhere = kestrel
         .dispatch_session(a_workspace(&kestrel, "globex", None).await.id)
         .await;
     let link = Link::to(&kestrel.link());
 
     assert_eq!(
-        link.credentials(session.id, None).await.status(),
+        link.credentials(&on.instance, session.id, None)
+            .await
+            .status(),
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
-        link.credentials(elsewhere.id, Some(&credential))
+        link.credentials(&on.instance, elsewhere.id, Some(&on.credential))
             .await
             .status(),
-        StatusCode::FORBIDDEN
+        StatusCode::GONE
     );
 
     kestrel.teardown().await;
 }
 
-/// A credential is invalidated when its Session ends, so the Workspace's next Session finds nothing
-/// on the Instance that could ask for the provider keys again.
+/// Only a Session the Instance is carrying is handed anything, so an Instance between Sessions has
+/// nothing it could ask for the provider keys with (ADR-0010).
 #[tokio::test]
 async fn a_session_that_has_ended_hands_out_no_credential() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel, "acme", Some(A_PROVIDER_KEY)).await;
-    let (session, credential) = kestrel.dispatch_session(workspace.id).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
     let link = Link::to(&kestrel.link());
     assert_eq!(
-        link.credentials(session.id, Some(&credential))
+        link.credentials(&on.instance, session.id, Some(&on.credential))
             .await
             .status(),
         StatusCode::OK
@@ -249,17 +251,17 @@ async fn a_session_that_has_ended_hands_out_no_credential() {
     kestrel.complete_session(&session).await;
 
     assert_eq!(
-        link.credentials(session.id, Some(&credential))
+        link.credentials(&on.instance, session.id, Some(&on.credential))
             .await
             .status(),
-        StatusCode::UNAUTHORIZED
+        StatusCode::GONE
     );
 
     kestrel.teardown().await;
 }
 
-/// A Session running another Agent in the same Workspace takes a credential of its own, which
-/// its end invalidates as surely as the first Session's.
+/// A Session running another Agent in the same Workspace is handed credentials of its own, and
+/// none once it has ended, as surely as the first Session.
 #[tokio::test]
 async fn another_agents_session_hands_out_no_credential_once_it_has_ended() {
     let kestrel = Kestrel::boot().await;
@@ -267,29 +269,30 @@ async fn another_agents_session_hands_out_no_credential_once_it_has_ended() {
     kestrel
         .declare_agent(&workspace.organization, "reviewer", "opencode", None)
         .await;
-    let (built, _) = kestrel.dispatch_session(workspace.id).await;
+    let built = kestrel.dispatch_session(workspace.id).await;
     kestrel.complete_session(&built).await;
     kestrel.enqueue_session_as(workspace.id, "reviewer").await;
     let claimed = kestrel
         .claim_session()
         .await
         .expect("the review was just enqueued to claim");
+    let on = kestrel.on_the_link(&claimed).await;
     let link = Link::to(&kestrel.link());
-    assert_eq!(claimed.session.agent.name, "reviewer");
+    assert_eq!(claimed.agent.name, "reviewer");
     assert_eq!(
-        link.credentials(claimed.session.id, Some(&claimed.credential))
+        link.credentials(&on.instance, claimed.id, Some(&on.credential))
             .await
             .status(),
         StatusCode::OK
     );
 
-    kestrel.complete_session(&claimed.session).await;
+    kestrel.complete_session(&claimed).await;
 
     assert_eq!(
-        link.credentials(claimed.session.id, Some(&claimed.credential))
+        link.credentials(&on.instance, claimed.id, Some(&on.credential))
             .await
             .status(),
-        StatusCode::UNAUTHORIZED
+        StatusCode::GONE
     );
 
     kestrel.teardown().await;

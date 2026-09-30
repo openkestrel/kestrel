@@ -87,8 +87,7 @@ async fn complete_clean_sessions(kestrel: &Kestrel, workspaces: &[(&Workspace, &
         let session = kestrel
             .occupy_session()
             .await
-            .expect("the session should claim")
-            .session;
+            .expect("the session should claim");
         assert_eq!(session.id, queued.id);
         kestrel.executes_on(&session, instance).await;
         kestrel.report_checkout(&session, clean_checkout()).await;
@@ -105,8 +104,8 @@ async fn an_active_instance_counts_toward_the_organization_limit() {
         .occupy_session()
         .await
         .expect("the session should claim");
-    assert_eq!(claimed.session.id, first.id);
-    kestrel.executes_on(&claimed.session, "active").await;
+    assert_eq!(claimed.id, first.id);
+    kestrel.executes_on(&claimed, "active").await;
 
     let second = kestrel.enqueue_session(waiting.id).await;
     assert!(kestrel.occupy_session().await.is_none());
@@ -135,10 +134,7 @@ async fn reclaiming_for_new_work_does_not_delay_a_follow_up_that_already_has_an_
     let follow_up = kestrel.enqueue_session(existing.id).await;
 
     assert_eq!(
-        kestrel
-            .occupy_session()
-            .await
-            .map(|claimed| claimed.session.id),
+        kestrel.occupy_session().await.map(|claimed| claimed.id),
         Some(follow_up.id)
     );
     let new_session = kestrel.session(new_session.id).await;
@@ -162,8 +158,8 @@ async fn a_held_instance_blocks_new_work_but_not_its_workspaces_follow_up() {
         .occupy_session()
         .await
         .expect("the session should claim");
-    assert_eq!(claimed.session.id, first.id);
-    let first = claimed.session;
+    assert_eq!(claimed.id, first.id);
+    let first = claimed;
     kestrel.executes_on(&first, "held").await;
     let mut held = clean_checkout();
     held[0].git = Git::Read {
@@ -190,7 +186,7 @@ async fn a_held_instance_blocks_new_work_but_not_its_workspaces_follow_up() {
         .occupy_session()
         .await
         .expect("the follow-up should claim");
-    assert_eq!(claimed.session.id, follow_up.id);
+    assert_eq!(claimed.id, follow_up.id);
     assert_eq!(kestrel.instance(existing.id).await.as_deref(), Some("held"));
     assert_eq!(
         kestrel.session(blocked.id).await.state,
@@ -225,7 +221,7 @@ async fn the_longest_idle_recoverable_instance_is_archived_to_admit_new_work() {
         .occupy_session()
         .await
         .expect("the new session should claim after archival");
-    assert_eq!(claimed.session.id, third.id);
+    assert_eq!(claimed.id, third.id);
 
     kestrel.teardown().await;
 }

@@ -41,7 +41,6 @@ erDiagram
     session }o--|| agent : runs
     session ||--o{ turn : has
     session ||--o{ link_instruction : "is sent"
-    session ||--o{ session_credential : "is issued"
     session ||--o{ delivery : "says back"
     session ||--o{ session_dependency : "waits on"
 ```
@@ -61,10 +60,10 @@ erDiagram
 | `firing` | One Trigger × one Event | `outcome` ∈ opened, fed, ignored, held, canceled, failed; `CHECK`s tie `workspace_id`, `failure` and `considered_at` to it. |
 | `workspace`, `workspace_repository` | The durable place | Checkout fixed at open (`base`, `branch`, repositories). `instance`, `observed` (last git report) and `last_active_at` are current values. |
 | `transcript_entry` | The Transcript | `(workspace_id, seq)`; `body` is a JSON `log::Entry`. |
-| `session` | One harness execution | State, lease, supervisor presence, exit, usage, models, `reports_taken`. |
+| `session` | One harness execution | State, lease, the Instance and supervisor it ran on, exit, usage, models, `reports_taken`. |
 | `turn` | One prompt and answer | `from_seq` anchors which Transcript entries are this Turn's response. |
-| `session_credential` | Link credentials | Digest only, with expiry and invalidation. |
-| `link_instruction` | Instructions sent down the link | `seq` is the SSE event id. |
+| `supervisor` | An Instance's supervisor | One row per Instance: its name, version, when it last reached the link, and its link credential's digest. Replaced when another is started; deleted when the Instance is let go. |
+| `link_instruction` | Instructions sent down the link | `(instance, seq)`; `seq` is the SSE event id, and `session_id` the Session each is for. |
 | `pending_message`, `pending_session` | Input held for the unfinished Session | See [Sessions](sessions.md#the-unfinished-session). |
 | `follow_up` | Which comment Events fed which Workspace | One per Event, so a comment is taken once. |
 | `delivery` | Comments to post back | `(session_id, turn)`; `turn = 0` is the Outcome. |

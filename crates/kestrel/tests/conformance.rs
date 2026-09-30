@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use kestrel::compute::{Docker, Driver, Instance, Supervisor};
 use kestrel::domain::{Exit, Session, Usage, Workspace};
-use kestrel::link::credential::Secret;
+use kestrel::link::Harness;
 use support::Kestrel;
 use support::diagnostics::Diagnostics;
 use support::lineage::{DONE, Lineage};
@@ -62,13 +62,22 @@ impl Driven {
 
     async fn logged_in_with(kestrel: &Kestrel, lineage: Lineage, model: &str, auth: &str) -> Self {
         let workspace = a_workspace(kestrel, lineage, model).await;
-        let (session, credential) = kestrel.dispatch_session(workspace.id).await;
+        let session = kestrel.dispatch_session(workspace.id).await;
         let (mut instance, supervisor, mut diagnostics) =
-            provisioned(kestrel, lineage, &session, &credential, auth);
+            provisioned(kestrel, lineage, &session).await;
 
         diagnostics.wait_until_it_says("reported connected").await;
         lineage.configure(&mut instance);
-        kestrel.start(&session).await;
+        kestrel
+            .start(
+                &session,
+                Harness {
+                    command: lineage.command().to_owned(),
+                    auth: (!auth.is_empty()).then(|| auth.to_owned()),
+                    model: session.agent.model.clone(),
+                },
+            )
+            .await;
 
         Self {
             lineage,
@@ -154,30 +163,24 @@ impl fmt::Display for Driven {
     }
 }
 
-fn provisioned(
+async fn provisioned(
     kestrel: &Kestrel,
     lineage: Lineage,
     session: &Session,
-    credential: &Secret,
-    auth: &str,
 ) -> (Instance, Supervisor, Diagnostics) {
-    let link = kestrel.link_from_an_environment();
-    let session_id = session.id.to_string();
+    let mut instance = Driver::Docker(Docker::provisioning_from(lineage.image()))
+        .provision(session.id)
+        .expect("the instance should provision");
+    let on = kestrel.on_the_link_at(session, instance.name()).await;
     let mut variables = vec![
-        ("KESTREL_LINK".to_owned(), link),
-        ("KESTREL_SESSION".to_owned(), session_id),
         (
-            "KESTREL_SESSION_CREDENTIAL".to_owned(),
-            credential.as_str().to_owned(),
+            "KESTREL_LINK".to_owned(),
+            kestrel.link_from_an_environment(),
         ),
+        ("KESTREL_INSTANCE".to_owned(), on.instance.clone()),
         (
-            "KESTREL_HARNESS_COMMAND".to_owned(),
-            lineage.command().to_owned(),
-        ),
-        ("KESTREL_AGENT_AUTH".to_owned(), auth.to_owned()),
-        (
-            "KESTREL_AGENT_MODEL".to_owned(),
-            session.agent.model.clone().unwrap_or_default(),
+            "KESTREL_INSTANCE_CREDENTIAL".to_owned(),
+            on.credential.as_str().to_owned(),
         ),
     ];
     variables.extend(lineage.variables());
@@ -186,9 +189,6 @@ fn provisioned(
         .iter()
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect();
-    let mut instance = Driver::Docker(Docker::provisioning_from(lineage.image()))
-        .provision(session.id)
-        .expect("the instance should provision");
     let mut supervisor = instance
         .supervise(&borrowed)
         .expect("the supervisor should start");

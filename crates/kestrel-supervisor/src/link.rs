@@ -9,11 +9,11 @@ use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::{Client, Response, StatusCode, header};
 use serde::{Deserialize, Serialize};
 
-pub const CREDENTIALS: &str = "/link/sessions/{session}/credentials";
-pub const INSTRUCTIONS: &str = "/link/sessions/{session}/instructions";
-pub const REPORTS: &str = "/link/sessions/{session}/reports";
+pub const CREDENTIALS: &str = "/link/instances/{instance}/credentials";
+pub const INSTRUCTIONS: &str = "/link/instances/{instance}/instructions";
+pub const REPORTS: &str = "/link/instances/{instance}/reports";
 
-/// A session reaches the link as one path segment, whatever the Environment was handed.
+/// An Instance's name carries a `/`, and reaches the link as one path segment.
 const SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'_')
@@ -26,6 +26,7 @@ pub enum Instruction {
     Start {
         checkout: Checkout,
         prompt: String,
+        harness: Harness,
     },
     /// The next turn, in the conversation the Session's first one opened.
     Prompt {
@@ -47,6 +48,16 @@ impl Instruction {
             Instruction::Unrecognized => "unrecognized",
         }
     }
+}
+
+/// What to spawn for the Session, which may be another Agent's than the last Session's.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Harness {
+    pub command: String,
+    #[serde(default)]
+    pub auth: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -111,9 +122,11 @@ pub enum Git {
 }
 
 /// A report as it goes on the wire: the seq is what lets the control plane take it once
-/// however many times a reconnect sends it.
+/// however many times a reconnect sends it, counted within the Session it names.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Reported<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seq: Option<i64>,
     #[serde(flatten)]
@@ -160,20 +173,30 @@ struct Refreshed<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Delivered {
     pub id: String,
+    pub session: String,
     pub instruction: Instruction,
+}
+
+#[derive(Deserialize)]
+struct Carried {
+    session: String,
+    #[serde(flatten)]
+    instruction: Instruction,
 }
 
 #[derive(Debug)]
 pub enum Error {
-    /// The link declined this Environment, or what it sent. Sending it again will not help.
+    /// The link declined this Instance, or what it sent. Sending it again will not help.
     Refused(String),
+    /// The link takes nothing more about the Session, which is let go; the Instance stays on it.
+    Session(String),
     Lost(String),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Refused(why) | Error::Lost(why) => out.write_str(why),
+            Error::Refused(why) | Error::Session(why) | Error::Lost(why) => out.write_str(why),
         }
     }
 }
@@ -189,7 +212,7 @@ impl From<reqwest::Error> for Error {
 pub struct Link {
     client: Client,
     base: String,
-    session: String,
+    instance: String,
     credential: String,
     reached: Reached,
 }
@@ -227,11 +250,11 @@ impl Reached {
 }
 
 impl Link {
-    pub fn to(base: &str, session: &str, credential: &str) -> Self {
+    pub fn to(base: &str, instance: &str, credential: &str) -> Self {
         Self {
             client: Client::new(),
             base: base.to_owned(),
-            session: session.to_owned(),
+            instance: instance.to_owned(),
             credential: credential.to_owned(),
             reached: Reached::now(),
         }
@@ -243,12 +266,21 @@ impl Link {
         self.reached.elapsed()
     }
 
-    pub async fn report(&self, report: &Report, seq: Option<i64>) -> Result<(), Error> {
+    pub async fn report(
+        &self,
+        report: &Report,
+        session: Option<&str>,
+        seq: Option<i64>,
+    ) -> Result<(), Error> {
         let response = self
             .client
             .post(self.url(REPORTS))
             .bearer_auth(&self.credential)
-            .json(&Reported { seq, report })
+            .json(&Reported {
+                session,
+                seq,
+                report,
+            })
             .send()
             .await?;
 
@@ -264,10 +296,10 @@ impl Link {
         Ok(())
     }
 
-    pub async fn credentials(&self) -> Result<Credentials, Error> {
+    pub async fn credentials(&self, session: &str) -> Result<Credentials, Error> {
         let response = self
             .client
-            .get(self.url(CREDENTIALS))
+            .get(self.about(CREDENTIALS, session))
             .bearer_auth(&self.credential)
             .send()
             .await?;
@@ -284,10 +316,14 @@ impl Link {
         Ok(response.json().await?)
     }
 
-    pub async fn refresh(&self, files: &BTreeMap<String, String>) -> Result<(), Error> {
+    pub async fn refresh(
+        &self,
+        session: &str,
+        files: &BTreeMap<String, String>,
+    ) -> Result<(), Error> {
         let response = self
             .client
-            .patch(self.url(CREDENTIALS))
+            .patch(self.about(CREDENTIALS, session))
             .bearer_auth(&self.credential)
             .json(&Refreshed { files })
             .send()
@@ -332,9 +368,15 @@ impl Link {
     }
 
     fn url(&self, path: &str) -> String {
-        let session = utf8_percent_encode(&self.session, SEGMENT).to_string();
+        let instance = utf8_percent_encode(&self.instance, SEGMENT).to_string();
 
-        format!("{}{}", self.base, path.replace("{session}", &session))
+        format!("{}{}", self.base, path.replace("{instance}", &instance))
+    }
+
+    fn about(&self, path: &str, session: &str) -> String {
+        let session = utf8_percent_encode(session, SEGMENT);
+
+        format!("{}?session={session}", self.url(path))
     }
 }
 
@@ -342,14 +384,21 @@ impl Instructions {
     pub async fn next(&mut self) -> Result<Option<Delivered>, Error> {
         loop {
             if let Some((id, data)) = self.take_frame() {
-                let instruction = serde_json::from_str(&data).map_err(|error| {
+                let Carried {
+                    session,
+                    instruction,
+                } = serde_json::from_str(&data).map_err(|error| {
                     Error::Lost(format!(
                         "the stream carried {data}, which is not an instruction: {error}"
                     ))
                 })?;
                 self.reached.touched();
 
-                return Ok(Some(Delivered { id, instruction }));
+                return Ok(Some(Delivered {
+                    id,
+                    session,
+                    instruction,
+                }));
             }
 
             match self.response.chunk().await? {
@@ -387,10 +436,10 @@ impl Instructions {
 
 async fn refuse_if_declined(response: Response) -> Result<Response, Error> {
     match response.status() {
-        StatusCode::BAD_REQUEST
-        | StatusCode::UNAUTHORIZED
-        | StatusCode::FORBIDDEN
-        | StatusCode::NOT_FOUND => Err(Error::Refused(response.text().await?)),
+        StatusCode::GONE | StatusCode::BAD_REQUEST => Err(Error::Session(response.text().await?)),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => {
+            Err(Error::Refused(response.text().await?))
+        }
         _ => Ok(response),
     }
 }

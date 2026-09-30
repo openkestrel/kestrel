@@ -93,7 +93,7 @@ impl Instance {
         self.provisioned.write_file(path, contents)
     }
 
-    /// Starts one Session's supervisor, which alone is handed that Session's credentials.
+    /// Starts the Instance's supervisor, which alone is handed its link credential.
     pub fn supervise(&mut self, variables: &[(&str, &str)]) -> io::Result<Supervisor> {
         self.provisioned.supervise(variables)
     }
@@ -103,12 +103,13 @@ impl Instance {
     }
 }
 
+/// Outlives this handle as its Instance does: a control plane that restarts leaves it dialling
+/// back in rather than taking it down.
 pub struct Supervisor {
     name: String,
     stdout: Option<ChildStdout>,
     stderr: Option<ChildStderr>,
     supervising: Box<dyn Supervising>,
-    stopped: bool,
 }
 
 impl Supervisor {
@@ -130,21 +131,8 @@ impl Supervisor {
         self.supervising.status()
     }
 
-    /// Takes every process the Session started with it, so none is left for the next Session to
-    /// find.
     pub fn stop(mut self) -> io::Result<()> {
-        let stopped = self.supervising.stop();
-        self.stopped = true;
-
-        stopped
-    }
-}
-
-impl Drop for Supervisor {
-    fn drop(&mut self) {
-        if !self.stopped {
-            let _ = self.supervising.stop();
-        }
+        self.supervising.stop()
     }
 }
 

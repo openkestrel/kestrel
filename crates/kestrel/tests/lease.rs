@@ -111,11 +111,7 @@ async fn a_session_holds_a_lease_from_the_moment_it_is_claimed() {
     let queued = kestrel.enqueue_session(workspace.id).await;
     assert!(queued.lease_expires_at.is_none());
 
-    let claimed = kestrel
-        .claim_session()
-        .await
-        .expect("a session to claim")
-        .session;
+    let claimed = kestrel.claim_session().await.expect("a session to claim");
     assert_eq!(claimed.id, queued.id);
     assert!(
         claimed.lease_expires_at > Some(Timestamp::now()),
@@ -129,7 +125,7 @@ async fn a_session_holds_a_lease_from_the_moment_it_is_claimed() {
 async fn a_lease_nothing_holds_out_ends_its_session_failed() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
 
     kestrel.lease_until(&session, a_moment_ago()).await;
 
@@ -152,7 +148,7 @@ async fn a_lease_nothing_holds_out_ends_its_session_failed() {
 async fn a_lease_that_expires_leaves_its_workspace_no_active_session() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
 
     kestrel.lease_until(&session, a_moment_ago()).await;
     swept(&kestrel, session.id).await;
@@ -167,10 +163,7 @@ async fn a_lease_that_expires_leaves_its_workspace_no_active_session() {
     );
     let next = kestrel.enqueue_session(workspace.id).await;
     assert_eq!(
-        kestrel
-            .claim_session()
-            .await
-            .map(|claimed| claimed.session.id),
+        kestrel.claim_session().await.map(|claimed| claimed.id),
         Some(next.id),
         "the session after the one that expired was not dispatched"
     );
@@ -214,7 +207,7 @@ async fn one_parallel_sessions_expired_lease_leaves_the_other_session_active() {
 async fn a_session_failed_by_lease_expiry_is_never_dispatched_again() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
 
     kestrel.lease_until(&session, a_moment_ago()).await;
     swept(&kestrel, session.id).await;
@@ -232,7 +225,7 @@ async fn a_session_failed_by_lease_expiry_is_never_dispatched_again() {
 async fn a_due_time_survives_a_control_plane_restart_and_fires_after_it() {
     let kestrel = Kestrel::boot().await;
     let workspace = a_workspace(&kestrel).await;
-    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
 
     let stopped = kestrel.kill().await;
     stopped.lease_until(&session, a_moment_ago()).await;
@@ -304,9 +297,6 @@ async fn a_supervisor_that_dies_mid_session_stops_holding_the_lease_out_and_the_
     kestrel.lease_until(&working, shortened()).await;
 
     swept(&kestrel, session.id).await;
-    Environment::named(working.supervisor.as_deref().expect("a supervisor"))
-        .is_gone()
-        .await;
 
     kestrel.teardown().await;
 }

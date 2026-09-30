@@ -281,8 +281,7 @@ async fn a_new_session_trigger_starts_a_session_with_its_agent_and_brief() {
     let first = kestrel
         .claim_session()
         .await
-        .expect("the opening firing enqueued a session")
-        .session;
+        .expect("the opening firing enqueued a session");
     kestrel.complete_session(&first).await;
 
     ci_failed(&stub, &[]);
@@ -325,8 +324,7 @@ async fn a_new_session_firing_waits_for_the_unfinished_session_to_let_go() {
     let first = kestrel
         .claim_session()
         .await
-        .expect("the opening firing enqueued a session")
-        .session;
+        .expect("the opening firing enqueued a session");
 
     ci_failed(&stub, &[]);
     fed(&kestrel, 1).await;
@@ -407,8 +405,7 @@ async fn a_workspace_drains_messages_and_new_sessions_in_the_order_they_arrived(
     let first = kestrel
         .claim_session()
         .await
-        .expect("the opening firing enqueued a session")
-        .session;
+        .expect("the opening firing enqueued a session");
 
     kestrel
         .post_while_busy(workspace.id, "operator", "before")
@@ -467,8 +464,7 @@ async fn a_label_chooses_the_agent_of_a_new_session_among_those_its_trigger_allo
     let first = kestrel
         .claim_session()
         .await
-        .expect("the opening firing enqueued a session")
-        .session;
+        .expect("the opening firing enqueued a session");
     kestrel.complete_session(&first).await;
 
     ci_failed(&stub, &["agent:codex"]);
@@ -521,8 +517,7 @@ async fn a_command_chooses_the_agent_of_a_new_session_among_those_its_trigger_al
     let first = kestrel
         .claim_session()
         .await
-        .expect("the opening firing enqueued a session")
-        .session;
+        .expect("the opening firing enqueued a session");
     kestrel.complete_session(&first).await;
 
     stub.script_answer(
@@ -598,8 +593,7 @@ triggers:
     let first = kestrel
         .claim_session()
         .await
-        .expect("the opening firing enqueued a session")
-        .session;
+        .expect("the opening firing enqueued a session");
     kestrel.complete_session(&first).await;
 
     ci_failed(&stub, &[]);

@@ -11,9 +11,8 @@ use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{Exit, Session, SessionId, SessionState, Workspace};
-use kestrel::link::credential::Secret;
-use support::Kestrel;
 use support::image::{self, Environment};
+use support::{Kestrel, OnTheLink};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 
@@ -126,9 +125,9 @@ fn the_supervisor_is_what_the_image_starts_with_nothing_wrapped_around_it() {
 async fn an_environment_the_image_provisions_dials_out_and_the_control_plane_knows_it_is_connected()
 {
     let kestrel = Kestrel::boot_reachable_from_an_environment().await;
-    let (session, credential) = a_session(&kestrel).await;
+    let (session, on) = a_session(&kestrel).await;
 
-    let mut environment = an_environment(&kestrel, session.id, &credential);
+    let mut environment = an_environment(&kestrel, &on);
     environment.wait_until_it_says("reported connected").await;
 
     let connected = kestrel
@@ -149,9 +148,9 @@ async fn an_environment_the_image_provisions_dials_out_and_the_control_plane_kno
 #[ignore = "builds and runs the kestrel-env image"]
 async fn killing_the_supervisor_in_the_environment_ends_the_session_and_nothing_restarts_it() {
     let kestrel = Kestrel::boot_reachable_from_an_environment().await;
-    let (session, credential) = a_session(&kestrel).await;
+    let (session, on) = a_session(&kestrel).await;
 
-    let mut environment = an_environment(&kestrel, session.id, &credential);
+    let mut environment = an_environment(&kestrel, &on);
     environment.wait_until_it_says("reported connected").await;
 
     environment.kill_the_supervisor();
@@ -201,14 +200,18 @@ fn anything_named(names: &[&str]) -> String {
     image::running(&sweep).out
 }
 
-fn an_environment(kestrel: &Kestrel, session: SessionId, credential: &Secret) -> Environment {
-    Environment::provision(&kestrel.link_from_an_environment(), session, credential)
+fn an_environment(kestrel: &Kestrel, on: &OnTheLink) -> Environment {
+    Environment::provision(&kestrel.link_from_an_environment(), on)
 }
 
-async fn a_session(kestrel: &Kestrel) -> (Session, Secret) {
+async fn a_session(kestrel: &Kestrel) -> (Session, OnTheLink) {
     let workspace = a_workspace(kestrel).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
+    let on = kestrel
+        .on_the_link_at(&session, &format!("docker/kestrel-env-{}", session.id))
+        .await;
 
-    kestrel.dispatch_session(workspace.id).await
+    (session, on)
 }
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {

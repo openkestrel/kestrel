@@ -3,8 +3,8 @@
   "info": {
     "title": "kestrel link",
     "version": "0.1.0",
-    "summary": "The connection between an Environment and the control plane.",
-    "description": "The supervisor inside an Environment opens this connection outward: server-sent events down, POST up, plain HTTP with no protocol upgrade. Every Environment authenticates as the Session it is executing.",
+    "summary": "The connection between an Instance and the control plane.",
+    "description": "The supervisor inside an Instance opens this connection outward: server-sent events down, POST up, plain HTTP with no protocol upgrade. A supervisor lives with its Instance, not its Session: it authenticates as the Instance, and every Session on the Instance is begun, prompted and stopped over the one link.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -22,16 +22,19 @@
   ],
   "security": [
     {
-      "sessionCredential": []
+      "instanceCredential": []
     }
   ],
   "paths": {
-    "/link/sessions/{session}/credentials": {
+    "/link/instances/{instance}/credentials": {
       "get": {
         "operationId": "credentials",
-        "summary": "Take what the Session's Harness is spawned with.",
-        "description": "Answered as the Environment spawns its Harness, and asked at no other moment: the control plane decrypts them here. Every Provider Credential the Session's Organization holds, and the variables and files of the Subscription Profile its Workspace names, which no other Workspace's Session is handed. Variables reach that process's environment and nothing else; files are written beneath the agent's home for the length of the Session. The credential a Session authenticates with is invalidated when the Session ends, so an Environment that outlives its Session is refused.",
+        "summary": "Take what a Session's Harness is spawned with.",
+        "description": "Answered as the supervisor spawns a Session's Harness, and asked at no other moment: the control plane decrypts them here. Every Provider Credential the Session's Organization holds, and the variables and files of the Subscription Profile its Workspace names, which no other Workspace's Session is handed. Variables reach that process's environment and nothing else; files are written beneath the agent's home for the length of the Session. Only a Session the Instance is carrying is answered for, so an Instance between Sessions is handed nothing.",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/instance"
+          },
           {
             "$ref": "#/components/parameters/session"
           }
@@ -53,7 +56,7 @@
           "403": {
             "$ref": "#/components/responses/Refused"
           },
-          "404": {
+          "410": {
             "$ref": "#/components/responses/Refused"
           },
           "503": {
@@ -64,8 +67,11 @@
       "patch": {
         "operationId": "refreshCredentials",
         "summary": "Hand back the files the Harness rewrote.",
-        "description": "A harness refreshes its login where it keeps it, and a refresh may revoke the login it replaced, so the Environment hands back every file it was given that changed before it reports the Session finished. Only files the Workspace's Subscription Profile already holds are taken; any other path is ignored.",
+        "description": "A harness refreshes its login where it keeps it, and a refresh may revoke the login it replaced, so the supervisor hands back every file it was given that changed before it reports the Session's turn over. Only files the Workspace's Subscription Profile already holds are taken; any other path is ignored.",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/instance"
+          },
           {
             "$ref": "#/components/parameters/session"
           }
@@ -93,7 +99,7 @@
           "403": {
             "$ref": "#/components/responses/Refused"
           },
-          "404": {
+          "410": {
             "$ref": "#/components/responses/Refused"
           },
           "422": {
@@ -105,14 +111,14 @@
         }
       }
     },
-    "/link/sessions/{session}/entries": {
+    "/link/instances/{instance}/entries": {
       "get": {
         "operationId": "entries",
-        "summary": "Read one window of the Transcript of the Workspace this Session belongs to.",
+        "summary": "Read one window of the Transcript of the Workspace holding this Instance.",
         "description": "At most one window of entries, in order, and the cursor the next read resumes from. A cursor names a position rather than a read held open, so it still walks after the control plane restarts; one that names no position in this Transcript is refused rather than silently restarting the walk.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/session"
+            "$ref": "#/components/parameters/instance"
           },
           {
             "name": "cursor",
@@ -156,29 +162,26 @@
           "403": {
             "$ref": "#/components/responses/Refused"
           },
-          "404": {
-            "$ref": "#/components/responses/Refused"
-          },
           "503": {
             "$ref": "#/components/responses/Refused"
           }
         }
       }
     },
-    "/link/sessions/{session}/instructions": {
+    "/link/instances/{instance}/instructions": {
       "get": {
         "operationId": "instructions",
-        "summary": "Hold open the stream of instructions for a Session.",
-        "description": "Replays every instruction after `Last-Event-ID`, then stays open. The stream closes when the Session ends.",
+        "summary": "Hold open the stream of instructions for an Instance.",
+        "description": "One stream per Instance, carrying every Session's instructions in order, each naming its Session: a Session's `start` always follows the last Session's `stop`. Replays every instruction after `Last-Event-ID`, then stays open. The stream closes when the Instance is let go.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/session"
+            "$ref": "#/components/parameters/instance"
           },
           {
             "name": "Last-Event-ID",
             "in": "header",
             "required": false,
-            "description": "The seq of the last instruction this Environment received. Absent means from the beginning.",
+            "description": "The seq of the last instruction this supervisor received. Absent means from the beginning.",
             "schema": {
               "type": "integer",
               "format": "int64",
@@ -188,7 +191,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The stream is open. Each event carries an instruction as its data, the instruction's kind as its event name, and its seq as its id.",
+            "description": "The stream is open. Each event carries an instruction and the Session it is for as its data, the instruction's kind as its event name, and its seq as its id.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -203,23 +206,20 @@
           "403": {
             "$ref": "#/components/responses/Refused"
           },
-          "404": {
-            "$ref": "#/components/responses/Refused"
-          },
           "503": {
             "$ref": "#/components/responses/Refused"
           }
         }
       }
     },
-    "/link/sessions/{session}/reports": {
+    "/link/instances/{instance}/reports": {
       "post": {
         "operationId": "report",
-        "summary": "Report something about an Environment to the control plane.",
-        "description": "Delivery is at-least-once: an Environment that loses the answer to a report sends it again under the same seq, and the control plane takes it once. A seq that skips one the Session has yet to report is refused.",
+        "summary": "Report something about an Instance, or the Session it carries, to the control plane.",
+        "description": "Delivery is at-least-once: a supervisor that loses the answer to a report sends it again under the same seq, and the control plane takes it once. Seqs are counted within the Session a report names; one that skips a report the Session has yet to make is refused. A report about a Session the Instance no longer carries — it has ended, or its lease has passed — is answered 410, and the supervisor lets that Session go.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/session"
+            "$ref": "#/components/parameters/instance"
           }
         ],
         "requestBody": {
@@ -245,7 +245,7 @@
           "403": {
             "$ref": "#/components/responses/Refused"
           },
-          "404": {
+          "410": {
             "$ref": "#/components/responses/Refused"
           },
           "503": {
@@ -257,18 +257,27 @@
   },
   "components": {
     "securitySchemes": {
-      "sessionCredential": {
+      "instanceCredential": {
         "type": "http",
         "scheme": "bearer",
-        "description": "The credential issued for this Session when its Environment was provisioned, and invalidated when the Session ends."
+        "description": "The credential issued for the Instance when its supervisor was started. Refused once the Instance is let go, and once another supervisor is started on it."
       }
     },
     "parameters": {
-      "session": {
-        "name": "session",
+      "instance": {
+        "name": "instance",
         "in": "path",
         "required": true,
-        "description": "The Session this Environment is executing.",
+        "description": "The Instance this supervisor runs on, as `<driver>/<name>`, percent-encoded as one path segment.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "session": {
+        "name": "session",
+        "in": "query",
+        "required": true,
+        "description": "The Session the Instance is carrying, which alone is handed anything of a Session's.",
         "schema": {
           "type": "string",
           "format": "uuid"
@@ -281,7 +290,9 @@
         "headers": {
           "Retry-After": {
             "description": "Seconds to wait before asking again. Present on a 503 only when the database was busy, which asking again can clear.",
-            "schema": { "type": "integer" }
+            "schema": {
+              "type": "integer"
+            }
           }
         },
         "content": {
@@ -336,7 +347,7 @@
         "additionalProperties": false
       },
       "Instruction": {
-        "description": "What the control plane asks of an Environment.",
+        "description": "What the control plane asks of an Instance, for the Session it names.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/Start"
@@ -355,10 +366,20 @@
             "prompt": "#/components/schemas/Prompt",
             "stop": "#/components/schemas/Stop"
           }
-        }
+        },
+        "properties": {
+          "session": {
+            "description": "The Session this instruction is for.",
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "session"
+        ]
       },
       "Start": {
-        "description": "Check out, then open the Session's one agent conversation and prompt its first turn. A checkout that fails is reported as the Session finished failed, and the Session never starts.",
+        "description": "Take up the Session: check out, then open its one agent conversation and prompt its first turn. A checkout that fails is reported as the Session finished failed, and the Session never starts.",
         "type": "object",
         "properties": {
           "kind": {
@@ -370,12 +391,16 @@
           "prompt": {
             "description": "The agent's whole prompt, sent exactly as given: the Workspace's unfollowed Brief, or the message or messages that started this Session with earlier Transcript entries as labeled context ahead of them.",
             "type": "string"
+          },
+          "harness": {
+            "$ref": "#/components/schemas/Harness"
           }
         },
         "required": [
           "kind",
           "checkout",
-          "prompt"
+          "prompt",
+          "harness"
         ]
       },
       "Prompt": {
@@ -419,8 +444,29 @@
         ],
         "additionalProperties": false
       },
+      "Harness": {
+        "description": "What the supervisor spawns for this Session, which may be another Agent's than the last Session's on the Instance.",
+        "type": "object",
+        "properties": {
+          "command": {
+            "description": "The ACP agent command line.",
+            "type": "string"
+          },
+          "auth": {
+            "description": "The ACP authentication method to log the agent in with, for an agent that requires one.",
+            "type": "string"
+          },
+          "model": {
+            "description": "The model the Session named. Absent leaves the harness's default.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ]
+      },
       "Stop": {
-        "description": "Leave the link and exit, ending the agent conversation with it.",
+        "description": "End the Session's agent conversation and let the Session go. The supervisor stays on the link.",
         "type": "object",
         "properties": {
           "kind": {
@@ -432,7 +478,7 @@
         ]
       },
       "Report": {
-        "description": "What an Environment tells the control plane about itself. A report that belongs to its ordered account of the Session carries a seq and is taken once; what it says about itself costs nothing to take twice.",
+        "description": "What a supervisor tells the control plane. `connected` and `heartbeat` are about the Instance; every other report names the Session it is about, and one that belongs to its ordered account of that Session carries a seq and is taken once.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/Connected"
@@ -479,10 +525,17 @@
             "checkout": "#/components/schemas/CheckoutObserved",
             "finished": "#/components/schemas/Finished"
           }
+        },
+        "properties": {
+          "session": {
+            "description": "The Session this report is about. Required on every report but `connected`, `heartbeat` and `stderr`.",
+            "type": "string",
+            "format": "uuid"
+          }
         }
       },
       "Connected": {
-        "description": "The Environment is on the link, and this is what is running in it.",
+        "description": "The supervisor is on the link, and this is what is running in the Instance.",
         "type": "object",
         "properties": {
           "kind": {
@@ -499,7 +552,7 @@
         ]
       },
       "Heartbeat": {
-        "description": "The Environment is still alive, and holds its Session's lease out for another turn of the clock. Sent for as long as the Session lasts; when it stops, the lease expires and the Session ends failed.",
+        "description": "The supervisor is still alive, and holds out the lease of the Session it carries for another turn of the clock. Sent for as long as the Instance lives; when it stops, a Session's lease expires and the Session ends failed.",
         "type": "object",
         "properties": {
           "kind": {
@@ -538,10 +591,15 @@
           },
           "seq": {
             "$ref": "#/components/schemas/Seq"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
           "kind",
+          "session",
           "seq"
         ]
       },
@@ -557,10 +615,15 @@
           },
           "seq": {
             "$ref": "#/components/schemas/Seq"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
           "kind",
+          "session",
           "seq",
           "model"
         ]
@@ -577,10 +640,15 @@
           },
           "seq": {
             "$ref": "#/components/schemas/Seq"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
           "kind",
+          "session",
           "seq",
           "message"
         ]
@@ -597,10 +665,15 @@
           },
           "seq": {
             "$ref": "#/components/schemas/Seq"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
           "kind",
+          "session",
           "seq",
           "usage"
         ]
@@ -614,10 +687,15 @@
           },
           "seq": {
             "$ref": "#/components/schemas/Seq"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
           "kind",
+          "session",
           "seq"
         ]
       },
@@ -636,10 +714,15 @@
           },
           "seq": {
             "$ref": "#/components/schemas/Seq"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
           "kind",
+          "session",
           "seq",
           "repositories"
         ]
@@ -728,7 +811,7 @@
         ]
       },
       "Finished": {
-        "description": "The Session is over, and this is how it went: its conversation failed, or it never started. The Environment exits after saying so.",
+        "description": "The Session is over, and this is how it went: its conversation failed, or it never started. The supervisor lets the Session go after saying so, and stays on the link.",
         "type": "object",
         "properties": {
           "kind": {
@@ -739,16 +822,21 @@
           },
           "seq": {
             "$ref": "#/components/schemas/Seq"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
           "kind",
+          "session",
           "seq",
           "exit"
         ]
       },
       "Seq": {
-        "description": "Where a report sits in the sequence the Environment numbers. The control plane takes each number once, so a report replayed after an answer that never arrived changes the record once.",
+        "description": "Where a report sits in the sequence the supervisor numbers for its Session. The control plane takes each number once, so a report replayed after an answer that never arrived changes the record once.",
         "type": "integer",
         "format": "int64",
         "minimum": 1

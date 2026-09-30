@@ -71,7 +71,7 @@ async fn working(kestrel: &Kestrel) -> (Workspace, Session) {
         if let Some(workspace) = kestrel.workspaces("acme").await.into_iter().next()
             && let Some(claimed) = kestrel.claim_session().await
         {
-            return (workspace, claimed.session);
+            return (workspace, claimed);
         }
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -302,7 +302,7 @@ async fn a_workspace_no_event_started_says_nothing_and_that_is_not_an_error() {
     watching(&kestrel, &stub, BOTH).await;
 
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let (session, _) = kestrel.dispatch_session(workspace.id).await;
+    let session = kestrel.dispatch_session(workspace.id).await;
     kestrel.complete_session(&session).await;
 
     nothing_is_said(&stub).await;
@@ -317,7 +317,7 @@ async fn a_later_sessions_outcome_does_not_reuse_an_earlier_sessions_message() {
     watching(&kestrel, &stub, BOTH).await;
 
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
-    let (first, _) = kestrel.dispatch_session(workspace.id).await;
+    let first = kestrel.dispatch_session(workspace.id).await;
     kestrel
         .said(&first, "The first investigation finished.")
         .await;

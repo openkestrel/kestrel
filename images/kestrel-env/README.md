@@ -44,23 +44,21 @@ that causes it. The opencode binary is nearly all of the size.
 
 ## Running one by hand
 
-A Session's supervisor is the image's entrypoint, and it needs the control plane's address, the Session it is
-executing, that Session's credential, and the command to spawn as the harness.
+The Instance's supervisor is the image's entrypoint, and it needs the control plane's address, the
+Instance it runs on, and that Instance's link credential.
 
 ```sh
 docker run --rm \
   --add-host host.docker.internal:host-gateway \
   --env KESTREL_LINK=http://host.docker.internal:7717 \
-  --env KESTREL_SESSION=<session> \
-  --env KESTREL_SESSION_CREDENTIAL=<credential> \
-  --env KESTREL_HARNESS_COMMAND='opencode acp --print-logs' \
-  --env KESTREL_AGENT_MODEL=<model, as the harness advertises it> \
+  --env KESTREL_INSTANCE=<driver>/<instance> \
+  --env KESTREL_INSTANCE_CREDENTIAL=<credential> \
   kestrel-env
 ```
 
-`KESTREL_AGENT_MODEL` is the model the Session's Agent named, set over ACP once the ACP session is open; an
-empty one leaves the harness on its own default. `KESTREL_AGENT_AUTH` names the ACP authentication
-method to log the agent in with, for a harness that will not open a session until something has.
+Each Session is begun over the link: its `start` names the harness command, the model the Session's
+Agent named (set over ACP once the ACP session is open), and the ACP authentication method, if any.
+The supervisor stays on the link between Sessions.
 
 **No provider key is among them.** The **Provider Credentials** the Session's Organization holds arrive
 over the link as the supervisor spawns the agent, and reach that process's environment and nothing
@@ -76,10 +74,10 @@ checked out side by side. An ACP session's working directory is the checkout of 
 outside has to land owned by that user, and a derived image that installs packages needs `USER root`
 first.
 
-**Killing the supervisor ends the Session.** The agent is the supervisor's child over stdio, so nothing
-in the image restarts one — the entrypoint is the supervisor itself, with no init or wrapper around
-it. A supervisor that dies takes its Session with it: the lease expires unheld, and the Session ends failed
-with an explicit exit status. That is the trade ADR-0007 records, and `crates/kestrel/tests/image.rs`
+**Killing the supervisor ends the Session it carries.** The agent is the supervisor's child over
+stdio, so nothing in the image restarts one — the entrypoint is the supervisor itself, with no init or
+wrapper around it. A supervisor that dies takes its Session with it: the lease expires unheld, and the
+Session ends failed with an explicit exit status. That is the trade ADR-0007 records, and `crates/kestrel/tests/image.rs`
 holds it to it.
 
 ## Deriving from it

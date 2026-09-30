@@ -1,5 +1,5 @@
 //! The escape hatch that exists whether or not it is planned (ADR-0005), and the Instance the
-//! primary test seam provisions: a directory, and a supervisor process per Session inside it.
+//! primary test seam provisions: a directory, and its supervisor's process tree.
 
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
@@ -302,7 +302,6 @@ impl Provisioned for Directory {
                 pgid: child.id() as i32,
                 child,
             }),
-            stopped: false,
         })
     }
 
@@ -462,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dropped_supervisor_leaves_no_orphan_process_even_without_an_explicit_stop() {
+    fn a_supervisor_outlives_its_handle_and_goes_with_its_instance() {
         let scripts = TempDir::new().expect("a temporary directory");
         let driver = driver(&scripts, "sleep 30 & echo $!\nwait");
         let mut instance = provisioned(&driver);
@@ -471,9 +470,15 @@ mod tests {
             drop(supervisor);
             grandchild
         };
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            process_exists(grandchild),
+            "dropping the handle stopped the supervisor"
+        );
+
+        instance.destroy().expect("destroy should succeed");
 
         eventually_gone(grandchild);
-        instance.destroy().expect("destroy should succeed");
     }
 
     #[test]
