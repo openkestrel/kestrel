@@ -2912,7 +2912,7 @@ async fn a_client_in_its_own_process_reads_a_transcript_over_the_operator_bounda
     assert!(read.status.success(), "the client failed:\n{}", read.err);
     assert_eq!(seqs(&read.out), recorded_seqs(&kestrel, &workspace).await);
     let said: Value = serde_json::from_str(&read.out[read.out.len() - 1]).expect("an entry");
-    assert_eq!(said["entry"]["kind"], "said");
+    assert_eq!(said["entry"]["type"], "said");
     assert_eq!(said["entry"]["message"], "message 2");
     assert!(
         read.err.contains("cursor  "),
@@ -4242,6 +4242,8 @@ fn the_published_operator_document_describes_every_transcript_entry() {
         Entry::Said {
             participant: "builder".to_owned(),
             message: "what the agent said".to_owned(),
+            session_id: None,
+            completion: None,
         },
         Entry::Messages {
             messages: vec![Message {
@@ -4258,12 +4260,22 @@ fn the_published_operator_document_describes_every_transcript_entry() {
             instance: "docker/kestrel-01999cf2".to_owned(),
             unpublished: Some("https://github.com/acme/widgets has 1 untracked file".to_owned()),
         },
+        Entry::Thought {
+            session_id: SessionId::generate(),
+            text: "thinking".to_owned(),
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
+        },
+        Entry::Plan {
+            session_id: SessionId::generate(),
+            entries: Vec::new(),
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
+        },
     ];
 
     let mut kinds: Vec<String> = Vec::new();
     for entry in served {
         let entry = serde_json::to_value(&entry).expect("an entry");
-        let kind = entry["kind"].as_str().expect("a kind").to_owned();
+        let kind = entry["type"].as_str().expect("a kind").to_owned();
         let schema = mapping
             .get(&kind)
             .unwrap_or_else(|| panic!("the document describes no {kind} entry"))

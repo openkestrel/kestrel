@@ -115,6 +115,7 @@ struct Asking {
 
 #[derive(Deserialize)]
 struct Paging {
+    kinds: Option<String>,
     cursor: Option<String>,
     window: Option<usize>,
 }
@@ -139,6 +140,8 @@ struct Entries {
 
 #[derive(Serialize)]
 struct Recorded {
+    kind: crate::log::Kind,
+    session_id: Option<SessionId>,
     seq: i64,
     appended_at: String,
     entry: log::Entry,
@@ -385,13 +388,23 @@ async fn entries(
     let window = Window::or_default(paging.window)
         .map_err(|error| Refused::BadRequest(error.to_string()))?;
 
-    let page = workspace::transcript(&control_plane.store, linked.workspace, from, window).await?;
+    let kinds = paging
+        .kinds
+        .as_deref()
+        .map(str::parse::<crate::log::Kinds>)
+        .transpose()
+        .map_err(|error| Refused::BadRequest(error.to_string()))?
+        .unwrap_or_default();
+    let page =
+        workspace::transcript(&control_plane.store, linked.workspace, from, window, &kinds).await?;
 
     Ok(Json(Entries {
         entries: page
             .entries
             .into_iter()
             .map(|entry| Recorded {
+                kind: entry.kind,
+                session_id: entry.session_id,
                 seq: entry.seq,
                 appended_at: entry.appended_at.to_string(),
                 entry: entry.entry,
@@ -598,7 +611,7 @@ mod tests {
 
     #[test]
     fn a_numbered_report_carries_its_seq_beside_its_kind() {
-        let sent = serde_json::json!({"kind": "said", "seq": 3, "message": "what it said"});
+        let sent = serde_json::json!({"kind": "said", "completion": {"started_at": "2026-09-29T12:00:00Z", "finished_at": "2026-09-29T12:00:00Z", "turn_outcome": null}, "seq": 3, "message": "what it said"});
 
         let reported: Reported = serde_json::from_value(sent.clone()).expect("a report");
 
@@ -606,7 +619,8 @@ mod tests {
         assert_eq!(
             reported.report,
             Report::Said {
-                message: "what it said".to_owned()
+                message: "what it said".to_owned(),
+                completion: crate::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap())
             }
         );
         assert_eq!(serde_json::to_value(&reported).expect("a report"), sent);

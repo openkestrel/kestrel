@@ -131,11 +131,10 @@ async fn one_command_takes_a_fresh_clone_and_an_empty_control_plane_to_a_session
         }
     );
     assert!(
-        transcript.iter().any(|recorded| recorded.entry
-            == Entry::Said {
-                participant: "opencode".to_owned(),
-                message: BRIEF.to_owned(),
-            }),
+        transcript.iter().any(|recorded| matches!(&recorded.entry,
+            Entry::Said { participant, message, session_id: Some(id), .. }
+                if participant == "opencode" && message == BRIEF && *id == session
+        )),
         "the agent was never prompted with the brief"
     );
 

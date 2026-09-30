@@ -43,7 +43,12 @@ several matching is `Declined::Missing` or `Declined::Ambiguous`, naming the can
 `GET …/workspaces/{workspace}/transcript` is SSE. Each entry is an event whose id is a cursor; the
 stream ends with an `end` event when the Workspace seals or, with `follow=false`, when it reaches
 the last entry. A stream that closes without `end` was cut off; the Client resumes from the last
-id it printed (`kestrel-client/src/transcript.rs`) and gives up after 30 s unreachable.
+id it received (`kestrel-client/src/transcript.rs`) and gives up after 30 s unreachable.
+
+`kinds` selects `shared_state`, `narration` or `detail`, defaulting to shared state. The CLI passes
+`workspace transcript --kinds` through to this read. Both the link page and this stream advance
+across omitted entries: the page returns the highest examined seq, and the stream sends a `cursor`
+event when omitted entries advance it beyond the last delivered entry. The cursor remains global.
 
 ### Reading live work
 

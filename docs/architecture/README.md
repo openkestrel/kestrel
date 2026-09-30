@@ -150,8 +150,8 @@ supervisor ([ADR-0026](../adr/0026-kestrel-carries-named-credentials-never-a-run
 An accepted ADR is a decision, not a description. These are decided and not yet built:
 
 - **Transcript kinds** ([ADR-0020](../adr/0020-the-transcript-records-what-the-runtime-emits-in-kinds.md),
-  [ADR-0033](../adr/0033-expire-transcript-detail-in-place.md)): `log::Entry` holds shared state only.
-  The supervisor drops thoughts, plans and tool calls, and nothing expires.
+  [ADR-0033](../adr/0033-expire-transcript-detail-in-place.md)): `log::Entry` holds shared state and narration.
+  Messages, thoughts and plans are recorded as completed units; tool calls and retention remain unbuilt.
 - **Integration identity** ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)): there
   is no GitHub App. The Integration and the agent's `gh` both use tokens an operator supplies.
 - **Pull request state** ([ADR-0032](../adr/0032-a-pull-request-event-updates-workspace-state-without-a-firing.md)):

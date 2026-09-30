@@ -8,9 +8,8 @@ use sqlx::{Row, SqliteConnection};
 
 use crate::domain::{Exit, SessionId, Workspace, WorkspaceId, WorkspaceState};
 
-/// What changed a Workspace's shared state. Never what happened inside a Session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Entry {
     ParticipantJoined {
         participant: String,
@@ -26,6 +25,20 @@ pub enum Entry {
     Said {
         participant: String,
         message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_id: Option<SessionId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        completion: Option<Completion>,
+    },
+    Thought {
+        session_id: SessionId,
+        text: String,
+        completion: Completion,
+    },
+    Plan {
+        session_id: SessionId,
+        entries: Vec<PlanEntry>,
+        completion: Completion,
     },
     Messages {
         messages: Vec<Message>,
@@ -61,7 +74,18 @@ impl fmt::Display for Entry {
             Entry::Said {
                 participant,
                 message,
+                ..
             } => write!(f, "said  {participant}  {message}"),
+            Entry::Thought { text, .. } => write!(f, "thought  {text}"),
+            Entry::Plan { entries, .. } => write!(
+                f,
+                "plan  {}",
+                entries
+                    .iter()
+                    .map(|entry| entry.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            ),
             Entry::Messages { messages } => write!(
                 f,
                 "messages  {}",
@@ -95,6 +119,8 @@ pub struct Message {
 
 #[derive(Debug, Clone)]
 pub struct TranscriptEntry {
+    pub kind: Kind,
+    pub session_id: Option<SessionId>,
     pub seq: i64,
     pub appended_at: Timestamp,
     pub entry: Entry,
@@ -115,11 +141,13 @@ impl<'a> Log<'a> {
         let appended_at = Timestamp::now();
 
         let appended = sqlx::query(
-            "INSERT INTO transcript_entry (workspace_id, organization_id, seq, body, appended_at)
+            "INSERT INTO transcript_entry (workspace_id, organization_id, seq, body, appended_at, kind, session_id)
              SELECT
                  ?,
                  ?,
                  (SELECT COALESCE(MAX(seq), 0) + 1 FROM transcript_entry WHERE workspace_id = ?),
+                 ?,
+                 ?,
                  ?,
                  ?
              WHERE EXISTS (SELECT 1 FROM workspace WHERE id = ? AND state = ?)
@@ -130,6 +158,8 @@ impl<'a> Log<'a> {
         .bind(workspace.id.to_string())
         .bind(serde_json::to_string(&entry)?)
         .bind(appended_at.to_string())
+        .bind(entry.kind().as_str())
+        .bind(entry.session_id().map(|id| id.to_string()))
         .bind(workspace.id.to_string())
         .bind(WorkspaceState::Open.as_str())
         .fetch_optional(&mut *self.connection)
@@ -143,6 +173,8 @@ impl<'a> Log<'a> {
         })?;
 
         Ok(TranscriptEntry {
+            kind: entry.kind(),
+            session_id: entry.session_id(),
             seq: appended.get("seq"),
             appended_at,
             entry,
@@ -157,11 +189,11 @@ impl<'a> Log<'a> {
         let latest = sqlx::query(
             "SELECT body
              FROM transcript_entry
-             WHERE workspace_id = ? AND json_extract(body, '$.kind') = 'said'
+             WHERE workspace_id = ? AND json_extract(body, '$.type') = 'said'
                AND json_extract(body, '$.participant') = ?
                AND seq > COALESCE((
                    SELECT MAX(seq) FROM transcript_entry
-                   WHERE workspace_id = ? AND json_extract(body, '$.kind') = 'session_ended'
+                   WHERE workspace_id = ? AND json_extract(body, '$.type') = 'session_ended'
                ), 0)
              ORDER BY seq DESC
              LIMIT 1",
@@ -181,6 +213,7 @@ impl<'a> Log<'a> {
             Entry::Said {
                 participant: said_by,
                 message,
+                ..
             } if said_by == participant => Some(message),
             _ => None,
         })
@@ -198,7 +231,7 @@ impl<'a> Log<'a> {
             "SELECT body
              FROM transcript_entry
              WHERE workspace_id = ? AND seq > ?
-               AND json_extract(body, '$.kind') = 'said'
+               AND json_extract(body, '$.type') = 'said'
              ORDER BY seq",
         )
         .bind(workspace.id.to_string())
@@ -212,6 +245,7 @@ impl<'a> Log<'a> {
             if let Entry::Said {
                 participant: who,
                 message,
+                ..
             } = serde_json::from_str(row.get("body"))?
                 && who == participant
             {
@@ -231,10 +265,11 @@ impl<'a> Log<'a> {
             "SELECT body
              FROM transcript_entry
              WHERE workspace_id = ?
-               AND json_extract(body, '$.kind') NOT IN ('participant_joined', 'session_started')
+               AND kind = 'shared_state'
+               AND json_extract(body, '$.type') NOT IN ('participant_joined', 'session_started')
                AND seq > COALESCE((
                    SELECT MAX(seq) FROM transcript_entry
-                   WHERE workspace_id = ? AND json_extract(body, '$.kind') = 'session_ended'
+                   WHERE workspace_id = ? AND json_extract(body, '$.type') = 'session_ended'
                ), 0)
              ORDER BY seq
              LIMIT 2",
@@ -262,14 +297,15 @@ impl<'a> Log<'a> {
             "SELECT body
              FROM transcript_entry
              WHERE workspace_id = ?
-               AND json_extract(body, '$.kind') != 'participant_joined'
+               AND kind = 'shared_state'
+               AND json_extract(body, '$.type') != 'participant_joined'
                AND seq < (
                    SELECT MIN(seq) FROM transcript_entry
                    WHERE workspace_id = ?
-                     AND json_extract(body, '$.kind') IN ('said', 'messages')
+                     AND json_extract(body, '$.type') IN ('said', 'messages')
                      AND seq > COALESCE((
                          SELECT MAX(seq) FROM transcript_entry
-                         WHERE workspace_id = ? AND json_extract(body, '$.kind') = 'session_ended'
+                         WHERE workspace_id = ? AND json_extract(body, '$.type') = 'session_ended'
                      ), 0)
                )
              ORDER BY seq",
@@ -294,10 +330,10 @@ impl<'a> Log<'a> {
             "SELECT body
              FROM transcript_entry
              WHERE workspace_id = ?
-               AND json_extract(body, '$.kind') IN ('said', 'messages')
+               AND json_extract(body, '$.type') IN ('said', 'messages')
                AND seq > COALESCE((
                    SELECT MAX(seq) FROM transcript_entry
-                   WHERE workspace_id = ? AND json_extract(body, '$.kind') = 'session_ended'
+                   WHERE workspace_id = ? AND json_extract(body, '$.type') = 'session_ended'
                ), 0)
              ORDER BY seq",
         )
@@ -313,6 +349,7 @@ impl<'a> Log<'a> {
                 Entry::Said {
                     participant,
                     message,
+                    ..
                 } => messages.push(Message {
                     participant,
                     message,
@@ -330,10 +367,11 @@ impl<'a> Log<'a> {
         workspace: &Workspace,
         from: Option<Cursor>,
         window: Window,
+        kinds: &Kinds,
     ) -> Result<Page, Unreadable> {
         let from = self.position(workspace, from).await?;
 
-        Ok(self.after(workspace, from, window).await?)
+        Ok(self.after(workspace, from, window, kinds).await?)
     }
 
     async fn position(
@@ -373,9 +411,10 @@ impl<'a> Log<'a> {
         workspace: &Workspace,
         from: Option<Cursor>,
         window: Window,
+        kinds: &Kinds,
     ) -> Result<Page> {
         let rows = sqlx::query(
-            "SELECT seq, body, appended_at
+            "SELECT seq, body, appended_at, kind, session_id
              FROM transcript_entry
              WHERE workspace_id = ? AND seq > ?
              ORDER BY seq
@@ -394,6 +433,11 @@ impl<'a> Log<'a> {
             .take(window.0)
             .map(|row| {
                 Ok(TranscriptEntry {
+                    kind: row.get::<String, _>("kind").parse()?,
+                    session_id: row
+                        .get::<Option<String>, _>("session_id")
+                        .map(|id| id.parse())
+                        .transpose()?,
                     seq: row.get("seq"),
                     appended_at: row.get::<String, _>("appended_at").parse()?,
                     entry: serde_json::from_str(row.get("body"))?,
@@ -401,14 +445,19 @@ impl<'a> Log<'a> {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        let cursor = entries
+            .last()
+            .map(|entry| Cursor {
+                workspace: workspace.id,
+                seq: entry.seq,
+            })
+            .or(from);
+        let entries = entries
+            .into_iter()
+            .filter(|entry| kinds.contains(entry.kind))
+            .collect();
         Ok(Page {
-            cursor: entries
-                .last()
-                .map(|entry| Cursor {
-                    workspace: workspace.id,
-                    seq: entry.seq,
-                })
-                .or(from),
+            cursor,
             entries,
             more,
         })
@@ -503,5 +552,105 @@ impl From<anyhow::Error> for Unreadable {
 impl From<sqlx::Error> for Unreadable {
     fn from(error: sqlx::Error) -> Self {
         Unreadable::Unavailable(error.into())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    SharedState,
+    Narration,
+    Detail,
+}
+
+impl Kind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SharedState => "shared_state",
+            Self::Narration => "narration",
+            Self::Detail => "detail",
+        }
+    }
+}
+impl FromStr for Kind {
+    type Err = anyhow::Error;
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "shared_state" => Ok(Self::SharedState),
+            "narration" => Ok(Self::Narration),
+            "detail" => Ok(Self::Detail),
+            _ => bail!("{value} is no transcript kind"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Kinds(Vec<Kind>);
+impl Default for Kinds {
+    fn default() -> Self {
+        Self(vec![Kind::SharedState])
+    }
+}
+impl FromStr for Kinds {
+    type Err = anyhow::Error;
+    fn from_str(value: &str) -> Result<Self> {
+        Ok(Self(
+            value.split(',').map(str::parse).collect::<Result<_>>()?,
+        ))
+    }
+}
+impl Kinds {
+    pub fn contains(&self, kind: Kind) -> bool {
+        self.0.contains(&kind)
+    }
+}
+impl Entry {
+    pub const fn kind(&self) -> Kind {
+        match self {
+            Self::Thought { .. } | Self::Plan { .. } => Kind::Narration,
+            _ => Kind::SharedState,
+        }
+    }
+    pub const fn session_id(&self) -> Option<SessionId> {
+        match self {
+            Self::Said { session_id, .. } => *session_id,
+            Self::Thought { session_id, .. } | Self::Plan { session_id, .. } => Some(*session_id),
+            Self::SessionStarted { session, .. } | Self::SessionEnded { session, .. } => {
+                Some(*session)
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Completion {
+    pub started_at: jiff::Timestamp,
+    pub finished_at: jiff::Timestamp,
+    pub turn_outcome: Option<TurnOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanEntry {
+    pub content: String,
+    pub priority: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum TurnOutcome {
+    Answered { stop_reason: String },
+    Cancelled,
+    Failed { because: String },
+}
+
+impl Completion {
+    pub fn at(now: jiff::Timestamp) -> Self {
+        Self {
+            started_at: now,
+            finished_at: now,
+            turn_outcome: None,
+        }
     }
 }

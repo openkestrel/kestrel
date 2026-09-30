@@ -40,10 +40,11 @@ pub async fn read(
     workspace: &str,
     from: Option<String>,
     follow: bool,
+    kinds: &str,
     presentation: &Presentation,
 ) -> Result<Option<String>> {
     let client = Client::new();
-    let url = transcript(control_plane, organization, workspace, follow)?;
+    let url = transcript(control_plane, organization, workspace, follow, kinds)?;
     let mut cursor = from;
     let mut heard = Instant::now();
 
@@ -108,6 +109,7 @@ async fn streamed(
                     })?;
                 *cursor = event.id;
             }
+            Some("cursor") => *cursor = event.id,
             Some("end") => return Ok(()),
             _ => {}
         }
@@ -128,6 +130,7 @@ fn transcript(
     organization: &str,
     workspace: &str,
     follow: bool,
+    kinds: &str,
 ) -> Result<Url> {
     let mut url = control_plane.clone();
     url.path_segments_mut()
@@ -148,7 +151,8 @@ fn transcript(
             "transcript",
         ]);
     url.query_pairs_mut()
-        .append_pair("follow", if follow { "true" } else { "false" });
+        .append_pair("follow", if follow { "true" } else { "false" })
+        .append_pair("kinds", kinds);
 
     Ok(url)
 }

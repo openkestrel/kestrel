@@ -148,17 +148,42 @@ pub struct Checkout {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Report {
-    Connected { version: String },
+    Connected {
+        version: String,
+    },
     Heartbeat,
-    Work { repositories: Vec<WorkRepository> },
-    Stderr { lines: Vec<String> },
+    Work {
+        repositories: Vec<WorkRepository>,
+    },
+    Stderr {
+        lines: Vec<String>,
+    },
     Started,
-    Model { model: String },
-    Said { message: String },
-    Used { usage: Usage },
+    Model {
+        model: String,
+    },
+    Said {
+        message: String,
+        completion: Completion,
+    },
+    Thought {
+        text: String,
+        completion: Completion,
+    },
+    Plan {
+        entries: Vec<PlanEntry>,
+        completion: Completion,
+    },
+    Used {
+        usage: Usage,
+    },
     Answered,
-    Checkout { repositories: Vec<Observed> },
-    Finished { exit: Exit },
+    Checkout {
+        repositories: Vec<Observed>,
+    },
+    Finished {
+        exit: Exit,
+    },
 }
 
 impl Report {
@@ -171,6 +196,8 @@ impl Report {
             Report::Started => "started",
             Report::Model { .. } => "model",
             Report::Said { .. } => "said",
+            Report::Thought { .. } => "thought",
+            Report::Plan { .. } => "plan",
             Report::Used { .. } => "used",
             Report::Answered => "answered",
             Report::Checkout { .. } => "checkout",
@@ -632,5 +659,37 @@ async fn refuse_if_declined(response: Response) -> Result<Response, Error> {
             Err(Error::Refused(response.text().await?))
         }
         _ => Ok(response),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Completion {
+    pub started_at: jiff::Timestamp,
+    pub finished_at: jiff::Timestamp,
+    pub turn_outcome: Option<TurnOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlanEntry {
+    pub content: String,
+    pub priority: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum TurnOutcome {
+    Answered { stop_reason: String },
+    Cancelled,
+    Failed { because: String },
+}
+
+impl Completion {
+    pub fn at(now: jiff::Timestamp) -> Self {
+        Self {
+            started_at: now,
+            finished_at: now,
+            turn_outcome: None,
+        }
     }
 }

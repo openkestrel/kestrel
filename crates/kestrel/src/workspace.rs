@@ -321,6 +321,8 @@ async fn said(
             Entry::Said {
                 participant: participant.to_owned(),
                 message: message.to_owned(),
+                session_id: None,
+                completion: None,
             },
         )
         .await?;
@@ -333,11 +335,12 @@ pub async fn transcript(
     id: WorkspaceId,
     from: Option<Cursor>,
     window: Window,
+    kinds: &crate::log::Kinds,
 ) -> Result<Page, Unreadable> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(id).await?;
 
-    tx.log().page(&workspace, from, window).await
+    tx.log().page(&workspace, from, window, kinds).await
 }
 
 pub async fn resolve(store: &Store, organization: &str, reference: &str) -> Result<Workspace> {

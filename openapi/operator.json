@@ -1607,6 +1607,21 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "kinds",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated Transcript kinds. The cursor advances across every examined seq, including omitted kinds.",
+            "schema": {
+              "type": "string",
+              "default": "shared_state",
+              "examples": [
+                "shared_state",
+                "narration,shared_state",
+                "shared_state,narration,detail"
+              ]
+            }
           }
         ],
         "responses": {
@@ -3065,16 +3080,28 @@
           },
           "entry": {
             "$ref": "#/components/schemas/Entry"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TranscriptKind"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           }
         },
         "required": [
           "seq",
           "appended_at",
-          "entry"
+          "entry",
+          "kind",
+          "session_id"
         ]
       },
       "Entry": {
-        "description": "One entry of a Workspace's Transcript.",
+        "description": "One completed unit of the Workspace Transcript.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/ParticipantJoined"
@@ -3096,10 +3123,16 @@
           },
           {
             "$ref": "#/components/schemas/InstanceReleased"
+          },
+          {
+            "$ref": "#/components/schemas/ThoughtEntry"
+          },
+          {
+            "$ref": "#/components/schemas/PlanEntry"
           }
         ],
         "discriminator": {
-          "propertyName": "kind",
+          "propertyName": "type",
           "mapping": {
             "participant_joined": "#/components/schemas/ParticipantJoined",
             "brief": "#/components/schemas/Brief",
@@ -3107,7 +3140,9 @@
             "said": "#/components/schemas/Message",
             "messages": "#/components/schemas/Messages",
             "session_ended": "#/components/schemas/SessionEnded",
-            "instance_released": "#/components/schemas/InstanceReleased"
+            "instance_released": "#/components/schemas/InstanceReleased",
+            "thought": "#/components/schemas/ThoughtEntry",
+            "plan": "#/components/schemas/PlanEntry"
           }
         }
       },
@@ -3115,15 +3150,15 @@
         "description": "A Participant joined the Workspace.",
         "type": "object",
         "properties": {
-          "kind": {
-            "const": "participant_joined"
-          },
           "participant": {
             "type": "string"
+          },
+          "type": {
+            "const": "participant_joined"
           }
         },
         "required": [
-          "kind",
+          "type",
           "participant"
         ]
       },
@@ -3131,9 +3166,6 @@
         "description": "The instruction a Workspace started with, rendered by the Trigger that fired or supplied by an operator.",
         "type": "object",
         "properties": {
-          "kind": {
-            "const": "brief"
-          },
           "trigger": {
             "type": [
               "string",
@@ -3143,10 +3175,13 @@
           },
           "brief": {
             "type": "string"
+          },
+          "type": {
+            "const": "brief"
           }
         },
         "required": [
-          "kind",
+          "type",
           "trigger",
           "brief"
         ]
@@ -3155,9 +3190,6 @@
         "description": "A Session started on behalf of the Workspace.",
         "type": "object",
         "properties": {
-          "kind": {
-            "const": "session_started"
-          },
           "session": {
             "type": "string",
             "format": "uuid"
@@ -3165,10 +3197,13 @@
           "agent": {
             "description": "The Agent the Session runs.",
             "type": "string"
+          },
+          "type": {
+            "const": "session_started"
           }
         },
         "required": [
-          "kind",
+          "type",
           "session",
           "agent"
         ]
@@ -3177,18 +3212,25 @@
         "description": "What a Participant said.",
         "type": "object",
         "properties": {
-          "kind": {
-            "const": "said"
-          },
           "participant": {
             "type": "string"
           },
           "message": {
             "type": "string"
+          },
+          "type": {
+            "const": "said"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
           }
         },
         "required": [
-          "kind",
+          "type",
           "participant",
           "message"
         ]
@@ -3197,19 +3239,19 @@
         "description": "Messages that arrived while a Session was active, drained as one Transcript entry.",
         "type": "object",
         "properties": {
-          "kind": {
-            "const": "messages"
-          },
           "messages": {
             "type": "array",
             "minItems": 1,
             "items": {
               "$ref": "#/components/schemas/SpokenMessage"
             }
+          },
+          "type": {
+            "const": "messages"
           }
         },
         "required": [
-          "kind",
+          "type",
           "messages"
         ]
       },
@@ -3233,19 +3275,19 @@
         "description": "A Session ended, and how it went.",
         "type": "object",
         "properties": {
-          "kind": {
-            "const": "session_ended"
-          },
           "session": {
             "type": "string",
             "format": "uuid"
           },
           "exit": {
             "$ref": "#/components/schemas/Exit"
+          },
+          "type": {
+            "const": "session_ended"
           }
         },
         "required": [
-          "kind",
+          "type",
           "session",
           "exit"
         ]
@@ -3297,13 +3339,16 @@
         ]
       },
       "Event": {
-        "description": "One event on the stream. Its event name is its kind.",
+        "description": "SSE names: entry (Recorded), cursor (CursorEvent), or end (End). Entry and cursor IDs advance the global Transcript cursor.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/Recorded"
           },
           {
             "$ref": "#/components/schemas/End"
+          },
+          {
+            "$ref": "#/components/schemas/CursorEvent"
           }
         ]
       },
@@ -3311,9 +3356,6 @@
         "description": "A person released the Workspace's Instance, destroying it and whatever it held that was never pushed.",
         "type": "object",
         "properties": {
-          "kind": {
-            "const": "instance_released"
-          },
           "participant": {
             "type": "string"
           },
@@ -3326,14 +3368,156 @@
               "null"
             ],
             "description": "What it held that existed nowhere else, as judged when it was released; null when it held nothing."
+          },
+          "type": {
+            "const": "instance_released"
           }
         },
         "required": [
-          "kind",
+          "type",
           "participant",
           "instance",
           "unpublished"
         ]
+      },
+      "TranscriptKind": {
+        "type": "string",
+        "enum": [
+          "shared_state",
+          "narration",
+          "detail"
+        ]
+      },
+      "TurnOutcome": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "answered"
+              },
+              "stop_reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "stop_reason"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "cancelled"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "failed"
+              },
+              "because": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "because"
+            ]
+          }
+        ],
+        "discriminator": {
+          "propertyName": "status"
+        }
+      },
+      "Completion": {
+        "type": "object",
+        "properties": {
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "turn_outcome": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TurnOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "started_at",
+          "finished_at",
+          "turn_outcome"
+        ]
+      },
+      "PlanEntry": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "plan"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanEntry"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "session_id",
+          "completion",
+          "entries"
+        ]
+      },
+      "ThoughtEntry": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "thought"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "session_id",
+          "completion",
+          "text"
+        ]
+      },
+      "CursorEvent": {
+        "type": "string",
+        "description": "A cursor event carries the highest examined workspace:seq as its SSE id and data, so a filtered read resumes beyond omitted entries."
       }
     }
   }

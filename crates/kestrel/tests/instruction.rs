@@ -45,6 +45,7 @@ async fn prompted(kestrel: &Kestrel) -> String {
             Entry::Said {
                 participant,
                 message,
+                ..
             } if participant == "builder" => Some(message),
             _ => None,
         })

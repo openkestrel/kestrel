@@ -107,23 +107,73 @@ async fn what_the_agent_says_reaches_the_transcript_coalesced_by_the_message_it_
     kestrel.teardown().await;
 }
 
-#[tokio::test]
-async fn an_agents_plan_its_tool_calls_and_its_reasoning_reach_no_transcript() {
-    let (kestrel, workspace, _) = worked(Script::Speaks).await;
-
-    let transcript = transcript(&kestrel, &workspace).await.join("\n");
-    for inside_the_session in [
-        "read the issue",
-        "the issue looks small",
-        "read README.md",
-        "call-1",
-    ] {
-        assert!(
-            !transcript.contains(inside_the_session),
-            "the transcript carries {inside_the_session}, which happened inside the session:\n{transcript}"
-        );
+async fn operator_entries(
+    kestrel: &Kestrel,
+    workspace: &Workspace,
+    kinds: Option<&str>,
+) -> Vec<serde_json::Value> {
+    let mut url = reqwest::Url::parse(&format!(
+        "{}/operator/organizations/acme/workspaces/{}/transcript?follow=false",
+        kestrel.operator(),
+        workspace.id
+    ))
+    .unwrap();
+    if let Some(kinds) = kinds {
+        url.query_pairs_mut().append_pair("kinds", kinds);
     }
+    let response = reqwest::Client::new().get(url).send().await.unwrap();
+    assert!(response.status().is_success());
+    response
+        .text()
+        .await
+        .unwrap()
+        .split("\n\n")
+        .filter_map(|frame| {
+            if !frame.contains("event: entry") {
+                return None;
+            }
+            let data = frame
+                .lines()
+                .find_map(|line| line.strip_prefix("data: "))
+                .unwrap();
+            Some(serde_json::from_str(data).unwrap())
+        })
+        .collect()
+}
 
+#[tokio::test]
+async fn an_agents_plan_and_reasoning_reach_narration_while_tool_calls_stay_out() {
+    let (kestrel, workspace, session) = worked(Script::Speaks).await;
+    let shared = operator_entries(&kestrel, &workspace, None).await;
+    assert!(shared.iter().all(|record| record["kind"] == "shared_state"));
+    let all = operator_entries(&kestrel, &workspace, Some("narration,shared_state")).await;
+    let narration: Vec<_> = all
+        .iter()
+        .filter(|record| record["kind"] == "narration")
+        .collect();
+    assert_eq!(narration.len(), 2);
+    assert_eq!(narration[0]["entry"]["type"], "plan");
+    assert_eq!(
+        narration[0]["entry"]["entries"][0]["content"],
+        "read the issue"
+    );
+    assert_eq!(narration[1]["entry"]["text"], "the issue looks small");
+    for record in all
+        .iter()
+        .filter(|record| record["entry"]["completion"].is_object())
+    {
+        assert_eq!(record["session_id"], session.id.to_string());
+        assert_eq!(record["entry"]["session_id"], session.id.to_string());
+        let completion = &record["entry"]["completion"];
+        let start: jiff::Timestamp = completion["started_at"].as_str().unwrap().parse().unwrap();
+        let finish: jiff::Timestamp = completion["finished_at"].as_str().unwrap().parse().unwrap();
+        assert!(start <= finish);
+    }
+    assert!(
+        all.windows(2)
+            .all(|pair| pair[0]["seq"].as_i64() < pair[1]["seq"].as_i64())
+    );
+    assert!(!serde_json::to_string(&all).unwrap().contains("call-1"));
     kestrel.teardown().await;
 }
 
@@ -540,4 +590,87 @@ async fn an_agent_that_dies_mid_turn_fails_the_session_rather_than_leaving_it_ha
     );
 
     kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_completed_message_is_readable_before_a_slow_turn_answers() {
+    let log = operator_log::capturing();
+    let kestrel = Kestrel::dispatching_to(
+        supervisor::binary(),
+        &scripted_agent::playing(Script::ReportsThenWaits),
+    )
+    .await;
+    let workspace = a_workspace(&kestrel).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let entries = operator_entries(&kestrel, &workspace, None).await;
+        if entries
+            .iter()
+            .any(|entry| entry["entry"]["message"] == "first message")
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the completed message stayed buffered"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let working = kestrel.session(session.id).await;
+    assert_eq!(working.state, SessionState::Working);
+    assert_eq!(working.worked_model.as_deref(), Some(OTHER_MODEL));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if log
+            .about(session.id)
+            .iter()
+            .any(|line| line.contains("completed message"))
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the late update reached no diagnostic"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let all = operator_entries(&kestrel, &workspace, Some("shared_state,narration")).await;
+    assert!(!serde_json::to_string(&all).unwrap().contains("late text"));
+    assert_eq!(
+        kestrel
+            .session(session.id)
+            .await
+            .usage
+            .unwrap()
+            .context_used,
+        12
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn failed_and_cancelled_turns_keep_the_text_observed_before_the_boundary() {
+    for (script, status) in [
+        (Script::CancelledText, "cancelled"),
+        (Script::FailedText, "failed"),
+    ] {
+        let (kestrel, workspace, session) = worked(script).await;
+        assert!(matches!(session.exit, Some(Exit::Failed { .. })));
+        let entries = operator_entries(&kestrel, &workspace, Some("shared_state,narration")).await;
+        let completed: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry["entry"]["completion"].is_object())
+            .collect();
+        assert_eq!(completed.len(), 2);
+        assert_eq!(completed[0]["entry"]["message"], "observed message");
+        assert_eq!(completed[1]["entry"]["text"], "observed thought");
+        for entry in completed {
+            assert_eq!(
+                entry["entry"]["completion"]["turn_outcome"]["status"],
+                status
+            );
+        }
+        kestrel.teardown().await;
+    }
 }

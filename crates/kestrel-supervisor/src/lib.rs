@@ -1,4 +1,5 @@
 pub mod checkout;
+pub mod completer;
 pub mod files;
 pub mod harness;
 pub mod link;
@@ -102,8 +103,6 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
         summary: None,
     };
 
-    // Nothing else reaches the link while a turn is being worked, so this Instance says it is
-    // alive beside the work rather than between the steps of it.
     let alive = tokio::spawn(saying_it_is_alive(Arc::clone(&link)));
     let mut relaying = tokio::spawn(relaying_stderr(Arc::clone(&link), written));
     let status = supervised(
@@ -269,11 +268,16 @@ async fn attend(
                     report_work(link, supervising, true).await?;
                 }
             }
-            worked = turn(&mut supervising.carrying) => {
+            event = next(&mut supervising.carrying) => {
                 if let Some(carrying) = supervising.carrying.as_mut() {
-                    carrying.working = false;
-                    worked_on(carrying, worked, diagnostics).await;
-                    report_work(link, supervising, true).await?;
+                    match event {
+                        harness::ConversationEvent::Report(report) => carrying.saying.push_back(report),
+                        harness::ConversationEvent::Worked(worked) => {
+                            carrying.working = false;
+                            worked_on(carrying, worked, diagnostics).await;
+                            report_work(link, supervising, true).await?;
+                        }
+                    }
                 }
             }
             _ = checking.tick() => {
@@ -533,12 +537,12 @@ async fn conversation(
     }
 }
 
-async fn turn(carrying: &mut Option<Carrying>) -> harness::Worked {
+async fn next(carrying: &mut Option<Carrying>) -> harness::ConversationEvent {
     match carrying
         .as_mut()
         .and_then(|carrying| carrying.conversation.as_mut())
     {
-        Some(conversation) => conversation.turn().await,
+        Some(conversation) => conversation.next().await,
         None => std::future::pending().await,
     }
 }
@@ -594,26 +598,15 @@ fn everything_left_to_say(
     worked: harness::Worked,
     observed: Vec<link::Observed>,
 ) -> impl Iterator<Item = Report> {
-    worked
-        .on
-        .map(|on| Report::Model { model: on.model })
-        .into_iter()
-        .chain(
-            worked
-                .said
-                .into_iter()
-                .map(|message| Report::Said { message }),
-        )
-        .chain(worked.usage.map(|usage| Report::Used { usage }))
-        .chain(std::iter::once(Report::Checkout {
-            repositories: observed,
-        }))
-        .chain(std::iter::once(match worked.failed {
-            Some(because) => Report::Finished {
-                exit: Exit::Failed { because },
-            },
-            None => Report::Answered,
-        }))
+    std::iter::once(Report::Checkout {
+        repositories: observed,
+    })
+    .chain(std::iter::once(match worked.failed {
+        Some(because) => Report::Finished {
+            exit: Exit::Failed { because },
+        },
+        None => Report::Answered,
+    }))
 }
 
 fn dialled(variables: &BTreeMap<String, String>) -> Option<Link> {

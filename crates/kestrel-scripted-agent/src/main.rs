@@ -2,6 +2,7 @@
 //! over the wire rather than over a shim above it, with no network and no model spend.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -192,6 +193,8 @@ async fn main() -> Result<()> {
         .await
 }
 
+static TURN: AtomicUsize = AtomicUsize::new(0);
+
 async fn play(
     script: Script,
     prompted: &str,
@@ -199,6 +202,33 @@ async fn play(
     located: Option<PathBuf>,
     connection: &ConnectionTo<Client>,
 ) -> Result<StopReason> {
+    TURN.store(earlier.len(), Ordering::Relaxed);
+    if script == Script::ReportsThenWaits {
+        say(connection, "first", "first message")?;
+        update(
+            connection,
+            SessionUpdate::AgentThoughtChunk(chunk(Some("thinking"), "thinking between messages")),
+        )?;
+        say(connection, "second", "still working")?;
+        say(connection, "first", "late text")?;
+        update(
+            connection,
+            SessionUpdate::UsageUpdate(UsageUpdate::new(12, 100)),
+        )?;
+        std::future::pending::<()>().await;
+    }
+    if matches!(script, Script::CancelledText | Script::FailedText) {
+        say(connection, "message", "observed message")?;
+        update(
+            connection,
+            SessionUpdate::AgentThoughtChunk(chunk(Some("thought"), "observed thought")),
+        )?;
+        return Ok(if script == Script::CancelledText {
+            StopReason::Cancelled
+        } else {
+            StopReason::MaxTokens
+        });
+    }
     if script == Script::Mutters {
         eprintln!("{MUTTERED}");
         eprintln!("{}", "a".repeat(OVERLONG));
@@ -459,8 +489,13 @@ fn update(connection: &ConnectionTo<Client>, update: SessionUpdate) -> Result<()
 }
 
 fn chunk(message: Option<&str>, said: &str) -> ContentChunk {
-    ContentChunk::new(ContentBlock::Text(TextContent::new(said)))
-        .message_id(message.map(MessageId::new))
+    ContentChunk::new(ContentBlock::Text(TextContent::new(said))).message_id(message.map(|id| {
+        MessageId::new(format!(
+            "{}-{}-{id}",
+            std::process::id(),
+            TURN.load(Ordering::Relaxed)
+        ))
+    }))
 }
 
 fn models(current: impl Into<SessionConfigValueId>) -> SessionConfigOption {
