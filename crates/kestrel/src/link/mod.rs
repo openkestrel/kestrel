@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::Result;
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -31,6 +32,7 @@ use crate::workspace;
 
 pub(crate) const ON_THE_LINK: jiff::SignedDuration = jiff::SignedDuration::from_secs(6);
 
+pub const ANSWERS: &str = "/link/instances/{instance}/answers/{request}";
 pub const CREDENTIALS: &str = "/link/instances/{instance}/credentials";
 /// The Transcript of the Workspace holding the Instance. Named for what crosses the link rather
 /// than for what it is, because the supervisor is a courier and may not know (ADR-0002).
@@ -98,6 +100,7 @@ struct ControlPlane {
     store: Store,
     shutdown: CancellationToken,
     summaries: crate::live_work::Summaries,
+    reads: crate::live_read::Reads,
 }
 
 struct Waiting {
@@ -145,8 +148,10 @@ pub fn router(
     store: Store,
     shutdown: CancellationToken,
     summaries: crate::live_work::Summaries,
+    reads: crate::live_read::Reads,
 ) -> Router {
     Router::new()
+        .route(ANSWERS, post(answer))
         .route(CREDENTIALS, get(credentials).patch(refresh_credentials))
         .route(ENTRIES, get(entries))
         .route(INSTRUCTIONS, get(instructions))
@@ -155,6 +160,7 @@ pub fn router(
             store,
             shutdown,
             summaries,
+            reads,
         })
 }
 
@@ -268,8 +274,10 @@ async fn instructions(
     );
 
     let connection = control_plane.summaries.connected(&linked.instance);
+    let (mut asked, reading) = control_plane.reads.connected(&linked.instance);
     let stream = async_stream::try_stream! {
         let _connection = connection;
+        let _reading = reading;
         loop {
             let waiting = waiting(&control_plane.store, &linked.instance, &digest, cursor).await?;
             for sent in waiting.instructions {
@@ -287,9 +295,13 @@ async fn instructions(
                 break;
             }
 
-            tokio::select! {
-                () = tokio::time::sleep(POLL) => {}
+            let read = tokio::select! {
+                () = tokio::time::sleep(POLL) => None,
+                read = asked.recv() => read,
                 () = control_plane.shutdown.cancelled() => break,
+            };
+            if let Some(read) = read {
+                yield Event::default().event("read").json_data(&read)?;
             }
         }
     };
@@ -415,6 +427,29 @@ async fn report(
         return Ok((StatusCode::ACCEPTED, Json(checkout)).into_response());
     }
     Ok(StatusCode::ACCEPTED.into_response())
+}
+
+async fn answer(
+    State(control_plane): State<ControlPlane>,
+    Path((instance, request)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<StatusCode, Refused> {
+    authenticated(&control_plane, &headers, &instance).await?;
+    let request = request
+        .parse()
+        .map_err(|_| Refused::BadRequest(format!("{request} is not a read")))?;
+    let json = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|kind| kind.to_str().ok())
+        .is_some_and(|kind| kind.starts_with("application/json"));
+    let taken = control_plane
+        .reads
+        .answer(&instance, request, body, json)
+        .ok_or_else(|| Refused::Gone("no read is waiting on this answer".to_owned()))?;
+    let _ = taken.await;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn waiting(store: &Store, instance: &str, digest: &str, cursor: i64) -> Result<Waiting> {

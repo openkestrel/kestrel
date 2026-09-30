@@ -1685,6 +1685,7 @@ dependencies = [
  "tempfile",
  "tiny_http",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

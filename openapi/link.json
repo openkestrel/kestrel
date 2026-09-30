@@ -26,6 +26,38 @@
     }
   ],
   "paths": {
+    "/link/instances/{instance}/answers/{request}": {
+      "post": {
+        "operationId": "answer",
+        "summary": "Answer a read the stream asked of this Instance.",
+        "description": "The body is streamed and piped to the operator who asked. A read nobody has begun answering 10 s after it was sent is given up on, and its answer is then refused. A JSON answer is one `Answer`; bytes are a file's contents as they are.",
+        "parameters": [
+          { "$ref": "#/components/parameters/instance" },
+          {
+            "name": "request",
+            "in": "path",
+            "required": true,
+            "description": "The `request` the read carried.",
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/Answer" } },
+            "application/octet-stream": { "schema": { "type": "string", "contentMediaType": "application/octet-stream" } }
+          }
+        },
+        "responses": {
+          "204": { "description": "The answer was taken, or the operator stopped reading it." },
+          "400": { "$ref": "#/components/responses/Refused" },
+          "401": { "$ref": "#/components/responses/Refused" },
+          "403": { "$ref": "#/components/responses/Refused" },
+          "410": { "$ref": "#/components/responses/Refused" },
+          "503": { "$ref": "#/components/responses/Refused" }
+        }
+      }
+    },
     "/link/instances/{instance}/credentials": {
       "get": {
         "operationId": "credentials",
@@ -191,7 +223,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The stream is open. Each event carries an instruction and the Session it is for as its data, the instruction's kind as its event name, and its seq as its id.",
+            "description": "The stream is open. Each event carries an instruction and the Session it is for as its data, the instruction's kind as its event name, and its seq as its id. An event named `read` carries a `Read` instead, and no id: it is never stored, and a reconnect never replays it.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -426,6 +458,110 @@
           "kind",
           "prompt"
         ]
+      },
+      "Read": {
+        "description": "A read of the Instance's checkouts, answered by POSTing to `answers/{request}`. Paths are `<repo>/<path>`, resolved through symlinks, and refused outside that repository's checkout.",
+        "oneOf": [
+          { "$ref": "#/components/schemas/ReadFiles" },
+          { "$ref": "#/components/schemas/ReadFile" }
+        ],
+        "discriminator": {
+          "propertyName": "read",
+          "mapping": {
+            "files": "#/components/schemas/ReadFiles",
+            "file": "#/components/schemas/ReadFile"
+          }
+        },
+        "properties": {
+          "request": { "type": "string", "format": "uuid" }
+        },
+        "required": ["request"]
+      },
+      "ReadFiles": {
+        "description": "One directory level, at most 5,000 entries, each marked tracked, untracked or ignored. No path lists the repositories.",
+        "type": "object",
+        "properties": {
+          "read": { "const": "files" },
+          "path": { "type": "string" }
+        },
+        "required": ["read"]
+      },
+      "ReadFile": {
+        "description": "A file: UTF-8 text up to 1 MiB as a `text` answer, otherwise, or when `raw`, its bytes.",
+        "type": "object",
+        "properties": {
+          "read": { "const": "file" },
+          "path": { "type": "string" },
+          "raw": { "type": "boolean" }
+        },
+        "required": ["read", "path", "raw"]
+      },
+      "Answer": {
+        "oneOf": [
+          { "$ref": "#/components/schemas/AnswerListing" },
+          { "$ref": "#/components/schemas/AnswerText" },
+          { "$ref": "#/components/schemas/AnswerRefused" },
+          { "$ref": "#/components/schemas/AnswerMissing" }
+        ],
+        "discriminator": {
+          "propertyName": "answer",
+          "mapping": {
+            "listing": "#/components/schemas/AnswerListing",
+            "text": "#/components/schemas/AnswerText",
+            "refused": "#/components/schemas/AnswerRefused",
+            "missing": "#/components/schemas/AnswerMissing"
+          }
+        }
+      },
+      "AnswerListing": {
+        "type": "object",
+        "properties": {
+          "answer": { "const": "listing" },
+          "path": { "type": "string" },
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "kind": { "enum": ["file", "directory", "symlink", "other"] },
+                "size": { "type": "integer", "minimum": 0 },
+                "git": { "enum": ["tracked", "untracked", "ignored"] }
+              },
+              "required": ["name", "kind"]
+            }
+          },
+          "total": { "type": "integer", "minimum": 0 },
+          "truncated": { "type": "boolean" }
+        },
+        "required": ["answer", "path", "entries", "total", "truncated"]
+      },
+      "AnswerText": {
+        "type": "object",
+        "properties": {
+          "answer": { "const": "text" },
+          "path": { "type": "string" },
+          "text": { "type": "string" }
+        },
+        "required": ["answer", "path", "text"]
+      },
+      "AnswerRefused": {
+        "description": "Outside the checkout, or not the kind of entry the read needs.",
+        "type": "object",
+        "properties": {
+          "answer": { "const": "refused" },
+          "message": { "type": "string" }
+        },
+        "required": ["answer", "message"]
+      },
+      "AnswerMissing": {
+        "description": "No such repository or path.",
+        "type": "object",
+        "properties": {
+          "answer": { "const": "missing" },
+          "message": { "type": "string" }
+        },
+        "required": ["answer", "message"]
       },
       "Checkout": {
         "description": "What the agent works in: each repository cloned into the working directory, on the branch, which is cut from the base when the repository does not have it yet.",
