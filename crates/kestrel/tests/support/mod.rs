@@ -1283,7 +1283,7 @@ impl Kestrel {
         from: Option<Cursor>,
         window: Window,
     ) -> Result<Page, Unreadable> {
-        workspace::transcript(&self.store, id, from, window).await
+        workspace::transcript(&self.store, id, from, window, &Default::default()).await
     }
 
     pub async fn said(&self, session: &Session, message: &str) {
@@ -1301,6 +1301,10 @@ impl Kestrel {
                 Entry::Said {
                     participant: session.agent.name.clone(),
                     message: message.to_owned(),
+                    session_id: Some(session.id),
+                    completion: Some(kestrel::log::Completion::at(
+                        "2026-09-29T12:00:00Z".parse().unwrap(),
+                    )),
                 },
             )
             .await?;
@@ -1408,6 +1412,8 @@ impl Kestrel {
                 Entry::Said {
                     participant: "operator".to_owned(),
                     message: "do the work this environment was provisioned for".to_owned(),
+                    session_id: None,
+                    completion: None,
                 },
             )
             .await?;

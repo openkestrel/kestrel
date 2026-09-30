@@ -915,7 +915,8 @@ async fn fed(
     holding: WorkspaceId,
 ) -> Result<Fired> {
     let workspace = tx.workspaces().get(holding).await?;
-    let session = workspace::post_in(&mut tx, &workspace, &trigger.name, &rendered.brief).await?;
+    // A Trigger's name is not a person's, so it is not held to the participant name rule.
+    let session = workspace::post_as(&mut tx, &workspace, &trigger.name, &rendered.brief).await?;
     tx.triggers()
         .record_fed_firing(trigger, event, &workspace)
         .await?;

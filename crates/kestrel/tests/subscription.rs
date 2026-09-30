@@ -245,6 +245,7 @@ async fn said_by_the_agent(kestrel: &Kestrel, workspace: &Workspace) -> String {
             log::Entry::Said {
                 participant,
                 message,
+                ..
             } if participant == workspace.opened_with.name => Some(message),
             _ => None,
         })

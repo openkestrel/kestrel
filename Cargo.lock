@@ -1686,6 +1686,7 @@ name = "kestrel-supervisor"
 version = "0.0.0"
 dependencies = [
  "agent-client-protocol",
+ "jiff",
  "percent-encoding",
  "reqwest",
  "serde",
@@ -1693,6 +1694,7 @@ dependencies = [
  "tempfile",
  "tiny_http",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

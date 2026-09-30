@@ -26,7 +26,7 @@ use crate::agent;
 use crate::browser;
 use crate::cron::Cron;
 use crate::declaration;
-use crate::declined::Declined;
+use crate::declined::{Declined, FieldRefusal};
 use crate::domain::{
     self, Agent, Connection, Correlation, Direction, EventRecordId, EventRefusal, Fires, Firing,
     Integration, Occurrence, Organization, Project, Schedule, Session, SubscriptionProfile,
@@ -82,6 +82,10 @@ pub const WORKSPACES: &str = "/operator/organizations/{organization}/workspaces"
 pub const WORKSPACE: &str = "/operator/organizations/{organization}/workspaces/{workspace}";
 pub const WORKSPACE_WORK: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/work";
+pub const WORKSPACE_FILES: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/files";
+pub const WORKSPACE_FILE: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/file";
 pub const WORKSPACE_MESSAGES: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/messages";
 pub const WORKSPACE_SEAL: &str =
@@ -108,15 +112,31 @@ struct ControlPlane {
     shutdown: CancellationToken,
     summaries: crate::live_work::Summaries,
     client: Option<Arc<PathBuf>>,
+    reads: crate::live_read::Reads,
+}
+
+#[derive(Deserialize)]
+struct Browsing {
+    path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Reading {
+    path: String,
+    #[serde(default)]
+    raw: bool,
 }
 
 #[derive(Deserialize)]
 struct Following {
     follow: Option<bool>,
+    kinds: Option<String>,
 }
 
 #[derive(Serialize)]
 struct Recorded {
+    kind: log::Kind,
+    session_id: Option<crate::domain::SessionId>,
     seq: i64,
     appended_at: String,
     entry: log::Entry,
@@ -144,6 +164,7 @@ pub fn router(
     shutdown: CancellationToken,
     summaries: crate::live_work::Summaries,
     client: Option<PathBuf>,
+    reads: crate::live_read::Reads,
 ) -> Router {
     Router::new()
         .route(ORGANIZATIONS, get(organizations).post(declare_organization))
@@ -181,6 +202,8 @@ pub fn router(
         .route(WORKSPACES, get(workspaces).post(open_workspace))
         .route(WORKSPACE, get(show_workspace))
         .route(WORKSPACE_WORK, get(work_summary))
+        .route(WORKSPACE_FILES, get(workspace_files))
+        .route(WORKSPACE_FILE, get(workspace_file))
         .route(WORKSPACE_MESSAGES, post(post_to_workspace))
         .route(WORKSPACE_SEAL, post(seal_workspace))
         .route(WORKSPACE_INSTANCE_RELEASE, post(release_instance))
@@ -194,6 +217,7 @@ pub fn router(
             shutdown,
             summaries,
             client: client.map(Arc::new),
+            reads,
         })
         .layer(middleware::from_fn(addressed_here))
 }
@@ -284,8 +308,7 @@ struct WorkspaceDeclaration {
 
 #[derive(Deserialize)]
 struct WorkspaceMessage {
-    #[serde(default = "default_operator_participant")]
-    participant: String,
+    participant: Option<String>,
     message: String,
 }
 
@@ -1820,6 +1843,41 @@ async fn work_summary(
     ))
 }
 
+async fn workspace_files(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, reference)): Path<(String, String)>,
+    Query(browsing): Query<Browsing>,
+) -> Result<crate::live_read::AnswerBody, Refused> {
+    Ok(crate::live_read::read(
+        &control_plane.store,
+        &control_plane.reads,
+        &organization,
+        &reference,
+        crate::live_read::Read::Files {
+            path: browsing.path.filter(|path| !path.is_empty()),
+        },
+    )
+    .await?)
+}
+
+async fn workspace_file(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, reference)): Path<(String, String)>,
+    Query(reading): Query<Reading>,
+) -> Result<crate::live_read::AnswerBody, Refused> {
+    Ok(crate::live_read::read(
+        &control_plane.store,
+        &control_plane.reads,
+        &organization,
+        &reference,
+        crate::live_read::Read::File {
+            path: reading.path,
+            raw: reading.raw,
+        },
+    )
+    .await?)
+}
+
 async fn show_workspace(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
@@ -1841,7 +1899,7 @@ async fn post_to_workspace(
     let session = workspace::post(
         &control_plane.store,
         workspace.id,
-        &message.participant,
+        message.participant.as_deref().unwrap_or_default(),
         &message.message,
     )
     .await
@@ -2004,20 +2062,35 @@ async fn transcript(
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     let workspace = workspace.id;
     let follow = following.follow.unwrap_or(true);
+    let kinds = following
+        .kinds
+        .as_deref()
+        .map(str::parse::<log::Kinds>)
+        .transpose()
+        .map_err(|error| Refused::BadRequest(error.to_string()))?
+        .unwrap_or_default();
     let from = last_event_id(&headers)?;
-    let mut read = reading(&control_plane.store, workspace, from).await?;
+    let mut read = reading(&control_plane.store, workspace, from, &kinds).await?;
 
     let stream = async_stream::try_stream! {
+        let mut delivered = from;
         loop {
             for entry in read.page.entries {
+                delivered = Some(Cursor::at(workspace, entry.seq));
                 yield Event::default()
                     .id(Cursor::at(workspace, entry.seq).to_string())
                     .event("entry")
                     .json_data(Recorded {
+                        kind: entry.kind,
+                        session_id: entry.session_id,
                         seq: entry.seq,
                         appended_at: entry.appended_at.to_string(),
                         entry: entry.entry,
                     })?;
+            }
+            if let Some(cursor) = read.page.cursor && delivered != Some(cursor) {
+                delivered = Some(cursor);
+                yield Event::default().event("cursor").id(cursor.to_string()).json_data(cursor.to_string())?;
             }
             if !read.page.more {
                 let because = match (read.sealed, follow) {
@@ -2036,7 +2109,7 @@ async fn transcript(
                 }
             }
 
-            read = reading(&control_plane.store, workspace, read.page.cursor)
+            read = reading(&control_plane.store, workspace, read.page.cursor, &kinds)
                 .await
                 .map_err(Refused::into_error)?;
         }
@@ -2047,14 +2120,22 @@ async fn transcript(
 
 /// The state is read in the transaction the page is, so a Workspace sealed between the two
 /// cannot end the stream short of its last entry.
-async fn reading(store: &Store, id: WorkspaceId, from: Option<Cursor>) -> Result<Read, Refused> {
+async fn reading(
+    store: &Store,
+    id: WorkspaceId,
+    from: Option<Cursor>,
+    kinds: &log::Kinds,
+) -> Result<Read, Refused> {
     let mut tx = store.begin().await?;
     let workspace = tx
         .workspaces()
         .find(id)
         .await?
         .ok_or_else(|| Refused::NotFound("no workspace".to_owned()))?;
-    let page = tx.log().page(&workspace, from, Window::DEFAULT).await?;
+    let page = tx
+        .log()
+        .page(&workspace, from, Window::DEFAULT, kinds)
+        .await?;
 
     Ok(Read {
         page,
@@ -2081,6 +2162,12 @@ enum Refused {
     NotFound(String),
     Conflict(String),
     Unprocessable(String),
+    /// A value a person named, refused: the request field it came in travels with the reason.
+    Named {
+        field: &'static str,
+        why: String,
+    },
+    NotAnswering(String),
     Unavailable(anyhow::Error),
 }
 
@@ -2091,7 +2178,9 @@ impl Refused {
             | Refused::Forbidden(why)
             | Refused::NotFound(why)
             | Refused::Conflict(why)
-            | Refused::Unprocessable(why) => why.into(),
+            | Refused::Unprocessable(why)
+            | Refused::Named { why, .. }
+            | Refused::NotAnswering(why) => why.into(),
             Refused::Unavailable(error) => error.into(),
         }
     }
@@ -2101,6 +2190,15 @@ impl From<anyhow::Error> for Refused {
     fn from(error: anyhow::Error) -> Self {
         if let Some(missing) = error.downcast_ref::<NoSuchOrganization>() {
             return Refused::NotFound(missing.to_string());
+        }
+        if let Some(named) = error.downcast_ref::<FieldRefusal>() {
+            return Refused::Named {
+                field: named.field,
+                why: named.message.clone(),
+            };
+        }
+        if let Some(silent) = error.downcast_ref::<crate::live_read::NotAnswering>() {
+            return Refused::NotAnswering(silent.to_string());
         }
         match error.downcast::<Declined>() {
             Ok(Declined::Unacceptable(why)) => Refused::Unprocessable(why),
@@ -2129,26 +2227,31 @@ impl From<Unreadable> for Refused {
 impl IntoResponse for Refused {
     fn into_response(self) -> Response {
         let busy = matches!(&self, Refused::Unavailable(error) if store::busy(error));
-        let (status, message) = match self {
-            Refused::BadRequest(why) => (StatusCode::BAD_REQUEST, why),
-            Refused::Forbidden(why) => (StatusCode::FORBIDDEN, why),
-            Refused::NotFound(why) => (StatusCode::NOT_FOUND, why),
-            Refused::Conflict(why) => (StatusCode::CONFLICT, why),
-            Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why),
+        let (status, message, field) = match self {
+            Refused::BadRequest(why) => (StatusCode::BAD_REQUEST, why, None),
+            Refused::Forbidden(why) => (StatusCode::FORBIDDEN, why, None),
+            Refused::NotFound(why) => (StatusCode::NOT_FOUND, why, None),
+            Refused::Conflict(why) => (StatusCode::CONFLICT, why, None),
+            Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why, None),
+            Refused::Named { field, why } => (StatusCode::UNPROCESSABLE_ENTITY, why, Some(field)),
+            Refused::NotAnswering(why) => (StatusCode::GATEWAY_TIMEOUT, why, None),
             Refused::Unavailable(error) => {
                 warn!(%error, busy, "the operator boundary could not answer");
                 (
                     StatusCode::SERVICE_UNAVAILABLE,
                     "the control plane could not answer".to_owned(),
+                    None,
                 )
             }
         };
 
-        serve::refusal(status, busy, Json(Refusal { message }))
+        serve::refusal(status, busy, Json(Refusal { message, field }))
     }
 }
 
 #[derive(Serialize)]
 struct Refusal {
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    field: Option<&'static str>,
 }

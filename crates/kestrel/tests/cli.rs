@@ -345,7 +345,7 @@ fn transcribed(kestrel: &Booted, workspace: &str) -> Vec<String> {
         .iter()
         .map(|recorded| {
             let entry = &recorded["entry"];
-            let said = match entry["kind"].as_str().expect("an entry kind") {
+            let said = match entry["type"].as_str().expect("an entry kind") {
                 "participant_joined" => format!("participant joined {}", entry["participant"]),
                 "session_started" => {
                     format!("session started {} {}", entry["session"], entry["agent"])
@@ -449,7 +449,14 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
     let booted = kestrel.boot();
     declared(&booted);
     let workspace = opened(&booted);
-    booted.run(&["workspace", "post", &workspace, "go"]);
+    booted.run(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "operator",
+        "go",
+    ]);
     dispatched(&booted, &workspace);
 
     let shown = booted.record(&["workspace", "show", &workspace, "--json", "instance,held"]);
@@ -473,7 +480,7 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
     );
     assert_eq!(
         transcribed(&booted, &workspace).last(),
-        Some(&format!("7 instance released operator {instance}")),
+        Some(&format!("10 instance released operator {instance}")),
         "the release is not on the record"
     );
     assert!(
@@ -484,12 +491,34 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
 }
 
 #[test]
+fn a_workspace_post_without_a_participant_is_a_usage_error() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.boot();
+    declared(&booted);
+    let workspace = opened(&booted);
+
+    let refused = booted.refused(&["workspace", "post", &workspace, "go"]);
+
+    assert!(
+        refused.contains("--as-participant"),
+        "a post without a participant should be refused by usage: {refused}"
+    );
+}
+
+#[test]
 fn a_session_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
     let kestrel = Kestrel::new();
     let booted = kestrel.boot();
     declared(&booted);
     let workspace = opened(&booted);
-    let session = booted.run(&["workspace", "post", &workspace, "go"]);
+    let session = booted.run(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "operator",
+        "go",
+    ]);
 
     let listed = dispatched(&booted, &workspace);
 
@@ -519,7 +548,14 @@ async fn a_supervisor_outlives_its_stopped_control_plane_and_goes_with_its_insta
     let booted = kestrel.booting("127.0.0.1:0", Script::Converses, "info");
     declared(&booted);
     let workspace = opened(&booted);
-    booted.run(&["workspace", "post", &workspace, "go"]);
+    booted.run(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "operator",
+        "go",
+    ]);
     let listed = booted.until(
         &[
             "session",
@@ -557,7 +593,14 @@ async fn killing_a_control_plane_without_restarting_stops_its_supervisor() {
     let booted = kestrel.booting("127.0.0.1:0", Script::Converses, "info");
     declared(&booted);
     let workspace = opened(&booted);
-    booted.run(&["workspace", "post", &workspace, "go"]);
+    booted.run(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "operator",
+        "go",
+    ]);
     let listed = booted.until(
         &[
             "session",
@@ -592,7 +635,14 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
     let killed = kestrel.booting(&listen, Script::Lingers, "info");
     declared(&killed);
     let workspace = opened(&killed);
-    let session = killed.run(&["workspace", "post", &workspace, "go"]);
+    let session = killed.run(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "operator",
+        "go",
+    ]);
     // The transcript says the Session started only once the supervisor holds the Start instruction,
     // which is the first moment a restart has anything to recover; an instance alone is not.
     killed.until(
@@ -600,7 +650,7 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
         |transcribed| {
             transcribed
                 .iter()
-                .any(|recorded| recorded["entry"]["kind"] == "session_started")
+                .any(|recorded| recorded["entry"]["type"] == "session_started")
         },
         "started its turn",
     );
@@ -639,11 +689,12 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
         transcript,
         vec![
             "1 participant joined builder".to_owned(),
-            "2 said operator go".to_owned(),
-            format!("3 session started {session} builder"),
-            "4 said builder half of one message, and the other half".to_owned(),
-            "5 said builder a second message".to_owned(),
-            format!("6 session ended {session} succeeded"),
+            "2 participant joined operator".to_owned(),
+            "3 said operator go".to_owned(),
+            format!("4 session started {session} builder"),
+            "7 said builder half of one message, and the other half".to_owned(),
+            "8 said builder a second message".to_owned(),
+            format!("9 session ended {session} succeeded"),
         ]
     );
 }
@@ -1246,4 +1297,60 @@ fn only_one_of_a_filter_and_a_brief_is_read_from_standard_input() {
     ]);
 
     assert!(refusal.contains("standard input"), "{refusal}");
+}
+
+#[test]
+fn transcript_kinds_select_the_entries_the_client_streams() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.boot();
+    declared(&booted);
+    let workspace = opened(&booted);
+    booted.run(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "operator",
+        "go",
+    ]);
+    dispatched(&booted, &workspace);
+    let shared = booted.records(&[
+        "workspace",
+        "transcript",
+        &workspace,
+        "--json",
+        "kind,entry",
+    ]);
+    assert!(shared.iter().all(|record| record["kind"] == "shared_state"));
+    let narration = booted.records(&[
+        "workspace",
+        "transcript",
+        &workspace,
+        "--kinds",
+        "narration",
+        "--json",
+        "seq,kind,session_id,entry",
+    ]);
+    assert_eq!(narration.len(), 2);
+    assert_eq!(narration[0]["entry"]["type"], "plan");
+    assert_eq!(narration[1]["entry"]["type"], "thought");
+    assert!(
+        narration
+            .iter()
+            .all(|record| record["kind"] == "narration" && record["session_id"].is_string())
+    );
+    let all = booted.records(&[
+        "workspace",
+        "transcript",
+        &workspace,
+        "--kinds",
+        "narration,shared_state",
+        "--json",
+        "seq,kind,entry",
+    ]);
+    assert_eq!(all.len(), shared.len() + narration.len());
+    assert!(
+        all.windows(2)
+            .all(|pair| pair[0]["seq"].as_i64() < pair[1]["seq"].as_i64())
+    );
 }

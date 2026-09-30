@@ -248,6 +248,7 @@ async fn a_command_on_a_continuing_trigger_is_the_waiting_sessions_next_turn() {
             Entry::Said {
                 participant,
                 message,
+                ..
             } if participant == "builder" => Some(message),
             _ => None,
         })
@@ -608,7 +609,7 @@ triggers:
             .iter()
             .any(|recorded| matches!(
                 &recorded.entry,
-                Entry::Said { participant, message }
+                Entry::Said { participant, message, .. }
                     if participant == "ci" && *message == ci_brief().1
             ))
     );

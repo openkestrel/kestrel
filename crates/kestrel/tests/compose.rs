@@ -266,7 +266,14 @@ async fn a_session_provisions_an_instance_and_releasing_it_destroys_it_through_t
     let stack = Stack::up();
     let namespace = compose::namespace_for(&docker::repository());
     let workspace = a_workspace(&stack);
-    let session = stack.ran(&["workspace", "post", &workspace, "go"]);
+    let session = stack.ran(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "operator",
+        "go",
+    ]);
 
     let instance = compose::until("the session to reach an instance", || {
         listed(&stack, &session).instance
@@ -351,7 +358,7 @@ fn the_commands_usage_documents_are_the_commands_that_work() {
     let transcript = stack.client(&["workspace", "transcript", "latest"]);
     assert!(
         transcript.out[0]
-            .ends_with("\t{\"kind\":\"participant_joined\",\"participant\":\"builder\"}"),
+            .ends_with("\t{\"type\":\"participant_joined\",\"participant\":\"builder\"}"),
         "USAGE.md shows the Agent joining as the first entry, and the transcript was:\n{:?}",
         transcript.out
     );

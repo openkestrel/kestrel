@@ -49,6 +49,7 @@ async fn said(kestrel: &Kestrel, workspace: WorkspaceId) -> Vec<String> {
             Entry::Said {
                 participant,
                 message,
+                ..
             } if participant == "builder" => Some(message),
             _ => None,
         })

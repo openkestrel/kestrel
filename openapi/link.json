@@ -26,6 +26,38 @@
     }
   ],
   "paths": {
+    "/link/instances/{instance}/answers/{request}": {
+      "post": {
+        "operationId": "answer",
+        "summary": "Answer a read the stream asked of this Instance.",
+        "description": "The body is streamed and piped to the operator who asked. A read nobody has begun answering 10 s after it was sent is given up on, and its answer is then refused. A JSON answer is one `Answer`; bytes are a file's contents as they are.",
+        "parameters": [
+          { "$ref": "#/components/parameters/instance" },
+          {
+            "name": "request",
+            "in": "path",
+            "required": true,
+            "description": "The `request` the read carried.",
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/Answer" } },
+            "application/octet-stream": { "schema": { "type": "string", "contentMediaType": "application/octet-stream" } }
+          }
+        },
+        "responses": {
+          "204": { "description": "The answer was taken, or the operator stopped reading it." },
+          "400": { "$ref": "#/components/responses/Refused" },
+          "401": { "$ref": "#/components/responses/Refused" },
+          "403": { "$ref": "#/components/responses/Refused" },
+          "410": { "$ref": "#/components/responses/Refused" },
+          "503": { "$ref": "#/components/responses/Refused" }
+        }
+      }
+    },
     "/link/instances/{instance}/credentials": {
       "get": {
         "operationId": "credentials",
@@ -140,6 +172,21 @@
               "maximum": 500,
               "default": 100
             }
+          },
+          {
+            "name": "kinds",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated Transcript kinds. The cursor advances across every examined seq, including omitted kinds.",
+            "schema": {
+              "type": "string",
+              "default": "shared_state",
+              "examples": [
+                "shared_state",
+                "narration,shared_state",
+                "shared_state,narration,detail"
+              ]
+            }
           }
         ],
         "responses": {
@@ -191,7 +238,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The stream is open. Each event carries an instruction and the Session it is for as its data, the instruction's kind as its event name, and its seq as its id.",
+            "description": "The stream is open. Each event carries an instruction and the Session it is for as its data, the instruction's kind as its event name, and its seq as its id. An event named `read` carries a `Read` instead, and no id: it is never stored, and a reconnect never replays it.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -427,6 +474,110 @@
           "prompt"
         ]
       },
+      "Read": {
+        "description": "A read of the Instance's checkouts, answered by POSTing to `answers/{request}`. Paths are `<repo>/<path>`, resolved through symlinks, and refused outside that repository's checkout.",
+        "oneOf": [
+          { "$ref": "#/components/schemas/ReadFiles" },
+          { "$ref": "#/components/schemas/ReadFile" }
+        ],
+        "discriminator": {
+          "propertyName": "read",
+          "mapping": {
+            "files": "#/components/schemas/ReadFiles",
+            "file": "#/components/schemas/ReadFile"
+          }
+        },
+        "properties": {
+          "request": { "type": "string", "format": "uuid" }
+        },
+        "required": ["request"]
+      },
+      "ReadFiles": {
+        "description": "One directory level, at most 5,000 entries, each marked tracked, untracked or ignored. No path lists the repositories.",
+        "type": "object",
+        "properties": {
+          "read": { "const": "files" },
+          "path": { "type": "string" }
+        },
+        "required": ["read"]
+      },
+      "ReadFile": {
+        "description": "A file: UTF-8 text up to 1 MiB as a `text` answer, otherwise, or when `raw`, its bytes.",
+        "type": "object",
+        "properties": {
+          "read": { "const": "file" },
+          "path": { "type": "string" },
+          "raw": { "type": "boolean" }
+        },
+        "required": ["read", "path", "raw"]
+      },
+      "Answer": {
+        "oneOf": [
+          { "$ref": "#/components/schemas/AnswerListing" },
+          { "$ref": "#/components/schemas/AnswerText" },
+          { "$ref": "#/components/schemas/AnswerRefused" },
+          { "$ref": "#/components/schemas/AnswerMissing" }
+        ],
+        "discriminator": {
+          "propertyName": "answer",
+          "mapping": {
+            "listing": "#/components/schemas/AnswerListing",
+            "text": "#/components/schemas/AnswerText",
+            "refused": "#/components/schemas/AnswerRefused",
+            "missing": "#/components/schemas/AnswerMissing"
+          }
+        }
+      },
+      "AnswerListing": {
+        "type": "object",
+        "properties": {
+          "answer": { "const": "listing" },
+          "path": { "type": "string" },
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "kind": { "enum": ["file", "directory", "symlink", "other"] },
+                "size": { "type": "integer", "minimum": 0 },
+                "git": { "enum": ["tracked", "untracked", "ignored"] }
+              },
+              "required": ["name", "kind"]
+            }
+          },
+          "total": { "type": "integer", "minimum": 0 },
+          "truncated": { "type": "boolean" }
+        },
+        "required": ["answer", "path", "entries", "total", "truncated"]
+      },
+      "AnswerText": {
+        "type": "object",
+        "properties": {
+          "answer": { "const": "text" },
+          "path": { "type": "string" },
+          "text": { "type": "string" }
+        },
+        "required": ["answer", "path", "text"]
+      },
+      "AnswerRefused": {
+        "description": "Outside the checkout, or not the kind of entry the read needs.",
+        "type": "object",
+        "properties": {
+          "answer": { "const": "refused" },
+          "message": { "type": "string" }
+        },
+        "required": ["answer", "message"]
+      },
+      "AnswerMissing": {
+        "description": "No such repository or path.",
+        "type": "object",
+        "properties": {
+          "answer": { "const": "missing" },
+          "message": { "type": "string" }
+        },
+        "required": ["answer", "message"]
+      },
       "Checkout": {
         "description": "What the agent works in: each repository cloned into the working directory, on the branch, which is cut from the base when the repository does not have it yet.",
         "type": "object",
@@ -519,6 +670,12 @@
           },
           {
             "$ref": "#/components/schemas/Finished"
+          },
+          {
+            "$ref": "#/components/schemas/Thought"
+          },
+          {
+            "$ref": "#/components/schemas/Plan"
           }
         ],
         "discriminator": {
@@ -534,7 +691,9 @@
             "used": "#/components/schemas/Used",
             "answered": "#/components/schemas/Answered",
             "checkout": "#/components/schemas/CheckoutObserved",
-            "finished": "#/components/schemas/Finished"
+            "finished": "#/components/schemas/Finished",
+            "thought": "#/components/schemas/Thought",
+            "plan": "#/components/schemas/Plan"
           }
         },
         "properties": {
@@ -640,7 +799,7 @@
         ]
       },
       "Said": {
-        "description": "What the Harness said, coalesced into one message at the end of a turn. An Agent's reasoning and its tool calls are the Session's business and are never reported.",
+        "description": "A message completed at an ID change or Turn boundary; a chunk without an ID completes immediately.",
         "type": "object",
         "properties": {
           "kind": {
@@ -655,13 +814,17 @@
           "session": {
             "type": "string",
             "format": "uuid"
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
           }
         },
         "required": [
           "kind",
           "session",
           "seq",
-          "message"
+          "message",
+          "completion"
         ]
       },
       "Used": {
@@ -962,16 +1125,28 @@
           },
           "entry": {
             "$ref": "#/components/schemas/Entry"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TranscriptKind"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           }
         },
         "required": [
           "seq",
           "appended_at",
-          "entry"
+          "entry",
+          "kind",
+          "session_id"
         ]
       },
       "Entry": {
-        "description": "What changed the Workspace's shared state. Never what happened inside a Session.",
+        "description": "One completed unit of the Workspace Transcript.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/ParticipantJoined"
@@ -993,10 +1168,16 @@
           },
           {
             "$ref": "#/components/schemas/InstanceReleased"
+          },
+          {
+            "$ref": "#/components/schemas/ThoughtEntry"
+          },
+          {
+            "$ref": "#/components/schemas/PlanEntry"
           }
         ],
         "discriminator": {
-          "propertyName": "kind",
+          "propertyName": "type",
           "mapping": {
             "participant_joined": "#/components/schemas/ParticipantJoined",
             "brief": "#/components/schemas/Brief",
@@ -1004,7 +1185,9 @@
             "said": "#/components/schemas/Message",
             "messages": "#/components/schemas/Messages",
             "session_ended": "#/components/schemas/SessionEnded",
-            "instance_released": "#/components/schemas/InstanceReleased"
+            "instance_released": "#/components/schemas/InstanceReleased",
+            "thought": "#/components/schemas/ThoughtEntry",
+            "plan": "#/components/schemas/PlanEntry"
           }
         }
       },
@@ -1012,15 +1195,15 @@
         "description": "A Participant joined the Workspace.",
         "type": "object",
         "properties": {
-          "kind": {
-            "const": "participant_joined"
-          },
           "participant": {
             "type": "string"
+          },
+          "type": {
+            "const": "participant_joined"
           }
         },
         "required": [
-          "kind",
+          "type",
           "participant"
         ]
       },
@@ -1028,18 +1211,18 @@
         "description": "The instruction a Workspace started with, rendered by the Trigger that fired.",
         "type": "object",
         "properties": {
-          "kind": {
-            "const": "brief"
-          },
           "trigger": {
             "type": "string"
           },
           "brief": {
             "type": "string"
+          },
+          "type": {
+            "const": "brief"
           }
         },
         "required": [
-          "kind",
+          "type",
           "trigger",
           "brief"
         ]
@@ -1048,9 +1231,6 @@
         "description": "A Session started on behalf of the Workspace.",
         "type": "object",
         "properties": {
-          "kind": {
-            "const": "session_started"
-          },
           "session": {
             "type": "string",
             "format": "uuid"
@@ -1058,10 +1238,13 @@
           "agent": {
             "description": "The Agent the Session runs.",
             "type": "string"
+          },
+          "type": {
+            "const": "session_started"
           }
         },
         "required": [
-          "kind",
+          "type",
           "session",
           "agent"
         ]
@@ -1070,18 +1253,25 @@
         "description": "What a Participant said.",
         "type": "object",
         "properties": {
-          "kind": {
-            "const": "said"
-          },
           "participant": {
             "type": "string"
           },
           "message": {
             "type": "string"
+          },
+          "type": {
+            "const": "said"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
           }
         },
         "required": [
-          "kind",
+          "type",
           "participant",
           "message"
         ]
@@ -1090,19 +1280,19 @@
         "description": "Messages that arrived while a Session was active, drained as one Transcript entry.",
         "type": "object",
         "properties": {
-          "kind": {
-            "const": "messages"
-          },
           "messages": {
             "type": "array",
             "minItems": 1,
             "items": {
               "$ref": "#/components/schemas/SpokenMessage"
             }
+          },
+          "type": {
+            "const": "messages"
           }
         },
         "required": [
-          "kind",
+          "type",
           "messages"
         ]
       },
@@ -1126,19 +1316,19 @@
         "description": "A Session ended, and how it went.",
         "type": "object",
         "properties": {
-          "kind": {
-            "const": "session_ended"
-          },
           "session": {
             "type": "string",
             "format": "uuid"
           },
           "exit": {
             "$ref": "#/components/schemas/Exit"
+          },
+          "type": {
+            "const": "session_ended"
           }
         },
         "required": [
-          "kind",
+          "type",
           "session",
           "exit"
         ]
@@ -1147,9 +1337,6 @@
         "description": "A person released the Workspace's Instance, destroying it and whatever it held that was never pushed.",
         "type": "object",
         "properties": {
-          "kind": {
-            "const": "instance_released"
-          },
           "participant": {
             "type": "string"
           },
@@ -1162,10 +1349,13 @@
               "null"
             ],
             "description": "What it held that existed nowhere else, as judged when it was released; null when it held nothing."
+          },
+          "type": {
+            "const": "instance_released"
           }
         },
         "required": [
-          "kind",
+          "type",
           "participant",
           "instance",
           "unpublished"
@@ -1320,6 +1510,202 @@
           "repositories"
         ],
         "description": "Unnumbered and non-durable. Sent on connect, when a two-second check during a turn finds a change, and at turn close. Does not alter the durable checkout observation."
+      },
+      "TranscriptKind": {
+        "type": "string",
+        "enum": [
+          "shared_state",
+          "narration",
+          "detail"
+        ]
+      },
+      "TurnOutcome": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "answered"
+              },
+              "stop_reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "stop_reason"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "cancelled"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "failed"
+              },
+              "because": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "because"
+            ]
+          }
+        ],
+        "discriminator": {
+          "propertyName": "status"
+        }
+      },
+      "Completion": {
+        "type": "object",
+        "properties": {
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "turn_outcome": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TurnOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "started_at",
+          "finished_at",
+          "turn_outcome"
+        ]
+      },
+      "PlanEntry": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "plan"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanEntry"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "session_id",
+          "completion",
+          "entries"
+        ]
+      },
+      "ThoughtEntry": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "thought"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "session_id",
+          "completion",
+          "text"
+        ]
+      },
+      "Thought": {
+        "description": "One completed thought.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "thought"
+          },
+          "seq": {
+            "$ref": "#/components/schemas/Seq"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "session",
+          "seq",
+          "text",
+          "completion"
+        ]
+      },
+      "Plan": {
+        "description": "One completed plan.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "plan"
+          },
+          "seq": {
+            "$ref": "#/components/schemas/Seq"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanEntry"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "session",
+          "seq",
+          "entries",
+          "completion"
+        ]
       }
     }
   }

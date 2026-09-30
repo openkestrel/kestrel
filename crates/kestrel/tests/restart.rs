@@ -119,15 +119,24 @@ async fn the_transcript_of_a_session_that_outlived_a_restart_has_no_gap_and_no_d
             format!("session ended  {}  succeeded", session.id),
         ]
     );
-    assert_eq!(
-        kestrel
-            .transcript(workspace.id)
-            .await
-            .iter()
-            .map(|entry| entry.seq)
-            .collect::<Vec<_>>(),
-        (1..=6).collect::<Vec<_>>()
-    );
+    let all = reqwest::Client::new()
+        .get(format!("{}/operator/organizations/acme/workspaces/{}/transcript?follow=false&kinds=shared_state,narration,detail", kestrel.operator(), workspace.id))
+        .send().await.unwrap().text().await.unwrap();
+    let sequences: Vec<i64> = all
+        .split("\n\n")
+        .filter_map(|frame| {
+            if !frame.contains("event: entry") {
+                return None;
+            }
+            let data = frame
+                .lines()
+                .find_map(|line| line.strip_prefix("data: "))
+                .unwrap();
+            let entry: serde_json::Value = serde_json::from_str(data).unwrap();
+            entry["seq"].as_i64()
+        })
+        .collect();
+    assert_eq!(sequences, (1..=8).collect::<Vec<_>>());
 
     supervisor.lets_go_of(session.id).await;
     kestrel.teardown().await;
@@ -237,6 +246,7 @@ async fn a_report_whose_answer_never_arrived_is_taken_once_when_it_is_sent_again
         seq: Some(1),
         report: Report::Said {
             message: "said once, and reported twice".to_owned(),
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
     };
 
@@ -275,7 +285,7 @@ async fn a_report_that_skips_one_the_environment_has_yet_to_send_is_refused() {
         .report_body(
             &on.instance,
             Some(&on.credential),
-            &json!({"session": session.id, "kind": "said", "seq": 2, "message": "the one before this is missing"}),
+            &json!({"session": session.id, "kind": "said", "completion": {"started_at": "2026-09-29T12:00:00Z", "finished_at": "2026-09-29T12:00:00Z", "turn_outcome": null}, "seq": 2, "message": "the one before this is missing"}),
         )
         .await;
 
@@ -295,7 +305,7 @@ async fn a_report_that_changes_the_sessions_record_and_is_not_numbered_is_refuse
         .report_body(
             &on.instance,
             Some(&on.credential),
-            &json!({"session": session.id, "kind": "said", "message": "unnumbered"}),
+            &json!({"session": session.id, "kind": "said", "completion": {"started_at": "2026-09-29T12:00:00Z", "finished_at": "2026-09-29T12:00:00Z", "turn_outcome": null}, "message": "unnumbered"}),
         )
         .await;
 

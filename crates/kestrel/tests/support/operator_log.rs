@@ -25,6 +25,14 @@ pub fn capturing() -> &'static OperatorLog {
 }
 
 impl OperatorLog {
+    pub fn containing(&self, text: &str) -> Vec<String> {
+        String::from_utf8_lossy(&self.0.lock().expect("the log should not be poisoned"))
+            .lines()
+            .filter(|line| line.contains(text))
+            .map(str::to_owned)
+            .collect()
+    }
+
     pub fn about(&self, session: SessionId) -> Vec<String> {
         let session = session.to_string();
 

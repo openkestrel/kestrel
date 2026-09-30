@@ -57,6 +57,8 @@ CREATE TABLE workspace_repository (
 ) STRICT;
 
 CREATE TABLE transcript_entry (
+    kind TEXT NOT NULL CHECK (kind IN ('shared_state', 'narration', 'detail')),
+    session_id TEXT REFERENCES session (id),
     workspace_id TEXT NOT NULL REFERENCES workspace (id),
     organization_id TEXT NOT NULL REFERENCES organization (id),
     seq INTEGER NOT NULL,
@@ -64,3 +66,8 @@ CREATE TABLE transcript_entry (
     appended_at TEXT NOT NULL,
     PRIMARY KEY (workspace_id, seq)
 ) STRICT;
+
+CREATE INDEX transcript_entry_kind ON transcript_entry (workspace_id, kind, seq);
+CREATE INDEX transcript_entry_participant_joined
+    ON transcript_entry (workspace_id, json_extract(body, '$.participant'))
+    WHERE json_extract(body, '$.type') = 'participant_joined';
