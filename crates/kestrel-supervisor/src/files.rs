@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use tokio::io::AsyncReadExt as _;
 
 use crate::checkout;
-use crate::link::{Answer, Answered, Checkout, Entry, EntryKind, Tracking};
+use crate::link::{Answer, AnswerBody, Checkout, Entry, EntryKind, Tracking};
 
 pub const LISTED: usize = 5_000;
 pub const INLINE: u64 = 1024 * 1024;
@@ -92,14 +92,14 @@ pub async fn list(checkouts: &Checkouts, path: Option<&str>) -> Answer {
     }
 }
 
-pub async fn read(checkouts: &Checkouts, path: &str, raw: bool) -> Answered {
+pub async fn read(checkouts: &Checkouts, path: &str, raw: bool) -> AnswerBody {
     let path = normalized(path);
     let resolved = match resolved(checkouts, &path) {
         Ok(resolved) => resolved,
-        Err(refusal) => return Answered::Json(refusal),
+        Err(refusal) => return AnswerBody::Json(refusal),
     };
     if !resolved.target.is_file() {
-        return Answered::Json(Answer::Refused {
+        return AnswerBody::Json(Answer::Refused {
             message: format!("{path} is not a file"),
         });
     }
@@ -124,22 +124,22 @@ pub async fn read(checkouts: &Checkouts, path: &str, raw: bool) -> Answered {
         };
     }
     if held.contains(&0) {
-        return Answered::Raw(held.into());
+        return AnswerBody::Raw(held.into());
     }
     match String::from_utf8(held) {
-        Ok(text) => Answered::Json(Answer::Text { path, text }),
-        Err(binary) => Answered::Raw(binary.into_bytes().into()),
+        Ok(text) => AnswerBody::Json(Answer::Text { path, text }),
+        Err(binary) => AnswerBody::Raw(binary.into_bytes().into()),
     }
 }
 
-fn unreadable(path: &str, error: &std::io::Error) -> Answered {
-    Answered::Json(Answer::Refused {
+fn unreadable(path: &str, error: &std::io::Error) -> AnswerBody {
+    AnswerBody::Json(Answer::Refused {
         message: format!("{path} could not be read: {error}"),
     })
 }
 
-fn streamed(file: tokio::fs::File) -> Answered {
-    Answered::Raw(reqwest::Body::wrap_stream(
+fn streamed(file: tokio::fs::File) -> AnswerBody {
+    AnswerBody::Raw(reqwest::Body::wrap_stream(
         tokio_util::io::ReaderStream::new(file),
     ))
 }
@@ -482,7 +482,7 @@ mod tests {
             "widgets/../../secret",
             "widgets//etc/hosts",
         ] {
-            let Answered::Json(Answer::Refused { message }) =
+            let AnswerBody::Json(Answer::Refused { message }) =
                 read(&cloned.checkouts, path, false).await
             else {
                 panic!("{path} was not refused");
@@ -501,7 +501,7 @@ mod tests {
         std::os::unix::fs::symlink("src/lib.rs", cloned.checkout().join("alias.rs"))
             .expect("a symlink");
 
-        let Answered::Json(Answer::Text { text, .. }) =
+        let AnswerBody::Json(Answer::Text { text, .. }) =
             read(&cloned.checkouts, "widgets/alias.rs", false).await
         else {
             panic!("the symlink was not followed");
@@ -517,7 +517,7 @@ mod tests {
             assert!(
                 matches!(
                     read(&cloned.checkouts, path, false).await,
-                    Answered::Json(Answer::Missing { .. })
+                    AnswerBody::Json(Answer::Missing { .. })
                 ),
                 "{path}"
             );
@@ -532,7 +532,7 @@ mod tests {
 
         assert!(matches!(
             read(&cloned.checkouts, "widgets/src/lib.rs", false).await,
-            Answered::Json(Answer::Text { .. })
+            AnswerBody::Json(Answer::Text { .. })
         ));
         for (path, raw) in [
             ("widgets/binary.bin", false),
@@ -540,7 +540,7 @@ mod tests {
             ("widgets/src/lib.rs", true),
         ] {
             assert!(
-                matches!(read(&cloned.checkouts, path, raw).await, Answered::Raw(_)),
+                matches!(read(&cloned.checkouts, path, raw).await, AnswerBody::Raw(_)),
                 "{path} was not streamed"
             );
         }

@@ -123,7 +123,7 @@ pub enum Tracking {
     Ignored,
 }
 
-pub enum Answered {
+pub enum AnswerBody {
     Json(Answer),
     Raw(reqwest::Body),
 }
@@ -494,17 +494,17 @@ impl Link {
         Ok(())
     }
 
-    pub async fn answer(&self, request: &str, answered: Answered) -> Result<(), Error> {
+    pub async fn answer(&self, request: &str, body: AnswerBody) -> Result<(), Error> {
         let request = utf8_percent_encode(request, SEGMENT).to_string();
         let sending = self
             .client
             .post(self.url(ANSWERS).replace("{request}", &request))
             .bearer_auth(&self.credential);
-        let sending = match answered {
-            Answered::Json(answer) => sending.json(&answer),
-            Answered::Raw(body) => sending
+        let sending = match body {
+            AnswerBody::Json(answer) => sending.json(&answer),
+            AnswerBody::Raw(raw) => sending
                 .header(header::CONTENT_TYPE, "application/octet-stream")
-                .body(body),
+                .body(raw),
         };
 
         let response = refuse_if_declined(sending.send().await?).await?;

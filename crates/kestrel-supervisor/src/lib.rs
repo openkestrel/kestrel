@@ -14,7 +14,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::harness::{Conversation, Harness};
-use crate::link::{Answer, Answered, Checkout, Down, Exit, Instruction, Link, Read, Report};
+use crate::link::{Answer, AnswerBody, Checkout, Down, Exit, Instruction, Link, Read, Report};
 
 const RECONNECT_AFTER: Duration = Duration::from_millis(250);
 /// Often enough that the control plane keeps its hold on this Instance's Session through a
@@ -298,9 +298,11 @@ fn answer(link: &Arc<Link>, checkout: Option<&Checkout>, asked: link::Asked) {
     let checkouts = files::Checkouts::of(checkout);
     tokio::spawn(async move {
         let answered = match asked.read {
-            Read::Files { path } => Answered::Json(files::list(&checkouts, path.as_deref()).await),
+            Read::Files { path } => {
+                AnswerBody::Json(files::list(&checkouts, path.as_deref()).await)
+            }
             Read::File { path, raw } => files::read(&checkouts, &path, raw).await,
-            Read::Unrecognized => Answered::Json(Answer::Refused {
+            Read::Unrecognized => AnswerBody::Json(Answer::Refused {
                 message: "this Instance's supervisor does not know that read".to_owned(),
             }),
         };

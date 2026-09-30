@@ -43,7 +43,7 @@ pub struct Request {
 
 #[derive(Deserialize)]
 #[serde(tag = "answer", rename_all = "snake_case")]
-enum Answered {
+enum Answer {
     Listing(Listing),
     Text(Text),
     Refused { message: String },
@@ -74,18 +74,18 @@ struct Text {
     text: String,
 }
 
-pub enum Answer {
+pub enum AnswerBody {
     Json(Bytes),
     Raw(Body),
 }
 
-impl IntoResponse for Answer {
+impl IntoResponse for AnswerBody {
     fn into_response(self) -> Response {
         match self {
-            Answer::Json(json) => {
+            AnswerBody::Json(json) => {
                 ([(header::CONTENT_TYPE, "application/json")], json).into_response()
             }
-            Answer::Raw(body) => {
+            AnswerBody::Raw(body) => {
                 ([(header::CONTENT_TYPE, "application/octet-stream")], body).into_response()
             }
         }
@@ -203,7 +203,7 @@ impl Reads {
         Some(answered)
     }
 
-    async fn read(&self, instance: &str, read: Read) -> Result<Answer, anyhow::Error> {
+    async fn read(&self, instance: &str, read: Read) -> Result<AnswerBody, anyhow::Error> {
         if matches!(read, Read::File { raw: true, .. }) {
             let (outcome, raw) = self.asked(instance, read.clone()).await;
             return answered(outcome, raw);
@@ -283,11 +283,11 @@ impl Reads {
         }
 
         let outcome = match axum::body::to_bytes(arrived.body, BUFFERED_UP_TO).await {
-            Ok(json) => match serde_json::from_slice::<Answered>(&json) {
-                Ok(Answered::Listing(listing)) => serialized(&listing),
-                Ok(Answered::Text(text)) => serialized(&text),
-                Ok(Answered::Refused { message }) => Outcome::Refused(message),
-                Ok(Answered::Missing { message }) => Outcome::Missing(message),
+            Ok(json) => match serde_json::from_slice::<Answer>(&json) {
+                Ok(Answer::Listing(listing)) => serialized(&listing),
+                Ok(Answer::Text(text)) => serialized(&text),
+                Ok(Answer::Refused { message }) => Outcome::Refused(message),
+                Ok(Answer::Missing { message }) => Outcome::Missing(message),
                 Err(_) => Outcome::NotAnswering,
             },
             Err(_) => Outcome::NotAnswering,
@@ -302,10 +302,10 @@ fn serialized(answer: &impl Serialize) -> Outcome {
     serde_json::to_vec(answer).map_or(Outcome::NotAnswering, |json| Outcome::Json(json.into()))
 }
 
-fn answered(outcome: Outcome, raw: Option<Body>) -> Result<Answer, anyhow::Error> {
+fn answered(outcome: Outcome, raw: Option<Body>) -> Result<AnswerBody, anyhow::Error> {
     match (outcome, raw) {
-        (Outcome::Json(json), _) => Ok(Answer::Json(json)),
-        (Outcome::Raw, Some(body)) => Ok(Answer::Raw(body)),
+        (Outcome::Json(json), _) => Ok(AnswerBody::Json(json)),
+        (Outcome::Raw, Some(body)) => Ok(AnswerBody::Raw(body)),
         (Outcome::Refused(why), _) => Err(Declined::Unacceptable(why).into()),
         (Outcome::Missing(why), _) => Err(Declined::Missing(why).into()),
         (Outcome::Raw | Outcome::NotAnswering, _) => Err(NotAnswering.into()),
@@ -318,7 +318,7 @@ pub async fn read(
     organization: &str,
     reference: &str,
     read: Read,
-) -> anyhow::Result<Answer> {
+) -> anyhow::Result<AnswerBody> {
     let mut tx = store.read().await?;
     let organization = tx.organizations().named(organization).await?;
     let workspace = tx.workspaces().resolved(&organization, reference).await?;

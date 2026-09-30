@@ -1826,7 +1826,7 @@ async fn workspace_files(
     State(control_plane): State<ControlPlane>,
     Path((organization, reference)): Path<(String, String)>,
     Query(browsing): Query<Browsing>,
-) -> Result<crate::live_read::Answer, Refused> {
+) -> Result<crate::live_read::AnswerBody, Refused> {
     Ok(crate::live_read::read(
         &control_plane.store,
         &control_plane.reads,
@@ -1843,7 +1843,7 @@ async fn workspace_file(
     State(control_plane): State<ControlPlane>,
     Path((organization, reference)): Path<(String, String)>,
     Query(reading): Query<Reading>,
-) -> Result<crate::live_read::Answer, Refused> {
+) -> Result<crate::live_read::AnswerBody, Refused> {
     Ok(crate::live_read::read(
         &control_plane.store,
         &control_plane.reads,
