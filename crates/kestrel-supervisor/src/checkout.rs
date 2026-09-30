@@ -437,6 +437,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reading_a_checkout_whose_index_is_stale_leaves_the_index_untouched() {
+        let cloned = Cloned::new();
+        std::fs::File::options()
+            .write(true)
+            .open(cloned.checkout.join("README.md"))
+            .expect("the file should open")
+            .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000))
+            .expect("the file's mtime should change");
+        let index = cloned.checkout.join(".git/index");
+        let before = std::fs::read(&index).expect("the index");
+
+        assert_eq!(cloned.read().await, only(0, 0, 0, 0));
+        assert_eq!(std::fs::read(&index).expect("the index"), before);
+    }
+
+    #[tokio::test]
     async fn a_merge_conflict_counts_as_one_changed_file() {
         let cloned = Cloned::new();
         cloned.write("README.md", "declared branch\n");

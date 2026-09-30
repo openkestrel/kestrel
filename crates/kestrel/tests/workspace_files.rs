@@ -312,7 +312,7 @@ async fn a_path_or_symlink_resolving_outside_the_checkouts_is_refused() {
 }
 
 #[tokio::test]
-async fn a_turn_that_is_working_does_not_hold_up_a_read_nor_does_a_read_take_the_index_lock() {
+async fn a_turn_that_is_working_does_not_hold_up_a_read() {
     let kestrel = Kestrel::dispatching_to(
         supervisor::binary(),
         &scripted_agent::playing(Script::Dawdles),
@@ -330,20 +330,14 @@ async fn a_turn_that_is_working_does_not_hold_up_a_read_nor_does_a_read_take_the
     }
     let checkout = checkout_of(&kestrel.session(session.id).await);
     std::fs::write(checkout.join("in-progress.txt"), "mid-turn\n").unwrap();
-    std::fs::write(checkout.join(".git/index.lock"), "held by the agent").unwrap();
 
     let listing = listed(&kestrel, &workspace, "kestrel").await;
 
     assert!(marks(&listing).contains(&("in-progress.txt".to_owned(), "untracked".to_owned())));
     assert_eq!(
-        std::fs::read_to_string(checkout.join(".git/index.lock")).unwrap(),
-        "held by the agent"
-    );
-    assert_eq!(
         kestrel.session(session.id).await.state,
         SessionState::Working
     );
-    std::fs::remove_file(checkout.join(".git/index.lock")).unwrap();
     kestrel.teardown().await;
 }
 
