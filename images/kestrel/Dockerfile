@@ -8,6 +8,17 @@ COPY rust-toolchain.toml Cargo.toml Cargo.lock ./
 COPY crates ./crates
 RUN cargo build --locked --release --package kestrel
 
+# oven/bun:1.3.14-slim
+FROM oven/bun@sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04 AS client
+
+WORKDIR /src
+COPY package.json bun.lock ./
+COPY packages/client/package.json ./packages/client/
+RUN bun install --frozen-lockfile --filter @kestrel/client
+COPY openapi/operator.json ./openapi/
+COPY packages/client ./packages/client
+RUN cd packages/client && bun --bun run build
+
 # debian:trixie-slim
 FROM debian@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 
@@ -22,9 +33,11 @@ RUN apt-get update \
     && install --directory --owner kestrel --group kestrel /var/lib/kestrel
 
 COPY --from=build /src/target/release/kestrel-control-plane /usr/local/bin/kestrel-control-plane
+COPY --from=client /src/packages/client/dist/client /usr/share/kestrel/client
 
 ENV HOME=/home/kestrel
 ENV KESTREL_DATA_DIR=/var/lib/kestrel
+ENV KESTREL_CLIENT_DIR=/usr/share/kestrel/client
 # Loopback is the right default for a binary on a laptop and unreachable in a container: what
 # dials the link is an Environment outside this one (ADR-0002), and what reaches the operator
 # boundary is a Client outside it. The operator boundary authenticates nobody, so publish it

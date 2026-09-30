@@ -46,6 +46,45 @@ fn the_image_carries_no_client() {
     }
 }
 
+/// The image serves the Client it was built with, from where it was built into, not from a
+/// source tree (ADR-0036).
+#[test]
+#[ignore = "builds and runs the kestrel image"]
+fn the_operator_listener_serves_the_browser_client_the_image_carries() {
+    let volume = Volume::empty();
+    let kestrel = Started::with(&volume, &["serve"]);
+    let deep_link = "/organizations/acme/workspaces/brave-otter-abcdefgh";
+
+    let (opened, shell) = kestrel.what_the_operator_serves(deep_link);
+    let (refreshed, again) = kestrel.what_the_operator_serves(deep_link);
+    assert_eq!((opened, refreshed), (200, 200));
+    assert!(
+        shell.contains("<title>kestrel</title>"),
+        "{deep_link} served {shell}"
+    );
+    assert_eq!(again, shell);
+
+    let asset = shell
+        .split('"')
+        .find(|part| part.starts_with("/assets/") && part.ends_with(".js"))
+        .unwrap_or_else(|| panic!("the shell names no script: {shell}"));
+    assert_eq!(kestrel.what_the_operator_serves(asset).0, 200, "{asset}");
+
+    let (missing, body) = kestrel.what_the_operator_serves("/assets/nothing-here.js");
+    assert_eq!(missing, 404);
+    assert!(
+        !body.contains("<title>kestrel</title>"),
+        "a missing asset served the shell"
+    );
+
+    let (refused, body) = kestrel.what_the_operator_serves("/operator/nothing-here");
+    assert_eq!(refused, 404);
+    assert!(
+        body.contains("\"message\""),
+        "an unknown operator path answered {body}"
+    );
+}
+
 #[test]
 #[ignore = "builds and runs the kestrel image"]
 fn no_argv_starts_every_role_in_one_process() {

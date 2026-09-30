@@ -80,3 +80,21 @@ ago its supervisor reported it. `--json` returns the whole operator response.
   that would fix it.
 - `kestrel start` (`start.rs`) infers an Organization, Project and Agent from the local clone and
   explains every inferred value on stderr before changing anything.
+
+## The browser Client
+
+`packages/client` ([README](../../packages/client/README.md)) is a static SPA the control plane
+serves from `KESTREL_CLIENT_DIR` (`/usr/share/kestrel/client` in the image) on the operator
+listener ([ADR-0036](../adr/0036-the-browser-client-shares-the-loopback-operator-origin.md)).
+The operator router's fallback (`browser.rs`) decides what an unrouted path is:
+
+| Path | Answer |
+| --- | --- |
+| `/operator` or under it | The operator interface's 404 refusal, never the shell |
+| Last segment names a file (`/assets/x.js`) | That file, or 404 when absent |
+| Anything else | `index.html`, uncached, so a deep link survives a refresh |
+| Any method but `GET`/`HEAD` outside `/operator` | 405 |
+
+With no `KESTREL_CLIENT_DIR`, every non-operator path is 404. The Client's types come from
+`openapi/operator.json`; its transport (`src/operator/transport.ts`) parses a refusal's `message`
+and, when present, `field` and `phase`, and reads SSE with `Last-Event-ID` as the cursor.

@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod browser;
 pub mod cli;
 pub mod compute;
 pub mod cron;
@@ -42,12 +43,16 @@ pub async fn run(cli: &Cli, shutdown: CancellationToken) -> anyhow::Result<()> {
 
     match cli.command {
         None => {
-            let all_in_one = role::bind(store, cli.listen()).await?;
+            let all_in_one = role::bind(store, cli.listen())
+                .await?
+                .serving_client(cli.client_dir.clone());
             let dispatch = cli.dispatch(all_in_one.bound().link)?;
             all_in_one.run(Some(dispatch), shutdown).await
         }
         Some(Command::Serve) => {
-            let listening = role::serve::bind(store, cli.listen(), timer::Wake::default()).await?;
+            let listening = role::serve::bind(store, cli.listen(), timer::Wake::default())
+                .await?
+                .serving_client(cli.client_dir.clone());
             role::serve::run(listening, shutdown).await
         }
         Some(Command::Work) => {
