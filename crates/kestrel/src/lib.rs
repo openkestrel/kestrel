@@ -20,6 +20,7 @@ pub mod operator;
 pub mod participant;
 pub mod profile;
 pub mod provider;
+pub mod pull_request;
 pub mod queue;
 pub mod readiness;
 pub mod reference;

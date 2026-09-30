@@ -19,6 +19,7 @@ pub const API: &str = "https://api.github.com";
 /// label, so a trigger matching on the type and label alone would fire on both.
 pub const LABELLED: &str = "com.github.issues.labeled";
 pub const COMMENTED: &str = "com.github.issue_comment.created";
+pub const PULL_REQUEST_OPENED: &str = "com.github.pull_request.opened";
 
 pub fn at_or_after(event: &Occurrence, origin: &Occurrence) -> bool {
     match event.time.cmp(&origin.time) {
@@ -797,6 +798,22 @@ pub fn repository(repository: &str) -> Result<String> {
     Ok(format!("{owner}/{name}"))
 }
 
+/// The `owner/name` a github.com URL names, in any of the forms git clones it by.
+pub fn named_repository(url: &str) -> Option<String> {
+    let named = [
+        "https://github.com/",
+        "http://github.com/",
+        "ssh://git@github.com/",
+        "git@github.com:",
+        "git://github.com/",
+    ]
+    .iter()
+    .find_map(|prefix| url.strip_prefix(prefix))?
+    .trim_end_matches('/');
+
+    repository(named.strip_suffix(".git").unwrap_or(named)).ok()
+}
+
 /// One comment as GitHub reports it, and what it answers a newly posted one with.
 #[derive(Debug, Deserialize)]
 pub struct Comment {
@@ -857,6 +874,29 @@ mod tests {
                 StatusCode::FORBIDDEN,
                 &headers(&[("x-ratelimit-remaining", "4999")])
             ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_repository_is_named_by_any_url_git_clones_it_by() {
+        for url in [
+            "https://github.com/jtmthf/kestrel",
+            "https://github.com/jtmthf/kestrel.git",
+            "https://github.com/jtmthf/kestrel/",
+            "git@github.com:jtmthf/kestrel.git",
+            "ssh://git@github.com/jtmthf/kestrel",
+        ] {
+            assert_eq!(
+                named_repository(url).as_deref(),
+                Some("jtmthf/kestrel"),
+                "{url}"
+            );
+        }
+        assert_eq!(named_repository("/tmp/jtmthf/kestrel"), None);
+        assert_eq!(named_repository("https://gitlab.com/jtmthf/kestrel"), None);
+        assert_eq!(
+            named_repository("https://github.com/jtmthf/kestrel/pull/7"),
             None
         );
     }

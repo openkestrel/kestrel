@@ -127,7 +127,7 @@ The rest of `crates/kestrel/src`, grouped by the page that covers them:
 | --- | --- |
 | Sessions | `work.rs`, `workspace.rs`, `instance.rs`, `queue.rs`, `role/work.rs` |
 | Link | `link/`, `provider.rs`, `profile.rs`, `keyring.rs` |
-| Triggers | `trigger.rs`, `trigger/apply.rs`, `filter.rs`, `template.rs`, `cron.rs`, `readiness.rs`, `follow_up.rs`, `integration/` |
+| Triggers | `trigger.rs`, `trigger/apply.rs`, `filter.rs`, `template.rs`, `cron.rs`, `readiness.rs`, `follow_up.rs`, `pull_request.rs`, `integration/` |
 | Operator | `operator.rs`, `declaration.rs`, `start.rs`, `agent.rs`, `reference.rs`, `declined.rs` |
 | Shared | `domain.rs` (every record type), `log.rs`, `store/`, `timer.rs`, `cli.rs`, `telemetry.rs`, `shutdown.rs`, `hex.rs`, `participant.rs` (the one rule a declared name obeys) |
 
@@ -155,7 +155,8 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
 - **Integration identity** ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)): there
   is no GitHub App. The Integration and the agent's `gh` both use tokens an operator supplies.
 - **Pull request state** ([ADR-0032](../adr/0032-a-pull-request-event-updates-workspace-state-without-a-firing.md)):
-  nothing records a pull request against a Workspace; `pull_request` Events reach Triggers only.
+  only `opened` is learned. Reopened, closed, merged and head-moved Events, ordering ties and the
+  sealed case are unbuilt.
 - **Split roles**: `serve` and `work` parse separately but run correctly only in one process.
 - **Policy, Approvals, Questions, Workflows, Campaigns** exist in `CONTEXT.md` and
   [`ROADMAP.md`](../../ROADMAP.md), not in code. `session_dependency` and the Unreachable state are

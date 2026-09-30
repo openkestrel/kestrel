@@ -3,6 +3,7 @@ pub mod integration;
 pub mod organization;
 pub mod profile;
 pub mod project;
+pub mod pull_request;
 pub mod queue;
 pub mod trigger;
 pub mod workspace;
@@ -24,6 +25,7 @@ use crate::store::integration::Integrations;
 use crate::store::organization::Organizations;
 use crate::store::profile::Profiles;
 use crate::store::project::Projects;
+use crate::store::pull_request::PullRequests;
 use crate::store::queue::Queue;
 use crate::store::trigger::Triggers;
 use crate::store::workspace::Workspaces;
@@ -156,6 +158,10 @@ impl Tx<'_> {
 
     pub fn triggers(&mut self) -> Triggers<'_> {
         Triggers::over(&mut self.transaction)
+    }
+
+    pub fn pull_requests(&mut self) -> PullRequests<'_> {
+        PullRequests::over(&mut self.transaction)
     }
 
     pub async fn commit(self) -> Result<()> {

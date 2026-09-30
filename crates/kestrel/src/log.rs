@@ -6,7 +6,9 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqliteConnection};
 
-use crate::domain::{Exit, SessionId, Workspace, WorkspaceId, WorkspaceState};
+use crate::domain::{
+    EventRecordId, Exit, PullRequestState, SessionId, Workspace, WorkspaceId, WorkspaceState,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -51,6 +53,15 @@ pub enum Entry {
         participant: String,
         instance: String,
         unpublished: Option<String>,
+    },
+    PullRequest {
+        event: EventRecordId,
+        repository: String,
+        number: i64,
+        url: String,
+        title: String,
+        action: String,
+        state: PullRequestState,
     },
 }
 
@@ -107,6 +118,9 @@ impl fmt::Display for Entry {
                     None => Ok(()),
                 }
             }
+            Entry::PullRequest {
+                url, action, state, ..
+            } => write!(f, "pull request {action}  {url}  {}", state.as_str()),
         }
     }
 }
@@ -277,7 +291,7 @@ impl<'a> Log<'a> {
     }
 
     /// The Brief that started this Session, if nothing has said anything since it: participants
-    /// joining and Sessions starting are not something said. Bounded to what the Transcript holds
+    /// joining, Sessions starting and pull requests learned are not something said. Bounded to what the Transcript holds
     /// since the Workspace's last Session ended, or since it opened if none has, so a Brief that
     /// started an earlier Session is not mistaken for one starting this one.
     pub async fn unfollowed_brief(&mut self, workspace: &Workspace) -> Result<Option<String>> {
@@ -286,7 +300,8 @@ impl<'a> Log<'a> {
              FROM transcript_entry
              WHERE workspace_id = ?
                AND kind = 'shared_state'
-               AND json_extract(body, '$.type') NOT IN ('participant_joined', 'session_started')
+               AND json_extract(body, '$.type')
+                   NOT IN ('participant_joined', 'session_started', 'pull_request')
                AND seq > COALESCE((
                    SELECT MAX(seq) FROM transcript_entry
                    WHERE workspace_id = ? AND json_extract(body, '$.type') = 'session_ended'

@@ -4386,6 +4386,15 @@ fn the_published_operator_document_describes_every_transcript_entry() {
             entries: Vec::new(),
             completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
+        Entry::PullRequest {
+            event: kestrel::domain::EventRecordId::generate(),
+            repository: "https://github.com/jtmthf/kestrel".to_owned(),
+            number: 7,
+            url: "https://github.com/jtmthf/kestrel/pull/7".to_owned(),
+            title: "Learn pull requests".to_owned(),
+            action: "opened".to_owned(),
+            state: kestrel::domain::PullRequestState::Open,
+        },
     ];
 
     let mut kinds: Vec<String> = Vec::new();
