@@ -70,4 +70,4 @@ CREATE TABLE transcript_entry (
 CREATE INDEX transcript_entry_kind ON transcript_entry (workspace_id, kind, seq);
 CREATE INDEX transcript_entry_participant_joined
     ON transcript_entry (workspace_id, json_extract(body, '$.participant'))
-    WHERE json_extract(body, '$.kind') = 'participant_joined';
+    WHERE json_extract(body, '$.type') = 'participant_joined';

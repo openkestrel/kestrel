@@ -1305,7 +1305,14 @@ fn transcript_kinds_select_the_entries_the_client_streams() {
     let booted = kestrel.boot();
     declared(&booted);
     let workspace = opened(&booted);
-    booted.run(&["workspace", "post", &workspace, "go"]);
+    booted.run(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "operator",
+        "go",
+    ]);
     dispatched(&booted, &workspace);
     let shared = booted.records(&[
         "workspace",

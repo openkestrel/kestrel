@@ -188,7 +188,7 @@ impl<'a> Log<'a> {
             "SELECT EXISTS (
                  SELECT 1 FROM transcript_entry
                  WHERE workspace_id = ?
-                   AND json_extract(body, '$.kind') = 'participant_joined'
+                   AND json_extract(body, '$.type') = 'participant_joined'
                    AND json_extract(body, '$.participant') = ?
              )",
         )
