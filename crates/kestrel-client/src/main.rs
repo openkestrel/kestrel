@@ -587,7 +587,7 @@ enum WorkspaceCommand {
         /// `latest`
         workspace: String,
         /// The participant saying the message
-        #[arg(long, default_value = "operator")]
+        #[arg(long)]
         as_participant: String,
         /// What the participant says
         message: String,

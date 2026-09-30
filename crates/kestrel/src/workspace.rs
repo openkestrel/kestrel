@@ -6,7 +6,8 @@ use crate::domain::{
 };
 use crate::fanout::{self, Change};
 use crate::instance;
-use crate::log::{Cursor, Entry, Page, Unreadable, Window};
+use crate::log::{Cursor, Entry, Message, Page, Unreadable, Window};
+use crate::participant;
 use crate::store::workspace::{Opening, PendingSession, Unfinished};
 use crate::store::{Store, Tx};
 use crate::work;
@@ -234,11 +235,22 @@ pub(crate) async fn post_in(
     participant: &str,
     message: &str,
 ) -> Result<Option<Session>> {
-    workspace.accepts("message")?;
+    let participant = participant::accepted(tx, &workspace.organization, participant).await?;
 
+    post_as(tx, workspace, &participant, message).await
+}
+
+pub(crate) async fn post_as(
+    tx: &mut Tx<'_>,
+    workspace: &Workspace,
+    participant: &str,
+    message: &str,
+) -> Result<Option<Session>> {
+    workspace.accepts("message")?;
     let unfinished = unfinished_session(tx, workspace).await?;
     match unfinished.post_destination() {
         PostDestination::Start => {
+            ensure_joined(tx, workspace, participant).await?;
             said(tx, workspace, participant, message).await?;
             Ok(Some(
                 tx.workspaces()
@@ -247,6 +259,7 @@ pub(crate) async fn post_in(
             ))
         }
         PostDestination::Brief => {
+            ensure_joined(tx, workspace, participant).await?;
             said(tx, workspace, participant, message).await?;
             Ok(None)
         }
@@ -264,6 +277,35 @@ pub(crate) async fn post_in(
             Ok(Some(waiting.clone()))
         }
     }
+}
+
+async fn ensure_joined(tx: &mut Tx<'_>, workspace: &Workspace, participant: &str) -> Result<()> {
+    if !tx.log().has_joined(workspace, participant).await? {
+        tx.log()
+            .append(
+                workspace,
+                Entry::ParticipantJoined {
+                    participant: participant.to_owned(),
+                },
+            )
+            .await?;
+    }
+
+    Ok(())
+}
+
+/// Joins each new author of a drained batch, in message order, all immediately before the entry
+/// that carries the batch.
+pub(crate) async fn join_authors(
+    tx: &mut Tx<'_>,
+    workspace: &Workspace,
+    messages: &[Message],
+) -> Result<()> {
+    for message in messages {
+        ensure_joined(tx, workspace, &message.participant).await?;
+    }
+
+    Ok(())
 }
 
 /// Waits for the unfinished Session to let go (ADR-0014), and ends one waiting between turns

@@ -2523,10 +2523,13 @@
       "WorkspaceMessage": {
         "type": "object",
         "properties": {
-          "participant": { "type": "string", "default": "operator" },
+          "participant": {
+            "type": "string",
+            "description": "The person posting, by declared name. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization."
+          },
           "message": { "type": "string" }
         },
-        "required": ["message"]
+        "required": ["participant", "message"]
       },
       "Workspace": {
         "type": "object",
@@ -3316,6 +3319,10 @@
         "properties": {
           "message": {
             "type": "string"
+          },
+          "field": {
+            "type": "string",
+            "description": "The request field the message concerns, when the refusal is about one."
           }
         },
         "required": [

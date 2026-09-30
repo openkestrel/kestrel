@@ -30,7 +30,8 @@ maps it to a status. Anything else is `Unavailable`.
 | Anything else | 503 | 5 unavailable |
 
 The exit numbers are published by `kestrel exit-codes` and never move (`kestrel-client/src/exit.rs`).
-The body of a refusal is the reason alone, written to be shown to a person.
+The body of a refusal is the reason alone, written to be shown to a person, plus the `field` the
+reason concerns when it is about one (a declared `participant`, for instance).
 
 ### References
 

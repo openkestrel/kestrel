@@ -17,6 +17,7 @@ pub mod live_read;
 pub mod live_work;
 pub mod log;
 pub mod operator;
+pub mod participant;
 pub mod profile;
 pub mod provider;
 pub mod queue;

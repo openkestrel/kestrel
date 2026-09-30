@@ -266,7 +266,14 @@ async fn a_session_provisions_an_instance_and_releasing_it_destroys_it_through_t
     let stack = Stack::up();
     let namespace = compose::namespace_for(&docker::repository());
     let workspace = a_workspace(&stack);
-    let session = stack.ran(&["workspace", "post", &workspace, "go"]);
+    let session = stack.ran(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "operator",
+        "go",
+    ]);
 
     let instance = compose::until("the session to reach an instance", || {
         listed(&stack, &session).instance

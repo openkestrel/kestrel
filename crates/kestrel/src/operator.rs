@@ -23,7 +23,7 @@ use tracing::warn;
 use crate::agent;
 use crate::cron::Cron;
 use crate::declaration;
-use crate::declined::Declined;
+use crate::declined::{Declined, FieldRefusal};
 use crate::domain::{
     self, Agent, Connection, Correlation, Direction, EventRecordId, EventRefusal, Fires, Firing,
     Integration, Occurrence, Organization, Project, Schedule, Session, SubscriptionProfile,
@@ -289,8 +289,7 @@ struct WorkspaceDeclaration {
 
 #[derive(Deserialize)]
 struct WorkspaceMessage {
-    #[serde(default = "default_operator_participant")]
-    participant: String,
+    participant: Option<String>,
     message: String,
 }
 
@@ -1881,7 +1880,7 @@ async fn post_to_workspace(
     let session = workspace::post(
         &control_plane.store,
         workspace.id,
-        &message.participant,
+        message.participant.as_deref().unwrap_or_default(),
         &message.message,
     )
     .await
@@ -2144,6 +2143,11 @@ enum Refused {
     NotFound(String),
     Conflict(String),
     Unprocessable(String),
+    /// A value a person named, refused: the request field it came in travels with the reason.
+    Named {
+        field: &'static str,
+        why: String,
+    },
     NotAnswering(String),
     Unavailable(anyhow::Error),
 }
@@ -2156,6 +2160,7 @@ impl Refused {
             | Refused::NotFound(why)
             | Refused::Conflict(why)
             | Refused::Unprocessable(why)
+            | Refused::Named { why, .. }
             | Refused::NotAnswering(why) => why.into(),
             Refused::Unavailable(error) => error.into(),
         }
@@ -2166,6 +2171,12 @@ impl From<anyhow::Error> for Refused {
     fn from(error: anyhow::Error) -> Self {
         if let Some(missing) = error.downcast_ref::<NoSuchOrganization>() {
             return Refused::NotFound(missing.to_string());
+        }
+        if let Some(named) = error.downcast_ref::<FieldRefusal>() {
+            return Refused::Named {
+                field: named.field,
+                why: named.message.clone(),
+            };
         }
         if let Some(silent) = error.downcast_ref::<crate::live_read::NotAnswering>() {
             return Refused::NotAnswering(silent.to_string());
@@ -2197,27 +2208,31 @@ impl From<Unreadable> for Refused {
 impl IntoResponse for Refused {
     fn into_response(self) -> Response {
         let busy = matches!(&self, Refused::Unavailable(error) if store::busy(error));
-        let (status, message) = match self {
-            Refused::BadRequest(why) => (StatusCode::BAD_REQUEST, why),
-            Refused::Forbidden(why) => (StatusCode::FORBIDDEN, why),
-            Refused::NotFound(why) => (StatusCode::NOT_FOUND, why),
-            Refused::Conflict(why) => (StatusCode::CONFLICT, why),
-            Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why),
-            Refused::NotAnswering(why) => (StatusCode::GATEWAY_TIMEOUT, why),
+        let (status, message, field) = match self {
+            Refused::BadRequest(why) => (StatusCode::BAD_REQUEST, why, None),
+            Refused::Forbidden(why) => (StatusCode::FORBIDDEN, why, None),
+            Refused::NotFound(why) => (StatusCode::NOT_FOUND, why, None),
+            Refused::Conflict(why) => (StatusCode::CONFLICT, why, None),
+            Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why, None),
+            Refused::Named { field, why } => (StatusCode::UNPROCESSABLE_ENTITY, why, Some(field)),
+            Refused::NotAnswering(why) => (StatusCode::GATEWAY_TIMEOUT, why, None),
             Refused::Unavailable(error) => {
                 warn!(%error, busy, "the operator boundary could not answer");
                 (
                     StatusCode::SERVICE_UNAVAILABLE,
                     "the control plane could not answer".to_owned(),
+                    None,
                 )
             }
         };
 
-        serve::refusal(status, busy, Json(Refusal { message }))
+        serve::refusal(status, busy, Json(Refusal { message, field }))
     }
 }
 
 #[derive(Serialize)]
 struct Refusal {
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    field: Option<&'static str>,
 }

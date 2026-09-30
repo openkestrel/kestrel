@@ -22,3 +22,19 @@ impl fmt::Display for Declined {
 }
 
 impl std::error::Error for Declined {}
+
+/// A value a person named that kestrel refuses, carrying the request field it came in so a Client
+/// can say which one.
+#[derive(Debug)]
+pub struct FieldRefusal {
+    pub field: &'static str,
+    pub message: String,
+}
+
+impl fmt::Display for FieldRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for FieldRefusal {}

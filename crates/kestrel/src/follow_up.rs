@@ -1,6 +1,7 @@
 use anyhow::Result;
 use tracing::info;
 
+use crate::declined::FieldRefusal;
 use crate::domain::{Event, EventRecordId, SessionId, Workspace, WorkspaceId, WorkspaceState};
 use crate::filter::Author;
 use crate::integration::github;
@@ -76,14 +77,29 @@ async fn receiving(store: &Store, event: &Event) -> Result<Received> {
             "a comment from an author the workspace's trigger does not authorize was not taken as input"
         );
     }
+    let actor = data.actor().unwrap_or_default();
     let session = if feeds {
-        crate::workspace::post_in(
+        match crate::workspace::post_in(
             &mut tx,
             &workspace,
-            data.actor().unwrap_or_default(),
+            actor,
             data.message().unwrap_or_default(),
         )
-        .await?
+        .await
+        {
+            Ok(session) => session,
+            // A login the name rule refuses is not fed, rather than failing the whole poll; the
+            // Event is still taken, so it is never retried forever.
+            Err(error) if error.downcast_ref::<FieldRefusal>().is_some() => {
+                info!(
+                    workspace = %workspace.id,
+                    actor,
+                    "a comment names a participant the workspace cannot take"
+                );
+                None
+            }
+            Err(error) => return Err(error),
+        }
     } else {
         None
     };
