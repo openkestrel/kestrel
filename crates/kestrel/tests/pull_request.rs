@@ -394,6 +394,85 @@ async fn a_repository_no_inbound_integration_watches_says_its_pull_requests_are_
 }
 
 #[tokio::test]
+async fn a_fork_pull_request_delivered_through_the_watched_base_is_available_on_the_fork() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, "acme", &[FORK]).await;
+    let github = watching(&kestrel, "acme", BASE).await;
+    let workspace = kestrel
+        .open_workspace_on("acme", "kestrel", "builder", "feature")
+        .await;
+
+    deliver(
+        &kestrel,
+        &github,
+        "d-upstream",
+        &Opened {
+            base: BASE,
+            head: FORK,
+            branch: "feature",
+            number: 9,
+        },
+    )
+    .await;
+    attached(&kestrel, workspace.id, 1).await;
+
+    let record = shown(&kestrel, "acme", &workspace).await;
+    assert_eq!(record["pull_requests"][0]["availability"], "available");
+    assert_eq!(
+        record["pull_requests"][0]["known"][0]["url"],
+        format!("{}/pull/9", url(BASE))
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn pull_requests_sharing_a_head_and_number_against_different_bases_are_both_kept() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, "acme", &[FORK]).await;
+    let upstream = watching(&kestrel, "acme", BASE).await;
+    let fork = watching(&kestrel, "acme", FORK).await;
+    let workspace = kestrel
+        .open_workspace_on("acme", "kestrel", "builder", "feature")
+        .await;
+
+    for (integration, delivery, base) in [(&upstream, "d-upstream", BASE), (&fork, "d-fork", FORK)]
+    {
+        deliver(
+            &kestrel,
+            integration,
+            delivery,
+            &Opened {
+                base,
+                head: FORK,
+                branch: "feature",
+                number: 9,
+            },
+        )
+        .await;
+    }
+    attached(&kestrel, workspace.id, 2).await;
+
+    let record = shown(&kestrel, "acme", &workspace).await;
+    let mut known: Vec<_> = record["pull_requests"][0]["known"]
+        .as_array()
+        .expect("available")
+        .iter()
+        .map(|pull_request| pull_request["url"].as_str().expect("a url").to_owned())
+        .collect();
+    known.sort();
+    assert_eq!(
+        known,
+        [
+            format!("{}/pull/9", url(BASE)),
+            format!("{}/pull/9", url(FORK))
+        ]
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_trigger_declared_for_the_event_fires_as_it_would_without_the_workspace_learning_it() {
     let kestrel = Kestrel::boot().await;
     declared(&kestrel, "acme", &[BASE]).await;

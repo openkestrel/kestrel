@@ -172,6 +172,7 @@ impl Observed {
 }
 
 /// `known` is `None` when no Integration could deliver them, which is not knowing there are none.
+/// One learned is known however it arrived: a fork's pull request is delivered by the watched base.
 pub struct Availability {
     pub repository: String,
     pub known: Option<Vec<PullRequest>>,
@@ -194,10 +195,11 @@ pub async fn availability(store: &Store, workspace: &Workspace) -> Result<Vec<Av
                 .collect();
             Availability {
                 repository: repository.clone(),
-                known: watched
-                    .iter()
-                    .any(|watching| github::names(repository, watching))
-                    .then_some(known),
+                known: (!known.is_empty()
+                    || watched
+                        .iter()
+                        .any(|watching| github::names(repository, watching)))
+                .then_some(known),
             }
         })
         .collect())

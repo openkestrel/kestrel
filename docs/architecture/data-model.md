@@ -68,7 +68,7 @@ erDiagram
 | `link_instruction` | Instructions sent down the link | `(instance, seq)`; `seq` is the SSE event id, and `session_id` the Session each is for. |
 | `pending_message`, `pending_session` | Input held for the unfinished Session | See [Sessions](sessions.md#the-unfinished-session). |
 | `follow_up` | Which comment Events fed which Workspace | One per Event, so a comment is taken once. |
-| `pull_request` | A Workspace's current value per pull request | `(workspace_id, repository, number)`; a value fresher at its source (`updated_at`) is never replaced by an older one. |
+| `pull_request` | A Workspace's current value per pull request | `(workspace_id, url)`, since the url names the base repository and the number alone does not; a value fresher at its source (`updated_at`) is never replaced by an older one. |
 | `pull_request_attachment` | Which pull request Events were considered | One per Event: `attached` with its Workspace, `unmatched` or `ambiguous`. |
 | `delivery` | Comments to post back | `(session_id, turn)`; `turn = 0` is the Outcome. |
 | `session_dependency` | Session waits on blocker | Drives Unreachable. |

@@ -86,8 +86,7 @@ impl<'a> PullRequests<'a> {
                  (workspace_id, organization_id, repository, number, url, title, state,
                   head_branch, head_revision, updated_at, event_record_id)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT (workspace_id, repository, number) DO UPDATE SET
-                 url = excluded.url,
+             ON CONFLICT (workspace_id, url) DO UPDATE SET
                  title = excluded.title,
                  state = excluded.state,
                  head_branch = excluded.head_branch,

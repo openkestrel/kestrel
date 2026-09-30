@@ -812,7 +812,11 @@ pub fn named_repository(url: &str) -> Option<String> {
         "git://github.com/",
     ]
     .iter()
-    .find_map(|prefix| url.strip_prefix(prefix))?
+    .find_map(|prefix| {
+        url.get(..prefix.len())
+            .filter(|scheme_and_host| scheme_and_host.eq_ignore_ascii_case(prefix))
+            .map(|_| &url[prefix.len()..])
+    })?
     .trim_end_matches('/');
 
     repository(named.strip_suffix(".git").unwrap_or(named)).ok()
@@ -890,6 +894,7 @@ mod tests {
             "https://github.com/jtmthf/kestrel/",
             "git@github.com:jtmthf/kestrel.git",
             "ssh://git@github.com/jtmthf/kestrel",
+            "HTTPS://GitHub.com/jtmthf/kestrel",
         ] {
             assert_eq!(
                 named_repository(url).as_deref(),

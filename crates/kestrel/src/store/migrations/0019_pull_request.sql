@@ -10,7 +10,9 @@ CREATE TABLE pull_request (
     head_revision TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     event_record_id TEXT NOT NULL REFERENCES event (record_id),
-    PRIMARY KEY (workspace_id, repository, number)
+    -- The url names the base repository: a fork's pull request and one against the fork can share
+    -- head repository and number.
+    PRIMARY KEY (workspace_id, url)
 ) STRICT;
 
 -- One per pull_request Event considered, whatever it matched, so each is considered once.

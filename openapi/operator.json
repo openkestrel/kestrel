@@ -2566,7 +2566,7 @@
           "availability": {
             "type": "string",
             "enum": ["available", "unavailable"],
-            "description": "Unavailable when no inbound, signed GitHub Integration in the Organization watches the repository: kestrel cannot learn its pull requests, which says nothing about whether any exist."
+            "description": "Unavailable when no inbound, signed GitHub Integration in the Organization watches the repository and none has delivered a pull request from it: kestrel cannot learn its pull requests, which says nothing about whether any exist."
           },
           "known": {
             "type": ["array", "null"],
