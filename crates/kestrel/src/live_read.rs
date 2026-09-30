@@ -333,3 +333,24 @@ pub async fn read(
 
     reads.read(&instance, read).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn an_instance_that_takes_a_read_but_never_answers_is_given_up_on() {
+        let reads = Reads::default();
+        let (mut asked, _stream) = reads.connected("silent");
+        let began = Instant::now();
+
+        let Err(error) = reads.read("silent", Read::Files { path: None }).await else {
+            panic!("a silent Instance should not answer");
+        };
+
+        assert!(error.is::<NotAnswering>());
+        assert!(began.elapsed() >= ANSWER_BEGUN_WITHIN);
+        assert!(asked.try_recv().is_ok());
+        assert!(reads.0.lock().unwrap().awaiting.is_empty());
+    }
+}
