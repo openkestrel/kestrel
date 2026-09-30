@@ -120,6 +120,7 @@ pub const WORKSPACE: View = View::Detail(&[
     "started_by",
     "continues",
     "continued_by",
+    "pull_requests",
 ]);
 pub const SESSIONS: View = View::Rows(&[
     "id",

@@ -723,7 +723,7 @@ fn event_refusal(row: &SqliteRow) -> Result<Option<EventRefusal>> {
     }))
 }
 
-fn event(row: &SqliteRow) -> Result<Event> {
+pub(crate) fn event(row: &SqliteRow) -> Result<Event> {
     Ok(Event {
         record_id: row.get::<String, _>("record_id").parse()?,
         organization: row.get::<String, _>("organization_id").parse()?,

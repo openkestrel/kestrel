@@ -2833,10 +2833,49 @@
           "sealed_at": { "type": ["string", "null"], "format": "date-time" },
           "continues": { "type": ["string", "null"], "format": "uuid" },
           "started_by": { "type": ["string", "null"], "format": "uuid" },
-          "continued_by": { "type": "array", "items": { "type": "string", "format": "uuid" } }
+          "continued_by": { "type": "array", "items": { "type": "string", "format": "uuid" } },
+          "pull_requests": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/PullRequestAvailability" },
+            "description": "One per repository fixed on the Workspace, in the checkout's order."
+          }
         },
-        "required": ["id", "name", "organization", "project", "opened_with", "profile", "checkout", "instance", "held", "correlation", "state", "opened_at", "last_active_at", "sealed_at", "continues", "started_by", "continued_by"]
+        "required": ["id", "name", "organization", "project", "opened_with", "profile", "checkout", "instance", "held", "correlation", "state", "opened_at", "last_active_at", "sealed_at", "continues", "started_by", "continued_by", "pull_requests"]
       },
+      "PullRequestAvailability": {
+        "type": "object",
+        "properties": {
+          "repository": { "type": "string" },
+          "availability": {
+            "type": "string",
+            "enum": ["available", "unavailable"],
+            "description": "Unavailable when no inbound, signed GitHub Integration in the Organization watches the repository and none has delivered a pull request from it: kestrel cannot learn its pull requests, which says nothing about whether any exist."
+          },
+          "known": {
+            "type": ["array", "null"],
+            "items": { "$ref": "#/components/schemas/PullRequest" },
+            "description": "The pull requests learned from the declared branch in this repository; null when unavailable."
+          }
+        },
+        "required": ["repository", "availability", "known"]
+      },
+      "PullRequest": {
+        "type": "object",
+        "description": "A Workspace's current value for one pull request, learned from a verified GitHub Event.",
+        "properties": {
+          "repository": { "type": "string", "description": "The head repository fixed on the Workspace." },
+          "number": { "type": "integer", "minimum": 1 },
+          "url": { "type": "string" },
+          "title": { "type": "string" },
+          "state": { "$ref": "#/components/schemas/PullRequestState" },
+          "head_branch": { "type": "string" },
+          "head_revision": { "type": "string" },
+          "updated_at": { "type": "string", "format": "date-time", "description": "When GitHub last changed it, as the Event said." },
+          "event": { "type": "string", "format": "uuid", "description": "The Event the value was learned from." }
+        },
+        "required": ["repository", "number", "url", "title", "state", "head_branch", "head_revision", "updated_at", "event"]
+      },
+      "PullRequestState": { "type": "string", "enum": ["open", "closed", "merged"] },
       "Checkout": {
         "type": "object",
         "properties": {
@@ -3415,6 +3454,9 @@
           },
           {
             "$ref": "#/components/schemas/PlanEntry"
+          },
+          {
+            "$ref": "#/components/schemas/PullRequestEntry"
           }
         ],
         "discriminator": {
@@ -3428,7 +3470,8 @@
             "session_ended": "#/components/schemas/SessionEnded",
             "instance_released": "#/components/schemas/InstanceReleased",
             "thought": "#/components/schemas/ThoughtEntry",
-            "plan": "#/components/schemas/PlanEntry"
+            "plan": "#/components/schemas/PlanEntry",
+            "pull_request": "#/components/schemas/PullRequestEntry"
           }
         }
       },
@@ -3641,6 +3684,21 @@
             "$ref": "#/components/schemas/CursorEvent"
           }
         ]
+      },
+      "PullRequestEntry": {
+        "description": "A verified GitHub Event observed a pull request from the Workspace's declared branch in one of its repositories. Learning it starts no work.",
+        "type": "object",
+        "properties": {
+          "type": { "const": "pull_request" },
+          "event": { "type": "string", "format": "uuid", "description": "The Organization Event it was learned from." },
+          "repository": { "type": "string", "description": "The head repository fixed on the Workspace." },
+          "number": { "type": "integer", "minimum": 1 },
+          "url": { "type": "string" },
+          "title": { "type": "string" },
+          "action": { "type": "string", "description": "GitHub's action, such as opened." },
+          "state": { "$ref": "#/components/schemas/PullRequestState" }
+        },
+        "required": ["type", "event", "repository", "number", "url", "title", "action", "state"]
       },
       "InstanceReleased": {
         "description": "A person released the Workspace's Instance, destroying it and whatever it held that was never pushed.",

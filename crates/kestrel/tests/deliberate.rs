@@ -20,6 +20,15 @@ const COMMENTS: &str = "/issues/comments?";
 const PATIENCE: Duration = Duration::from_secs(30);
 
 async fn dogfooding(kestrel: &Kestrel, stub: &GithubStub) {
+    dogfood_declarations(kestrel).await;
+    integrating(kestrel, stub).await;
+}
+
+/// Every declaration that must exist before an Event can be recorded. Registering the
+/// Integration is what starts the poller, so declaring after it races the poll: an Event
+/// recorded before a Trigger's `declared_at` is never matched, and the poller answers from an
+/// exhausted script with a 404, never offering that Event again.
+async fn dogfood_declarations(kestrel: &Kestrel) {
     let organization = kestrel.declare_organization("acme").await;
     kestrel
         .declare_project(&organization, "kestrel", &[], "main")
@@ -39,6 +48,9 @@ async fn dogfooding(kestrel: &Kestrel, stub: &GithubStub) {
         "{:?}",
         applied.admitting_outsiders
     );
+}
+
+async fn integrating(kestrel: &Kestrel, stub: &GithubStub) {
     kestrel
         .register_integration(
             "acme",
@@ -868,7 +880,7 @@ async fn a_closed_native_dependency_does_not_hold_the_start() {
 /// Assignment starts nothing in the dogfood declarations, so the automatic start under test is
 /// declared beside them.
 async fn delegating(kestrel: &Kestrel, stub: &GithubStub) {
-    dogfooding(kestrel, stub).await;
+    dogfood_declarations(kestrel).await;
     kestrel
         .declare_trigger_rendering(
             "acme",
@@ -886,6 +898,7 @@ async fn delegating(kestrel: &Kestrel, stub: &GithubStub) {
             ),
         )
         .await;
+    integrating(kestrel, stub).await;
 }
 
 fn blocked_by(stub: &GithubStub, issue: i64, blocker: i64) {

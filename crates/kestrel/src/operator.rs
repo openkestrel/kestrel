@@ -41,7 +41,7 @@ use crate::store::organization::NoSuchOrganization;
 use crate::store::{self, Declared, Store};
 use crate::template::Template;
 use crate::trigger::{self, apply};
-use crate::{instance, start, work, workspace};
+use crate::{instance, pull_request, start, work, workspace};
 
 pub const ORGANIZATIONS: &str = "/operator/organizations";
 pub const STARTS: &str = "/operator/starts";
@@ -402,6 +402,55 @@ struct WorkspaceRecord {
     continues: Option<String>,
     started_by: Option<String>,
     continued_by: Vec<String>,
+    pull_requests: Vec<PullRequestAvailabilityRecord>,
+}
+
+#[derive(Serialize)]
+struct PullRequestAvailabilityRecord {
+    repository: String,
+    availability: &'static str,
+    known: Option<Vec<PullRequestRecord>>,
+}
+
+#[derive(Serialize)]
+struct PullRequestRecord {
+    repository: String,
+    number: i64,
+    url: String,
+    title: String,
+    state: domain::PullRequestState,
+    head_branch: String,
+    head_revision: String,
+    updated_at: Timestamp,
+    event: String,
+}
+
+impl From<pull_request::Availability> for PullRequestAvailabilityRecord {
+    fn from(availability: pull_request::Availability) -> Self {
+        Self {
+            repository: availability.repository,
+            availability: match availability.known {
+                Some(_) => "available",
+                None => "unavailable",
+            },
+            known: availability.known.map(|known| {
+                known
+                    .into_iter()
+                    .map(|pull_request| PullRequestRecord {
+                        repository: pull_request.repository,
+                        number: pull_request.number,
+                        url: pull_request.url,
+                        title: pull_request.title,
+                        state: pull_request.state,
+                        head_branch: pull_request.head_branch,
+                        head_revision: pull_request.head_revision,
+                        updated_at: pull_request.updated_at,
+                        event: pull_request.event.to_string(),
+                    })
+                    .collect()
+            }),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -513,6 +562,11 @@ impl WorkspaceRecord {
         let held = instance::held_by(store, workspace.id)
             .await?
             .map(|held| held.because);
+        let pull_requests = pull_request::availability(store, &workspace)
+            .await?
+            .into_iter()
+            .map(PullRequestAvailabilityRecord::from)
+            .collect();
 
         Ok(Self {
             id: workspace.id.to_string(),
@@ -532,6 +586,7 @@ impl WorkspaceRecord {
             continues: workspace.continues.map(|workspace| workspace.to_string()),
             started_by: workspace.started_by.map(|event| event.to_string()),
             continued_by,
+            pull_requests,
         })
     }
 }

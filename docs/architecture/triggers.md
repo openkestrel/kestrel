@@ -140,6 +140,23 @@ Triggers:
   It is posted as a message ([Sessions](sessions.md#the-unfinished-session)).
 - Comments carrying kestrel's own delivery marker are never read as input.
 
+## Pull requests
+
+`pull_request.rs` learns pull requests as Workspace state, independent of Triggers
+([ADR-0032](../adr/0032-a-pull-request-event-updates-workspace-state-without-a-firing.md)):
+
+- It reads only a GitHub Integration's `com.github.pull_request.opened` Events; a generic webhook
+  may name any type and proves nothing about GitHub.
+- The payload's head repository and head branch must name exactly one open Workspace in the
+  Event's Organization: one whose declared branch is the head branch and which fixes the head
+  repository among its repositories. A fork is its own repository. Zero or several candidates
+  leave the Event unattached.
+- An attached Event appends a `pull_request` shared-state entry and updates the Workspace's current
+  value for that repository and number. It creates no Firing and prompts no Session, and a Trigger
+  declared for the same Event fires as it would anyway.
+- `pull_request_attachment` records every Event considered and what it matched, so each is
+  considered once.
+
 ## Delivery
 
 The outbound half (`integration/delivery.rs`, [ADR-0024](../adr/0024-a-run-spans-prompt-turns.md)):

@@ -824,6 +824,51 @@ impl FromStr for WorkspaceState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PullRequestState {
+    Open,
+    Closed,
+    Merged,
+}
+
+impl PullRequestState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            PullRequestState::Open => "open",
+            PullRequestState::Closed => "closed",
+            PullRequestState::Merged => "merged",
+        }
+    }
+}
+
+impl FromStr for PullRequestState {
+    type Err = anyhow::Error;
+
+    fn from_str(state: &str) -> Result<Self> {
+        match state {
+            "open" => Ok(PullRequestState::Open),
+            "closed" => Ok(PullRequestState::Closed),
+            "merged" => Ok(PullRequestState::Merged),
+            other => bail!("{other} is not a state a pull request can be in"),
+        }
+    }
+}
+
+/// `repository` is the head repository's URL as fixed on the Workspace, not GitHub's `owner/name`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequest {
+    pub repository: String,
+    pub number: i64,
+    pub url: String,
+    pub title: String,
+    pub state: PullRequestState,
+    pub head_branch: String,
+    pub head_revision: String,
+    pub updated_at: Timestamp,
+    pub event: EventRecordId,
+}
+
 impl fmt::Display for WorkspaceState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
