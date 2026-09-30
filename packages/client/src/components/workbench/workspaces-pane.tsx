@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { Refusal } from "#/components/refusal";
-import { Button } from "#/components/ui/button";
+import { buttonVariants } from "#/components/ui/button";
 import { Skeleton } from "#/components/ui/skeleton";
 import { workspacesQuery } from "#/operator/queries";
 import { PaneHeading } from "./workbench";
@@ -14,12 +14,14 @@ export function WorkspacesPane({ organization }: { organization: string }) {
 		<>
 			<PaneHeading>Workspaces</PaneHeading>
 			<div className="p-2">
-				<Button asChild variant="outline" size="sm" className="w-full">
-					<Link to="/organizations/$organization/new" params={{ organization }}>
-						<Plus aria-hidden />
-						New Workspace
-					</Link>
-				</Button>
+				<Link
+					to="/organizations/$organization/new"
+					params={{ organization }}
+					className={buttonVariants({ variant: "outline", size: "sm", className: "w-full" })}
+				>
+					<Plus aria-hidden />
+					New Workspace
+				</Link>
 			</div>
 			<nav aria-label="Workspaces" className="min-h-0 flex-1 overflow-y-auto p-2">
 				{workspaces.isPending ? (

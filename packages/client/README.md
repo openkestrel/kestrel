@@ -20,5 +20,5 @@ bun run check      # biome
 - **Routes** mirror the operator paths without `/operator`: `/organizations/$organization`,
   `…/workspaces/$workspace` and `…/new`. Each renders the three-pane `Workbench`, which becomes
   tabs under 900px.
-- **Components** are shadcn (`src/components/ui`) and AI Elements (`src/components/ai-elements`),
-  added with their CLIs and then owned here.
+- **Components** are shadcn's Lyra style on Base UI (`src/components/ui`) and AI Elements
+  (`src/components/ai-elements`), added with their CLIs and then owned here.

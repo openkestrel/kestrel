@@ -1,4 +1,4 @@
-import { type ReactNode, useId, useState } from "react";
+import { type ReactNode, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
 
 const PANES = [
@@ -12,17 +12,16 @@ type Pane = (typeof PANES)[number]["value"];
 // Under 900px the panes become tabs; above it every pane shows and the tab list is hidden.
 export function Workbench(panes: Record<Pane, ReactNode> & { initial?: Pane }) {
 	const [shown, setShown] = useState<Pane>(panes.initial ?? "transcript");
-	const id = useId();
 
 	return (
 		<Tabs
 			value={shown}
-			onValueChange={(value) => setShown(value as Pane)}
+			onValueChange={(value: Pane) => setShown(value)}
 			className="flex h-dvh flex-col gap-0"
 		>
 			<TabsList className="w-full shrink-0 rounded-none min-[900px]:hidden" aria-label="Panes">
 				{PANES.map(({ value, label }) => (
-					<TabsTrigger key={value} value={value} id={`${id}-${value}-tab`}>
+					<TabsTrigger key={value} value={value}>
 						{label}
 					</TabsTrigger>
 				))}
@@ -32,9 +31,11 @@ export function Workbench(panes: Record<Pane, ReactNode> & { initial?: Pane }) {
 					<TabsContent
 						key={value}
 						value={value}
-						forceMount
-						aria-labelledby={`${id}-${value}-tab`}
-						className="min-h-0 overflow-y-auto data-[state=inactive]:max-[899px]:hidden"
+						keepMounted
+						// Base UI hides and inerts every inactive panel; above 900px all three are shown.
+						hidden={false}
+						inert={false}
+						className="min-h-0 overflow-y-auto data-hidden:max-[899px]:hidden"
 					>
 						<section aria-label={label} className="flex h-full min-h-0 flex-col">
 							{panes[value]}
