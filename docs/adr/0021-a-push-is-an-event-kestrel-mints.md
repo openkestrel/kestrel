@@ -11,7 +11,7 @@ poke and waiting for a poll.
 
 ## Why an event, rather than a side door
 
-`CONTEXT.md` said kestrel "translates nothing into a vocabulary of its own, and mints one type only,
+`GLOSSARY.md` said kestrel "translates nothing into a vocabulary of its own, and mints one type only,
 for its own schedules elapsing," which reads as a prohibition and is not one — a schedule elapsing is
 already an internal event kestrel mints. The clause's subject is **translation**: do not restate
 GitHub's vocabulary in kestrel's. An event kestrel mints for something kestrel itself did is not
@@ -53,7 +53,7 @@ second internal event source appears.
   command pointed the other way.
 - **A pushed session has an Outcome, addressed to what its event names.** `dispatch #109`
   round-trips to the issue exactly as labelling it would. A raw prompt has no subject and no outcome,
-  which `CONTEXT.md` already handles: a session no event started has none, and one whose event
+  which `GLOSSARY.md` already handles: a session no event started has none, and one whose event
   reaches no integration has nowhere to say it.
 - **A firing budget still bounds a push.** Nothing about arriving by hand exempts work from the caps
   that bound work arriving by poll.

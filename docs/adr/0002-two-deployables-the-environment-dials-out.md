@@ -40,7 +40,7 @@ deployments at the `Work` seam at `0.7`, which is
 It holds a cursor and nothing else: on reconnect it re-reads opencode from its last acknowledged
 sequence, using that server's durable `GET /api/session/:id/event?after=<seq>` replay. The only
 events opencode will not replay are the four `.delta` streaming events — which is exactly what
-[`CONTEXT.md`](../../CONTEXT.md) already excludes from a `Transcript`, since it records what changed
+[`GLOSSARY.md`](../../GLOSSARY.md) already excludes from a `Transcript`, since it records what changed
 the session's shared state and never what happened inside a run.
 [#14](https://github.com/jtmthf/kestrel/issues/14)'s invariant holds in its strongest form: the
 courier carries no cargo.

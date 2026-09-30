@@ -9,7 +9,7 @@ unsupported. This supersedes
 supervisor becomes Rust and TypeScript leaves kestrel's source.
 
 **ADR-0001's load-bearing claim is false.** It holds that the Claude Agent SDK's `canUseTool` is *"the
-only surface that carries that round-trip"* — the mid-run approval a [`CONTEXT.md`](../../CONTEXT.md)
+only surface that carries that round-trip"* — the mid-run approval a [`GLOSSARY.md`](../../GLOSSARY.md)
 **Approval** requires. ACP's `session/request_permission` is a blocking JSON-RPC request/response
 offering `allow_once | allow_always | reject_once | reject_always`, and every ACP agent has it. The
 Rust and TypeScript SDKs both reached 1.0 on 2026-06-25; the `agent-client-protocol` crate implements
@@ -99,7 +99,7 @@ worst of the three available outcomes.
 
 **A `Run` owns exactly one ACP session.** Environments are disposable per run and an agent cannot
 outlive its parent supervisor, so ACP's `sessionId` is a run's identifier at the runtime rather than
-a concept, and [`CONTEXT.md`](../../CONTEXT.md) gains no term for it.
+a concept, and [`GLOSSARY.md`](../../GLOSSARY.md) gains no term for it.
 
 **`session/update` is filtered, not forwarded.** `agent_message_chunk` is coalesced by `messageId`
 into one transcript entry at turn end; `plan`, `tool_call`, `tool_call_update` and thought chunks

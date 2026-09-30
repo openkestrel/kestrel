@@ -6,7 +6,7 @@ request, every approval and question resolved), **narration** (the agent's thoug
 **detail** (tool calls and their results). A read names the kinds it wants. Shared state alone is
 what a human gets when they join a session late.
 
-This replaces `CONTEXT.md`'s previous definition, which recorded "what changed the session's shared
+This replaces `GLOSSARY.md`'s previous definition, which recorded "what changed the session's shared
 state, never what happened inside a run," and retires the supervisor test
 `a_plan_a_tool_call_and_a_thought_are_heard_and_never_said` that enforced it.
 
@@ -37,7 +37,7 @@ Filtering is a **read** concern, and it belongs on the read.
   opencode's `?after=<seq>` replay and notes that the four `.delta` streaming events are the only
   ones it will not replay — safe then because the old definition excluded them by definition, and
   safe now because this one does too. The record stays gap-free, which is a promise
-  `CONTEXT.md` protects hard enough to record its own deletions. Liveness is bounded by unit size,
+  `GLOSSARY.md` protects hard enough to record its own deletions. Liveness is bounded by unit size,
   and a completed tool call arriving as it completes would have shown the `openssl` thrash
   immediately, which is all the operator wanted.
 - **Reports go up as they happen**, rather than being drained after the turn. This is a bug against

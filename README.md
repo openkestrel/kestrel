@@ -28,6 +28,6 @@ The first start builds the container images from source. Follow the [usage guide
 
 - [Usage guide](USAGE.md) — first session and links to manual workspaces, subscriptions, and automation.
 - [Roadmap](ROADMAP.md) — current milestones and planned work.
-- [Domain model](CONTEXT.md) — the terms used throughout the project.
+- [Domain model](GLOSSARY.md) — the terms used throughout the project.
 
 Kestrel is licensed under [Apache 2.0](LICENSE).

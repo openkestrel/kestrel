@@ -12,13 +12,13 @@ between kestrel's domain and someone else's library.
 **The supervisor is TypeScript because of the Claude Agent SDK.** It is published as a library for
 Python and TypeScript only, and Anthropic's documented alternative for other languages — `claude -p`
 — has no mid-run approval callback: its permission surface is `--allowedTools`, `--permission-mode`
-and `dontAsk`, which pre-authorise or deny. [`CONTEXT.md`](../../CONTEXT.md) defines an **Approval**
+and `dontAsk`, which pre-authorise or deny. [`GLOSSARY.md`](../../GLOSSARY.md) defines an **Approval**
 as a decision that *blocks a run until a human resolves it*, so a runtime that can only be
 pre-authorised cannot participate in kestrel's governance at all. The SDK's `canUseTool` is the only
 surface that carries that round-trip.
 
 **The control plane is Rust because the domain is a pile of invariants.**
-[`CONTEXT.md`](../../CONTEXT.md) states around twenty-five of them and a state machine on nearly
+[`GLOSSARY.md`](../../GLOSSARY.md) states around twenty-five of them and a state machine on nearly
 every noun — `open | sealed`, `queued | active | failed | unreachable`, `allow | deny | judge |
 human`. Sum types with exhaustive matching, private constructors returning `Result`, and the absence
 of null or a zero value make most of those unrepresentable rather than merely tested.
