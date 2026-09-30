@@ -9,6 +9,12 @@ Client ([ADR-0015](../adr/0015-the-cli-is-a-client-not-a-role.md)). Server:
 
 - Served on its own listener (`KESTREL_OPERATOR_LISTEN`, default loopback 7718) and authenticates
   nobody. Operator identity is `0.4` work; until then, reaching the port is authority.
+- Every route refuses a `Host` that is not loopback and, when the request carries one, an `Origin`
+  that is not exactly `http://` and that `Host`; a cross-origin preflight is granted nothing. The
+  guard is `operator::addressed_here`, pinned by `crates/kestrel/tests/forgery.rs`. These checks
+  refuse a rebound name and a browser-driven write, and never replace the loopback limit
+  ([ADR-0036](../adr/0036-the-browser-client-shares-the-loopback-operator-origin.md), amended by
+  [ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md)).
 - Routes live under `/operator/organizations/{organization}/…`, plus a few Organization-free ones
   (`/operator/organizations`, `/operator/starts`, `/operator/events/{record}`). The route table is
   `operator::router`.
