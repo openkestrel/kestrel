@@ -798,6 +798,10 @@ pub fn repository(repository: &str) -> Result<String> {
     Ok(format!("{owner}/{name}"))
 }
 
+pub fn names(url: &str, repository: &str) -> bool {
+    named_repository(url).is_some_and(|named| named.eq_ignore_ascii_case(repository))
+}
+
 /// The `owner/name` a github.com URL names, in any of the forms git clones it by.
 pub fn named_repository(url: &str) -> Option<String> {
     let named = [

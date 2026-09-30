@@ -855,8 +855,7 @@ impl FromStr for PullRequestState {
     }
 }
 
-/// What a Workspace currently knows of one pull request from its declared branch, keyed by the
-/// head repository fixed on the Workspace and the pull request's number.
+/// `repository` is the head repository's URL as fixed on the Workspace, not GitHub's `owner/name`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullRequest {
     pub repository: String,

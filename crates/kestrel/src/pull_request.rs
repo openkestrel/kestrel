@@ -48,10 +48,12 @@ async fn learning(store: &Store, event: &Event) -> Result<Learned> {
             .open_on_branch(event.organization, &observed.head_branch)
             .await?
         {
-            if let Some(repository) = workspace.checkout.repositories.iter().find(|url| {
-                github::named_repository(url)
-                    .is_some_and(|named| named.eq_ignore_ascii_case(&observed.head_repository))
-            }) {
+            if let Some(repository) = workspace
+                .checkout
+                .repositories
+                .iter()
+                .find(|url| github::names(url, &observed.head_repository))
+            {
                 let repository = repository.clone();
                 matching.push((workspace, repository));
             }
@@ -103,7 +105,6 @@ fn observed_action(event: &Event) -> String {
         .to_owned()
 }
 
-/// What one delivery says of its pull request, read from the verified payload alone.
 struct Observed {
     head_repository: String,
     head_branch: String,
@@ -151,7 +152,7 @@ impl Observed {
             },
             updated_at: text(&["updated_at"])?
                 .parse()
-                .context("the pull request's updated_at is no time")?,
+                .context("the pull request's updated_at is not a time")?,
         })
     }
 
@@ -170,9 +171,7 @@ impl Observed {
     }
 }
 
-/// Whether kestrel can learn pull requests from one repository fixed on a Workspace, and what it
-/// has learned there. `known` is `None` when nothing could deliver them, which is not the same as
-/// knowing there are none.
+/// `known` is `None` when no Integration could deliver them, which is not knowing there are none.
 pub struct Availability {
     pub repository: String,
     pub known: Option<Vec<PullRequest>>,
@@ -193,15 +192,12 @@ pub async fn availability(store: &Store, workspace: &Workspace) -> Result<Vec<Av
                 .filter(|pull_request| &pull_request.repository == repository)
                 .cloned()
                 .collect();
-            let is_watched = github::named_repository(repository).is_some_and(|named| {
-                watched
-                    .iter()
-                    .any(|watching| watching.eq_ignore_ascii_case(&named))
-            });
             Availability {
                 repository: repository.clone(),
-                // A fork's pull requests arrive through the Integration watching their base.
-                known: (is_watched || !known.is_empty()).then_some(known),
+                known: watched
+                    .iter()
+                    .any(|watching| github::names(repository, watching))
+                    .then_some(known),
             }
         })
         .collect())

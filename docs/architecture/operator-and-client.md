@@ -55,8 +55,7 @@ event when omitted entries advance it beyond the last delivered entry. The curso
 
 A Workspace read carries `pull_requests`: one item per fixed repository, in checkout order.
 `availability` is `available` when an inbound, signed GitHub Integration in the Organization
-watches the repository, or a pull request from it has already been learned; `known` then lists
-its current values. Otherwise it is `unavailable` and `known` is null, which never means there are
+watches the repository; `known` then lists its current values. Otherwise it is `unavailable` and `known` is null, which never means there are
 none. Nothing is inferred from git or a Session. `kestrel workspace show` prints the same field.
 
 ### Reading live work

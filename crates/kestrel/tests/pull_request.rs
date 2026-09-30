@@ -137,8 +137,9 @@ async fn shown(kestrel: &Kestrel, organization: &str, workspace: &Workspace) -> 
 
 async fn watching(kestrel: &Kestrel, organization: &str, repository: &str) -> Integration {
     let stub = GithubStub::start();
+    let name = repository.replace('/', "-");
     kestrel
-        .register_signed_github(organization, "github", repository, &stub.base_url(), SECRET)
+        .register_signed_github(organization, &name, repository, &stub.base_url(), SECRET)
         .await
 }
 
@@ -253,6 +254,8 @@ async fn only_the_head_repository_and_branch_of_one_open_workspace_attach() {
     declared(&kestrel, "acme", &[BASE, TOOLS]).await;
     declared(&kestrel, "beta", &[BASE]).await;
     let github = watching(&kestrel, "acme", BASE).await;
+    let tooling = watching(&kestrel, "acme", TOOLS).await;
+    watching(&kestrel, "beta", BASE).await;
     let tools = kestrel
         .open_workspace_on("acme", "kestrel", "builder", "tooling")
         .await;
@@ -301,10 +304,10 @@ async fn only_the_head_repository_and_branch_of_one_open_workspace_attach() {
     // Every repository of a multi-repository Project is searched, and only the head's counts.
     deliver(
         &kestrel,
-        &github,
+        &tooling,
         "d-tools",
         &Opened {
-            base: BASE,
+            base: TOOLS,
             head: TOOLS,
             branch: "tooling",
             number: 3,
@@ -341,10 +344,10 @@ async fn only_the_head_repository_and_branch_of_one_open_workspace_attach() {
         matches!(&learned[..], [Entry::PullRequest { number: 5, .. }]),
         "{learned:?}"
     );
-    let tooling = attached(&kestrel, tools.id, 1).await;
+    let learned_by_tools = attached(&kestrel, tools.id, 1).await;
     assert!(
-        matches!(&tooling[..], [Entry::PullRequest { number: 3, repository, .. }] if *repository == url(TOOLS)),
-        "{tooling:?}"
+        matches!(&learned_by_tools[..], [Entry::PullRequest { number: 3, repository, .. }] if *repository == url(TOOLS)),
+        "{learned_by_tools:?}"
     );
     for unattached in [&first, &second, &forked, &elsewhere] {
         assert!(
