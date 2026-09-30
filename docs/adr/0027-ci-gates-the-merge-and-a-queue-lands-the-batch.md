@@ -1,5 +1,8 @@
 # CI gates the merge, and a queue lands the batch
 
+> **Amended by [ADR-0042](0042-a-tree-that-passed-the-gate-is-not-run-again.md).** A queue entry
+> whose exact tree passed the gate within the day is not run again; every other entry still is.
+
 kestrel's own changes arrive several at a time: a person keeps three or four worktrees in flight, each
 opens a pull request, and integrating them is a serial chore — merge one, `main` moves, rebase the
 next, wait for its checks again. The waiting was not the expensive part; the recurring re-validation

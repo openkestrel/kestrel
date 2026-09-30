@@ -1,0 +1,8 @@
+# A test that passes on a retry still fails the gate (ADR-0042): the retry only labels it FLAKY.
+[profile.ci]
+fail-fast = false
+retries = 2
+flaky-result = "fail"
+
+[profile.stress]
+fail-fast = false
