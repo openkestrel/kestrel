@@ -9,7 +9,7 @@ const PANES = [
 
 type Pane = (typeof PANES)[number]["value"];
 
-// Under 900px the panes become tabs; above it every pane shows and the tab list is hidden.
+// Below lg the panes become tabs; from lg every pane shows and the tab list is hidden.
 export function Workbench(panes: Record<Pane, ReactNode> & { initial?: Pane }) {
 	const [shown, setShown] = useState<Pane>(panes.initial ?? "transcript");
 
@@ -19,23 +19,23 @@ export function Workbench(panes: Record<Pane, ReactNode> & { initial?: Pane }) {
 			onValueChange={(value: Pane) => setShown(value)}
 			className="flex h-dvh flex-col gap-0"
 		>
-			<TabsList className="w-full shrink-0 rounded-none min-[900px]:hidden" aria-label="Panes">
+			<TabsList className="w-full shrink-0 lg:hidden" aria-label="Panes">
 				{PANES.map(({ value, label }) => (
 					<TabsTrigger key={value} value={value}>
 						{label}
 					</TabsTrigger>
 				))}
 			</TabsList>
-			<div className="grid min-h-0 flex-1 grid-cols-1 min-[900px]:grid-cols-[16rem_minmax(0,1fr)_20rem] min-[900px]:divide-x">
+			<div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-workbench lg:divide-x">
 				{PANES.map(({ value, label }) => (
 					<TabsContent
 						key={value}
 						value={value}
 						keepMounted
-						// Base UI hides and inerts every inactive panel; above 900px all three are shown.
+						// Base UI hides and inerts every inactive panel; from lg all three are shown.
 						hidden={false}
 						inert={false}
-						className="min-h-0 overflow-y-auto data-hidden:max-[899px]:hidden"
+						className="min-h-0 overflow-y-auto data-hidden:max-lg:hidden"
 					>
 						<section aria-label={label} className="flex h-full min-h-0 flex-col">
 							{panes[value]}

@@ -19,6 +19,6 @@ bun run check      # oxlint and oxfmt
   Only types are generated: `src/operator/transport.ts` owns every request, refusal and stream.
 - **Routes** mirror the operator paths without `/operator`: `/organizations/$organization`,
   `…/workspaces/$workspace` and `…/new`. Each renders the three-pane `Workbench`, which becomes
-  tabs under 900px.
+  tabs below the `lg` breakpoint.
 - **Components** are shadcn's Lyra style on Base UI (`src/components/ui`) and AI Elements
   (`src/components/ai-elements`), added with their CLIs and then owned here.

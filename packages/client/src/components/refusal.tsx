@@ -11,10 +11,10 @@ export function Refusal({ error }: { error: unknown }) {
 	return (
 		<Alert variant="destructive">
 			<CircleAlert aria-hidden />
-			<AlertTitle className="line-clamp-none">{said}</AlertTitle>
+			<AlertTitle>{said}</AlertTitle>
 			{error instanceof Refused && (
 				<AlertDescription>
-					<dl className="grid grid-cols-[auto_1fr] gap-x-3">
+					<dl className="grid grid-cols-key-value gap-x-3">
 						<dt>Status</dt>
 						<dd>{error.status}</dd>
 						{error.field && (

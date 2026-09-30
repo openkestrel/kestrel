@@ -134,3 +134,10 @@
     @apply font-mono;
     }
 }
+@utility grid-cols-workbench {
+  grid-template-columns: 16rem minmax(0, 1fr) 20rem;
+}
+
+@utility grid-cols-key-value {
+  grid-template-columns: auto 1fr;
+}
