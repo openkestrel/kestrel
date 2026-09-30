@@ -4188,6 +4188,7 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::WORKSPACES, "get"),
         (operator::WORKSPACES, "post"),
         (operator::WORKSPACE, "get"),
+        (operator::WORKSPACE_WORK, "get"),
         (operator::WORKSPACE_MESSAGES, "post"),
         (operator::WORKSPACE_SEAL, "post"),
         (operator::WORKSPACE_INSTANCE_RELEASE, "post"),

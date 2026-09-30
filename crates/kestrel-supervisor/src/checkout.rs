@@ -105,6 +105,171 @@ async fn read(directory: &Path) -> Result<Git, String> {
     })
 }
 
+pub async fn work(checkout: &Checkout) -> Vec<crate::link::WorkRepository> {
+    let mut repositories = Vec::with_capacity(checkout.repositories.len());
+    for repository in &checkout.repositories {
+        let name = cloned_into(repository);
+        let git = match tokio::time::timeout(
+            Duration::from_secs(10),
+            work_in(Path::new(name), &checkout.branch),
+        )
+        .await
+        {
+            Ok(Ok(git)) => git,
+            Ok(Err(because)) => crate::link::WorkGit::Unreadable { because },
+            Err(_) => crate::link::WorkGit::Unreadable {
+                because: "git did not report the work within 10 seconds".to_owned(),
+            },
+        };
+        repositories.push(crate::link::WorkRepository {
+            repository: name.to_owned(),
+            git,
+        });
+    }
+    repositories
+}
+
+async fn work_in(directory: &Path, declared: &str) -> Result<crate::link::WorkGit, String> {
+    use crate::link::{Commits, WorkGit};
+    let directory = &*directory.to_string_lossy();
+    let branch = git(&["-C", directory, "branch", "--show-current"]).await?;
+    let changed = numstat(
+        &git(&[
+            "-C",
+            directory,
+            "diff",
+            "--numstat",
+            "-z",
+            "--no-ext-diff",
+            "--find-renames",
+            "--no-textconv",
+        ])
+        .await?,
+    )?;
+    let staged = numstat(
+        &git(&[
+            "-C",
+            directory,
+            "diff",
+            "--cached",
+            "--numstat",
+            "-z",
+            "--no-ext-diff",
+            "--find-renames",
+            "--no-textconv",
+        ])
+        .await?,
+    )?;
+    let commits = git(&[
+        "-C",
+        directory,
+        "rev-list",
+        "--count",
+        "HEAD",
+        "--branches",
+        "--not",
+        "--remotes",
+    ])
+    .await?;
+    let committed = numstat(
+        &git(&[
+            "-C",
+            directory,
+            "log",
+            "--format=",
+            "--numstat",
+            "-z",
+            "--no-ext-diff",
+            "--find-renames",
+            "--no-textconv",
+            "--diff-merges=first-parent",
+            "HEAD",
+            "--branches",
+            "--not",
+            "--remotes",
+        ])
+        .await?,
+    )?;
+    let pushed = git(&[
+        "-C",
+        directory,
+        "rev-parse",
+        "--verify",
+        &format!("refs/remotes/origin/{declared}"),
+    ])
+    .await
+    .ok();
+    let untracked = git(&[
+        "-C",
+        directory,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+    ])
+    .await?
+    .split('\0')
+    .filter(|path| !path.is_empty())
+    .count() as u64;
+    let stashed = git(&["-C", directory, "stash", "list", "--format=%H"])
+        .await?
+        .lines()
+        .count() as u64;
+    Ok(WorkGit::Read {
+        branch: (!branch.is_empty()).then_some(branch),
+        changed,
+        staged,
+        committed: Commits {
+            commits: commits
+                .parse()
+                .map_err(|_| format!("git counted {commits:?} commits"))?,
+            added: committed.added,
+            removed: committed.removed,
+        },
+        pushed,
+        untracked,
+        stashed,
+    })
+}
+
+fn numstat(output: &str) -> Result<crate::link::Changes, String> {
+    let mut stats = crate::link::Changes {
+        files: 0,
+        added: 0,
+        removed: 0,
+    };
+    let mut paths = std::collections::HashSet::new();
+    let mut records = output.split('\0').filter(|record| !record.is_empty());
+    while let Some(record) = records.next() {
+        let mut fields = record.trim_start_matches('\n').splitn(3, '\t');
+        let added = fields.next().unwrap_or_default();
+        let removed = fields
+            .next()
+            .ok_or_else(|| format!("git returned an invalid numstat: {record:?}"))?;
+        let mut path = fields
+            .next()
+            .ok_or_else(|| format!("git returned an invalid numstat: {record:?}"))?;
+        if path.is_empty() {
+            records
+                .next()
+                .ok_or_else(|| "git omitted a renamed file's old path".to_owned())?;
+            path = records
+                .next()
+                .ok_or_else(|| "git omitted a renamed file's new path".to_owned())?;
+        }
+        paths.insert(path);
+        for (number, count) in [(added, &mut stats.added), (removed, &mut stats.removed)] {
+            if number != "-" {
+                *count += number
+                    .parse::<u64>()
+                    .map_err(|_| format!("git returned an invalid line count: {number:?}"))?;
+            }
+        }
+    }
+    stats.files = paths.len() as u64;
+    Ok(stats)
+}
+
 pub fn root(checkout: Option<&Checkout>) -> PathBuf {
     let here = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
 
@@ -131,6 +296,7 @@ async fn git(arguments: &[&str]) -> Result<String, String> {
     let running = Command::new("git")
         .args(arguments)
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .kill_on_drop(true)
         .output();
     let ran = tokio::time::timeout(GIT_GIVES_UP_AFTER, running)
@@ -237,6 +403,55 @@ mod tests {
             stashes,
             unpushed,
         }
+    }
+
+    #[test]
+    fn numstat_counts_binary_files_and_paths_containing_tabs_or_newlines() {
+        let stats = numstat("2\t1\tsource.rs\0-\t-\timage.png\0\n3\t0\ta\tb\nc\0").unwrap();
+        assert_eq!(
+            stats,
+            crate::link::Changes {
+                files: 3,
+                added: 5,
+                removed: 1
+            }
+        );
+    }
+
+    #[test]
+    fn numstat_counts_a_rename_as_one_file() {
+        let stats = numstat("1\t2\t\0old name\0new name\0").unwrap();
+        assert_eq!(
+            stats,
+            crate::link::Changes {
+                files: 1,
+                added: 1,
+                removed: 2
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merge_conflict_counts_as_one_changed_file() {
+        let cloned = Cloned::new();
+        cloned.write("README.md", "declared branch\n");
+        commit(&cloned.checkout, "declared branch");
+        cloned.git(&["checkout", "-b", "side", "main"]);
+        cloned.write("README.md", "side branch\n");
+        commit(&cloned.checkout, "side branch");
+        cloned.git(&["checkout", "kestrel/work"]);
+        cloned.git(&["config", "user.name", "kestrel"]);
+        cloned.git(&["config", "user.email", "kestrel@example.com"]);
+        assert!(
+            git(&["-C", &cloned.checkout.to_string_lossy(), "merge", "side"])
+                .await
+                .is_err()
+        );
+        let summary = work_in(&cloned.checkout, "kestrel/work").await.unwrap();
+        let crate::link::WorkGit::Read { changed, .. } = summary else {
+            panic!("unreadable");
+        };
+        assert_eq!(changed.files, 1);
     }
 
     #[tokio::test]

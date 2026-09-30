@@ -216,7 +216,7 @@
       "post": {
         "operationId": "report",
         "summary": "Report something about an Instance, or the Session it carries, to the control plane.",
-        "description": "Delivery is at-least-once: a supervisor that loses the answer to a report sends it again under the same seq, and the control plane takes it once. Seqs are counted within the Session a report names; one that skips a report the Session has yet to make is refused. A report about a Session the Instance no longer carries — it has ended, or its lease has passed — is answered 410, and the supervisor lets that Session go.",
+        "description": "Delivery is at-least-once: a supervisor that loses the answer to a report sends it again under the same seq, and the control plane takes it once. Seqs are counted within the Session a report names; one that skips a report the Session has yet to make is refused. A report about a Session the Instance no longer carries \u2014 it has ended, or its lease has passed \u2014 is answered 410, and the supervisor lets that Session go.",
         "parameters": [
           {
             "$ref": "#/components/parameters/instance"
@@ -234,7 +234,14 @@
         },
         "responses": {
           "202": {
-            "description": "The report was recorded, or had been already."
+            "description": "The report was accepted. Connected reports return the Workspace checkout declaration, so a supervisor can inspect a held Instance even between Sessions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Checkout"
+                }
+              }
+            }
           },
           "400": {
             "$ref": "#/components/responses/Refused"
@@ -487,6 +494,9 @@
             "$ref": "#/components/schemas/Heartbeat"
           },
           {
+            "$ref": "#/components/schemas/Work"
+          },
+          {
             "$ref": "#/components/schemas/Stderr"
           },
           {
@@ -516,6 +526,7 @@
           "mapping": {
             "connected": "#/components/schemas/Connected",
             "heartbeat": "#/components/schemas/Heartbeat",
+            "work": "#/components/schemas/Work",
             "stderr": "#/components/schemas/Stderr",
             "started": "#/components/schemas/Started",
             "model": "#/components/schemas/Model",
@@ -604,7 +615,7 @@
         ]
       },
       "Model": {
-        "description": "Which model the Harness is on for this turn — the one the Session's Agent named, or the harness's own default when it named none. Absent for a harness that lets no client select one at all.",
+        "description": "Which model the Harness is on for this turn \u2014 the one the Session's Agent named, or the harness's own default when it named none. Absent for a harness that lets no client select one at all.",
         "type": "object",
         "properties": {
           "kind": {
@@ -1159,6 +1170,156 @@
           "instance",
           "unpublished"
         ]
+      },
+      "WorkChanges": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "added": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "removed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "files",
+          "added",
+          "removed"
+        ]
+      },
+      "WorkCommits": {
+        "type": "object",
+        "properties": {
+          "commits": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "added": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "removed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "commits",
+          "added",
+          "removed"
+        ]
+      },
+      "WorkRepositoryRead": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "git": {
+            "const": "read"
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changed": {
+            "$ref": "#/components/schemas/WorkChanges"
+          },
+          "staged": {
+            "$ref": "#/components/schemas/WorkChanges"
+          },
+          "committed": {
+            "$ref": "#/components/schemas/WorkCommits"
+          },
+          "pushed": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "untracked": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "stashed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "repository",
+          "git",
+          "branch",
+          "changed",
+          "staged",
+          "committed",
+          "pushed",
+          "untracked",
+          "stashed"
+        ]
+      },
+      "WorkRepositoryUnreadable": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "git": {
+            "const": "unreadable"
+          },
+          "because": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "git",
+          "because"
+        ]
+      },
+      "WorkRepository": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/WorkRepositoryRead"
+          },
+          {
+            "$ref": "#/components/schemas/WorkRepositoryUnreadable"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "git",
+          "mapping": {
+            "read": "#/components/schemas/WorkRepositoryRead",
+            "unreadable": "#/components/schemas/WorkRepositoryUnreadable"
+          }
+        }
+      },
+      "Work": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "work"
+          },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkRepository"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "repositories"
+        ],
+        "description": "Unnumbered and non-durable. Sent on connect, when a two-second check during a turn finds a change, and at turn close. Does not alter the durable checkout observation."
       }
     }
   }

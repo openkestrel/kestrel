@@ -164,6 +164,13 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
         (
             None,
             None,
+            Report::Work {
+                repositories: vec![],
+            },
+        ),
+        (
+            None,
+            None,
             Report::Stderr {
                 lines: vec!["level=INFO message=init".to_owned()],
             },

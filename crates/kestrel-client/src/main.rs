@@ -7,6 +7,7 @@ mod sse;
 mod start;
 mod transcript;
 mod view;
+mod work;
 
 use std::io::{IsTerminal as _, Read as _, Write as _};
 use std::process::ExitCode;
@@ -66,7 +67,7 @@ struct Client {
 
     /// Emit these fields and no others, as JSON, one record a line; without it a terminal
     /// gets the presentation chosen for the command and anything else gets it tab-delimited
-    #[arg(long, global = true, value_name = "FIELDS")]
+    #[arg(long, global = true, value_name = "FIELDS", num_args = 0..=1, default_missing_value = "")]
     json: Option<String>,
 }
 
@@ -556,6 +557,8 @@ enum WorkspaceCommand {
     },
     /// List every Workspace in the Organization
     List,
+    #[command(alias = "status")]
+    Work { workspace: String },
     /// Show a Workspace
     Show {
         /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
@@ -648,7 +651,16 @@ async fn run() -> Result<()> {
         .try_get_matches()
         .unwrap_or_else(|error| exit_after(&error));
     let client = Client::from_arg_matches(&matches).unwrap_or_else(|error| exit_after(&error));
-    let presentation = Presentation::chosen(client.json.as_deref())?;
+    let presentation = Presentation::chosen(
+        if matches!(
+            &client.command,
+            Command::Workspace(WorkspaceCommand::Work { .. })
+        ) {
+            None
+        } else {
+            client.json.as_deref()
+        },
+    )?;
 
     let named = client.organization.map(|organization| Scope {
         organization,
@@ -1144,6 +1156,19 @@ async fn run() -> Result<()> {
                 &api.get(&["organizations", &organization, "workspaces"])
                     .await?,
             )?;
+        }
+        Command::Workspace(WorkspaceCommand::Work { workspace }) => {
+            let organization = scoping.resolve().await?.organization;
+            let answer = api
+                .get(&[
+                    "organizations",
+                    &organization,
+                    "workspaces",
+                    &workspace,
+                    "work",
+                ])
+                .await?;
+            work::show(answer, client.json.is_some())?;
         }
         Command::Workspace(WorkspaceCommand::Show { workspace }) => {
             let organization = scoping.resolve().await?.organization;

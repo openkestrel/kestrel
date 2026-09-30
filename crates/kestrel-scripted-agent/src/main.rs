@@ -220,6 +220,15 @@ async fn play(
         }
         return Ok(StopReason::EndTurn);
     }
+    if script == Script::Writes {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let directory = located.as_ref().ok_or_else(Error::internal_error)?;
+        std::fs::write(directory.join("written.txt"), "work in progress\n")
+            .map_err(Error::into_internal_error)?;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        say(connection, "message-1", "wrote a file")?;
+        return Ok(StopReason::EndTurn);
+    }
     if script == Script::Lingers {
         tokio::time::sleep(LINGER).await;
     }

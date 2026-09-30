@@ -45,6 +45,17 @@ stream ends with an `end` event when the Workspace seals or, with `follow=false`
 the last entry. A stream that closes without `end` was cut off; the Client resumes from the last
 id it printed (`kestrel-client/src/transcript.rs`) and gives up after 30 s unreachable.
 
+### Reading live work
+
+`GET …/workspaces/{workspace}/work` returns `state: reported`, per-repository summaries and
+`reported_at`. It reads Store without taking its write lock and never writes history. With no
+Instance it returns `state: no_instance` and the declared branch; `pull_request` remains null until
+pull request state is built. A supervisor off the link, or one that has not supplied a summary,
+returns `state: not_answering` rather than a durable checkout observation.
+
+`kestrel workspace work <workspace>` (alias `status`) prints a heading per repository and how long
+ago its supervisor reported it. `--json` returns the whole operator response.
+
 ### Declarations
 
 - `POST …/declaration` applies a whole document (Projects, Agents, Triggers) in one transaction;
@@ -59,9 +70,10 @@ id it printed (`kestrel-client/src/transcript.rs`) and gives up after 30 s unrea
   `scope.rs`): `--organization`, then `KESTREL_ORGANIZATION`, then a `.kestrel/organization` file
   found walking up from the working directory, then the only Organization that exists. Several
   Organizations and no binding is an error that lists them.
-- **Output** (`output.rs`, `view.rs`): each command declares a `View` of dotted paths into the
-  answer. A terminal gets aligned columns; a pipe gets delimited rows; `--json a,b` gets exactly
-  those fields in that order.
+- **Output** (`output.rs`, `view.rs`): most commands declare a `View` of dotted paths into the
+  answer. Live work inspection follows git-style prose even when piped, and its `--json` returns
+  the whole response. For commands with a `View`, a terminal gets aligned columns; a pipe gets
+  delimited rows; `--json a,b` gets exactly those fields in that order.
 - **Nothing is prompted for.** Whatever drives the Client may have no terminal. Secrets are read
   from standard input, never from arguments.
 - **Corrections** (`corrective.rs`): a refusal the Client recognises is followed by the command
