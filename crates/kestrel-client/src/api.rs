@@ -37,6 +37,16 @@ impl ControlPlane {
         self.answered(self.client.get(url)).await
     }
 
+    /// The answer as it arrived, for one that may be raw bytes rather than JSON.
+    pub async fn get_response(&self, path: &[&str], query: &[(&str, &str)]) -> Result<Response> {
+        let mut url = self.url(path)?;
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query);
+        }
+
+        self.sent(self.client.get(url)).await
+    }
+
     pub async fn post(&self, path: &[&str], body: &impl Serialize) -> Result<Value> {
         self.answered(self.client.post(self.url(path)?).json(body))
             .await

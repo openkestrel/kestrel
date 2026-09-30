@@ -280,7 +280,7 @@ pub fn root(checkout: Option<&Checkout>) -> PathBuf {
 }
 
 /// The directory `git clone` would choose for itself, named so the checkout after it can find it.
-fn cloned_into(repository: &str) -> &str {
+pub(crate) fn cloned_into(repository: &str) -> &str {
     let name = repository
         .trim_end_matches('/')
         .rsplit('/')
@@ -293,6 +293,11 @@ fn cloned_into(repository: &str) -> &str {
 const GIT_GIVES_UP_AFTER: Duration = Duration::from_secs(10 * 60);
 
 async fn git(arguments: &[&str]) -> Result<String, String> {
+    Ok(untrimmed(arguments).await?.trim().to_owned())
+}
+
+/// For `-z` output, where a name may start or end with whitespace.
+pub(crate) async fn untrimmed(arguments: &[&str]) -> Result<String, String> {
     let running = Command::new("git")
         .args(arguments)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -308,7 +313,7 @@ async fn git(arguments: &[&str]) -> Result<String, String> {
         return Err(String::from_utf8_lossy(&ran.stderr).trim().to_owned());
     }
 
-    Ok(String::from_utf8_lossy(&ran.stdout).trim().to_owned())
+    Ok(String::from_utf8_lossy(&ran.stdout).into_owned())
 }
 
 #[cfg(test)]

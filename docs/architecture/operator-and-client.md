@@ -56,6 +56,14 @@ returns `state: not_answering` rather than a durable checkout observation.
 `kestrel workspace work <workspace>` (alias `status`) prints a heading per repository and how long
 ago its supervisor reported it. `--json` returns the whole operator response.
 
+`GET …/workspaces/{workspace}/files?path=` lists one directory of the live Instance and
+`GET …/file?path=&raw=` reads one file, both asked of the supervisor over the link ([Link](link.md#reads)).
+`file` answers JSON for inline text and `application/octet-stream` otherwise. A path outside the
+checkouts is `422`, a missing one `404`, a Workspace with no Instance `422` naming its branch, and
+an Instance that does not answer within 10 s `504`. `kestrel workspace files` (alias `ls`) prints one
+entry a line with its git mark; `kestrel workspace read` (alias `cat`) writes the file's bytes to
+stdout. `--json` returns the operator response, except for bytes, which are always written raw.
+
 ### Declarations
 
 - `POST …/declaration` applies a whole document (Projects, Agents, Triggers) in one transaction;
