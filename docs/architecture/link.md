@@ -17,10 +17,23 @@ segment:
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/instructions` | SSE stream of the Instance's instructions after `Last-Event-ID`. Closes once the Instance is let go. |
-| `POST` | `/reports` | One report. `202` when taken, including a replay. |
+| `POST` | `/reports` | One report. `202` when taken, including a replay. `connected` returns the Workspace checkout declaration. |
 | `GET` | `/credentials?session=` | Provider Credentials and Subscription Profile contents for a Session the Instance carries, decrypted for this request. |
 | `PATCH` | `/credentials?session=` | Hands back profile files the harness refreshed. |
 | `GET` | `/entries` | Pages the Workspace's Transcript. The supervisor does not currently call it. |
+
+## Live work reports
+
+The unnumbered `work` report carries each repository's current branch, changed and staged file
+and line counts, commits no remote-tracking branch reaches on any branch or detached HEAD with
+line counts, `origin/<declared>`'s commit, and untracked and stash counts. The supervisor sends it
+on connect, at turn close, and when a two-second check during a working turn finds a change.
+Every supervisor git command sets `GIT_OPTIONAL_LOCKS=0`.
+
+`live_work::Summaries` belongs to the serve role and is shared by its link and operator routers.
+It holds reports with their arrival times only while the Instance has an open instruction stream.
+The operator also checks the supervisor's heartbeat freshness before serving a summary. The
+separate numbered `checkout` report remains durable and supplies the reaping gate only.
 
 ## A Session over the link
 

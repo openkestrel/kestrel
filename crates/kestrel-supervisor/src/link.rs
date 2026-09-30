@@ -72,6 +72,7 @@ pub struct Checkout {
 pub enum Report {
     Connected { version: String },
     Heartbeat,
+    Work { repositories: Vec<WorkRepository> },
     Stderr { lines: Vec<String> },
     Started,
     Model { model: String },
@@ -87,6 +88,7 @@ impl Report {
         match self {
             Report::Connected { .. } => "connected",
             Report::Heartbeat => "heartbeat",
+            Report::Work { .. } => "work",
             Report::Stderr { .. } => "stderr",
             Report::Started => "started",
             Report::Model { .. } => "model",
@@ -119,6 +121,44 @@ pub enum Git {
     Unreadable {
         because: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkRepository {
+    pub repository: String,
+    #[serde(flatten)]
+    pub git: WorkGit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "git", rename_all = "snake_case")]
+pub enum WorkGit {
+    Read {
+        branch: Option<String>,
+        changed: Changes,
+        staged: Changes,
+        committed: Commits,
+        pushed: Option<String>,
+        untracked: u64,
+        stashed: u64,
+    },
+    Unreadable {
+        because: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Changes {
+    pub files: u64,
+    pub added: u64,
+    pub removed: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Commits {
+    pub commits: u64,
+    pub added: u64,
+    pub removed: u64,
 }
 
 /// A report as it goes on the wire: the seq is what lets the control plane take it once
@@ -266,12 +306,41 @@ impl Link {
         self.reached.elapsed()
     }
 
+    pub async fn connected(&self) -> Result<Option<Checkout>, Error> {
+        let response = self
+            .post_report(
+                &Report::Connected {
+                    version: env!("CARGO_PKG_VERSION").to_owned(),
+                },
+                None,
+                None,
+            )
+            .await?;
+        let body = response.bytes().await?;
+        if body.is_empty() {
+            return Ok(None);
+        }
+        serde_json::from_slice(&body)
+            .map(Some)
+            .map_err(|error| Error::Lost(error.to_string()))
+    }
+
     pub async fn report(
         &self,
         report: &Report,
         session: Option<&str>,
         seq: Option<i64>,
     ) -> Result<(), Error> {
+        self.post_report(report, session, seq).await?;
+        Ok(())
+    }
+
+    async fn post_report(
+        &self,
+        report: &Report,
+        session: Option<&str>,
+        seq: Option<i64>,
+    ) -> Result<Response, Error> {
         let response = self
             .client
             .post(self.url(REPORTS))
@@ -293,7 +362,7 @@ impl Link {
         }
         self.reached.touched();
 
-        Ok(())
+        Ok(response)
     }
 
     pub async fn credentials(&self, session: &str) -> Result<Credentials, Error> {

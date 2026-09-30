@@ -29,6 +29,8 @@ use crate::store::{self, Store, Tx};
 use crate::work::{self, ReportRefused, Reported};
 use crate::workspace;
 
+pub(crate) const ON_THE_LINK: jiff::SignedDuration = jiff::SignedDuration::from_secs(6);
+
 pub const CREDENTIALS: &str = "/link/instances/{instance}/credentials";
 /// The Transcript of the Workspace holding the Instance. Named for what crosses the link rather
 /// than for what it is, because the supervisor is a courier and may not know (ADR-0002).
@@ -95,6 +97,7 @@ struct Carried<'a> {
 struct ControlPlane {
     store: Store,
     shutdown: CancellationToken,
+    summaries: crate::live_work::Summaries,
 }
 
 struct Waiting {
@@ -138,13 +141,21 @@ struct Recorded {
     entry: log::Entry,
 }
 
-pub fn router(store: Store, shutdown: CancellationToken) -> Router {
+pub fn router(
+    store: Store,
+    shutdown: CancellationToken,
+    summaries: crate::live_work::Summaries,
+) -> Router {
     Router::new()
         .route(CREDENTIALS, get(credentials).patch(refresh_credentials))
         .route(ENTRIES, get(entries))
         .route(INSTRUCTIONS, get(instructions))
         .route(REPORTS, post(report))
-        .with_state(ControlPlane { store, shutdown })
+        .with_state(ControlPlane {
+            store,
+            shutdown,
+            summaries,
+        })
 }
 
 /// A Brief nothing has followed is the agent's whole prompt, verbatim, so a harness still
@@ -256,7 +267,9 @@ async fn instructions(
         cursor, "a supervisor is on the link"
     );
 
+    let connection = control_plane.summaries.connected(&linked.instance);
     let stream = async_stream::try_stream! {
+        let _connection = connection;
         loop {
             let waiting = waiting(&control_plane.store, &linked.instance, &digest, cursor).await?;
             for sent in waiting.instructions {
@@ -382,11 +395,26 @@ async fn report(
     Path(instance): Path<String>,
     headers: HeaderMap,
     Json(reported): Json<Reported>,
-) -> Result<StatusCode, Refused> {
+) -> Result<Response, Refused> {
     let (linked, _) = authenticated(&control_plane, &headers, &instance).await?;
+    if let work::Report::Work { repositories } = reported.report {
+        control_plane.summaries.report(&instance, repositories);
+        return Ok(StatusCode::ACCEPTED.into_response());
+    }
+    let connected = matches!(reported.report, work::Report::Connected { .. });
     work::report(&control_plane.store, &linked.instance, reported).await?;
-
-    Ok(StatusCode::ACCEPTED)
+    if connected {
+        let checkout = control_plane
+            .store
+            .read()
+            .await?
+            .workspaces()
+            .get(linked.workspace)
+            .await?
+            .checkout;
+        return Ok((StatusCode::ACCEPTED, Json(checkout)).into_response());
+    }
+    Ok(StatusCode::ACCEPTED.into_response())
 }
 
 async fn waiting(store: &Store, instance: &str, digest: &str, cursor: i64) -> Result<Waiting> {

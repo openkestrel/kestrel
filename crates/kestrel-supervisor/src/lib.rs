@@ -46,6 +46,8 @@ impl Diagnostics for Stderr {
 struct Supervising {
     cursor: Option<String>,
     carrying: Option<Carrying>,
+    checkout: Option<Checkout>,
+    summary: Option<Vec<link::WorkRepository>>,
 }
 
 /// One Session's part of the supervisor's life. The conversation goes on whether or not the link
@@ -57,6 +59,7 @@ struct Carrying {
     harness: Harness,
     conversation: Option<Conversation>,
     finished: bool,
+    working: bool,
     taken: i64,
     /// Handed back before anything is said, because saying the Session finished ends it and with it
     /// this Instance's right to hand anything back for it.
@@ -94,6 +97,8 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
     let mut supervising = Supervising {
         cursor: set(variables, "KESTREL_INSTRUCTIONS_AFTER").map(str::to_owned),
         carrying: None,
+        checkout: None,
+        summary: None,
     };
 
     // Nothing else reaches the link while a turn is being worked, so this Instance says it is
@@ -209,14 +214,15 @@ async fn attend(
         Some(held) => diagnostics.info(&format!("link open after {held}")),
     }
 
-    link.report(
-        &Report::Connected {
-            version: env!("CARGO_PKG_VERSION").to_owned(),
-        },
-        None,
-        None,
-    )
-    .await?;
+    if let Some(checkout) = link.connected().await? {
+        supervising.checkout = Some(checkout);
+    }
+    report_work(link, supervising, true).await?;
+    let mut checking = tokio::time::interval_at(
+        tokio::time::Instant::now() + HEARTBEAT_EVERY,
+        HEARTBEAT_EVERY,
+    );
+    checking.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     diagnostics.info("reported connected");
 
     loop {
@@ -250,11 +256,23 @@ async fn attend(
                     delivered.id,
                     delivered.session
                 ));
+                let closing = matches!(&delivered.instruction, Instruction::Stop)
+                    && supervising.carrying.as_ref().is_some_and(|carrying| carrying.session == delivered.session);
                 instructed(stderr, supervising, delivered, diagnostics).await;
+                if closing {
+                    report_work(link, supervising, true).await?;
+                }
             }
             worked = turn(&mut supervising.carrying) => {
                 if let Some(carrying) = supervising.carrying.as_mut() {
+                    carrying.working = false;
                     worked_on(carrying, worked, diagnostics).await;
+                    report_work(link, supervising, true).await?;
+                }
+            }
+            _ = checking.tick() => {
+                if supervising.carrying.as_ref().is_some_and(|carrying| carrying.working) {
+                    report_work(link, supervising, false).await?;
                 }
             }
             () = give_up_timer => {
@@ -266,6 +284,29 @@ async fn attend(
             }
         }
     }
+}
+
+async fn report_work(
+    link: &Link,
+    supervising: &mut Supervising,
+    force: bool,
+) -> Result<(), link::Error> {
+    let Some(checkout) = &supervising.checkout else {
+        return Ok(());
+    };
+    let repositories = checkout::work(checkout).await;
+    if force || supervising.summary.as_ref() != Some(&repositories) {
+        link.report(
+            &Report::Work {
+                repositories: repositories.clone(),
+            },
+            None,
+            None,
+        )
+        .await?;
+        supervising.summary = Some(repositories);
+    }
+    Ok(())
 }
 
 /// Everything left to do for the Session before waiting on the link again: `false` once it has
@@ -331,6 +372,7 @@ async fn instructed(
                     .let_go("another session started", diagnostics)
                     .await;
             }
+            supervising.checkout = Some(checkout.clone());
             let mut carrying = Carrying {
                 session: delivered.session,
                 checkout,
@@ -343,6 +385,7 @@ async fn instructed(
                 },
                 conversation: None,
                 finished: false,
+                working: true,
                 taken: 0,
                 refreshed: BTreeMap::new(),
                 written: None,
@@ -364,6 +407,9 @@ async fn instructed(
             supervising.carrying = Some(carrying);
         }
         Instruction::Prompt { prompt } if carrying_it => {
+            if let Some(carrying) = supervising.carrying.as_mut() {
+                carrying.working = true;
+            }
             match supervising
                 .carrying
                 .as_ref()

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
-use jiff::{SignedDuration, Timestamp};
+use jiff::Timestamp;
 use tokio::task::{JoinError, JoinSet};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -26,8 +26,6 @@ use crate::workspace;
 /// Nothing subscribes to `Fanout` at 0.1 (ADR-0005), so a queued Session is found by asking
 /// `Store` again rather than by being told.
 const POLL: Duration = Duration::from_millis(100);
-/// A few of the supervisor's two-second heartbeats: one heard from within this is on the link.
-const ON_THE_LINK: SignedDuration = SignedDuration::from_secs(6);
 
 #[derive(Clone)]
 pub struct Dispatch {
@@ -373,7 +371,7 @@ async fn supervised(
         if matches!(held, Held::Nothing)
             && recorded
                 .reached_at
-                .is_some_and(|reached| Timestamp::now().duration_since(reached) < ON_THE_LINK)
+                .is_some_and(|reached| Timestamp::now().duration_since(reached) < link::ON_THE_LINK)
         {
             return Ok(recorded.name);
         }

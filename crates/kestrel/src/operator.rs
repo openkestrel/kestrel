@@ -77,6 +77,8 @@ pub const APPLIED_TRIGGERS_PREVIEW: &str =
 pub const INSTANCES: &str = "/operator/organizations/{organization}/instances";
 pub const WORKSPACES: &str = "/operator/organizations/{organization}/workspaces";
 pub const WORKSPACE: &str = "/operator/organizations/{organization}/workspaces/{workspace}";
+pub const WORKSPACE_WORK: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/work";
 pub const WORKSPACE_MESSAGES: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/messages";
 pub const WORKSPACE_SEAL: &str =
@@ -101,6 +103,7 @@ const KEEP_ALIVE: Duration = Duration::from_secs(15);
 struct ControlPlane {
     store: Store,
     shutdown: CancellationToken,
+    summaries: crate::live_work::Summaries,
 }
 
 #[derive(Deserialize)]
@@ -132,7 +135,11 @@ struct Read {
     sealed: bool,
 }
 
-pub fn router(store: Store, shutdown: CancellationToken) -> Router {
+pub fn router(
+    store: Store,
+    shutdown: CancellationToken,
+    summaries: crate::live_work::Summaries,
+) -> Router {
     Router::new()
         .route(ORGANIZATIONS, get(organizations).post(declare_organization))
         .route(STARTS, post(start))
@@ -168,6 +175,7 @@ pub fn router(store: Store, shutdown: CancellationToken) -> Router {
         .route(QUEUE, get(show_queue))
         .route(WORKSPACES, get(workspaces).post(open_workspace))
         .route(WORKSPACE, get(show_workspace))
+        .route(WORKSPACE_WORK, get(work_summary))
         .route(WORKSPACE_MESSAGES, post(post_to_workspace))
         .route(WORKSPACE_SEAL, post(seal_workspace))
         .route(WORKSPACE_INSTANCE_RELEASE, post(release_instance))
@@ -175,7 +183,11 @@ pub fn router(store: Store, shutdown: CancellationToken) -> Router {
         .route(SESSION, get(show_session))
         .route(SESSION_STOP, post(stop_session))
         .route(TRANSCRIPT, get(transcript))
-        .with_state(ControlPlane { store, shutdown })
+        .with_state(ControlPlane {
+            store,
+            shutdown,
+            summaries,
+        })
         .layer(middleware::from_fn(addressed_here))
 }
 
@@ -1771,6 +1783,21 @@ async fn open_workspace(
     Ok((
         StatusCode::CREATED,
         Json(WorkspaceRecord::read(&control_plane.store, workspace).await?),
+    ))
+}
+
+async fn work_summary(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, reference)): Path<(String, String)>,
+) -> Result<Json<crate::live_work::Work>, Refused> {
+    Ok(Json(
+        crate::live_work::read(
+            &control_plane.store,
+            &control_plane.summaries,
+            &organization,
+            &reference,
+        )
+        .await?,
     ))
 }
 

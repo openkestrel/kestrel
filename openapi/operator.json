@@ -1149,6 +1149,52 @@
         }
       }
     },
+    "/operator/organizations/{organization}/workspaces/{workspace}/work": {
+      "get": {
+        "operationId": "workspaceWork",
+        "summary": "Read the live work summary of a Workspace.",
+        "description": "Returns the latest supervisor report and its arrival time, per repository. Held only in serve memory, lost on restart; never writes to the Store, Transcript or Event log. A supervisor off the link is not answering; durable checkout observations are never presented as live state.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The live summary, or why no summary is available.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceWork"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
     "/operator/organizations/{organization}/workspaces/{workspace}/messages": {
       "post": {
         "operationId": "postToWorkspace",
@@ -1542,6 +1588,218 @@
       }
     },
     "schemas": {
+      "WorkChanges": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "added": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "removed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "files",
+          "added",
+          "removed"
+        ]
+      },
+      "WorkCommits": {
+        "type": "object",
+        "properties": {
+          "commits": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "added": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "removed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "commits",
+          "added",
+          "removed"
+        ]
+      },
+      "WorkRepositoryRead": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "git": {
+            "const": "read"
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changed": {
+            "$ref": "#/components/schemas/WorkChanges"
+          },
+          "staged": {
+            "$ref": "#/components/schemas/WorkChanges"
+          },
+          "committed": {
+            "$ref": "#/components/schemas/WorkCommits"
+          },
+          "pushed": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "untracked": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "stashed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "repository",
+          "git",
+          "branch",
+          "changed",
+          "staged",
+          "committed",
+          "pushed",
+          "untracked",
+          "stashed"
+        ]
+      },
+      "WorkRepositoryUnreadable": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "git": {
+            "const": "unreadable"
+          },
+          "because": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "git",
+          "because"
+        ]
+      },
+      "WorkRepository": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/WorkRepositoryRead"
+          },
+          {
+            "$ref": "#/components/schemas/WorkRepositoryUnreadable"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "git",
+          "mapping": {
+            "read": "#/components/schemas/WorkRepositoryRead",
+            "unreadable": "#/components/schemas/WorkRepositoryUnreadable"
+          }
+        }
+      },
+      "WorkReported": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "const": "reported"
+          },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkRepository"
+            }
+          },
+          "reported_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "state",
+          "repositories",
+          "reported_at"
+        ]
+      },
+      "WorkNoInstance": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "const": "no_instance"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "pull_request": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "branch",
+          "pull_request"
+        ]
+      },
+      "WorkNotAnswering": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "const": "not_answering"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "message"
+        ]
+      },
+      "WorkspaceWork": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/WorkReported"
+          },
+          {
+            "$ref": "#/components/schemas/WorkNoInstance"
+          },
+          {
+            "$ref": "#/components/schemas/WorkNotAnswering"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "state",
+          "mapping": {
+            "reported": "#/components/schemas/WorkReported",
+            "no_instance": "#/components/schemas/WorkNoInstance",
+            "not_answering": "#/components/schemas/WorkNotAnswering"
+          }
+        }
+      },
       "OrganizationDeclaration": {
         "type": "object",
         "properties": {

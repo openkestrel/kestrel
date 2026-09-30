@@ -55,6 +55,7 @@ pub enum Script {
     Insists,
     /// Works at a turn that never ends, so nothing the agent does is what ends the Session.
     Dawdles,
+    Writes,
     /// Writes to stderr as it works at a turn that never ends.
     Mutters,
     /// Writes to stderr several times a second through each turn, as a harness running `git` does.
@@ -98,6 +99,7 @@ impl Script {
             Script::Decides => "decides",
             Script::Insists => "insists",
             Script::Dawdles => "dawdles",
+            Script::Writes => "writes",
             Script::Mutters => "mutters",
             Script::Chatters => "chatters",
             Script::Lingers => "lingers",
