@@ -50,7 +50,7 @@ A workspace keeps its checkout on its own branch, normally `kestrel/<workspace i
 To give the agent another turn, post a message:
 
 ```sh
-kestrel workspace post latest "Please add a test for the failure case"
+kestrel workspace post latest --as-participant operator "Please add a test for the failure case"
 ```
 
 A waiting session receives it in the same conversation. If no session is open, Kestrel starts a new one and supplies the workspace transcript as context. You can also start a fresh conversation with a specific agent:

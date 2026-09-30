@@ -31,7 +31,7 @@ An organization can limit live instances with `--max-live-instances N`. When tha
 ```sh
 kestrel workspace open --project kestrel --agent builder
 kestrel workspace show latest
-kestrel workspace post latest "Explain the failing test and propose a fix"
+kestrel workspace post latest --as-participant operator "Explain the failing test and propose a fix"
 ```
 
 Posting the first task queues a session. You can also run `kestrel session enqueue --workspace latest` explicitly; without a brief or message, the harness receives Kestrel's general context prompt rather than a specific task.
@@ -52,7 +52,7 @@ The CLI renders readable columns at a terminal and tab-delimited records when pi
 ## Continue the work
 
 ```sh
-kestrel workspace post latest "Please add the missing test"
+kestrel workspace post latest --as-participant operator "Please add the missing test"
 ```
 
 If a session is waiting, the message becomes its next turn. If it is working, the message waits in the transcript until the turn finishes. If no session is open, posting queues another session and supplies the earlier transcript as context. To use a different agent in a new conversation on the same checkout, run:

@@ -235,14 +235,23 @@ pub(crate) async fn post_in(
     participant: &str,
     message: &str,
 ) -> Result<Option<Session>> {
-    workspace.accepts("message")?;
     let participant = participant::accepted(tx, &workspace.organization, participant).await?;
 
+    post_as(tx, workspace, &participant, message).await
+}
+
+pub(crate) async fn post_as(
+    tx: &mut Tx<'_>,
+    workspace: &Workspace,
+    participant: &str,
+    message: &str,
+) -> Result<Option<Session>> {
+    workspace.accepts("message")?;
     let unfinished = unfinished_session(tx, workspace).await?;
     match unfinished.post_destination() {
         PostDestination::Start => {
-            ensure_joined(tx, workspace, &participant).await?;
-            said(tx, workspace, &participant, message).await?;
+            ensure_joined(tx, workspace, participant).await?;
+            said(tx, workspace, participant, message).await?;
             Ok(Some(
                 tx.workspaces()
                     .enqueue_session(workspace, None, None)
@@ -250,20 +259,20 @@ pub(crate) async fn post_in(
             ))
         }
         PostDestination::Brief => {
-            ensure_joined(tx, workspace, &participant).await?;
-            said(tx, workspace, &participant, message).await?;
+            ensure_joined(tx, workspace, participant).await?;
+            said(tx, workspace, participant, message).await?;
             Ok(None)
         }
         PostDestination::Held => {
             tx.workspaces()
-                .add_pending_message(workspace, &participant, message)
+                .add_pending_message(workspace, participant, message)
                 .await?;
             Ok(None)
         }
         // Held even for a waiting Session: its next turn waits for an active-work slot.
         PostDestination::Wake(waiting) => {
             tx.workspaces()
-                .add_pending_message(workspace, &participant, message)
+                .add_pending_message(workspace, participant, message)
                 .await?;
             Ok(Some(waiting.clone()))
         }
