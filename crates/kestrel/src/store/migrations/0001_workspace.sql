@@ -67,6 +67,18 @@ CREATE TABLE transcript_entry (
     PRIMARY KEY (workspace_id, seq)
 ) STRICT;
 
+CREATE TABLE transcript_payload (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    organization_id TEXT NOT NULL REFERENCES organization (id),
+    seq INTEGER NOT NULL,
+    field TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    content BLOB NOT NULL,
+    FOREIGN KEY (workspace_id, seq) REFERENCES transcript_entry (workspace_id, seq),
+    UNIQUE (workspace_id, seq, field)
+) STRICT;
+
 CREATE INDEX transcript_entry_kind ON transcript_entry (workspace_id, kind, seq);
 CREATE INDEX transcript_entry_participant_joined
     ON transcript_entry (workspace_id, json_extract(body, '$.participant'))

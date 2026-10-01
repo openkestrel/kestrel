@@ -32,7 +32,7 @@ use crate::domain::{
 use crate::filter::Filter;
 use crate::integration::github::{self, Github};
 use crate::integration::{self, Connecting, Registration};
-use crate::log::{self, Cursor, Page, Unreadable, Window};
+use crate::log::{self, Cursor, Unreadable, Window};
 use crate::profile::{self, Entry};
 use crate::provider::{self, Held};
 use crate::queue;
@@ -100,6 +100,8 @@ pub const SESSION: &str = "/operator/organizations/{organization}/sessions/{sess
 pub const SESSION_STOP: &str = "/operator/organizations/{organization}/sessions/{session}/stop";
 pub const TRANSCRIPT: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/transcript";
+pub const TRANSCRIPT_PAYLOAD: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/transcript/payloads/{payload}";
 /// One read of a Workspace's queue: the limits, their occupancy, and the queued Sessions in
 /// dispatch order.
 pub const QUEUE: &str = "/operator/organizations/{organization}/queue";
@@ -141,7 +143,7 @@ struct Recorded {
     session_id: Option<crate::domain::SessionId>,
     seq: i64,
     appended_at: String,
-    entry: log::Entry,
+    entry: serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -157,7 +159,7 @@ enum Because {
 }
 
 struct Read {
-    page: Page,
+    page: log::StoredPage,
     sealed: bool,
 }
 
@@ -215,6 +217,7 @@ pub fn router(
         .route(SESSION, get(show_session))
         .route(SESSION_STOP, post(stop_session))
         .route(TRANSCRIPT, get(transcript))
+        .route(TRANSCRIPT_PAYLOAD, get(transcript_payload))
         .with_state(ControlPlane {
             store,
             shutdown,
@@ -2190,6 +2193,30 @@ where
     (status, Json(R::from(declared.record))).into_response()
 }
 
+async fn transcript_payload(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, workspace, payload)): Path<(String, String, String)>,
+) -> Result<Response, Refused> {
+    let workspace = resolved(&control_plane, &organization, &workspace).await?;
+    let mut tx = control_plane.store.read().await?;
+    let payload = match tx.log().payload(&workspace, &payload).await? {
+        log::PayloadRead::Available(payload) => payload,
+        log::PayloadRead::Gone => {
+            return Err(Refused::Gone(
+                "the Transcript payload has expired".to_owned(),
+            ));
+        }
+        log::PayloadRead::Missing => {
+            return Err(Refused::NotFound("no payload in this Workspace".to_owned()));
+        }
+    };
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, payload.media_type)],
+        payload.content,
+    )
+        .into_response())
+}
+
 /// A stream that closes without an `end` event was cut off, and the reader resumes it from
 /// the last id it was handed.
 async fn transcript(
@@ -2273,7 +2300,7 @@ async fn reading(
         .ok_or_else(|| Refused::NotFound("no workspace".to_owned()))?;
     let page = tx
         .log()
-        .page(&workspace, from, Window::DEFAULT, kinds)
+        .stored_page(&workspace, from, Window::DEFAULT, kinds)
         .await?;
 
     Ok(Read {
@@ -2299,6 +2326,7 @@ enum Refused {
     BadRequest(String),
     Forbidden(String),
     NotFound(String),
+    Gone(String),
     Conflict(String),
     Unprocessable(String),
     /// A value a person named, refused: the request field it came in travels with the reason.
@@ -2316,6 +2344,7 @@ impl Refused {
             Refused::BadRequest(why)
             | Refused::Forbidden(why)
             | Refused::NotFound(why)
+            | Refused::Gone(why)
             | Refused::Conflict(why)
             | Refused::Unprocessable(why)
             | Refused::Named { why, .. }
@@ -2370,6 +2399,7 @@ impl IntoResponse for Refused {
             Refused::BadRequest(why) => (StatusCode::BAD_REQUEST, why, None),
             Refused::Forbidden(why) => (StatusCode::FORBIDDEN, why, None),
             Refused::NotFound(why) => (StatusCode::NOT_FOUND, why, None),
+            Refused::Gone(why) => (StatusCode::GONE, why, None),
             Refused::Conflict(why) => (StatusCode::CONFLICT, why, None),
             Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why, None),
             Refused::Named { field, why } => (StatusCode::UNPROCESSABLE_ENTITY, why, Some(field)),
