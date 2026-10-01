@@ -355,6 +355,27 @@ async fn the_link_takes_every_report_the_published_openapi_document_describes() 
                 "cost": {"amount": 0.42, "currency": "USD"},
             },
         },
+        "session_info": {
+            "kind": "session_info",
+            "title": "the scripted conversation",
+            "options": [
+                {
+                    "id": "model",
+                    "name": "Model",
+                    "description": null,
+                    "category": "model",
+                    "kind": "select",
+                    "current": "scripted-mini",
+                    "values": [
+                        {"value": "scripted-mini", "name": "scripted-mini", "description": null},
+                    ],
+                    "groups": [],
+                },
+            ],
+            "commands": [
+                {"name": "compact", "description": "Compact the conversation", "input_hint": "/compact"},
+            ],
+        },
         "answered": {"kind": "answered", "seq": 1},
         "checkout": {
             "kind": "checkout",

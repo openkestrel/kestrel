@@ -7,15 +7,16 @@ use std::str::FromStr as _;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, AuthMethod, AuthenticateRequest, ContentBlock, ErrorCode, InitializeRequest,
-    InitializeResponse, LoadSessionRequest, NewSessionRequest, PromptRequest,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigId, SessionConfigKind,
-    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOptions,
-    SessionConfigValueId, SessionId, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, StopReason, TextContent,
+    AgentCapabilities, AuthMethod, AuthenticateRequest, AvailableCommand, AvailableCommandInput,
+    ContentBlock, ErrorCode, InitializeRequest, InitializeResponse, LoadSessionRequest,
+    NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigId,
+    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption,
+    SessionConfigSelectOptions, SessionConfigValueId, SessionId, SessionModeId, SessionModeState,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, StopReason, TextContent,
 };
 use agent_client_protocol::{
     AcpAgent, AcpAgentConfig, Client, ConnectionTo, Error, LineDirection,
@@ -26,7 +27,10 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::completer::{Completed, Completer};
-use crate::link::{Report, TurnOutcome};
+use crate::link::{
+    Report, SessionCommand, SessionInfo, SessionOption, SessionOptionGroup, SessionOptionKind,
+    SessionOptionValue, TurnOutcome,
+};
 use crate::permission::{self, Subject};
 
 /// What this Environment was configured to drive, what the Session asks of it, and where what the
@@ -228,6 +232,8 @@ async fn conversing(
         reports: turns.clone(),
         diagnostics: harness.stderr.clone(),
         replaying: false,
+        info: Held::default(),
+        announced: None,
     }));
     let mut continuity = Continuity::default();
 
@@ -500,14 +506,16 @@ async fn set_up(
         .await
         .map_err(|error| unlogged_in(error, &initialized.auth_methods))?;
 
-    let on = select(
+    let selected = select(
         connection,
         &set_up.session_id,
         set_up.config_options.as_deref(),
         harness.model.as_deref(),
     )
     .await?;
-    heard.lock().expect("the observation lock").model(on);
+    let mut heard = heard.lock().expect("the observation lock");
+    heard.hold(selected.options.or(set_up.config_options), set_up.modes);
+    heard.model(selected.on);
 
     Ok((
         set_up.session_id,
@@ -537,20 +545,20 @@ async fn recover(
         heard.replaying = true;
     }
 
-    let config_options = match recovery {
+    let (config_options, modes) = match recovery {
         Recovery::Resume => {
-            connection
+            let resumed = connection
                 .send_request(ResumeSessionRequest::new(conversed.clone(), root))
                 .block_task()
-                .await?
-                .config_options
+                .await?;
+            (resumed.config_options, resumed.modes)
         }
         Recovery::Load => {
-            connection
+            let loaded = connection
                 .send_request(LoadSessionRequest::new(conversed.clone(), root))
                 .block_task()
-                .await?
-                .config_options
+                .await?;
+            (loaded.config_options, loaded.modes)
         }
     };
     {
@@ -560,15 +568,26 @@ async fn recover(
         heard.replaying = false;
     }
 
-    select(
+    let selected = select(
         connection,
         conversed,
         config_options.as_deref(),
         harness.model.as_deref(),
     )
     .await?;
+    heard
+        .lock()
+        .expect("the observation lock")
+        .hold(selected.options.or(config_options), modes);
 
     Ok(())
+}
+
+/// What a `session/new`, `session/load` or `session/resume` led to once the named model, if any,
+/// was selected: the agent's state and the list its answer carried.
+struct Selected {
+    on: Option<On>,
+    options: Option<Vec<SessionConfigOption>>,
 }
 
 async fn select(
@@ -576,12 +595,16 @@ async fn select(
     conversed: &SessionId,
     offered: Option<&[SessionConfigOption]>,
     model: Option<&str>,
-) -> Result<Option<On>, Error> {
+) -> Result<Selected, Error> {
     let Some(selects) = selects_the_model(offered.unwrap_or_default(), model)? else {
-        return Ok(None);
+        return Ok(Selected {
+            on: None,
+            options: None,
+        });
     };
+    let mut options = None;
     if let Some(id) = selects.id {
-        connection
+        let answered = connection
             .send_request(SetSessionConfigOptionRequest::new(
                 conversed.clone(),
                 id,
@@ -589,9 +612,13 @@ async fn select(
             ))
             .block_task()
             .await?;
+        options = Some(answered.config_options);
     }
 
-    Ok(Some(selects.on))
+    Ok(Selected {
+        on: Some(selects.on),
+        options,
+    })
 }
 
 /// ACP's `terminal` method launches an interactive process for someone to log in at, so an
@@ -735,6 +762,161 @@ struct Hearing {
     reports: mpsc::UnboundedSender<ConversationEvent>,
     diagnostics: mpsc::UnboundedSender<String>,
     replaying: bool,
+    /// What the harness has said about the Session beyond its turns (ADR-0041), and the last
+    /// whole state this supervisor put on the link, so an unchanged resend is dropped here.
+    info: Held,
+    announced: Option<SessionInfo>,
+}
+
+/// The bookkeeping a harness keeps current for the Session's whole life.
+#[derive(Default)]
+struct Held {
+    title: Option<String>,
+    options: Vec<SessionConfigOption>,
+    modes: Option<SessionModeState>,
+    current_mode: Option<SessionModeId>,
+    commands: Vec<AvailableCommand>,
+}
+
+impl Held {
+    /// The whole state as the link carries it, with a Mode option synthesized from legacy `modes`
+    /// for a harness that offers none of its own (ADR-0041).
+    fn snapshot(&self) -> SessionInfo {
+        let mut options: Vec<SessionOption> = self.options.iter().map(option).collect();
+        let mode = self.current_mode.clone().or_else(|| {
+            self.modes
+                .as_ref()
+                .map(|modes| modes.current_mode_id.clone())
+        });
+        match options.iter_mut().find(|option| option.is_category(MODE)) {
+            Some(option) => set_current(option, mode),
+            None => {
+                if let Some(current) = mode {
+                    options.push(synthesized_mode(&current, self.modes.as_ref()));
+                }
+            }
+        }
+
+        SessionInfo {
+            title: self.title.clone(),
+            options,
+            commands: self.commands.iter().map(command).collect(),
+        }
+    }
+}
+
+const MODE: &str = "mode";
+
+fn option(option: &SessionConfigOption) -> SessionOption {
+    SessionOption {
+        id: option.id.0.to_string(),
+        name: option.name.clone(),
+        description: option.description.clone(),
+        category: option.category.as_ref().map(category),
+        kind: match &option.kind {
+            SessionConfigKind::Select(select) => SessionOptionKind::Select {
+                current: select.current_value.0.to_string(),
+                values: values(&select.options),
+                groups: groups(&select.options),
+            },
+            SessionConfigKind::Boolean(boolean) => SessionOptionKind::Boolean {
+                current: boolean.current_value,
+            },
+            _ => SessionOptionKind::Select {
+                current: "unknown".to_owned(),
+                values: Vec::new(),
+                groups: Vec::new(),
+            },
+        },
+    }
+}
+
+/// A select's flat offered values, empty when the harness grouped them instead.
+fn values(options: &SessionConfigSelectOptions) -> Vec<SessionOptionValue> {
+    match options {
+        SessionConfigSelectOptions::Ungrouped(options) => options.iter().map(value).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn value(value: &SessionConfigSelectOption) -> SessionOptionValue {
+    SessionOptionValue {
+        value: value.value.0.to_string(),
+        name: value.name.clone(),
+        description: value.description.clone(),
+    }
+}
+
+fn groups(options: &SessionConfigSelectOptions) -> Vec<SessionOptionGroup> {
+    match options {
+        SessionConfigSelectOptions::Grouped(groups) => groups
+            .iter()
+            .map(|group| SessionOptionGroup {
+                group: group.group.0.to_string(),
+                name: group.name.clone(),
+                values: group.options.iter().map(value).collect(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn category(category: &SessionConfigOptionCategory) -> String {
+    match category {
+        SessionConfigOptionCategory::Mode => "mode".to_owned(),
+        SessionConfigOptionCategory::Model => "model".to_owned(),
+        SessionConfigOptionCategory::ModelConfig => "model_config".to_owned(),
+        SessionConfigOptionCategory::ThoughtLevel => "thought_level".to_owned(),
+        SessionConfigOptionCategory::Other(other) => other.clone(),
+        _ => "unknown".to_owned(),
+    }
+}
+
+fn set_current(option: &mut SessionOption, current: Option<SessionModeId>) {
+    let (Some(current), SessionOptionKind::Select { current: held, .. }) =
+        (current, &mut option.kind)
+    else {
+        return;
+    };
+
+    *held = current.0.to_string();
+}
+
+fn synthesized_mode(current: &SessionModeId, modes: Option<&SessionModeState>) -> SessionOption {
+    SessionOption {
+        id: MODE.to_owned(),
+        name: "Mode".to_owned(),
+        description: None,
+        category: Some(MODE.to_owned()),
+        kind: SessionOptionKind::Select {
+            current: current.0.to_string(),
+            values: modes
+                .map(|modes| {
+                    modes
+                        .available_modes
+                        .iter()
+                        .map(|mode| SessionOptionValue {
+                            value: mode.id.0.to_string(),
+                            name: mode.name.clone(),
+                            description: mode.description.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            groups: Vec::new(),
+        },
+    }
+}
+
+fn command(command: &AvailableCommand) -> SessionCommand {
+    SessionCommand {
+        name: command.name.clone(),
+        description: command.description.clone(),
+        input_hint: match &command.input {
+            Some(AvailableCommandInput::Unstructured(input)) => Some(input.hint.clone()),
+            _ => None,
+        },
+    }
 }
 
 impl Hearing {
@@ -757,10 +939,50 @@ impl Hearing {
         }
         self.on = on;
     }
+    /// Takes the options a `session/new`, `session/load`, `session/resume` or a
+    /// `session/set_config_option` answer carried, when it carried any, and says the whole state
+    /// up the link if it differs from what was last said.
+    fn hold(&mut self, options: Option<Vec<SessionConfigOption>>, modes: Option<SessionModeState>) {
+        if let Some(options) = options {
+            self.info.options = options;
+        }
+        if let Some(modes) = modes {
+            self.info.modes = Some(modes);
+        }
+        self.announce();
+    }
+    fn announce(&mut self) {
+        let info = self.info.snapshot();
+        if self.announced.as_ref() == Some(&info) {
+            return;
+        }
+        self.announced = Some(info.clone());
+        let _ = self
+            .reports
+            .send(ConversationEvent::Report(Report::SessionInfo(info)));
+    }
     fn update(&mut self, update: SessionUpdate) {
         if self.replaying {
             return;
         }
+        match &update {
+            SessionUpdate::ConfigOptionUpdate(update) => {
+                self.info.options = update.config_options.clone();
+            }
+            SessionUpdate::SessionInfoUpdate(update) => match &update.title {
+                MaybeUndefined::Value(title) => self.info.title = Some(title.clone()),
+                MaybeUndefined::Null => self.info.title = None,
+                MaybeUndefined::Undefined => {}
+            },
+            SessionUpdate::AvailableCommandsUpdate(update) => {
+                self.info.commands = update.available_commands.clone();
+            }
+            SessionUpdate::CurrentModeUpdate(update) => {
+                self.info.current_mode = Some(update.current_mode_id.clone());
+            }
+            _ => {}
+        }
+        self.announce();
         let completed = self.completer.update(update, jiff::Timestamp::now());
         self.emit(completed);
     }
@@ -786,8 +1008,9 @@ impl Hearing {
 #[cfg(test)]
 mod tests {
     use agent_client_protocol::schema::v1::{
-        AuthMethodAgent, AuthMethodTerminal, SessionCapabilities, SessionConfigSelect,
-        SessionConfigSelectGroup, SessionConfigSelectOption, SessionResumeCapabilities,
+        AuthMethodAgent, AuthMethodTerminal, ConfigOptionUpdate, CurrentModeUpdate,
+        SessionCapabilities, SessionConfigSelect, SessionConfigSelectGroup,
+        SessionConfigSelectOption, SessionInfoUpdate, SessionMode, SessionResumeCapabilities,
     };
 
     use super::*;
@@ -835,6 +1058,194 @@ mod tests {
             )
             .category(SessionConfigOptionCategory::Model),
         ]
+    }
+
+    fn a_mode_option(current: &str) -> SessionConfigOption {
+        SessionConfigOption::new(
+            "mode",
+            "Mode",
+            SessionConfigKind::Select(SessionConfigSelect::new(
+                current.to_owned(),
+                vec![
+                    SessionConfigSelectOption::new("build", "Build"),
+                    SessionConfigSelectOption::new("plan", "Plan"),
+                ],
+            )),
+        )
+        .category(SessionConfigOptionCategory::Mode)
+    }
+
+    /// A `Hearing` with nothing but the bookkeeping state under test.
+    fn hearing() -> (Hearing, mpsc::UnboundedReceiver<ConversationEvent>) {
+        let (reports, heard) = mpsc::unbounded_channel();
+        (
+            Hearing {
+                completer: Completer::default(),
+                allowed: Vec::new(),
+                on: None,
+                reports,
+                diagnostics: mpsc::unbounded_channel().0,
+                replaying: false,
+                info: Held::default(),
+                announced: None,
+            },
+            heard,
+        )
+    }
+
+    fn session_infos(heard: &mut mpsc::UnboundedReceiver<ConversationEvent>) -> Vec<SessionInfo> {
+        let mut infos = Vec::new();
+        while let Ok(event) = heard.try_recv() {
+            if let ConversationEvent::Report(Report::SessionInfo(info)) = event {
+                infos.push(info);
+            }
+        }
+
+        infos
+    }
+
+    #[test]
+    fn twenty_identical_config_option_updates_are_announced_once() {
+        let (mut hearing, mut heard) = hearing();
+        let offered = models(&["fast", "thorough"]);
+
+        for _ in 0..20 {
+            hearing.update(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(
+                offered.clone(),
+            )));
+        }
+
+        assert_eq!(session_infos(&mut heard).len(), 1);
+        assert!(!hearing.completer.produced);
+    }
+
+    #[test]
+    fn an_option_list_that_changes_is_announced_again() {
+        let (mut hearing, mut heard) = hearing();
+
+        hearing.update(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(
+            models(&["fast"]),
+        )));
+        hearing.update(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(
+            models(&["thorough"]),
+        )));
+
+        let said = session_infos(&mut heard);
+        assert_eq!(said.len(), 2);
+        assert!(said[1].options[1].is_category("model"));
+    }
+
+    #[test]
+    fn a_harness_offering_only_legacy_modes_reports_a_synthesized_mode_option() {
+        let (mut hearing, _) = hearing();
+
+        hearing.hold(
+            None,
+            Some(SessionModeState::new(
+                "build",
+                vec![
+                    SessionMode::new("build", "Build"),
+                    SessionMode::new("plan", "Plan"),
+                ],
+            )),
+        );
+
+        let mode = hearing
+            .info
+            .snapshot()
+            .options
+            .into_iter()
+            .find(|option| option.is_category("mode"))
+            .expect("a synthesized mode option");
+        assert_eq!(mode.id, "mode");
+        assert_eq!(mode.name, "Mode");
+        match mode.kind {
+            SessionOptionKind::Select {
+                current, values, ..
+            } => {
+                assert_eq!(current, "build");
+                assert_eq!(
+                    values
+                        .iter()
+                        .map(|value| value.value.as_str())
+                        .collect::<Vec<_>>(),
+                    ["build", "plan"]
+                );
+            }
+            other => panic!("a mode option is a select, not {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_current_mode_update_sets_the_mode_options_current_value() {
+        let (mut hearing, _) = hearing();
+        hearing.hold(Some(vec![a_mode_option("build")]), None);
+
+        hearing.update(SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(
+            "plan",
+        )));
+
+        let mode = hearing
+            .info
+            .snapshot()
+            .options
+            .into_iter()
+            .find(|option| option.is_category("mode"))
+            .expect("the mode option");
+        assert!(matches!(
+            mode.kind,
+            SessionOptionKind::Select { current, .. } if current == "plan"
+        ));
+    }
+
+    #[test]
+    fn a_title_is_set_and_cleared_by_session_info_updates() {
+        let (mut hearing, _) = hearing();
+
+        hearing.update(SessionUpdate::SessionInfoUpdate(
+            SessionInfoUpdate::new().title("a conversation"),
+        ));
+        assert_eq!(
+            hearing.info.snapshot().title.as_deref(),
+            Some("a conversation")
+        );
+
+        hearing.update(SessionUpdate::SessionInfoUpdate(
+            SessionInfoUpdate::new().title(None::<String>),
+        ));
+        assert!(hearing.info.snapshot().title.is_none());
+    }
+
+    #[test]
+    fn a_grouped_select_is_reported_with_its_groups() {
+        let offered = vec![
+            SessionConfigOption::new(
+                "model",
+                "Model",
+                SessionConfigKind::Select(SessionConfigSelect::new(
+                    "fast",
+                    vec![SessionConfigSelectGroup::new(
+                        "theirs",
+                        "Theirs",
+                        vec![SessionConfigSelectOption::new("fast", "Fast")],
+                    )],
+                )),
+            )
+            .category(SessionConfigOptionCategory::Model),
+        ];
+        let (mut hearing, _) = hearing();
+
+        hearing.hold(Some(offered), None);
+
+        let model = &hearing.info.snapshot().options[0];
+        match &model.kind {
+            SessionOptionKind::Select { values, groups, .. } => {
+                assert!(values.is_empty());
+                assert_eq!(groups[0].group, "theirs");
+                assert_eq!(groups[0].values[0].value, "fast");
+            }
+            other => panic!("a model option is a select, not {other:?}"),
+        }
     }
 
     #[test]

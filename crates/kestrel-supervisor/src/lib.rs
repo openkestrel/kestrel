@@ -28,6 +28,9 @@ const HEARTBEAT_EVERY: Duration = Duration::from_secs(2);
 const GIVE_UP_MARGIN: Duration = Duration::from_secs(5);
 const STDERR_LINES_PER_REPORT: usize = 64;
 const STDERR_REPORT_PATIENCE: Duration = Duration::from_secs(5);
+/// At most one bookkeeping report a second, at the window's trailing edge, however chatty the
+/// harness is (ADR-0041).
+const SESSION_INFO_EVERY: Duration = Duration::from_secs(1);
 /// Long enough for the last lines of an agent that has just exited, which are often why.
 const STDERR_DRAINING: Duration = Duration::from_secs(1);
 
@@ -70,6 +73,24 @@ struct Carrying {
     refreshed: BTreeMap<String, String>,
     written: Option<login::Written>,
     saying: VecDeque<Report>,
+    /// What the harness last said about the Session beyond its turns, and when that state is due
+    /// up the link: at most one report a second, at the window's trailing edge (ADR-0041).
+    info: Option<link::SessionInfo>,
+    info_due: Option<tokio::time::Instant>,
+}
+
+impl Carrying {
+    /// Takes a whole state the harness changed, arming the report the first time one is held; a
+    /// state identical to the one already held is dropped here.
+    fn hold(&mut self, info: link::SessionInfo) {
+        if self.info.as_ref() == Some(&info) {
+            return;
+        }
+        self.info = Some(info);
+        if self.info_due.is_none() {
+            self.info_due = Some(tokio::time::Instant::now() + SESSION_INFO_EVERY);
+        }
+    }
 }
 
 impl Carrying {
@@ -252,6 +273,13 @@ async fn attend(
         }
     }
     report_work(link, supervising, true).await?;
+    // Whatever the Session held while the link was down goes up again now it is not: the
+    // bookkeeping report is what a control plane that restarted under the Instance missed.
+    if let Some(carrying) = supervising.carrying.as_mut() {
+        if carrying.info.is_some() {
+            carrying.info_due = Some(tokio::time::Instant::now());
+        }
+    }
     let mut checking = tokio::time::interval_at(
         tokio::time::Instant::now() + HEARTBEAT_EVERY,
         HEARTBEAT_EVERY,
@@ -278,6 +306,10 @@ async fn attend(
         }
 
         let give_up_timer = until_given_up(link, supervising.carrying.is_some(), give_up_after);
+        let info_due = supervising
+            .carrying
+            .as_ref()
+            .and_then(|carrying| carrying.info_due);
         tokio::select! {
             delivered = instructions.next() => {
                 let delivered = match delivered? {
@@ -309,6 +341,9 @@ async fn attend(
                             carrying.state = Some(state);
                             report_state(link, &carrying.session, carrying.state.as_ref().unwrap()).await?;
                         }
+                        harness::ConversationEvent::Report(Report::SessionInfo(info)) => {
+                            carrying.hold(info);
+                        }
                         harness::ConversationEvent::Report(report) => carrying.saying.push_back(report),
                         harness::ConversationEvent::Worked(worked) => {
                             carrying.working = false;
@@ -326,6 +361,11 @@ async fn attend(
                 }
                 if supervising.carrying.as_ref().is_some_and(|carrying| carrying.working) {
                     report_work(link, supervising, false).await?;
+                }
+            }
+            _ = until_session_info_due(info_due) => {
+                if let Some(carrying) = supervising.carrying.as_mut() {
+                    say_session_info(link, carrying, diagnostics).await?;
                 }
             }
             () = give_up_timer => {
@@ -385,6 +425,38 @@ async fn report_work(
     Ok(())
 }
 
+/// Sends the Session's bookkeeping state once it is due: at most one report a second, at the
+/// window's trailing edge. An unchanged state is still sent after a reconnect, because the
+/// control plane may have missed the report that carried the change.
+async fn say_session_info(
+    link: &Link,
+    carrying: &mut Carrying,
+    diagnostics: &dyn Diagnostics,
+) -> Result<(), link::Error> {
+    let Some(info) = carrying.info.clone() else {
+        return Ok(());
+    };
+    if carrying
+        .info_due
+        .is_some_and(|due| tokio::time::Instant::now() < due)
+    {
+        return Ok(());
+    }
+    link.report(&Report::SessionInfo(info), Some(&carrying.session), None)
+        .await?;
+    carrying.info_due = None;
+    diagnostics.info(&format!("reported session_info for {}", carrying.session));
+
+    Ok(())
+}
+
+async fn until_session_info_due(due: Option<tokio::time::Instant>) {
+    match due {
+        Some(due) => tokio::time::sleep_until(due).await,
+        None => std::future::pending().await,
+    }
+}
+
 /// Everything left to do for the Session before waiting on the link again: `false` once it has
 /// said all it has to say about a Session that is over.
 async fn carried(
@@ -407,6 +479,7 @@ async fn carried(
         carrying.refreshed.clear();
     }
     say(link, carrying, diagnostics).await?;
+    say_session_info(link, carrying, diagnostics).await?;
     if carrying.finished {
         return Ok(false);
     }
@@ -471,6 +544,8 @@ async fn instructed(
                 refreshed: BTreeMap::new(),
                 written: None,
                 saying: VecDeque::new(),
+                info: None,
+                info_due: None,
             };
             match checkout::check_out(&carrying.checkout).await {
                 Ok(()) => carrying.saying.push_back(Report::Started),

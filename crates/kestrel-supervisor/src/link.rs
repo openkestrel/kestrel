@@ -228,6 +228,9 @@ pub enum Report {
     Used {
         usage: Usage,
     },
+    /// The Session's whole bookkeeping state, unnumbered and idempotent: a change is said once,
+    /// and the whole state is said again after a reconnect (ADR-0041).
+    SessionInfo(SessionInfo),
     Answered,
     Checkout {
         repositories: Vec<Observed>,
@@ -252,6 +255,7 @@ impl Report {
             Report::ToolCall { .. } => "tool_call",
             Report::SessionState { .. } => "session_state",
             Report::Used { .. } => "used",
+            Report::SessionInfo { .. } => "session_info",
             Report::Answered => "answered",
             Report::Checkout { .. } => "checkout",
             Report::Finished { .. } => "finished",
@@ -352,6 +356,75 @@ pub struct Usage {
 pub struct Cost {
     pub amount: f64,
     pub currency: String,
+}
+
+/// One config option the harness offers, whole: its current value and every value it offers
+/// (ADR-0041). A legacy harness that offers only `modes` is reported through a synthesized
+/// option of the `mode` category, so a reader sees one shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionInfo {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub options: Vec<SessionOption>,
+    #[serde(default)]
+    pub commands: Vec<SessionCommand>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOption {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(flatten)]
+    pub kind: SessionOptionKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionOptionKind {
+    Select {
+        current: String,
+        #[serde(default)]
+        values: Vec<SessionOptionValue>,
+        #[serde(default)]
+        groups: Vec<SessionOptionGroup>,
+    },
+    Boolean {
+        current: bool,
+    },
+}
+
+impl SessionOption {
+    pub fn is_category(&self, category: &str) -> bool {
+        self.category.as_deref() == Some(category)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOptionValue {
+    pub value: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOptionGroup {
+    pub group: String,
+    pub name: String,
+    pub values: Vec<SessionOptionValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCommand {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub input_hint: Option<String>,
 }
 
 /// What the Harness is spawned with to reach a model: variables for its environment, and

@@ -8,21 +8,25 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, AuthMethod, AuthMethodAgent, AuthMethodTerminal, AvailableCommandsUpdate,
-    ContentBlock, ContentChunk, Cost, InitializeRequest, InitializeResponse, LoadSessionRequest,
+    AgentCapabilities, AuthMethod, AuthMethodAgent, AuthMethodTerminal, AvailableCommand,
+    AvailableCommandInput, AvailableCommandsUpdate, ConfigOptionUpdate, ContentBlock, ContentChunk,
+    Cost, CurrentModeUpdate, InitializeRequest, InitializeResponse, LoadSessionRequest,
     LoadSessionResponse, MessageId, NewSessionRequest, NewSessionResponse, PermissionOption,
     PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, PromptCapabilities,
     PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
     SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelect,
-    SessionConfigSelectOption, SessionConfigValueId, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, TextContent,
-    ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, UsageUpdate,
+    SessionConfigSelectOption, SessionConfigValueId, SessionInfoUpdate, SessionMode,
+    SessionModeState, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionConfigOptionResponse, StopReason, TextContent, ToolCall, ToolCallStatus,
+    ToolCallUpdate, ToolCallUpdateFields, UnstructuredCommandInput, UsageUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Error, Result, Stdio};
 use clap::Parser;
 use kestrel_scripted_agent::{
-    CHATTER, CHATTERED_LINES, CHATTERED_MESSAGES, CONFIDED, DEFAULT_MODEL, FIRST_MEMORY,
-    LAST_MEMORY, LOGIN, MUTTERED, OTHER_MODEL, OVERLONG, REFRESHED, Script, chattered, conversed,
+    CHATTER, CHATTERED_LINES, CHATTERED_MESSAGES, COMMAND, COMMAND_DESCRIPTION, COMMAND_HINT,
+    CONFIDED, CUSTOM_CATEGORY, CUSTOM_OPTION, DEFAULT_MODEL, FIRST_MEMORY, LAST_MEMORY, LOGIN,
+    MODE_OPTION, MUTTERED, OTHER_MODE, OTHER_MODEL, OVERLONG, REFRESHED, REPEATS, STARTING_MODE,
+    SWITCHED_MODE, Script, TITLE, chattered, conversed,
 };
 
 const SESSION: &str = "scripted";
@@ -111,9 +115,8 @@ async fn main() -> Result<()> {
 
                 responder.respond(match script {
                     Script::Decides => NewSessionResponse::new(SESSION),
-                    _ => {
-                        NewSessionResponse::new(SESSION).config_options(vec![models(DEFAULT_MODEL)])
-                    }
+                    Script::LegacyModes => NewSessionResponse::new(SESSION).modes(legacy_modes()),
+                    _ => NewSessionResponse::new(SESSION).config_options(offered(DEFAULT_MODEL)),
                 })
             },
             agent_client_protocol::on_receive_request!(),
@@ -138,8 +141,7 @@ async fn main() -> Result<()> {
                         &conversed(turn + 1, &kept[..turn]),
                     )?;
                 }
-                responder
-                    .respond(LoadSessionResponse::new().config_options(vec![models(DEFAULT_MODEL)]))
+                responder.respond(LoadSessionResponse::new().config_options(offered(DEFAULT_MODEL)))
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -151,9 +153,9 @@ async fn main() -> Result<()> {
                     );
                 };
 
-                responder.respond(SetSessionConfigOptionResponse::new(vec![models(
+                responder.respond(SetSessionConfigOptionResponse::new(offered(
                     selected.clone(),
-                )]))
+                )))
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -334,6 +336,14 @@ async fn play(
             connection,
             SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(Vec::new())),
         )?;
+        update(
+            connection,
+            SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title("silent")),
+        )?;
+        update(
+            connection,
+            SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(offered(DEFAULT_MODEL))),
+        )?;
         return Ok(StopReason::EndTurn);
     }
     if script == Script::OversizedTool {
@@ -434,6 +444,57 @@ async fn play(
         }
         keep(prompted)?;
         say(connection, "message-1", &conversed(kept.len() + 1, &kept))?;
+        return Ok(StopReason::EndTurn);
+    }
+    if script == Script::Announces {
+        // Long enough that a test can take the link down while the harness still has this to say.
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        update(
+            connection,
+            SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(TITLE)),
+        )?;
+        update(
+            connection,
+            SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(vec![
+                AvailableCommand::new(COMMAND, COMMAND_DESCRIPTION).input(
+                    AvailableCommandInput::Unstructured(UnstructuredCommandInput::new(
+                        COMMAND_HINT,
+                    )),
+                ),
+                AvailableCommand::new("init", "Initialize the workspace"),
+            ])),
+        )?;
+        update(
+            connection,
+            SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(SWITCHED_MODE)),
+        )?;
+        say(connection, "message-1", "announced")?;
+        return Ok(StopReason::EndTurn);
+    }
+    if script == Script::Repeats {
+        for _ in 0..REPEATS {
+            update(
+                connection,
+                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(offered(DEFAULT_MODEL))),
+            )?;
+        }
+        say(connection, "message-1", "repeated")?;
+        return Ok(StopReason::EndTurn);
+    }
+    if script == Script::SwitchesModel {
+        update(
+            connection,
+            SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(offered(OTHER_MODEL))),
+        )?;
+        say(connection, "message-1", "switched")?;
+        return Ok(StopReason::EndTurn);
+    }
+    if script == Script::LegacyModes {
+        update(
+            connection,
+            SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(SWITCHED_MODE)),
+        )?;
+        say(connection, "message-1", "switched a legacy mode")?;
         return Ok(StopReason::EndTurn);
     }
     if script == Script::Vanishes {
@@ -588,6 +649,48 @@ fn models(current: impl Into<SessionConfigValueId>) -> SessionConfigOption {
         )),
     )
     .category(SessionConfigOptionCategory::Model)
+}
+
+/// The whole config-option list the scripted agent offers: a model, a Mode-category option, and
+/// one in a category of its own beginning with `_`.
+fn offered(current: impl Into<SessionConfigValueId>) -> Vec<SessionConfigOption> {
+    vec![
+        models(current),
+        SessionConfigOption::new(
+            MODE_OPTION,
+            "Mode",
+            SessionConfigKind::Select(SessionConfigSelect::new(
+                STARTING_MODE,
+                vec![
+                    SessionConfigSelectOption::new(STARTING_MODE, "Build"),
+                    SessionConfigSelectOption::new(SWITCHED_MODE, "Plan"),
+                ],
+            )),
+        )
+        .category(SessionConfigOptionCategory::Mode),
+        SessionConfigOption::new(
+            CUSTOM_OPTION,
+            "Verbose",
+            SessionConfigKind::Boolean(
+                agent_client_protocol::schema::v1::SessionConfigBoolean::new(false),
+            ),
+        )
+        .category(SessionConfigOptionCategory::Other(
+            CUSTOM_CATEGORY.to_owned(),
+        )),
+    ]
+}
+
+/// A harness that predates config options and offers only `modes`.
+fn legacy_modes() -> SessionModeState {
+    SessionModeState::new(
+        STARTING_MODE,
+        vec![
+            SessionMode::new(STARTING_MODE, "Build"),
+            SessionMode::new(SWITCHED_MODE, "Plan"),
+            SessionMode::new(OTHER_MODE, "Review"),
+        ],
+    )
 }
 
 /// Refuses to go on unless the client allows the call once, which is what makes a Session that

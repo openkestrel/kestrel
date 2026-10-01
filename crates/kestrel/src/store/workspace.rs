@@ -5,8 +5,8 @@ use sqlx::{Row, SqliteConnection};
 
 use crate::domain::{
     Agent, Checkout, Connected, Cost, Event, Exit, Organization, OrganizationId, Project, Session,
-    SessionId, SessionState, SubscriptionProfile, Turn, Usage, Workspace, WorkspaceId,
-    WorkspaceState,
+    SessionCommand, SessionId, SessionOption, SessionState, SubscriptionProfile, Turn, Usage,
+    Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::fanout::Touched;
 use crate::instance::Observed;
@@ -24,7 +24,8 @@ macro_rules! sessions_where {
                     (SELECT name FROM agent WHERE agent.id = session.agent_id) AS agent_name,
                     harness, state, exit, exit_because, outcome_message, instance,
                     supervisor, enqueued_at, started_at, ended_at, lease_expires_at, connected_at,
-                    supervisor_version, model, worked_model, context_used, context_size, cost_amount,
+                    supervisor_version, model, worked_model, title, config_options, commands,
+                    context_used, context_size, cost_amount,
                     cost_currency",
             $columns,
             "
@@ -582,6 +583,9 @@ impl<'a> Workspaces<'a> {
                 instance: None,
                 supervisor: None,
                 worked_model: None,
+                title: None,
+                options: Vec::new(),
+                commands: Vec::new(),
                 enqueued_at: Timestamp::now(),
                 started_at: None,
                 ended_at: None,
@@ -987,6 +991,54 @@ impl<'a> Workspaces<'a> {
         self.touched.session(session);
 
         Ok(())
+    }
+
+    /// The whole bookkeeping state as the supervisor last reported it. A report that changes
+    /// nothing already held writes nothing and raises nothing (ADR-0041).
+    pub async fn record_session_info(
+        &mut self,
+        session: &Session,
+        title: Option<&str>,
+        options: &[SessionOption],
+        commands: &[SessionCommand],
+    ) -> Result<bool> {
+        // Read back rather than trust the caller's copy: two reports may be applied in one
+        // process, and the second must see what the first wrote.
+        let stored =
+            sqlx::query("SELECT title, config_options, commands FROM session WHERE id = ?")
+                .bind(session.id.to_string())
+                .fetch_optional(&mut *self.connection)
+                .await?
+                .with_context(|| format!("no session {}", session.id))?;
+        let stored_title: Option<String> = stored.get("title");
+        if stored_title.as_deref() == title
+            && read_json::<SessionOption>(&stored, "config_options")? == options
+            && read_json::<SessionCommand>(&stored, "commands")? == commands
+        {
+            return Ok(false);
+        }
+
+        let worked_model = options
+            .iter()
+            .find(|option| option.is_category(SessionOption::MODEL))
+            .and_then(SessionOption::current_value);
+        sqlx::query(
+            "UPDATE session
+             SET title = ?, config_options = ?, commands = ?, worked_model = COALESCE(?, worked_model)
+             WHERE id = ?",
+        )
+        .bind(title)
+        .bind(serde_json::to_string(options)?)
+        .bind(serde_json::to_string(commands)?)
+        .bind(worked_model)
+        .bind(session.id.to_string())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("recording what session {} holds", session.id))?;
+
+        self.touched.session(session);
+
+        Ok(true)
     }
 
     pub async fn instance(&mut self, workspace: WorkspaceId) -> Result<Option<String>> {
@@ -1826,6 +1878,9 @@ fn session(row: &SqliteRow) -> Result<Session> {
         instance: row.get("instance"),
         supervisor: row.get("supervisor"),
         worked_model: row.get("worked_model"),
+        title: row.get("title"),
+        options: read_json(row, "config_options")?,
+        commands: read_json(row, "commands")?,
         enqueued_at: row.get::<String, _>("enqueued_at").parse()?,
         started_at: timestamp(row, "started_at")?,
         ended_at: timestamp(row, "ended_at")?,
@@ -1890,5 +1945,15 @@ fn usage(row: &SqliteRow) -> Option<Usage> {
             (Some(amount), Some(currency)) => Some(Cost { amount, currency }),
             _ => None,
         },
+    })
+}
+
+fn read_json<T: serde::de::DeserializeOwned>(row: &SqliteRow, column: &str) -> Result<Vec<T>> {
+    let stored: Option<String> = row.get(column);
+
+    Ok(match stored {
+        Some(stored) => serde_json::from_str(&stored)
+            .with_context(|| format!("reading the session's {column}"))?,
+        None => Vec::new(),
     })
 }

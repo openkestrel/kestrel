@@ -1408,9 +1408,8 @@ async fn run() -> Result<()> {
         }
         Command::Session(SessionCommand::Show { session }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            shown_session(
                 &presentation,
-                &view::SESSION,
                 &api.get(&["organizations", &organization, "sessions", &session])
                     .await?,
             )?;
@@ -1585,6 +1584,49 @@ async fn started(
 /// The limits and their occupancy said first, so every row below is read against what it
 /// counts against. A script asks `--json` for the fields and gets the rows alone, each one
 /// carrying the limits it arrived with.
+/// `session show` says the title, each option as `category: current`, and the command names; a
+/// `--json` read asks for the fields themselves and gets them exactly as served.
+fn shown_session(presentation: &Presentation, session: &Value) -> Result<()> {
+    let mut record = session.clone();
+    if !matches!(presentation, Presentation::Json(_)) {
+        record["options"] = Value::from(session_options(&record["options"]));
+        record["commands"] = Value::from(session_commands(&record["commands"]));
+    }
+
+    show(presentation, &view::SESSION, &record)
+}
+
+fn session_options(options: &Value) -> String {
+    options
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|option| {
+            let category = option["category"]
+                .as_str()
+                .or_else(|| option["id"].as_str())
+                .unwrap_or("option");
+            let current = match &option["current"] {
+                Value::String(value) => value.clone(),
+                other => other.to_string(),
+            };
+
+            format!("{category}: {current}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn session_commands(commands: &Value) -> String {
+    commands
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|command| command["name"].as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
     let slots = &snapshot["active_work"];
     let instances = &snapshot["instances"];

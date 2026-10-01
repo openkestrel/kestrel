@@ -872,6 +872,9 @@
             "$ref": "#/components/schemas/Used"
           },
           {
+            "$ref": "#/components/schemas/SessionInfo"
+          },
+          {
             "$ref": "#/components/schemas/Answered"
           },
           {
@@ -904,6 +907,7 @@
             "model": "#/components/schemas/Model",
             "said": "#/components/schemas/Said",
             "used": "#/components/schemas/Used",
+            "session_info": "#/components/schemas/SessionInfo",
             "answered": "#/components/schemas/Answered",
             "checkout": "#/components/schemas/CheckoutObserved",
             "finished": "#/components/schemas/Finished",
@@ -2162,6 +2166,160 @@
           "tools",
           "message_buffering",
           "thought_buffering"
+        ]
+      },
+      "SessionInfo": {
+        "description": "The Session's whole bookkeeping state: the harness's title for the conversation, its config options and the commands it offers (ADR-0041). Sent when any of it changes and again after a reconnect; unnumbered, because it is idempotent and the whole state goes up each time.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "session_info"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": ["string", "null"]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionOption"
+            }
+          },
+          "commands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionCommand"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "session",
+          "title",
+          "options",
+          "commands"
+        ]
+      },
+      "SessionOption": {
+        "type": "object",
+        "description": "A harness config option, whole: what it is, what it may be and what it is now. A legacy harness that offers only `modes` is reported through a synthesized option of the `mode` category.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": ["string", "null"]
+          },
+          "category": {
+            "type": ["string", "null"],
+            "description": "`mode`, `model`, `model_config`, `thought_level`, or the harness's own string, which may begin with `_`."
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["select", "boolean"]
+          },
+          "current": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              }
+            ],
+            "description": "The current value: a value id for a select, a boolean for a toggle."
+          },
+          "values": {
+            "type": "array",
+            "description": "The offered values of an ungrouped select; empty for a grouped one and for a boolean.",
+            "items": {
+              "$ref": "#/components/schemas/SessionOptionValue"
+            }
+          },
+          "groups": {
+            "type": "array",
+            "description": "The offered values of a grouped select; empty for an ungrouped one.",
+            "items": {
+              "$ref": "#/components/schemas/SessionOptionGroup"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "category",
+          "kind",
+          "current",
+          "values",
+          "groups"
+        ]
+      },
+      "SessionOptionValue": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": ["string", "null"]
+          }
+        },
+        "required": [
+          "value",
+          "name",
+          "description"
+        ]
+      },
+      "SessionOptionGroup": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionOptionValue"
+            }
+          }
+        },
+        "required": [
+          "group",
+          "name",
+          "values"
+        ]
+      },
+      "SessionCommand": {
+        "type": "object",
+        "description": "A command the harness offers for the Session, as a composer lists it.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "input_hint": {
+            "type": ["string", "null"]
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "input_hint"
         ]
       },
       "PayloadReference": {
