@@ -28,8 +28,7 @@ use crate::declined::{Declined, FieldRefusal, Kind};
 use crate::domain::{
     self, Agent, Connection, Correlation, Declared, Direction, EventRecordId, EventRefusal, Fires,
     Firing, HeldMessage, Integration, Occurrence, Organization, Project, Schedule, Session,
-    StartedBy,
-    SubscriptionProfile, Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
+    StartedBy, SubscriptionProfile, Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::fanout;
 use crate::filter::Filter;
@@ -1908,6 +1907,8 @@ struct ReleasedRecord {
 struct WorkRoleRecord {
     active_work_slots: usize,
     serialized_harnesses: Vec<String>,
+    /// The Compute driver the role provisions Instances with.
+    driver: String,
 }
 
 #[derive(Serialize)]
@@ -1976,12 +1977,25 @@ struct WaitingSessionRecord {
 }
 
 #[derive(Serialize)]
+struct UnbriefedSessionRecord {
+    name: String,
+    workspace: String,
+    agent: String,
+    /// The step it is preparing on: provisioning, cloning or harness_ready.
+    preparing: Option<String>,
+    /// When the oldest message held for its Brief arrived, or null while it holds none.
+    pending_since: Option<Timestamp>,
+    enqueued_at: Timestamp,
+}
+
+#[derive(Serialize)]
 struct QueueRecord {
     work_role: Option<WorkRoleRecord>,
     active_work: ActiveWorkRecord,
     instances: InstancesRecord,
     queued: Vec<QueuedSessionRecord>,
     waiting: Vec<WaitingSessionRecord>,
+    unbriefed: Vec<UnbriefedSessionRecord>,
 }
 
 impl QueueRecord {
@@ -1989,6 +2003,7 @@ impl QueueRecord {
         let recorded = snapshot.recorded.map(|recorded| WorkRoleRecord {
             active_work_slots: recorded.active_work_slots,
             serialized_harnesses: recorded.serialized_harnesses,
+            driver: recorded.driver,
         });
 
         Self {
@@ -2026,6 +2041,21 @@ impl QueueRecord {
                     pending_since: waiting.pending_since,
                     reasons: reasons(waiting.reasons),
                     enqueued_at: waiting.session.enqueued_at,
+                })
+                .collect(),
+            unbriefed: snapshot
+                .unbriefed
+                .into_iter()
+                .map(|unbriefed| UnbriefedSessionRecord {
+                    name: unbriefed.session.name,
+                    workspace: unbriefed.session.workspace.to_string(),
+                    agent: unbriefed.session.agent.name,
+                    preparing: unbriefed
+                        .session
+                        .preparing
+                        .map(|preparing| preparing.as_str().to_owned()),
+                    pending_since: unbriefed.pending_since,
+                    enqueued_at: unbriefed.session.enqueued_at,
                 })
                 .collect(),
         }

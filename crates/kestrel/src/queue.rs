@@ -19,6 +19,7 @@ pub struct Snapshot {
     pub instances: Instances,
     pub queued: Vec<Queued>,
     pub waiting: Vec<Waiting>,
+    pub unbriefed: Vec<Unbriefed>,
 }
 
 pub struct ActiveWork {
@@ -71,6 +72,14 @@ pub struct Waiting {
     pub reasons: Vec<Reason>,
 }
 
+/// A Session with no Brief yet: it holds an Instance and no Active-Work Slot, and waits for the
+/// first message that becomes its Brief. Its preparing step rides the Session.
+pub struct Unbriefed {
+    pub session: Session,
+    /// When the oldest message held for its Brief arrived; `None` while nothing is held.
+    pub pending_since: Option<Timestamp>,
+}
+
 pub async fn snapshot(store: &Store, name: &str) -> Result<Snapshot> {
     let mut tx = store.read().await?;
     let organization = tx.organizations().named(name).await?;
@@ -93,6 +102,7 @@ pub async fn snapshot(store: &Store, name: &str) -> Result<Snapshot> {
     let instances = instances(&mut tx, &organization).await?;
     let queued = queued(&mut tx, &organization, &mut held).await?;
     let waiting = waiting(&mut tx, &organization, &active_work, &queued, &mut held).await?;
+    let unbriefed = unbriefed(&mut tx, &organization).await?;
 
     Ok(Snapshot {
         recorded,
@@ -100,6 +110,7 @@ pub async fn snapshot(store: &Store, name: &str) -> Result<Snapshot> {
         instances,
         queued,
         waiting,
+        unbriefed,
     })
 }
 
@@ -198,6 +209,25 @@ async fn queued(
     }
 
     Ok(queued)
+}
+
+/// The Sessions getting ready for their first message, in enqueue order. They hold their
+/// Instances, so they are counted there, and no Active-Work Slot, so they are never numbered.
+async fn unbriefed(tx: &mut Tx<'_>, organization: &Organization) -> Result<Vec<Unbriefed>> {
+    let mut unbriefed = Vec::new();
+    for session in tx
+        .workspaces()
+        .sessions_in(organization, SessionState::Unbriefed)
+        .await?
+    {
+        let pending_since = tx.workspaces().pending_since(session.workspace).await?;
+        unbriefed.push(Unbriefed {
+            session,
+            pending_since,
+        });
+    }
+
+    Ok(unbriefed)
 }
 
 /// Those with held input come first, in the order a freed slot prompts them.

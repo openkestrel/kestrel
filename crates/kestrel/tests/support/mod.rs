@@ -46,9 +46,9 @@ use kestrel::agent;
 use kestrel::compute::{Docker, Driver, LocalExec};
 use kestrel::domain::{
     Agent, Correlation, CorrelationMiss, Declared, Direction, Event, EventRecordId, Exit, Fires,
-    HeldMessage, Integration, Occurrence, OnOpenWorkspace, Organization, Project, Schedule, Session,
-    SessionCommand, SessionId, SessionState, SubscriptionProfile, Templates, Trigger, Turn,
-    Workspace, WorkspaceId,
+    HeldMessage, Integration, Occurrence, OnOpenWorkspace, Organization, Project, Schedule,
+    Session, SessionCommand, SessionId, SessionState, SubscriptionProfile, Templates, Trigger,
+    Turn, Workspace, WorkspaceId,
 };
 use kestrel::instance;
 use kestrel::integration::{self, Connecting, Registration};
@@ -1797,10 +1797,10 @@ impl Kestrel {
             .expect("the occupancy should ask")
     }
 
-    pub async fn record_dispatch(&self, slots: usize) {
+    pub async fn record_dispatch(&self, slots: usize, driver: &str) {
         let mut tx = self.store.begin().await.expect("a transaction");
         tx.queue()
-            .record(slots, &[SERIALIZED.to_owned()])
+            .record(slots, &[SERIALIZED.to_owned()], driver)
             .await
             .expect("the dispatch should record");
         tx.commit().await.expect("the record should commit");

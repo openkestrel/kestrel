@@ -51,6 +51,13 @@ stateDiagram-v2
   Working as the only slot occupant, `held_input!` ordering and `work::goes_before_input`. A rule
   changed in one place changes both: unless older held input is prompted first, a free slot
   claims position 1.
+- **The snapshot also lists the unbriefed Sessions**, beside the Waiting ones and never numbered:
+  they hold their Instances and no slot, so they count against the live Instance limit alone. Each
+  carries its preparing step and any message held for its Brief. A queued Session whose Workspace
+  has no Brief shows only its Instance reasons and takes no position.
+- **The work role's record carries the Environment.** `work_role` holds the Active-Work Slot limit,
+  the serialized harnesses and the Compute driver (`Driver::name`), so the snapshot can say which
+  Environment work is provisioned in; with no record, no work role is dispatching.
 
 ## Declared options
 

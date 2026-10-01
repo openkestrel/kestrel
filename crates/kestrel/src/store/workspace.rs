@@ -5,8 +5,7 @@ use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 
 use crate::domain::{
     Agent, Checkout, Connected, Cost, Declared, Exit, HeldMessage, Organization, OrganizationId,
-    Preparing, Project,
-    Session, SessionCommand, SessionId, SessionOption, SessionState, StartedBy,
+    Preparing, Project, Session, SessionCommand, SessionId, SessionOption, SessionState, StartedBy,
     SubscriptionProfile, Turn, Usage, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::fanout::Touched;
@@ -711,6 +710,25 @@ impl<'a> Workspaces<'a> {
         self.touched.workspace(workspace);
 
         held(&row)
+    }
+
+    /// When the oldest message held for the Workspace arrived, or `None` while it holds none.
+    pub async fn pending_since(&mut self, workspace: WorkspaceId) -> Result<Option<Timestamp>> {
+        let since = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT MIN(received_at) FROM pending_message
+              WHERE workspace_id = ? AND state = 'held'",
+        )
+        .bind(workspace.to_string())
+        .fetch_one(&mut *self.connection)
+        .await
+        .with_context(|| {
+            format!("reading when the oldest message of workspace {workspace} arrived")
+        })?;
+
+        match since {
+            Some(since) => Ok(Some(since.parse()?)),
+            None => Ok(None),
+        }
     }
 
     pub async fn held_messages(&mut self, workspace: WorkspaceId) -> Result<Vec<HeldMessage>> {

@@ -36,6 +36,14 @@ pub enum Driver {
 }
 
 impl Driver {
+    /// What this driver names Instances under, as `<driver>/<instance>`.
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Driver::Docker(_) => "docker",
+            Driver::LocalExec(_) => "local-exec",
+        }
+    }
+
     pub fn provision(&self, session: SessionId) -> io::Result<Instance> {
         match self {
             Driver::Docker(docker) => docker.provision(session),
