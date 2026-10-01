@@ -885,6 +885,12 @@
           },
           {
             "$ref": "#/components/schemas/Plan"
+          },
+          {
+            "$ref": "#/components/schemas/ToolCall"
+          },
+          {
+            "$ref": "#/components/schemas/SessionState"
           }
         ],
         "discriminator": {
@@ -902,7 +908,9 @@
             "checkout": "#/components/schemas/CheckoutObserved",
             "finished": "#/components/schemas/Finished",
             "thought": "#/components/schemas/Thought",
-            "plan": "#/components/schemas/Plan"
+            "plan": "#/components/schemas/Plan",
+            "tool_call": "#/components/schemas/ToolCall",
+            "session_state": "#/components/schemas/SessionState"
           }
         },
         "properties": {
@@ -1383,6 +1391,9 @@
           },
           {
             "$ref": "#/components/schemas/PlanEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ToolCallEntry"
           }
         ],
         "discriminator": {
@@ -1396,7 +1407,8 @@
             "session_ended": "#/components/schemas/SessionEnded",
             "instance_released": "#/components/schemas/InstanceReleased",
             "thought": "#/components/schemas/ThoughtEntry",
-            "plan": "#/components/schemas/PlanEntry"
+            "plan": "#/components/schemas/PlanEntry",
+            "tool_call": "#/components/schemas/ToolCallEntry"
           }
         }
       },
@@ -1914,6 +1926,161 @@
           "seq",
           "entries",
           "completion"
+        ]
+      },
+      "ToolCallEntry": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "tool_call"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tool_kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "input": {},
+          "result": {},
+          "closing_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          }
+        },
+        "required": [
+          "type",
+          "session_id",
+          "call_id",
+          "title",
+          "tool_kind",
+          "status",
+          "input",
+          "result",
+          "closing_reason",
+          "completion"
+        ]
+      },
+      "RunningTool": {
+        "type": "object",
+        "properties": {
+          "call_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "call_id",
+          "title",
+          "status",
+          "started_at"
+        ]
+      },
+      "ToolCall": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "tool_call"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tool_kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "input": {},
+          "result": {},
+          "closing_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          }
+        },
+        "required": [
+          "kind",
+          "session",
+          "seq",
+          "call_id",
+          "title",
+          "tool_kind",
+          "status",
+          "input",
+          "result",
+          "closing_reason",
+          "completion"
+        ]
+      },
+      "SessionState": {
+        "description": "A whole transient Session snapshot, sent on changes and reconnect. Unnumbered; never enters the Transcript.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "session_state"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningTool"
+            }
+          },
+          "message_buffering": {
+            "type": "boolean"
+          },
+          "thought_buffering": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "session",
+          "tools",
+          "message_buffering",
+          "thought_buffering"
         ]
       }
     }

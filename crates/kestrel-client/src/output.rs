@@ -108,7 +108,27 @@ fn human(out: &mut impl Write, view: &View, records: &[&Value], width: usize) ->
                     writeln!(out)?;
                 }
                 for (label, field) in labels.iter().zip(*fields) {
-                    let value = rendered(at(record, field));
+                    let value = if *field == "tools" {
+                        at(record, field)
+                            .and_then(Value::as_array)
+                            .map(|tools| {
+                                tools
+                                    .iter()
+                                    .map(|tool| {
+                                        format!(
+                                            "{}\n{}  {}",
+                                            rendered(tool.get("title")),
+                                            rendered(tool.get("status")),
+                                            rendered(tool.get("started_at"))
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        rendered(at(record, field))
+                    };
                     let mut lines = value.lines();
                     let first = lines.next().unwrap_or_default();
                     writeln!(
@@ -289,6 +309,21 @@ mod tests {
             .iter()
             .map(|record| line(presentation, view, record).expect("a line"))
             .collect()
+    }
+
+    #[test]
+    fn session_show_lists_running_tools_with_status_and_start_time() {
+        let record = json!({"tools":[{"call_id":"one","title":"read README.md","status":"in_progress","started_at":"2026-09-30T12:00:00Z"}]});
+        let shown = line(&Presentation::Delimited, &crate::view::SESSION, &record).unwrap();
+        assert!(shown.contains("read README.md"));
+        assert!(shown.contains("in_progress"));
+        assert!(shown.contains("2026-09-30T12:00:00Z"));
+        let mut human_output = Vec::new();
+        human(&mut human_output, &crate::view::SESSION, &[&record], 240).unwrap();
+        let shown = String::from_utf8(human_output).unwrap();
+        assert!(shown.contains("read README.md"));
+        assert!(shown.contains("in_progress"));
+        assert!(shown.contains("2026-09-30T12:00:00Z"));
     }
 
     #[test]

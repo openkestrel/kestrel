@@ -113,6 +113,10 @@ impl Conversation {
     }
 
     /// Cancel-safe, so a caller may stop waiting on it and come back.
+    pub fn try_next(&mut self) -> Option<ConversationEvent> {
+        self.turns.try_recv().ok()
+    }
+
     pub async fn next(&mut self) -> ConversationEvent {
         self.turns.recv().await.unwrap_or_else(|| {
             ConversationEvent::Worked(Worked {
@@ -721,6 +725,7 @@ fn stopped_short(stop: StopReason) -> Option<String> {
 pub enum ConversationEvent {
     Report(Report),
     Worked(Worked),
+    State(Report),
 }
 
 struct Hearing {
@@ -734,6 +739,9 @@ struct Hearing {
 
 impl Hearing {
     fn emit(&self, completed: Completed) {
+        if let Some(state) = completed.state {
+            let _ = self.reports.send(ConversationEvent::State(state));
+        }
         for report in completed.reports {
             let _ = self.reports.send(ConversationEvent::Report(report));
         }

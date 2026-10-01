@@ -153,6 +153,7 @@ pub const SESSION: View = View::Detail(&[
     "connected_at",
     "supervisor_version",
     "usage",
+    "tools",
 ]);
 pub const STOPPED: View = View::Value("exit.status");
 pub const INSTANCES: View = View::Rows(&["workspace", "instance", "because"]);

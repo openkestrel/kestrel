@@ -474,6 +474,9 @@ struct SessionRecord {
     connected_at: Option<Timestamp>,
     supervisor_version: Option<String>,
     usage: Option<domain::Usage>,
+    tools: Vec<crate::live_work::RunningTool>,
+    message_buffering: bool,
+    thought_buffering: bool,
 }
 
 #[derive(Serialize)]
@@ -613,11 +616,31 @@ impl SessionRecord {
             connected_at: session.connected.as_ref().map(|connected| connected.at),
             supervisor_version: session.connected.map(|connected| connected.version),
             usage: session.usage,
+            tools: Vec::new(),
+            message_buffering: false,
+            thought_buffering: false,
         }
     }
 
-    fn all(sessions: Vec<Session>) -> Vec<Self> {
-        sessions.into_iter().map(Self::read).collect()
+    fn live(session: Session, summaries: &crate::live_work::Summaries) -> Self {
+        let state = if domain::SessionState::LIVE.contains(&session.state)
+            && session
+                .lease_expires_at
+                .is_some_and(|at| at > Timestamp::now())
+        {
+            session
+                .instance
+                .as_deref()
+                .map(|instance| summaries.session(instance, &session.id.to_string()))
+                .unwrap_or_default()
+        } else {
+            Default::default()
+        };
+        let mut record = Self::read(session);
+        record.tools = state.tools;
+        record.message_buffering = state.message_buffering;
+        record.thought_buffering = state.thought_buffering;
+        record
     }
 }
 
@@ -2043,7 +2066,12 @@ async fn sessions(
         .await
         .map_err(workspace_refusal)?;
 
-    Ok(Json(SessionRecord::all(sessions)))
+    Ok(Json(
+        sessions
+            .into_iter()
+            .map(|session| SessionRecord::live(session, &control_plane.summaries))
+            .collect(),
+    ))
 }
 
 async fn enqueue_session(
@@ -2071,7 +2099,7 @@ async fn show_session(
 ) -> Result<Json<SessionRecord>, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
 
-    Ok(Json(SessionRecord::read(session)))
+    Ok(Json(SessionRecord::live(session, &control_plane.summaries)))
 }
 
 async fn stop_session(

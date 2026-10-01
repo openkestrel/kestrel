@@ -28,6 +28,11 @@ pub const LAST_MEMORY: &str = "the last remembered message";
 pub enum Script {
     /// Plans, thinks, calls a tool it asks permission for, says two messages and ends the turn.
     Speaks,
+    SlowTool,
+    ReconnectingTools,
+    OpenToolAnswered,
+    OpenToolCancelled,
+    OpenToolFailed,
     ReportsThenWaits,
     CancelledText,
     FailedText,
@@ -89,6 +94,11 @@ impl Script {
     pub const fn as_str(self) -> &'static str {
         match self {
             Script::Speaks => "speaks",
+            Script::ReconnectingTools => "reconnecting-tools",
+            Script::SlowTool => "slow-tool",
+            Script::OpenToolAnswered => "open-tool-answered",
+            Script::OpenToolCancelled => "open-tool-cancelled",
+            Script::OpenToolFailed => "open-tool-failed",
             Script::ReportsThenWaits => "reports-then-waits",
             Script::CancelledText => "cancelled-text",
             Script::FailedText => "failed-text",

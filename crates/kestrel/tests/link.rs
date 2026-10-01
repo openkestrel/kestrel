@@ -378,6 +378,9 @@ async fn the_link_takes_every_report_the_published_openapi_document_describes() 
         },
         "finished": {"kind": "finished", "seq": 1, "exit": {"status": "succeeded"}},        "thought": {"kind": "thought", "seq": 1, "text": "thinking", "completion": {"started_at": "2026-09-29T12:00:00Z", "finished_at": "2026-09-29T12:00:00Z", "turn_outcome": null}},
         "plan": {"kind": "plan", "seq": 1, "entries": [], "completion": {"started_at": "2026-09-29T12:00:00Z", "finished_at": "2026-09-29T12:00:00Z", "turn_outcome": null}},
+        "tool_call": {"kind":"tool_call", "seq":1, "call_id":"call", "title":"read", "tool_kind":"read", "status":"completed", "input":{}, "result":[], "closing_reason":null, "completion":{"started_at":"2026-09-30T12:00:00Z", "finished_at":"2026-09-30T12:00:00Z", "turn_outcome":null}},
+        "session_state": {"kind":"session_state", "tools":[], "message_buffering":false, "thought_buffering":false},
+
 
     });
     assert_eq!(
@@ -585,6 +588,17 @@ fn the_published_openapi_document_describes_every_transcript_entry_the_link_serv
             entries: Vec::new(),
             completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
+        Entry::ToolCall {
+            session_id: SessionId::generate(),
+            call_id: "call".to_owned(),
+            title: "read".to_owned(),
+            tool_kind: "read".to_owned(),
+            status: "completed".to_owned(),
+            input: serde_json::json!({}),
+            result: serde_json::json!([]),
+            closing_reason: None,
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
+        },
     ];
 
     let mut kinds: Vec<String> = Vec::new();
@@ -655,7 +669,7 @@ async fn completed_units_replay_once_and_filtered_pages_walk_the_global_cursor()
             seq: Some(3),
             report: Report::Plan {
                 entries: Vec::new(),
-                completion,
+                completion: completion.clone(),
             },
         },
     ] {
@@ -668,16 +682,74 @@ async fn completed_units_replay_once_and_filtered_pages_walk_the_global_cursor()
             );
         }
     }
+    let transient = Reported {
+        session: Some(session.id),
+        seq: None,
+        report: Report::SessionState {
+            tools: vec![],
+            message_buffering: true,
+            thought_buffering: false,
+        },
+    };
+    assert!(
+        serde_json::to_value(&transient)
+            .unwrap()
+            .get("seq")
+            .is_none()
+    );
+    assert_eq!(
+        link.report(&on.instance, Some(&on.credential), &transient)
+            .await
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    let tool = Reported {
+        session: Some(session.id),
+        seq: Some(5),
+        report: Report::ToolCall {
+            call_id: "call".to_owned(),
+            title: "read".to_owned(),
+            tool_kind: "read".to_owned(),
+            status: "completed".to_owned(),
+            input: serde_json::json!({"path":"a"}),
+            result: serde_json::json!(["read"]),
+            closing_reason: None,
+            completion,
+        },
+    };
+    assert_eq!(
+        link.report(&on.instance, Some(&on.credential), &tool)
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let tool = Reported {
+        seq: Some(4),
+        ..tool
+    };
+    for _ in 0..2 {
+        assert_eq!(
+            link.report(&on.instance, Some(&on.credential), &tool)
+                .await
+                .status(),
+            StatusCode::ACCEPTED
+        );
+    }
     let client = reqwest::Client::new();
     for (kinds, expected) in [
         (None, vec![1, 2, 3]),
         (Some("narration"), vec![4, 5]),
+        (Some("detail"), vec![6]),
+        (
+            Some("narration,detail,shared_state"),
+            vec![1, 2, 3, 4, 5, 6],
+        ),
         (Some("narration,shared_state"), vec![1, 2, 3, 4, 5]),
     ] {
         let mut cursor: Option<String> = None;
         let mut walked = Vec::new();
-        for page_number in 0..6 {
-            assert!(page_number < 5, "the filtered walk repeated a page");
+        for page_number in 0..7 {
+            assert!(page_number < 6, "the filtered walk repeated a page");
             let mut url = reqwest::Url::parse(&format!(
                 "{}/link/instances/{}/entries",
                 kestrel.link(),
@@ -716,7 +788,7 @@ async fn completed_units_replay_once_and_filtered_pages_walk_the_global_cursor()
             }
         }
         assert_eq!(walked, expected);
-        assert_eq!(cursor, Some(format!("{}:5", session.workspace)));
+        assert_eq!(cursor, Some(format!("{}:6", session.workspace)));
     }
     let stream = client
         .get(format!(
@@ -731,7 +803,7 @@ async fn completed_units_replay_once_and_filtered_pages_walk_the_global_cursor()
         .await
         .unwrap();
     assert!(stream.contains("event: cursor"));
-    assert!(stream.contains(&format!("id: {}:5", session.workspace)));
+    assert!(stream.contains(&format!("id: {}:6", session.workspace)));
     assert!(!stream.contains("reasoning"));
     kestrel.teardown().await;
 }

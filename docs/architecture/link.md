@@ -125,6 +125,8 @@ effects (ADR-0004).
 | `said {message, completion}` | yes | Appends shared-state `Said`, naming its Session. |
 | `thought {text, completion}` | yes | Appends narration `Thought`. |
 | `plan {entries, completion}` | yes | Appends one narration plan replacement. |
+| `tool_call {call_id, title, tool_kind, status, input, result, closing_reason, completion}` | yes | Appends one completed detail entry. |
+| `session_state {tools, message_buffering, thought_buffering}` | no | Replaces the Session’s transient snapshot in serve-role memory; reconnect resends it. |
 | `used {usage}` | yes | Records cumulative context use and cost. |
 | `checkout {repositories}` | yes | Replaces the Workspace's observed git state (decides Unpublished Work). |
 | `answered` | yes | Closes the open Turn, moves the Session to Waiting, records a delivery. |
@@ -194,7 +196,9 @@ with no branch on which harness it drives.
   (`permission.rs`). There is no policy yet.
 - The pure completer buffers messages and thoughts independently by ID, completes chunks without
   IDs immediately, and records each plan replacement. ID changes and Turn boundaries close text
-  units; late updates become operator diagnostics. Tool calls are still dropped.
+  units; late updates become operator diagnostics. Tool starts and updates maintain transient Session
+  state, and terminal updates complete one detail entry. Open tools close interrupted on cancellation,
+  failed on failure, and unresolved with the stop reason when a Turn answers.
 - A Turn in which the agent produced no message, thought, plan or tool call fails the Session.
 - `checkout.rs` clones each repository side by side under `/workspace`, cuts the declared branch
   from the base when the remote lacks it, and leaves an existing checkout as an earlier Session

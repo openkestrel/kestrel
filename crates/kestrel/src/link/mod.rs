@@ -426,6 +426,25 @@ async fn report(
         control_plane.summaries.report(&instance, repositories);
         return Ok(StatusCode::ACCEPTED.into_response());
     }
+    if let work::Report::SessionState {
+        tools,
+        message_buffering,
+        thought_buffering,
+    } = &reported.report
+    {
+        work::report(&control_plane.store, &linked.instance, reported.clone()).await?;
+        let session = reported.session.expect("validated session report");
+        control_plane.summaries.report_session(
+            &instance,
+            &session.to_string(),
+            crate::live_work::SessionState {
+                tools: tools.clone(),
+                message_buffering: *message_buffering,
+                thought_buffering: *thought_buffering,
+            },
+        );
+        return Ok(StatusCode::ACCEPTED.into_response());
+    }
     let connected = matches!(reported.report, work::Report::Connected { .. });
     work::report(&control_plane.store, &linked.instance, reported).await?;
     if connected {

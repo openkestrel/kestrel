@@ -64,6 +64,7 @@ struct Carrying {
     finished: bool,
     working: bool,
     taken: i64,
+    state: Option<Report>,
     /// Handed back before anything is said, because saying the Session finished ends it and with it
     /// this Instance's right to hand anything back for it.
     refreshed: BTreeMap<String, String>,
@@ -130,6 +131,18 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
     }
 
     status
+}
+
+async fn report_state(link: &Link, session: &str, state: &Report) -> Result<(), link::Error> {
+    match tokio::time::timeout(
+        Duration::from_secs(1),
+        link.report(state, Some(session), None),
+    )
+    .await
+    {
+        Ok(Err(error @ (link::Error::Refused(_) | link::Error::Session(_)))) => Err(error),
+        _ => Ok(()),
+    }
 }
 
 async fn saying_it_is_alive(link: Arc<Link>) {
@@ -218,6 +231,26 @@ async fn attend(
     if let Some(checkout) = link.connected().await? {
         supervising.checkout = Some(checkout);
     }
+    if let Some(carrying) = supervising.carrying.as_mut() {
+        // Drain queued snapshots before replaying after a disconnected Turn.
+        while let Some(event) = carrying
+            .conversation
+            .as_mut()
+            .and_then(Conversation::try_next)
+        {
+            match event {
+                harness::ConversationEvent::State(state) => carrying.state = Some(state),
+                harness::ConversationEvent::Report(report) => carrying.saying.push_back(report),
+                harness::ConversationEvent::Worked(worked) => {
+                    carrying.working = false;
+                    worked_on(carrying, worked, diagnostics).await;
+                }
+            }
+        }
+        if let Some(state) = &carrying.state {
+            report_state(link, &carrying.session, state).await?;
+        }
+    }
     report_work(link, supervising, true).await?;
     let mut checking = tokio::time::interval_at(
         tokio::time::Instant::now() + HEARTBEAT_EVERY,
@@ -272,6 +305,10 @@ async fn attend(
             event = next(&mut supervising.carrying) => {
                 if let Some(carrying) = supervising.carrying.as_mut() {
                     match event {
+                        harness::ConversationEvent::State(state) => {
+                            carrying.state = Some(state);
+                            report_state(link, &carrying.session, carrying.state.as_ref().unwrap()).await?;
+                        }
                         harness::ConversationEvent::Report(report) => carrying.saying.push_back(report),
                         harness::ConversationEvent::Worked(worked) => {
                             carrying.working = false;
@@ -282,6 +319,11 @@ async fn attend(
                 }
             }
             _ = checking.tick() => {
+                if let Some(carrying) = &supervising.carrying {
+                    if let Some(state) = &carrying.state {
+                        report_state(link, &carrying.session, state).await?;
+                    }
+                }
                 if supervising.carrying.as_ref().is_some_and(|carrying| carrying.working) {
                     report_work(link, supervising, false).await?;
                 }
@@ -421,6 +463,11 @@ async fn instructed(
                 finished: false,
                 working: true,
                 taken: 0,
+                state: Some(Report::SessionState {
+                    tools: Vec::new(),
+                    message_buffering: false,
+                    thought_buffering: false,
+                }),
                 refreshed: BTreeMap::new(),
                 written: None,
                 saying: VecDeque::new(),
