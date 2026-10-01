@@ -78,7 +78,7 @@ erDiagram
 | `delivery` | Comments to post back | `(session_id, turn)`; `turn = 0` is the Outcome. |
 | `session_dependency` | Session waits on blocker | Drives Unreachable. |
 | `instance_archive` | Instances waiting to be destroyed | Written when a Workspace seals or releases. |
-| `work_role` | The dispatching role's limits | Rewritten at start so the queue view reports the limits actually enforced. |
+| `work_role` | The dispatching role's limits and Environment | Rewritten at start so the queue view reports the limits and Compute driver actually enforced. |
 
 ## Rules the schema carries
 

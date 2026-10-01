@@ -1797,10 +1797,10 @@ impl Kestrel {
             .expect("the occupancy should ask")
     }
 
-    pub async fn record_dispatch(&self, slots: usize) {
+    pub async fn record_dispatch(&self, slots: usize, driver: &str) {
         let mut tx = self.store.begin().await.expect("a transaction");
         tx.queue()
-            .record(slots, &[SERIALIZED.to_owned()])
+            .record(slots, &[SERIALIZED.to_owned()], driver)
             .await
             .expect("the dispatch should record");
         tx.commit().await.expect("the record should commit");

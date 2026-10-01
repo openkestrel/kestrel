@@ -1784,6 +1784,7 @@ fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
                 "live instances",
                 occupancy(instances, "unbounded", "counted"),
             ),
+            ("environment", environment(snapshot)),
         ];
         let width = said
             .iter()
@@ -1797,7 +1798,7 @@ fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
     }
 
     let mut rows = Vec::new();
-    for state in ["queued", "waiting"] {
+    for state in ["queued", "waiting", "unbriefed"] {
         let section = snapshot[state].as_array().with_context(|| {
             Failed::new(
                 Exit::Unavailable,
@@ -1814,6 +1815,8 @@ fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
             record.insert("state".to_owned(), Value::from(state));
             record.entry("position").or_insert(Value::Null);
             record.entry("pending_since").or_insert(Value::Null);
+            record.entry("preparing").or_insert(Value::Null);
+            record.entry("reasons").or_insert(Value::Array(Vec::new()));
             record.insert("why".to_owned(), Value::from(why(&record)));
             record.insert("active_work".to_owned(), slots.clone());
             record.insert("instances".to_owned(), instances.clone());
@@ -1826,6 +1829,12 @@ fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
 
 fn why(row: &serde_json::Map<String, Value>) -> String {
     let mut said: Vec<String> = Vec::new();
+    if let Some(preparing) = row["preparing"].as_str() {
+        said.push(match preparing {
+            "harness_ready" => "harness ready".to_owned(),
+            step => step.to_owned(),
+        });
+    }
     if let Some(since) = row["pending_since"].as_str() {
         said.push(format!("input since {since}"));
     }
@@ -1840,6 +1849,7 @@ fn why(row: &serde_json::Map<String, Value>) -> String {
         said.push(
             match row["state"].as_str() {
                 Some("waiting") => "waiting for a turn",
+                Some("unbriefed") => "getting ready for its first message",
                 _ => "ready",
             }
             .to_owned(),
@@ -1847,6 +1857,13 @@ fn why(row: &serde_json::Map<String, Value>) -> String {
     }
 
     said.join("; ")
+}
+
+/// The Compute driver the work role provisions Instances with, read-only.
+fn environment(snapshot: &Value) -> String {
+    snapshot["work_role"]["driver"]
+        .as_str()
+        .map_or_else(|| "no work role is dispatching".to_owned(), str::to_owned)
 }
 
 fn reason_in_words(reason: &Value) -> String {

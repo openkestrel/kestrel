@@ -4388,7 +4388,11 @@ async fn the_queue_reads_the_recorded_dispatch_which_a_restart_with_new_flags_re
     let first = recorded(&kestrel, 3).await;
     assert_eq!(
         first["work_role"],
-        json!({ "active_work_slots": 3, "serialized_harnesses": ["codex"] }),
+        json!({
+            "active_work_slots": 3,
+            "serialized_harnesses": ["codex"],
+            "driver": "local-exec",
+        }),
     );
 
     let restarted = kestrel
@@ -4399,7 +4403,11 @@ async fn the_queue_reads_the_recorded_dispatch_which_a_restart_with_new_flags_re
     let replaced = recorded(&restarted, 5).await;
     assert_eq!(
         replaced["work_role"],
-        json!({ "active_work_slots": 5, "serialized_harnesses": ["codex"] }),
+        json!({
+            "active_work_slots": 5,
+            "serialized_harnesses": ["codex"],
+            "driver": "local-exec",
+        }),
     );
 
     // The queue is read for acme whatever workspaces it has or does not have.
@@ -4548,6 +4556,12 @@ async fn a_terminal_reads_the_kestrel_queue_with_the_limits_said_first() {
         said.contains("live instances     unbounded; 0 counted"),
         "{said}"
     );
+    assert!(
+        said.lines()
+            .any(|line| line.starts_with("environment")
+                && line.contains("no work role is dispatching")),
+        "the environment is not said first: {said}"
+    );
     // The table's own labels and the enqueued times are truncated on a terminal this wide.
     assert!(
         said.contains("position  name"),
@@ -4671,7 +4685,7 @@ async fn sharing_a_serialized_profile(kestrel: &Kestrel, maximum: Option<usize>,
         .declare_profile("acme", "jack", "Jack")
         .await
         .expect("the profile should declare");
-    kestrel.record_dispatch(slots).await;
+    kestrel.record_dispatch(slots, "local-exec").await;
 }
 
 async fn jacks_workspace(kestrel: &Kestrel) -> WorkspaceId {
@@ -4895,6 +4909,178 @@ fn waiting_row<'a>(queue: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no waiting Session {name}: {queue}"))
 }
 
+fn unbriefed_row<'a>(queue: &'a Value, name: &str) -> &'a Value {
+    queue["unbriefed"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the snapshot's unbriefed Sessions: {queue}"))
+        .iter()
+        .find(|row| row["name"] == name)
+        .unwrap_or_else(|| panic!("no unbriefed Session {name}: {queue}"))
+}
+
+/// A Session with no Brief, its Instance recorded and its preparing under way, with the Workspace
+/// it belongs to so a test can post to it. Its harness is not up yet, so a message posted to it is
+/// held for the Brief its readiness will make of it.
+async fn an_unbriefed_session(
+    kestrel: &Kestrel,
+    organization: &str,
+    project: &str,
+    instance: &str,
+) -> (WorkspaceId, kestrel::domain::Session) {
+    let workspace = a_queued_workspace_in(kestrel, organization, project).await;
+    let queued = kestrel.enqueue_session_with_nothing_posted(workspace).await;
+    let session = kestrel
+        .claim_session()
+        .await
+        .expect("the unbriefed session should claim");
+    assert_eq!(session.id, queued.id);
+    kestrel.executes_on(&session, instance).await;
+
+    (workspace, session)
+}
+
+#[tokio::test]
+async fn an_unbriefed_session_stands_beside_the_waiting_ones_without_a_slot_of_its_own() {
+    let kestrel = Kestrel::boot().await;
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+
+    let waiting = a_waiting_session(
+        &kestrel,
+        a_queued_workspace_in(&kestrel, "acme", "kestrel").await,
+    )
+    .await;
+    let holding = kestrel
+        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    kestrel.executes_on(&holding, "docker/holding").await;
+    let (getting_ready, unbriefed) =
+        an_unbriefed_session(&kestrel, "acme", "kestrel", "docker/getting-ready").await;
+    let also_queued = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(
+        waiting_row(&queue, &waiting.name)["pending_since"],
+        Value::Null
+    );
+    let row = unbriefed_row(&queue, &unbriefed.name);
+    assert_eq!(row["preparing"], "provisioning");
+    assert_eq!(row["pending_since"], Value::Null);
+    assert_eq!(
+        numbered(&queue)
+            .iter()
+            .map(|row| row["name"].clone())
+            .collect::<Vec<_>>(),
+        [json!(also_queued.name)],
+        "an unbriefed Session was numbered in the queue"
+    );
+    assert_eq!(
+        queue["active_work"]["occupied"], 1,
+        "only the Working Session holds an Active-Work Slot"
+    );
+    assert_eq!(
+        queue["instances"]["count"], 3,
+        "the unbriefed Session's Instance counts against the live limit"
+    );
+    assert!(
+        queue["instances"]["counted"]
+            .as_array()
+            .expect("the counted Instances")
+            .contains(&json!("docker/getting-ready"))
+    );
+
+    // A message posted before the Brief shows as pending input, with when it arrived.
+    kestrel
+        .post_while_busy(getting_ready, "alice", "what I want")
+        .await;
+    assert!(kestrel.has_pending_messages(getting_ready).await);
+    let queue = queue_read(&kestrel).await;
+    assert!(unbriefed_row(&queue, &unbriefed.name)["pending_since"].is_string());
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_queued_session_with_no_brief_waits_only_on_its_instance_and_is_never_numbered() {
+    let kestrel = Kestrel::boot().await;
+    let organization = kestrel.declare_limited_organization("acme", 1).await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    let holding = kestrel
+        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    kestrel.executes_on(&holding, "docker/holding").await;
+
+    let queued = kestrel
+        .enqueue_session_with_nothing_posted(
+            a_queued_workspace_in(&kestrel, "acme", "kestrel").await,
+        )
+        .await;
+
+    let queue = queue_read(&kestrel).await;
+    let row = numbered(&queue)
+        .into_iter()
+        .find(|row| row["name"] == queued.name)
+        .expect("the queued Session");
+    assert_eq!(row["position"], Value::Null);
+    assert_eq!(
+        row["reasons"],
+        json!([{ "kind": "live_instance_limit", "limit": 1 }]),
+        "a queued Session with no Brief waits only on its Instance"
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn the_queue_names_the_compute_driver_the_work_role_recorded() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+
+    let (status, queue) = got(&kestrel, &queue_of("acme")).await;
+    assert_eq!(status, StatusCode::OK, "{queue}");
+    assert_eq!(
+        queue["work_role"],
+        Value::Null,
+        "no work role is dispatching"
+    );
+
+    kestrel.record_dispatch(2, "docker").await;
+    let (status, queue) = got(&kestrel, &queue_of("acme")).await;
+    assert_eq!(status, StatusCode::OK, "{queue}");
+    assert_eq!(
+        queue["work_role"],
+        json!({
+            "active_work_slots": 2,
+            "serialized_harnesses": ["codex"],
+            "driver": "docker",
+        }),
+    );
+
+    kestrel.teardown().await;
+}
+
 #[tokio::test]
 async fn a_waiting_session_with_held_input_says_why_its_next_turn_has_not_started() {
     let kestrel = Kestrel::boot().await;
@@ -5039,14 +5225,16 @@ async fn a_session_that_failed_to_dispatch_shows_as_ended_and_not_as_waiting() {
     kestrel.teardown().await;
 }
 
-/// A ready Session, one blocked on the Working holder of a serialized profile, and a Waiting
-/// Session the profile holds back with input beside one only waiting for a turn.
+/// A ready Session, one blocked on the Working holder of a serialized profile, a Waiting Session
+/// the profile holds back with input beside one only waiting for a turn, and an unbriefed one
+/// whose harness is ready, its Brief written and a message held for the Turn after.
 struct EveryKind {
     holding: kestrel::domain::Session,
     ready: kestrel::domain::Session,
     blocked: kestrel::domain::Session,
     prompted: kestrel::domain::Session,
     waiting: kestrel::domain::Session,
+    unbriefed: kestrel::domain::Session,
 }
 
 async fn a_queue_of_every_kind(kestrel: &Kestrel) -> EveryKind {
@@ -5064,6 +5252,15 @@ async fn a_queue_of_every_kind(kestrel: &Kestrel) -> EveryKind {
     kestrel
         .post_while_busy(jacks, "jack", "one more thing")
         .await;
+    let (getting_ready, unbriefed) =
+        an_unbriefed_session(kestrel, "acme", "kestrel", "docker/getting-ready").await;
+    kestrel.report_ready(&unbriefed).await;
+    kestrel
+        .post_while_busy(getting_ready, "alice", "the brief")
+        .await;
+    kestrel
+        .post_while_busy(getting_ready, "alice", "one more thing")
+        .await;
     let ready = kestrel
         .enqueue_session(a_queued_workspace_in(kestrel, "acme", "kestrel").await)
         .await;
@@ -5078,6 +5275,7 @@ async fn a_queue_of_every_kind(kestrel: &Kestrel) -> EveryKind {
         blocked,
         prompted,
         waiting,
+        unbriefed,
     }
 }
 
@@ -5104,7 +5302,8 @@ async fn kestrel_queue_says_each_reason_in_words_with_the_waiting_sessions_after
     assert!(
         line_of(&every.ready.name) < line_of(&every.blocked.name)
             && line_of(&every.blocked.name) < line_of(&every.prompted.name)
-            && line_of(&every.prompted.name) < line_of(&every.waiting.name),
+            && line_of(&every.prompted.name) < line_of(&every.waiting.name)
+            && line_of(&every.waiting.name) < line_of(&every.unbriefed.name),
         "{}",
         shown.said
     );
@@ -5119,11 +5318,13 @@ async fn kestrel_queue_says_each_reason_in_words_with_the_waiting_sessions_after
             ),
         ),
         (&every.waiting, "waiting for a turn".to_owned()),
+        (&every.unbriefed, "harness ready".to_owned()),
     ] {
         let line = lines[line_of(&session.name)];
         assert!(line.contains(&said), "{line} does not say {said}");
     }
     assert!(lines[line_of(&every.prompted.name)].contains("input since "));
+    assert!(lines[line_of(&every.unbriefed.name)].contains("input since "));
 
     kestrel.teardown().await;
 }
@@ -5142,7 +5343,7 @@ async fn kestrel_queue_json_agrees_with_the_operator_read() {
                 "--organization",
                 "acme",
                 "--json",
-                "name,state,position,reasons,pending_since",
+                "name,state,position,reasons,pending_since,preparing",
             ],
         )
         .await,
@@ -5156,6 +5357,7 @@ async fn kestrel_queue_json_agrees_with_the_operator_read() {
             "position": row["position"],
             "reasons": row["reasons"],
             "pending_since": null,
+            "preparing": null,
         }));
     }
     for row in queue["waiting"].as_array().expect("the waiting Sessions") {
@@ -5165,6 +5367,20 @@ async fn kestrel_queue_json_agrees_with_the_operator_read() {
             "position": null,
             "reasons": row["reasons"],
             "pending_since": row["pending_since"],
+            "preparing": null,
+        }));
+    }
+    for row in queue["unbriefed"]
+        .as_array()
+        .expect("the unbriefed Sessions")
+    {
+        read.push(json!({
+            "name": row["name"],
+            "state": "unbriefed",
+            "position": null,
+            "reasons": [],
+            "pending_since": row["pending_since"],
+            "preparing": row["preparing"],
         }));
     }
     assert_eq!(rows, read);

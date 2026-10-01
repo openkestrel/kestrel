@@ -1767,8 +1767,8 @@
     "/operator/organizations/{organization}/queue": {
       "get": {
         "operationId": "showQueue",
-        "summary": "Read the Organization's queue: the limits, their occupancy, the queued Sessions in dispatch order, and the Waiting Sessions.",
-        "description": "Queued Sessions appear in the order they were enqueued. Each one ready for dispatch apart from the shared Active-Work Slot pool is numbered from 1; one that is not carries no number and names every reason that holds it, derived by the rules dispatch applies. Waiting Sessions follow, unnumbered, with any held input and why their next turn has not started. Nothing is estimated. The Active-Work Slot limit is the one the dispatching work role recorded, or no work role is dispatching; the pool belongs to the control plane and every Organization shares it, so other Organizations' occupants are counted and never named. Reading changes nothing.",
+        "summary": "Read the Organization's queue: the limits, their occupancy, the queued Sessions in dispatch order, the Waiting Sessions and the unbriefed ones.",
+        "description": "Queued Sessions appear in the order they were enqueued. Each one ready for dispatch apart from the shared Active-Work Slot pool is numbered from 1; one that is not carries no number and names every reason that holds it, derived by the rules dispatch applies. A queued Session whose Workspace has no Brief waits only on its Instance. Waiting Sessions follow, unnumbered, with any held input and why their next turn has not started. Unbriefed Sessions follow those, beside them: they hold their Instances and no Active-Work Slot, are never numbered, and carry the step they are preparing on and any message held for their Brief. Nothing is estimated. The Active-Work Slot limit and the Compute driver are the ones the dispatching work role recorded, or no work role is dispatching; the pool belongs to the control plane and every Organization shares it, so other Organizations' occupants are counted and never named. Reading changes nothing.",
         "parameters": [
           { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } }
         ],
@@ -2927,9 +2927,13 @@
             "description": "What the dispatching work role recorded when it started, or null while no work role is dispatching.",
             "properties": {
               "active_work_slots": { "type": "integer", "minimum": 1 },
-              "serialized_harnesses": { "type": "array", "items": { "type": "string" } }
+              "serialized_harnesses": { "type": "array", "items": { "type": "string" } },
+              "driver": {
+                "type": "string",
+                "description": "The Compute driver it provisions Instances with: the Environment work is provisioned in, read-only."
+              }
             },
-            "required": ["active_work_slots", "serialized_harnesses"]
+            "required": ["active_work_slots", "serialized_harnesses", "driver"]
           },
           "active_work": { "$ref": "#/components/schemas/ActiveWork" },
           "instances": { "$ref": "#/components/schemas/QueueInstances" },
@@ -2940,9 +2944,13 @@
           "waiting": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/WaitingSession" }
+          },
+          "unbriefed": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/UnbriefedSession" }
           }
         },
-        "required": ["work_role", "active_work", "instances", "queued", "waiting"]
+        "required": ["work_role", "active_work", "instances", "queued", "waiting", "unbriefed"]
       },
       "ActiveWork": {
         "type": "object",
@@ -3031,6 +3039,27 @@
           "enqueued_at": { "type": "string", "format": "date-time" }
         },
         "required": ["name", "workspace", "agent", "pending_since", "reasons", "enqueued_at"]
+      },
+      "UnbriefedSession": {
+        "type": "object",
+        "description": "A Session with no Brief yet. It holds an Instance and no Active-Work Slot, has no place in the numbered queue, and waits for the first message that becomes its Brief. Its preparing step is current Session state.",
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
+          "workspace": { "type": "string", "format": "uuid" },
+          "agent": { "type": "string" },
+          "preparing": {
+            "type": ["string", "null"],
+            "enum": ["provisioning", "cloning", "harness_ready", null],
+            "description": "The step it is preparing on: provisioning from claim until its supervisor connects, cloning while it checks out, and harness_ready once the harness is up."
+          },
+          "pending_since": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "When the oldest message held for its Brief arrived, or null while it holds none."
+          },
+          "enqueued_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["name", "workspace", "agent", "preparing", "pending_since", "enqueued_at"]
       },
       "QueueReason": {
         "type": "object",

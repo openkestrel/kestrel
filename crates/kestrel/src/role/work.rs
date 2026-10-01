@@ -222,7 +222,11 @@ fn warn_if_it_panicked(finished: Result<(), JoinError>) {
 async fn record(store: &Store, dispatch: &Dispatch) -> Result<()> {
     let mut tx = store.begin().await?;
     tx.queue()
-        .record(dispatch.max_active_sessions.get(), &dispatch.serialized)
+        .record(
+            dispatch.max_active_sessions.get(),
+            &dispatch.serialized,
+            dispatch.driver.name(),
+        )
         .await?;
     tx.commit().await?;
 

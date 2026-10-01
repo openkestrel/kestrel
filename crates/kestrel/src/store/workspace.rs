@@ -712,6 +712,25 @@ impl<'a> Workspaces<'a> {
         held(&row)
     }
 
+    /// When the oldest message held for the Workspace arrived, or `None` while it holds none.
+    pub async fn pending_since(&mut self, workspace: WorkspaceId) -> Result<Option<Timestamp>> {
+        let since = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT MIN(received_at) FROM pending_message
+              WHERE workspace_id = ? AND state = 'held'",
+        )
+        .bind(workspace.to_string())
+        .fetch_one(&mut *self.connection)
+        .await
+        .with_context(|| {
+            format!("reading when the oldest message of workspace {workspace} arrived")
+        })?;
+
+        match since {
+            Some(since) => Ok(Some(since.parse()?)),
+            None => Ok(None),
+        }
+    }
+
     pub async fn held_messages(&mut self, workspace: WorkspaceId) -> Result<Vec<HeldMessage>> {
         let rows = sqlx::query(
             "SELECT seq, participant, body, received_at, edited_at
