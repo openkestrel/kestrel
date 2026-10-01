@@ -1,14 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Queue, QueueReason, Session, Workspace, WorkspaceWork } from "./generated";
+import { currentUnit, needsAttention, phaseLabel, phaseOf } from "./session-state";
 import {
 	changedWork,
 	composeRow,
-	currentUnit,
 	learnedPullRequest,
-	needsAttention,
 	order,
-	phaseLabel,
-	phaseOf,
 	pullRequestsUnavailable,
 	reasonText,
 	waitingText,

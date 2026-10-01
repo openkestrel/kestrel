@@ -2,12 +2,10 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { CircleAlert } from "lucide-react";
 import { workQuery } from "#/operator/queries";
+import { currentUnit, needsAttention, phaseLabel } from "#/operator/session-state";
 import {
 	changedWork,
-	currentUnit,
 	learnedPullRequest,
-	needsAttention,
-	phaseLabel,
 	pullRequestsUnavailable,
 	type WorkspaceRow,
 	waitingText,

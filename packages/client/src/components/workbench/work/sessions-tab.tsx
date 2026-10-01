@@ -2,13 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Refusal } from "#/components/refusal";
 import { Skeleton } from "#/components/ui/skeleton";
 import { workspaceSessionsQuery } from "#/operator/queries";
-import {
-	optionSummary,
-	sessionContinuity,
-	sessionOutcome,
-	sessionPhase,
-	usageText,
-} from "#/operator/work-view";
+import { sessionPhase } from "#/operator/session-state";
+import { optionSummary, sessionContinuity, sessionOutcome, usageText } from "#/operator/work-view";
 import { when } from "#/operator/workspace-list";
 
 export function SessionsTab({

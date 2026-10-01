@@ -6,8 +6,7 @@ import type {
 	Workspace,
 	WorkspaceWork,
 } from "./generated";
-
-export type RowPhase = "attention" | "working" | "waiting" | "queued" | "idle";
+import { phaseOf, type RowPhase } from "./session-state";
 
 export type WorkspaceRow = {
 	workspace: Workspace;
@@ -76,29 +75,6 @@ function queueEntry(
 	};
 }
 
-// A row needs a person: its Instance is held for work that exists nowhere else (GLOSSARY), its
-// Session lost its supervisor, or its Session failed.
-export function needsAttention(row: WorkspaceRow): boolean {
-	if (row.workspace.held !== null) return true;
-	if (row.session?.state === "unreachable") return true;
-	return row.session?.state === "ended" && row.session.exit?.status === "failed";
-}
-
-export function phaseOf(row: WorkspaceRow): RowPhase {
-	if (needsAttention(row)) return "attention";
-	switch (row.session?.state) {
-		case "working":
-		case "unbriefed":
-			return "working";
-		case "waiting":
-			return "waiting";
-		case "queued":
-			return "queued";
-		default:
-			return "idle";
-	}
-}
-
 export function order(rows: WorkspaceRow[]): WorkspaceRow[] {
 	return rows.toSorted((one, other) => {
 		const rank = RANK[phaseOf(one)] - RANK[phaseOf(other)];
@@ -117,49 +93,6 @@ export function order(rows: WorkspaceRow[]): WorkspaceRow[] {
 function enqueued(row: WorkspaceRow): number {
 	const at = row.session?.enqueued_at ?? row.workspace.opened_at;
 	return Date.parse(at) || 0;
-}
-
-export function phaseLabel(row: WorkspaceRow): string {
-	if (needsAttention(row)) return "Attention";
-	switch (row.session?.state) {
-		case "working":
-			return "Working";
-		case "unbriefed":
-			return "Preparing";
-		case "waiting":
-			return "Waiting";
-		case "queued":
-			return row.position === null ? "Queued" : `Queued #${row.position}`;
-		case "ended":
-			return "Ended";
-		case "unreachable":
-			return "Unreachable";
-		default:
-			return "Open";
-	}
-}
-
-// The line a person scans to see what is happening now: a running tool, the preparing step of an
-// unbriefed Session, or what it is writing.
-export function currentUnit(session: Session | undefined): string | undefined {
-	if (!session) return undefined;
-	const running =
-		session.tools.find((tool) => tool.status !== "completed" && tool.status !== "failed") ??
-		session.tools[0];
-	if (running) return running.title;
-	switch (session.preparing) {
-		case "provisioning":
-			return "provisioning";
-		case "cloning":
-			return "cloning";
-		case "harness_ready":
-			return "harness ready";
-		default:
-			break;
-	}
-	if (session.thought_buffering) return "thinking";
-	if (session.message_buffering) return "writing";
-	return undefined;
 }
 
 export function reasonText(reason: QueueReason): string {

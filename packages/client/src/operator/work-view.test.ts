@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "./generated";
+import { sessionPhase } from "./session-state";
 import { delivered, type Delivered } from "./transcript";
 import { transport } from "./transport";
 import { readFile } from "./work-queries";
@@ -17,7 +18,6 @@ import {
 	scopeLabel,
 	sessionContinuity,
 	sessionOutcome,
-	sessionPhase,
 	stashedText,
 	untrackedText,
 	usageText,
