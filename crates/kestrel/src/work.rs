@@ -5,7 +5,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::domain::{Exit, Session, SessionId, Turn, Usage, WorkspaceId};
+use crate::domain::{Exit, Session, SessionId, Turn, Usage, Workspace, WorkspaceId};
 use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
 use crate::link;
@@ -33,6 +33,9 @@ pub enum Report {
     Stderr {
         lines: Vec<String>,
     },
+    /// The harness is up and its conversation open, with no Turn started: an unbriefed Session is
+    /// ready for its first message (ADR-0038).
+    Ready,
     Started,
     Model {
         model: String,
@@ -83,6 +86,7 @@ impl Report {
             | Report::Heartbeat
             | Report::Stderr { .. }
             | Report::Work { .. }
+            | Report::Ready
             | Report::SessionState { .. } => false,
             Report::Started
             | Report::Model { .. }
@@ -211,7 +215,7 @@ pub async fn has_had_session(store: &Store, workspace: WorkspaceId) -> Result<bo
 /// second claimant asking at the same moment is handed something else, or nothing.
 pub async fn claim(store: &Store, serialized: &[String]) -> Result<Option<Session>> {
     let mut tx = store.begin().await?;
-    let claimed = claiming(&mut tx, serialized, None).await?;
+    let claimed = claiming(&mut tx, serialized, None, false).await?;
     tx.commit().await?;
 
     Ok(claimed)
@@ -230,26 +234,42 @@ pub async fn occupy(
     serialized: &[String],
 ) -> Result<Option<Occupied>> {
     let mut tx = store.begin().await?;
-    if tx.workspaces().occupying_slots().await? >= slots {
-        return Ok(None);
-    }
-
+    let full = tx.workspaces().occupying_slots().await? >= slots;
     let held = tx.workspaces().oldest_held_input(serialized).await?;
-    let occupied =
-        match claiming(&mut tx, serialized, held.as_ref().map(|(_, since)| *since)).await? {
-            Some(claimed) => Occupied::Claimed(claimed),
-            None => {
-                let Some((session, _)) = held else {
-                    tx.commit().await?;
-                    return Ok(None);
-                };
-                prompt_pending(&mut tx, &session).await?;
-                Occupied::Resumed(tx.workspaces().session(session.id).await?)
+    let occupied = match claiming(
+        &mut tx,
+        serialized,
+        held.as_ref().map(|(_, since)| *since),
+        full,
+    )
+    .await?
+    {
+        Some(claimed) => Occupied::Claimed(claimed),
+        None => {
+            // A full pool still lets an unbriefed Session provision, but leaves held input for a
+            // slot that frees.
+            if full {
+                tx.commit().await?;
+                return Ok(None);
             }
-        };
+            let Some((session, _)) = held else {
+                tx.commit().await?;
+                return Ok(None);
+            };
+            prompt_pending(&mut tx, &session).await?;
+            Occupied::Resumed(tx.workspaces().session(session.id).await?)
+        }
+    };
     tx.commit().await?;
 
     Ok(Some(occupied))
+}
+
+/// A queued Session whose Workspace holds nothing to start it with: dispatch claims it without an
+/// Active-Work Slot and without the serialized-Profile check, because it has no Turn to run yet
+/// (ADR-0038). The queue reads the same rule.
+pub(crate) async fn awaiting_a_brief(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<bool> {
+    Ok(crate::link::instruction(tx, workspace).await?.is_none())
 }
 
 /// A freed slot goes to whichever asked first, so a queued Session enqueued before the oldest held
@@ -262,18 +282,28 @@ async fn claiming(
     tx: &mut Tx<'_>,
     serialized: &[String],
     input_since: Option<Timestamp>,
+    full: bool,
 ) -> Result<Option<Session>> {
-    let claimable = tx.workspaces().claimable_sessions(serialized).await?;
+    let claimable = tx.workspaces().claimable_sessions().await?;
     for queued in claimable {
-        if input_since.is_some_and(|since| !goes_before_input(&queued, since)) {
-            continue;
-        }
         let workspace = tx.workspaces().get(queued.workspace).await?;
+        let unbriefed = awaiting_a_brief(tx, &workspace).await?;
+        if !unbriefed {
+            if full {
+                continue;
+            }
+            if input_since.is_some_and(|since| !goes_before_input(&queued, since)) {
+                continue;
+            }
+            if tx.workspaces().holds_profile(&queued, serialized).await? {
+                continue;
+            }
+        }
         match crate::instance::admission(tx, &workspace).await? {
             Admission::Available => {
                 if let Some(session) = tx
                     .workspaces()
-                    .claim_session(&queued, Timestamp::now() + LEASE)
+                    .claim_session(&queued, Timestamp::now() + LEASE, unbriefed)
                     .await?
                 {
                     return Ok(Some(session));
@@ -401,6 +431,11 @@ async fn reported(
         | Report::Stderr { .. }
         | Report::Work { .. } => {
             unreachable!("a report about the instance is taken before one about its session")
+        }
+        Report::Ready => {
+            if tx.workspaces().record_ready(session).await? {
+                info!(session = %session.id, "a supervisor reported its harness ready");
+            }
         }
         Report::Started => {
             if tx.workspaces().record_started(session).await? {

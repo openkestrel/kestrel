@@ -339,6 +339,7 @@ async fn the_link_takes_every_report_the_published_openapi_document_describes() 
         "heartbeat": {"kind": "heartbeat"},
         "work": {"kind": "work", "repositories": []},
         "stderr": {"kind": "stderr", "lines": ["level=INFO message=init"]},
+        "ready": {"kind": "ready"},
         "started": {"kind": "started", "seq": 1},
         "model": {
             "kind": "model",

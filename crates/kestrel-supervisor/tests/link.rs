@@ -185,6 +185,7 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
                 thought_buffering: false,
             },
         ),
+        (Some("a-session"), None, Report::Ready),
         (
             Some("a-session"),
             Some(1),
@@ -510,6 +511,11 @@ fn the_client_recognises_every_instruction_the_published_document_declares() {
                 "kind": kind,
                 "checkout": {"repositories": [], "base": "main", "branch": "main"},
                 "prompt": "do the work",
+                "harness": {"command": "opencode acp"},
+            }),
+            "unbriefed" => serde_json::json!({
+                "kind": kind,
+                "checkout": {"repositories": [], "base": "main", "branch": "main"},
                 "harness": {"command": "opencode acp"},
             }),
             "prompt" => serde_json::json!({"kind": kind, "prompt": "and the tests"}),

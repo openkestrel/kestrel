@@ -46,8 +46,20 @@ impl Fixture {
         )
         .await
         .unwrap();
-        enqueue(&store, workspace.id, None, None).await.unwrap();
-        let session = claim(&store, &[]).await.unwrap().unwrap();
+        let queued = enqueue(&store, workspace.id, None, None).await.unwrap();
+        // This fixture drives turns, so its Session is claimed as one with work to do rather than
+        // as an unbriefed one waiting for its first message.
+        let session = {
+            let mut tx = store.begin().await.unwrap();
+            let session = tx
+                .workspaces()
+                .claim_session(&queued, Timestamp::now() + LEASE, false)
+                .await
+                .unwrap()
+                .expect("the fixture's session should claim");
+            tx.commit().await.unwrap();
+            session
+        };
         executes_on(&store, &session, INSTANCE).await.unwrap();
 
         Self {
@@ -182,7 +194,10 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         SessionState::Waiting
     );
 
-    let second_queued = enqueue(&store, second.id, None, None).await.unwrap();
+    let second_queued = workspace::post(&store, second.id, "operator", "start please")
+        .await
+        .unwrap()
+        .expect("a fresh workspace's first message starts a session");
     let second_session = match occupy(&store, 1, &["codex".to_owned()]).await.unwrap() {
         Some(Occupied::Claimed(claimed)) => claimed,
         _ => panic!("the waiting session should leave its slot and profile available"),

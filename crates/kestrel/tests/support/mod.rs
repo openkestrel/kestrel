@@ -1722,6 +1722,12 @@ impl Kestrel {
         .expect("the checkout should be reported");
     }
 
+    pub async fn report_ready(&self, session: &Session) {
+        work::report_on(&self.store, session, None, work::Report::Ready)
+            .await
+            .expect("the ready report should be taken");
+    }
+
     pub async fn instances_to_archive(&self) -> Vec<String> {
         instance::to_archive(&self.store)
             .await

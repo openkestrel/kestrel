@@ -339,25 +339,35 @@ pub(crate) enum PostDestination<'a> {
 }
 
 impl UnfinishedSession {
-    /// A waiting Session is not in flight: sealing (ADR-0024) or archiving its Instance ends it.
+    /// A waiting or unbriefed Session is not in flight: sealing (ADR-0024) or archiving its
+    /// Instance ends it.
     pub fn in_flight(&self) -> Option<SessionId> {
         self.session.as_ref().and_then(|session| {
-            (!matches!(session.state, SessionState::Ended | SessionState::Waiting)
-                || self.held_input)
+            (!matches!(
+                session.state,
+                SessionState::Ended | SessionState::Waiting | SessionState::Unbriefed
+            ) || self.held_input)
                 .then_some(session.id)
         })
     }
 
-    pub fn waiting(&self) -> Option<Session> {
+    /// A Session between turns, or one waiting for its Brief: its Instance can be taken without
+    /// anything failing.
+    pub fn yielding(&self) -> Option<Session> {
         self.session
             .as_ref()
-            .filter(|session| session.state == SessionState::Waiting)
+            .filter(|session| {
+                matches!(
+                    session.state,
+                    SessionState::Waiting | SessionState::Unbriefed
+                )
+            })
             .cloned()
     }
 
     pub async fn end_waiting(&self, tx: &mut Tx<'_>) -> Result<()> {
-        if let Some(waiting) = self.waiting() {
-            work::ending(tx, &waiting, Exit::Succeeded).await?;
+        if let Some(yielding) = self.yielding() {
+            work::ending(tx, &yielding, Exit::Succeeded).await?;
         }
 
         Ok(())
@@ -385,6 +395,14 @@ impl UnfinishedSession {
 
 pub async fn show(store: &Store, id: WorkspaceId) -> Result<Workspace> {
     store.begin().await?.workspaces().get(id).await
+}
+
+/// The one Session a Workspace may have that has not let go of it, when it has one.
+pub async fn unfinished(store: &Store, id: WorkspaceId) -> Result<Option<Session>> {
+    let mut tx = store.begin().await?;
+    let workspace = tx.workspaces().get(id).await?;
+
+    Ok(unfinished_session(&mut tx, &workspace).await?.session)
 }
 
 pub async fn workspaces(store: &Store, organization: &str) -> Result<Vec<Workspace>> {
@@ -613,6 +631,7 @@ mod tests {
                 model: None,
             },
             state,
+            preparing: None,
             exit: None,
             outcome_message: None,
             instance: None,
@@ -636,7 +655,7 @@ mod tests {
 
     #[test]
     fn unfinished_session_rules_cover_every_phase_with_and_without_held_input() {
-        use SessionState::{Ended, Queued, Unreachable, Waiting, Working};
+        use SessionState::{Ended, Queued, Unbriefed, Unreachable, Waiting, Working};
         let brief: fn(&PostDestination) -> bool = |post| matches!(post, PostDestination::Brief);
         let held: fn(&PostDestination) -> bool = |post| matches!(post, PostDestination::Held);
         let wake: fn(&PostDestination) -> bool = |post| matches!(post, PostDestination::Wake(_));
@@ -648,6 +667,8 @@ mod tests {
             Case { state: Working,     held_input: true,  in_flight: true,  post: held },
             Case { state: Waiting,     held_input: false, in_flight: false, post: wake },
             Case { state: Waiting,     held_input: true,  in_flight: true,  post: wake },
+            Case { state: Unbriefed,   held_input: false, in_flight: false, post: held },
+            Case { state: Unbriefed,   held_input: true,  in_flight: true,  post: held },
             Case { state: Ended,       held_input: false, in_flight: false, post: held },
             Case { state: Ended,       held_input: true,  in_flight: true,  post: held },
             Case { state: Unreachable, held_input: false, in_flight: true,  post: held },
@@ -665,8 +686,8 @@ mod tests {
             assert!((case.post)(&unfinished.post_destination()), "{label}");
             assert_eq!(unfinished.refuses_enqueue(), Some(session.id), "{label}");
             assert_eq!(
-                unfinished.waiting().is_some(),
-                case.state == Waiting,
+                unfinished.yielding().is_some(),
+                matches!(case.state, Waiting | Unbriefed),
                 "{label}"
             );
         }

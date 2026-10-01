@@ -98,6 +98,11 @@ Each names the Session it is for.
 - `start {checkout, prompt, harness}`: take up the Session. `harness` is the command, model and ACP
   auth method to spawn, since each Session may choose its Agent. A `start` for the Session already
   carried is ignored.
+- `unbriefed {checkout, harness}`: take up the Session with no Brief. It checks out, opens the ACP
+  conversation and prompts nothing, reporting `ready`; the Session waits unbriefed and its first
+  message later arrives as an ordinary `prompt` ([ADR-0038](../adr/0038-a-session-may-start-before-its-brief.md)).
+  A checkout or spawn that fails is reported as the Session finished failed, exactly as a `start`'s
+  would be.
 - `prompt {prompt}`: the next Turn in the same ACP conversation. Sending it moves the Session from
   Waiting to Working in the same transaction.
 - `stop`: sent whenever a Session ends, however it ends, so the next Session's `start` always follows
@@ -117,9 +122,10 @@ effects (ADR-0004).
 
 | Report | Numbered | Effect |
 | --- | --- | --- |
-| `connected {version}` | no | Records the supervisor version on the Instance and its live Sessions. |
+| `connected {version}` | no | Records the supervisor version on the Instance and its live Sessions; an unbriefed one stops provisioning. |
 | `heartbeat` | no | Records the supervisor reached the link; extends the live Sessions' leases to now + 2 min, never one already passed. |
 | `stderr {lines}` | no | Logged to the operator, never the Transcript. |
+| `ready` | no | An unbriefed Session's harness is up and its conversation open: records `harness_ready`. |
 | `started` | yes | Appends `SessionStarted`. |
 | `model {model}` | yes | Records the model the harness is actually on. |
 | `said {message, completion}` | yes | Appends shared-state `Said`, naming its Session. |

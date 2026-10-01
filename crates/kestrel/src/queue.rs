@@ -165,8 +165,13 @@ async fn queued(
         if let Some(blockers) = blocked.remove(&session.id) {
             reasons.push(Reason::Dependencies(blockers));
         }
-        reasons.extend(held.remove(&session.id).unwrap_or_default());
         let workspace = tx.workspaces().get(session.workspace).await?;
+        // Dispatch claims a Session with nothing to start it with without a slot and without the
+        // serialized Profile, so neither can be why it is still queued.
+        let awaiting_a_brief = work::awaiting_a_brief(tx, &workspace).await?;
+        if !awaiting_a_brief {
+            reasons.extend(held.remove(&session.id).unwrap_or_default());
+        }
         match instance::admission(tx, &workspace).await? {
             Admission::Available => {}
             Admission::Archiving(instance) => reasons.push(Reason::InstanceArchiving(instance)),
@@ -181,7 +186,7 @@ async fn queued(
             Admission::AtLimit(limit) => reasons.push(Reason::LiveInstanceLimit(limit.get())),
         }
 
-        let position = reasons.is_empty().then(|| {
+        let position = (!awaiting_a_brief && reasons.is_empty()).then(|| {
             ready += 1;
             ready
         });

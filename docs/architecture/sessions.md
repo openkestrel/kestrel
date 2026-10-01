@@ -12,11 +12,14 @@ holds an Instance and seals. Code: `work.rs`, `workspace.rs`, `instance.rs`, `ro
 stateDiagram-v2
     [*] --> Queued: enqueued by a firing, a post, or an operator
     Queued --> Working: claimed (slot free, Instance admitted)
+    Queued --> Unbriefed: claimed with no Brief and nothing posted (no slot)
     Queued --> Ended: stopped, or failed before it started
     Queued --> Unreachable: a blocker failed
+    Unbriefed --> Working: its first message becomes the Brief
     Working --> Waiting: supervisor reports answered
     Waiting --> Working: held input prompts the next Turn
     Working --> Ended: finished, stopped (failed), or lease lapsed (failed)
+    Unbriefed --> Ended: stopped, sealed, or replaced (succeeded), or lease lapsed (failed)
     Waiting --> Ended: stopped, sealed, or replaced (succeeded), or lease lapsed (failed)
     Ended --> [*]
     Unreachable --> [*]
@@ -24,6 +27,12 @@ stateDiagram-v2
 
 - **Only Working occupies an active-work slot** (`occupying_slots` counts `state = 'working'`).
   Waiting holds its Instance and ACP conversation but no slot ([ADR-0024](../adr/0024-a-run-spans-prompt-turns.md)).
+  An **Unbriefed** Session — its harness up and its conversation open, before its first message —
+  holds its Instance and no slot either, and counts against the live Instance limit like a Waiting
+  one ([ADR-0038](../adr/0038-a-session-may-start-before-its-brief.md)).
+- **An Unbriefed Session carries a preparing step** (`session.preparing`): `provisioning` from claim
+  until its supervisor connects, `cloning` while it checks out, and `harness_ready` once the
+  supervisor reports the harness up. It is current state, never a Transcript entry.
 - **A Session ends once.** `work::ending` is the single path; whoever reaches it first (the
   supervisor's `finished`, a stop, the lease sweep, the claimant failing) sets the exit, and later
   callers get the exit that stands. Ending appends `SessionEnded`, invalidates the link
@@ -45,9 +54,9 @@ stateDiagram-v2
 
 ## The unfinished Session
 
-A Workspace has at most one **Unfinished Session**: queued, working or waiting. Its successor never
-shares the checkout with it: every ending sends the Session's `stop` down its Instance's stream, and
-the successor's `start` follows it ([Link](link.md#instructions)).
+A Workspace has at most one **Unfinished Session**: queued, working, waiting or unbriefed. Its
+successor never shares the checkout with it: every ending sends the Session's `stop` down its
+Instance's stream, and the successor's `start` follows it ([Link](link.md#instructions)).
 
 What arrives while one exists is held, never interleaved:
 
@@ -68,8 +77,12 @@ Session wins over pending messages. Several held messages reach the agent as one
    that supervisor so the next Session starts another.
 2. Stop the supervisor of, and destroy, each Instance queued in `instance_archive` (`archive`).
 3. `work::occupy`: if a slot is free, claim the oldest claimable queued Session, or, if held input
-   for a Waiting Session is older, prompt that instead. Claiming sets Working and starts a 2-minute
-   lease in one guarded update, so a Session is dispatched at most once.
+   for a Waiting Session is older, prompt that instead. A queued Session whose Workspace has no
+   Brief and nothing posted is claimed whether or not a slot is free, and without the serialized
+   Profile check: it has no Turn to run, so it provisions as Unbriefed while the person writes.
+   `work::awaiting_a_brief` is the one rule the dispatcher and the queue share. Claiming sets
+   Working or Unbriefed and starts a 2-minute lease in one guarded update, so a Session is
+   dispatched at most once.
 4. For a claim, `execute` in its own task:
    - Fail early if nothing can reach a model (no Provider Credential, Subscription Profile, or
      configured ACP login), or the work role has no command for the Agent's harness.

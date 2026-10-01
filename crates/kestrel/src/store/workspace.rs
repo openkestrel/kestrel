@@ -4,9 +4,9 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
 use crate::domain::{
-    Agent, Checkout, Connected, Cost, Exit, Organization, OrganizationId, Project, Session,
-    SessionId, SessionState, StartedBy, SubscriptionProfile, Turn, Usage, Workspace, WorkspaceId,
-    WorkspaceState,
+    Agent, Checkout, Connected, Cost, Exit, Organization, OrganizationId, Preparing, Project,
+    Session, SessionId, SessionState, StartedBy, SubscriptionProfile, Turn, Usage, Workspace,
+    WorkspaceId, WorkspaceState,
 };
 use crate::fanout::Touched;
 use crate::instance::Observed;
@@ -22,7 +22,7 @@ macro_rules! sessions_where {
         concat!(
             "SELECT id, name, organization_id, workspace_id, agent_id,
                     (SELECT name FROM agent WHERE agent.id = session.agent_id) AS agent_name,
-                    harness, state, exit, exit_because, outcome_message, instance,
+                    harness, state, preparing, exit, exit_because, outcome_message, instance,
                     supervisor, enqueued_at, started_at, ended_at, lease_expires_at, connected_at,
                     supervisor_version, model, worked_model, context_used, context_size, cost_amount,
                     cost_currency",
@@ -594,6 +594,7 @@ impl<'a> Workspaces<'a> {
                     ..agent.clone()
                 },
                 state: SessionState::Queued,
+                preparing: None,
                 exit: None,
                 outcome_message: None,
                 instance: None,
@@ -851,7 +852,7 @@ impl<'a> Workspaces<'a> {
     /// `false` when the Session was no longer queued, so a claimant that got there first stands.
     pub async fn mark_unreachable(&mut self, session: &Session) -> Result<bool> {
         let marked = sqlx::query(
-            "UPDATE session SET state = ?, ended_at = ?
+            "UPDATE session SET state = ?, preparing = NULL, ended_at = ?
                  WHERE id = ? AND state = ?",
         )
         .bind(SessionState::Unreachable.as_str())
@@ -870,7 +871,7 @@ impl<'a> Workspaces<'a> {
         Ok(marked.rows_affected() > 0)
     }
 
-    pub async fn claimable_sessions(&mut self, serialized: &[String]) -> Result<Vec<Session>> {
+    pub async fn claimable_sessions(&mut self) -> Result<Vec<Session>> {
         let claimable = format!(
             "SELECT s.id
              FROM session AS s
@@ -882,16 +883,12 @@ impl<'a> Workspaces<'a> {
                    WHERE d.session_id = s.id
                      AND {UNSATISFIED_BLOCKER}
                )
-               AND {}
-             ORDER BY s.enqueued_at, s.id",
-            profile_free!()
+             ORDER BY s.enqueued_at, s.id"
         );
         let ids = sqlx::query(sqlx::AssertSqlSafe(claimable))
             .bind(SessionState::Queued.as_str())
             .bind(SessionState::Ended.as_str())
             .bind(Exit::Succeeded.status())
-            .bind(serde_json::to_string(serialized)?)
-            .bind(SessionState::Working.as_str())
             .fetch_all(&mut *self.connection)
             .await
             .context("reading claimable sessions")?;
@@ -903,18 +900,46 @@ impl<'a> Workspaces<'a> {
         Ok(sessions)
     }
 
+    /// Whether the Session's harness would wait on a serialized Profile another Session on it
+    /// already works through (ADR-0025).
+    pub(crate) async fn holds_profile(
+        &mut self,
+        session: &Session,
+        serialized: &[String],
+    ) -> Result<bool> {
+        let holds = format!(
+            "SELECT EXISTS (SELECT 1 FROM session AS s WHERE s.id = ? AND EXISTS (SELECT 1 FROM \
+             {}))",
+            profile_held!()
+        );
+        sqlx::query_scalar(sqlx::AssertSqlSafe(holds))
+            .bind(session.id.to_string())
+            .bind(serde_json::to_string(serialized)?)
+            .bind(SessionState::Working.as_str())
+            .fetch_one(&mut *self.connection)
+            .await
+            .with_context(|| format!("reading what holds the profile of session {}", session.id))
+    }
+
+    /// An unbriefed Session is claimed without a slot: its state and first preparing step are set
+    /// in the same write that takes it out of the queue (ADR-0038).
     pub async fn claim_session(
         &mut self,
         session: &Session,
         lease_until: Timestamp,
+        unbriefed: bool,
     ) -> Result<Option<Session>> {
         let claimed = sqlx::query(
             "UPDATE session
-             SET state = ?, claimed_at = ?, lease_expires_at = ?
+             SET state = ?, preparing = ?, claimed_at = ?, lease_expires_at = ?
              WHERE id = ? AND state = ?
              RETURNING id",
         )
-        .bind(SessionState::Working.as_str())
+        .bind(match unbriefed {
+            true => SessionState::Unbriefed.as_str(),
+            false => SessionState::Working.as_str(),
+        })
+        .bind(unbriefed.then_some(Preparing::Provisioning.as_str()))
         .bind(Timestamp::now().to_string())
         .bind(due(lease_until))
         .bind(session.id.to_string())
@@ -1315,12 +1340,42 @@ impl<'a> Workspaces<'a> {
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("recording the supervisor of {instance} connected"))?;
+        // An unbriefed Session stops provisioning once its supervisor is on the link. Its
+        // checkout is next, so a reconnect never moves a step that already went further.
+        sqlx::query(
+            "UPDATE session SET preparing = ? WHERE instance = ? AND state = ? AND preparing = ?",
+        )
+        .bind(Preparing::Cloning.as_str())
+        .bind(instance)
+        .bind(SessionState::Unbriefed.as_str())
+        .bind(Preparing::Provisioning.as_str())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("recording the supervisor of {instance} connected"))?;
 
         for session in sessions {
             self.touched.session(&session);
         }
 
         Ok(())
+    }
+
+    /// The supervisor reports its harness up and its conversation open, with no turn started.
+    /// `false` when the Session was no longer unbriefed, so a late report changes nothing.
+    pub async fn record_ready(&mut self, session: &Session) -> Result<bool> {
+        let ready = sqlx::query("UPDATE session SET preparing = ? WHERE id = ? AND state = ?")
+            .bind(Preparing::HarnessReady.as_str())
+            .bind(session.id.to_string())
+            .bind(SessionState::Unbriefed.as_str())
+            .execute(&mut *self.connection)
+            .await
+            .with_context(|| format!("recording the session {} ready", session.id))?;
+
+        if ready.rows_affected() > 0 {
+            self.touched.session(session);
+        }
+
+        Ok(ready.rows_affected() > 0)
     }
 
     /// What the supervisor last said of itself goes with it, so a Session begun over a link that
@@ -1495,7 +1550,8 @@ impl<'a> Workspaces<'a> {
     ) -> Result<bool> {
         let ended = sqlx::query(
             "UPDATE session
-             SET state = ?, ended_at = ?, exit = ?, exit_because = ?, outcome_message = ?, lease_expires_at = NULL
+             SET state = ?, preparing = NULL, ended_at = ?, exit = ?, exit_because = ?,
+                 outcome_message = ?, lease_expires_at = NULL
              WHERE id = ? AND state != ?",
         )
         .bind(SessionState::Ended.as_str())
@@ -1841,6 +1897,10 @@ fn session(row: &SqliteRow) -> Result<Session> {
             model: row.get("model"),
         },
         state: row.get::<String, _>("state").parse()?,
+        preparing: row
+            .get::<Option<String>, _>("preparing")
+            .map(|preparing| preparing.parse())
+            .transpose()?,
         exit: exit
             .map(|status| Exit::read(&status, row.get("exit_because")))
             .transpose()?,

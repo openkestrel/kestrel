@@ -440,6 +440,17 @@ struct WorkspaceRecord {
     started_by: Option<String>,
     continued_by: Vec<String>,
     pull_requests: Vec<PullRequestAvailabilityRecord>,
+    /// The Session the Workspace has not let go of, while it has one: an unbriefed one shows the
+    /// step it is preparing on here.
+    unfinished_session: Option<UnfinishedSessionRecord>,
+}
+
+#[derive(Serialize)]
+struct UnfinishedSessionRecord {
+    id: String,
+    name: String,
+    state: String,
+    preparing: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -496,6 +507,8 @@ struct SessionRecord {
     name: String,
     workspace: String,
     state: String,
+    /// The step an unbriefed Session is preparing on; null in every other state.
+    preparing: Option<String>,
     exit: Option<domain::Exit>,
     outcome_message: Option<String>,
     instance: Option<String>,
@@ -607,6 +620,16 @@ impl WorkspaceRecord {
             .into_iter()
             .map(PullRequestAvailabilityRecord::from)
             .collect();
+        let unfinished_session = workspace::unfinished(store, workspace.id)
+            .await?
+            .map(|session| UnfinishedSessionRecord {
+                id: session.id.to_string(),
+                name: session.name,
+                state: session.state.as_str().to_owned(),
+                preparing: session
+                    .preparing
+                    .map(|preparing| preparing.as_str().to_owned()),
+            });
 
         Ok(Self {
             id: workspace.id.to_string(),
@@ -630,6 +653,7 @@ impl WorkspaceRecord {
             }),
             continued_by,
             pull_requests,
+            unfinished_session,
         })
     }
 }
@@ -641,6 +665,9 @@ impl SessionRecord {
             name: session.name,
             workspace: session.workspace.to_string(),
             state: session.state.as_str().to_owned(),
+            preparing: session
+                .preparing
+                .map(|preparing| preparing.as_str().to_owned()),
             exit: session.exit,
             outcome_message: session.outcome_message,
             instance: session.instance,

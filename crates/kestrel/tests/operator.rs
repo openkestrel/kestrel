@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::time::Duration;
 
-use kestrel::domain::{EventRecordId, Exit, SessionId, WorkspaceId};
+use kestrel::domain::{EventRecordId, Exit, Preparing, SessionId, SessionState, WorkspaceId};
 use kestrel::instance::{Git, Observed};
 use kestrel::link;
 use kestrel::log::{Entry, Message};
@@ -2496,6 +2496,137 @@ async fn a_later_session_enqueue_refuses_a_workspace_that_never_had_a_session() 
     );
     assert_eq!(refused.status.code(), Some(4));
     assert!(kestrel.sessions(workspace.id).await.is_empty());
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_unbriefed_session_shows_its_state_and_preparing_step_everywhere() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+
+    let (status, opened) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({ "project": "kestrel", "agent": "builder" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let workspace = workspace_of(&opened["workspace"]).to_string();
+    let session = opened["session"]["id"]
+        .as_str()
+        .expect("a session id")
+        .to_owned();
+
+    let queued = recorded(
+        &client(
+            &kestrel,
+            &[
+                "session",
+                "show",
+                &session,
+                "--organization",
+                "acme",
+                "--json",
+                "state,preparing",
+            ],
+        )
+        .await,
+    );
+    assert_eq!(queued[0], json!({ "state": "queued", "preparing": null }));
+
+    let claimed = kestrel
+        .claim_session()
+        .await
+        .expect("the queued session should claim");
+    assert_eq!(claimed.state, SessionState::Unbriefed);
+    assert_eq!(claimed.preparing, Some(Preparing::Provisioning));
+
+    let provisioning = recorded(
+        &client(
+            &kestrel,
+            &[
+                "session",
+                "show",
+                &session,
+                "--organization",
+                "acme",
+                "--json",
+                "state,preparing",
+            ],
+        )
+        .await,
+    );
+    assert_eq!(
+        provisioning[0],
+        json!({ "state": "unbriefed", "preparing": "provisioning" })
+    );
+
+    kestrel.report_ready(&claimed).await;
+    let ready = recorded(
+        &client(
+            &kestrel,
+            &[
+                "session",
+                "show",
+                &session,
+                "--organization",
+                "acme",
+                "--json",
+                "state,preparing",
+            ],
+        )
+        .await,
+    );
+    assert_eq!(
+        ready[0],
+        json!({ "state": "unbriefed", "preparing": "harness_ready" })
+    );
+
+    let listed = recorded(
+        &client(
+            &kestrel,
+            &[
+                "session",
+                "list",
+                "--workspace",
+                &workspace,
+                "--json",
+                "state,preparing",
+            ],
+        )
+        .await,
+    );
+    assert_eq!(
+        listed,
+        vec![json!({ "state": "unbriefed", "preparing": "harness_ready" })]
+    );
+
+    let shown = recorded(
+        &client(
+            &kestrel,
+            &[
+                "workspace",
+                "show",
+                &workspace,
+                "--json",
+                "unfinished_session",
+            ],
+        )
+        .await,
+    );
+    assert_eq!(shown[0]["unfinished_session"]["state"], "unbriefed");
+    assert_eq!(shown[0]["unfinished_session"]["preparing"], "harness_ready");
+
+    let (status, read) = got(&kestrel, &session_at("acme", &session)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(read["state"], "unbriefed");
+    assert_eq!(read["preparing"], "harness_ready");
+    let (status, read) = got(&kestrel, &workspace_at("acme", &workspace)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(read["unfinished_session"]["state"], "unbriefed");
+    assert_eq!(read["unfinished_session"]["preparing"], "harness_ready");
 
     kestrel.teardown().await;
 }

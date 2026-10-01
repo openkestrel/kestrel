@@ -29,6 +29,12 @@ pub enum Instruction {
         prompt: String,
         harness: Harness,
     },
+    /// Opens the conversation and prompts nothing: the Session waits unbriefed for its first
+    /// message (ADR-0038).
+    Unbriefed {
+        checkout: Checkout,
+        harness: Harness,
+    },
     /// The next turn, in the conversation the Session's first one opened.
     Prompt {
         prompt: String,
@@ -44,6 +50,7 @@ impl Instruction {
     pub const fn kind(&self) -> &'static str {
         match self {
             Instruction::Start { .. } => "start",
+            Instruction::Unbriefed { .. } => "unbriefed",
             Instruction::Prompt { .. } => "prompt",
             Instruction::Stop => "stop",
             Instruction::Unrecognized => "unrecognized",
@@ -194,6 +201,8 @@ pub enum Report {
     Stderr {
         lines: Vec<String>,
     },
+    /// The harness is up and its conversation open, with no Turn started.
+    Ready,
     Started,
     Model {
         model: String,
@@ -244,6 +253,7 @@ impl Report {
             Report::Heartbeat => "heartbeat",
             Report::Work { .. } => "work",
             Report::Stderr { .. } => "stderr",
+            Report::Ready => "ready",
             Report::Started => "started",
             Report::Model { .. } => "model",
             Report::Said { .. } => "said",
