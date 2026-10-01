@@ -291,7 +291,10 @@ test("a follow reconnect resumes from its cursor without a gap or duplicate", as
 		.findLast((block) => block.includes("event: entry"));
 	expect(delivered).toContain("data:");
 
+	// The reconnect can already be in flight by the time the entry is visible, so the resumed
+	// request is captured in the route (registered before navigation) rather than waited for after.
 	const cut = Promise.withResolvers<void>();
+	const resumed = Promise.withResolvers<void>();
 	let first = true;
 	await page.route(
 		(url) => url.pathname.endsWith("/transcript"),
@@ -305,6 +308,7 @@ test("a follow reconnect resumes from its cursor without a gap or duplicate", as
 				});
 				return;
 			}
+			if ((route.request().headers()["last-event-id"] ?? "") !== "") resumed.resolve();
 			await cut.promise;
 			await route.continue();
 		},
@@ -314,17 +318,12 @@ test("a follow reconnect resumes from its cursor without a gap or duplicate", as
 	await expect(page.getByRole("heading", { name })).toBeVisible();
 	await expect(page.getByRole("log").getByText(`${ACTOR}: one`)).toBeVisible({ timeout: 20_000 });
 
-	const resumed = page.waitForRequest(
-		(candidate) =>
-			candidate.url().includes("/transcript") &&
-			(candidate.headers()["last-event-id"] ?? "") !== "",
-		{ timeout: 20_000 },
-	);
+	// Held until "two" exists, so its arrival proves the reconnect resumed from the cursor.
+	await resumed.promise;
 	await posting(request, name, "two");
 	cut.resolve();
 
 	await expect(page.getByRole("log").getByText(`${ACTOR}: two`)).toBeVisible({ timeout: 20_000 });
-	await resumed;
 	await expect(page.getByRole("log").getByText(`${ACTOR}: one`)).toHaveCount(1);
 	await expect(page.getByRole("log").getByText(`${ACTOR}: two`)).toHaveCount(1);
 });

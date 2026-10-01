@@ -40,6 +40,15 @@ pub struct Selection<'a> {
     pub as_participant: Option<&'a str>,
 }
 
+#[derive(Clone, Copy)]
+struct Stream<'a> {
+    client: &'a Client,
+    url: &'a Url,
+    followers: &'a Url,
+    selection: &'a Selection<'a>,
+    presentation: &'a Presentation,
+}
+
 pub async fn read(
     control_plane: &Url,
     organization: &str,
@@ -51,23 +60,19 @@ pub async fn read(
     let client = Client::new();
     let url = transcript(control_plane, organization, workspace, &selection)?;
     let followers = followers(control_plane, organization, workspace)?;
+    let stream = Stream {
+        client: &client,
+        url: &url,
+        followers: &followers,
+        selection: &selection,
+        presentation,
+    };
     let mut activities = Activities::default();
     let mut cursor = from;
     let mut heard = Instant::now();
 
     loop {
-        match streamed(
-            &client,
-            &url,
-            &followers,
-            &mut cursor,
-            &mut heard,
-            presentation,
-            &selection,
-            &mut activities,
-        )
-        .await
-        {
+        match streamed(stream, &mut cursor, &mut heard, &mut activities).await {
             Ok(()) => return Ok(cursor),
             Err(Cut::Refused(status, why)) => bail!(Failed::new(
                 crate::api::refused(status),
@@ -86,15 +91,18 @@ pub async fn read(
 }
 
 async fn streamed(
-    client: &Client,
-    url: &Url,
-    followers: &Url,
+    stream: Stream<'_>,
     cursor: &mut Option<String>,
     heard: &mut Instant,
-    presentation: &Presentation,
-    selection: &Selection<'_>,
     activities: &mut Activities,
 ) -> Result<(), Cut> {
+    let Stream {
+        client,
+        url,
+        followers,
+        selection,
+        presentation,
+    } = stream;
     let mut request = client
         .get(url.clone())
         .header(header::ACCEPT, "text/event-stream");
