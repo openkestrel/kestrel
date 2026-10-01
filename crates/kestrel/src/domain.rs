@@ -652,6 +652,8 @@ pub struct Session {
     /// With the harness and model fixed when the Session was enqueued, never redeclared under it.
     pub agent: Agent,
     pub state: SessionState,
+    /// The step an unbriefed Session is preparing on, and `None` for every other state.
+    pub preparing: Option<Preparing>,
     pub exit: Option<Exit>,
     pub outcome_message: Option<String>,
     pub instance: Option<String>,
@@ -779,6 +781,9 @@ pub enum SessionState {
     Queued,
     Working,
     Waiting,
+    /// Its harness is up and its conversation is open, with no Brief yet: the first message
+    /// becomes the Brief and the first Turn (ADR-0038). It holds no Active-Work Slot.
+    Unbriefed,
     Ended,
     /// Terminal like `Ended`, but with no exit status: a queued Session whose declared tolerance
     /// can no longer be met never ran, so nothing failed.
@@ -786,13 +791,18 @@ pub enum SessionState {
 }
 
 impl SessionState {
-    pub const LIVE: [SessionState; 2] = [SessionState::Working, SessionState::Waiting];
+    pub const LIVE: [SessionState; 3] = [
+        SessionState::Working,
+        SessionState::Waiting,
+        SessionState::Unbriefed,
+    ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
             SessionState::Queued => "queued",
             SessionState::Working => "working",
             SessionState::Waiting => "waiting",
+            SessionState::Unbriefed => "unbriefed",
             SessionState::Ended => "ended",
             SessionState::Unreachable => "unreachable",
         }
@@ -804,6 +814,9 @@ impl SessionState {
             SessionState::Ended | SessionState::Unreachable => None,
             SessionState::Queued => Some(Exit::Failed {
                 because: "it was stopped before it started".into(),
+            }),
+            SessionState::Unbriefed => Some(Exit::Failed {
+                because: "it was stopped before its first turn".into(),
             }),
             SessionState::Working => Some(Exit::Failed {
                 because: "it was stopped mid-turn, before its agent answered".into(),
@@ -821,9 +834,45 @@ impl FromStr for SessionState {
             "queued" => Ok(SessionState::Queued),
             "working" => Ok(SessionState::Working),
             "waiting" => Ok(SessionState::Waiting),
+            "unbriefed" => Ok(SessionState::Unbriefed),
             "ended" => Ok(SessionState::Ended),
             "unreachable" => Ok(SessionState::Unreachable),
             other => bail!("{other} is not a state a session can be in"),
+        }
+    }
+}
+
+/// How far an unbriefed Session's harness has been prepared. It is current Session state, never a
+/// Transcript entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preparing {
+    /// From claim until the supervisor connects.
+    Provisioning,
+    /// While the checkout is made.
+    Cloning,
+    /// Once the supervisor reports the harness up and its conversation open.
+    HarnessReady,
+}
+
+impl Preparing {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Preparing::Provisioning => "provisioning",
+            Preparing::Cloning => "cloning",
+            Preparing::HarnessReady => "harness_ready",
+        }
+    }
+}
+
+impl FromStr for Preparing {
+    type Err = anyhow::Error;
+
+    fn from_str(preparing: &str) -> Result<Self> {
+        match preparing {
+            "provisioning" => Ok(Preparing::Provisioning),
+            "cloning" => Ok(Preparing::Cloning),
+            "harness_ready" => Ok(Preparing::HarnessReady),
+            other => bail!("{other} is not a step a session prepares on"),
         }
     }
 }

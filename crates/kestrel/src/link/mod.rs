@@ -53,6 +53,12 @@ pub enum Instruction {
         prompt: String,
         harness: Harness,
     },
+    /// Opens the conversation and prompts nothing: the Session waits unbriefed for its first
+    /// message (ADR-0038).
+    Unbriefed {
+        checkout: Checkout,
+        harness: Harness,
+    },
     Prompt {
         prompt: String,
     },
@@ -64,6 +70,7 @@ impl Instruction {
     pub const fn kind(&self) -> &'static str {
         match self {
             Instruction::Start { .. } => "start",
+            Instruction::Unbriefed { .. } => "unbriefed",
             Instruction::Prompt { .. } => "prompt",
             Instruction::Stop => "stop",
         }
@@ -198,10 +205,35 @@ pub async fn start(store: &Store, session: &Session, harness: Harness) -> Result
     Ok(sent)
 }
 
+/// Opens an unbriefed Session's conversation without a prompt: the supervisor checks out, spawns
+/// the harness and reports ready, and the first message becomes the Brief and the first Turn
+/// (ADR-0038).
+pub async fn unbriefed(
+    store: &Store,
+    session: &Session,
+    harness: Harness,
+) -> Result<SentInstruction> {
+    let mut tx = store.begin().await?;
+    let workspace = tx.workspaces().get(session.workspace).await?;
+    workspace.accepts("turn")?;
+    let sent = sent_on(
+        &mut tx,
+        session,
+        Instruction::Unbriefed {
+            checkout: workspace.checkout.clone(),
+            harness,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+
+    Ok(sent)
+}
+
 /// A Brief nothing has followed, exactly as it was written; otherwise the message or messages
 /// that started this Session, with everything the Transcript held before them labeled as context
-/// ahead of them.
-async fn instruction(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Option<String>> {
+/// ahead of them. `None` is a Workspace with nothing to start a Session with.
+pub(crate) async fn instruction(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Option<String>> {
     if let Some(brief) = tx.log().unfollowed_brief(workspace).await? {
         return Ok(Some(brief));
     }

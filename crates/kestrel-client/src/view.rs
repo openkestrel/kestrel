@@ -121,11 +121,14 @@ pub const WORKSPACE: View = View::Detail(&[
     "continues",
     "continued_by",
     "pull_requests",
+    "unfinished_session.state",
+    "unfinished_session.preparing",
 ]);
 pub const SESSIONS: View = View::Rows(&[
     "id",
     "name",
     "state",
+    "preparing",
     "agent",
     "exit.status",
     "exit.because",
@@ -137,6 +140,7 @@ pub const SESSION: View = View::Detail(&[
     "name",
     "workspace",
     "state",
+    "preparing",
     "exit.status",
     "exit.because",
     "outcome_message",

@@ -88,14 +88,16 @@ impl Conversation {
     pub fn open(
         harness: &Harness,
         provider: BTreeMap<String, String>,
-        first: String,
+        first: Option<String>,
         root: PathBuf,
     ) -> Self {
         let (prompts, prompted) = mpsc::unbounded_channel();
         let (answered, turns) = mpsc::unbounded_channel();
-        prompts
-            .send(first)
-            .expect("the conversation has not started, so nothing has hung up on it");
+        if let Some(first) = first {
+            prompts
+                .send(first)
+                .expect("the conversation has not started, so nothing has hung up on it");
+        }
         let task = tokio::spawn(conversing(
             harness.clone(),
             provider,
@@ -364,11 +366,13 @@ async fn living(
                         {
                             return Ok(ended(&error));
                         }
+                        let _ = turns.send(ConversationEvent::Ready);
                         conversed
                     }
                     _ => match set_up(&connection, harness, root, heard).await {
                         Ok((conversed, recovery)) => {
                             continuity.opened(conversed.clone(), recovery);
+                            let _ = turns.send(ConversationEvent::Ready);
                             conversed
                         }
                         Err(error) => return Ok(ended(&error)),
@@ -753,6 +757,8 @@ pub enum ConversationEvent {
     Report(Report),
     Worked(Worked),
     State(Report),
+    /// The conversation is open, with no Turn started: what an unbriefed Session waits for.
+    Ready,
 }
 
 struct Hearing {

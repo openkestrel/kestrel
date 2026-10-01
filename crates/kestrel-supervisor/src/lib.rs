@@ -61,11 +61,15 @@ struct Supervising {
 struct Carrying {
     session: String,
     checkout: Checkout,
-    prompt: String,
+    /// `None` for an unbriefed Session, which is opened without prompting.
+    prompt: Option<String>,
     harness: Harness,
     conversation: Option<Conversation>,
     finished: bool,
     working: bool,
+    /// An unbriefed Session's conversation has opened; `ready` is said again after a reconnect in
+    /// case the report was lost while on its way.
+    ready: bool,
     taken: i64,
     state: Option<Report>,
     /// Handed back before anything is said, because saying the Session finished ends it and with it
@@ -266,10 +270,15 @@ async fn attend(
                     carrying.working = false;
                     worked_on(carrying, worked, diagnostics).await;
                 }
+                harness::ConversationEvent::Ready => carrying.ready = true,
             }
         }
         if let Some(state) = &carrying.state {
             report_state(link, &carrying.session, state).await?;
+        }
+        if carrying.prompt.is_none() && carrying.ready {
+            link.report(&Report::Ready, Some(&carrying.session), None)
+                .await?;
         }
     }
     report_work(link, supervising, true).await?;
@@ -350,6 +359,9 @@ async fn attend(
                             worked_on(carrying, worked, diagnostics).await;
                             report_work(link, supervising, true).await?;
                         }
+                        harness::ConversationEvent::Ready => {
+                            ready(link, carrying).await?;
+                        }
                     }
                 }
             }
@@ -377,6 +389,19 @@ async fn attend(
             }
         }
     }
+}
+
+/// An unbriefed Session's conversation is open and waiting, so dispatch can be told it is ready.
+/// A briefed one just opened the conversation its first prompt was waiting on; `started` already
+/// said so.
+async fn ready(link: &Link, carrying: &mut Carrying) -> Result<(), link::Error> {
+    if carrying.prompt.is_none() {
+        carrying.ready = true;
+        link.report(&Report::Ready, Some(&carrying.session), None)
+            .await?;
+    }
+
+    Ok(())
 }
 
 /// Answered beside whatever the Session is doing, so a read never waits on a turn.
@@ -514,53 +539,28 @@ async fn instructed(
             prompt,
             harness,
         } if !carrying_it => {
-            // A Session's start follows the last one's stop down the stream, so one still carried
-            // here is over.
-            if let Some(carrying) = supervising.carrying.take() {
-                carrying
-                    .let_go("another session started", diagnostics)
-                    .await;
-            }
-            supervising.checkout = Some(checkout.clone());
-            let mut carrying = Carrying {
-                session: delivered.session,
+            start_carrying(
+                stderr,
+                supervising,
+                diagnostics,
+                delivered.session,
                 checkout,
-                prompt,
-                harness: Harness {
-                    command: harness.command,
-                    auth: harness.auth,
-                    model: harness.model,
-                    stderr: stderr.clone(),
-                },
-                conversation: None,
-                finished: false,
-                working: true,
-                taken: 0,
-                state: Some(Report::SessionState {
-                    tools: Vec::new(),
-                    message_buffering: false,
-                    thought_buffering: false,
-                }),
-                refreshed: BTreeMap::new(),
-                written: None,
-                saying: VecDeque::new(),
-                info: None,
-                info_due: None,
-            };
-            match checkout::check_out(&carrying.checkout).await {
-                Ok(()) => carrying.saying.push_back(Report::Started),
-                Err(because) => {
-                    diagnostics.info(&because);
-                    carrying.finished = true;
-                    carrying.saying.push_back(Report::Checkout {
-                        repositories: checkout::observe(&carrying.checkout).await,
-                    });
-                    carrying.saying.push_back(Report::Finished {
-                        exit: Exit::Failed { because },
-                    });
-                }
-            }
-            supervising.carrying = Some(carrying);
+                Some(prompt),
+                harness,
+            )
+            .await;
+        }
+        Instruction::Unbriefed { checkout, harness } if !carrying_it => {
+            start_carrying(
+                stderr,
+                supervising,
+                diagnostics,
+                delivered.session,
+                checkout,
+                None,
+                harness,
+            )
+            .await;
         }
         Instruction::Prompt { prompt } if carrying_it => {
             if let Some(carrying) = supervising.carrying.as_mut() {
@@ -577,9 +577,83 @@ async fn instructed(
         }
         Instruction::Stop
         | Instruction::Start { .. }
+        | Instruction::Unbriefed { .. }
         | Instruction::Prompt { .. }
         | Instruction::Unrecognized => {}
     }
+}
+
+/// Begins carrying a Session: checks it out, then opens its conversation. A briefed one is
+/// prompted by the conversation it opens; an unbriefed one waits, reporting ready instead.
+async fn start_carrying(
+    stderr: &mpsc::UnboundedSender<String>,
+    supervising: &mut Supervising,
+    diagnostics: &dyn Diagnostics,
+    session: String,
+    checkout: Checkout,
+    prompt: Option<String>,
+    harness: link::Harness,
+) {
+    // A Session's start follows the last one's stop down the stream, so one still carried here is
+    // over.
+    if let Some(carrying) = supervising.carrying.take() {
+        carrying
+            .let_go("another session started", diagnostics)
+            .await;
+    }
+    // A briefed Session is working from its first prompt; an unbriefed one is not working yet.
+    let working = prompt.is_some();
+    supervising.checkout = Some(checkout.clone());
+    let mut carrying = Carrying {
+        session,
+        checkout,
+        prompt,
+        harness: Harness {
+            command: harness.command,
+            auth: harness.auth,
+            model: harness.model,
+            stderr: stderr.clone(),
+        },
+        conversation: None,
+        finished: false,
+        working,
+        ready: false,
+        taken: 0,
+        state: Some(Report::SessionState {
+            tools: Vec::new(),
+            message_buffering: false,
+            thought_buffering: false,
+        }),
+        refreshed: BTreeMap::new(),
+        written: None,
+        saying: VecDeque::new(),
+        info: None,
+        info_due: None,
+    };
+    match checkout::check_out(&carrying.checkout).await {
+        Ok(()) => {
+            if carrying.prompt.is_some() {
+                carrying.saying.push_back(Report::Started);
+            } else {
+                // The checkout is what decides whether the Instance holds unpublished work, and
+                // this Session may seal without ever running a turn.
+                carrying.saying.push_back(Report::Checkout {
+                    repositories: checkout::observe(&carrying.checkout).await,
+                });
+            }
+        }
+        Err(because) => {
+            diagnostics.info(&because);
+            carrying.finished = true;
+            carrying.saying.push_back(Report::Checkout {
+                repositories: checkout::observe(&carrying.checkout).await,
+            });
+            carrying.saying.push_back(Report::Finished {
+                exit: Exit::Failed { because },
+            });
+        }
+    }
+    supervising.carrying = Some(carrying);
 }
 
 async fn worked_on(

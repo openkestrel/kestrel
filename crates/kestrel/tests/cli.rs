@@ -327,14 +327,21 @@ fn declared(kestrel: &Booted) {
 }
 
 fn opened(kestrel: &Booted) -> String {
-    kestrel.run(&[
+    let opened = kestrel.record(&[
         "workspace",
         "open",
         "--project",
         support::repository::NAME,
         "--agent",
         "builder",
-    ])
+        "--json",
+        "workspace",
+    ]);
+
+    opened["workspace"]
+        .as_str()
+        .expect("the opened workspace's generated name")
+        .to_owned()
 }
 
 /// Each entry as `seq kind …`, without the moment it was appended, which is different every

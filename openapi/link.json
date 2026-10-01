@@ -575,6 +575,9 @@
             "$ref": "#/components/schemas/Start"
           },
           {
+            "$ref": "#/components/schemas/Unbriefed"
+          },
+          {
             "$ref": "#/components/schemas/Prompt"
           },
           {
@@ -585,6 +588,7 @@
           "propertyName": "kind",
           "mapping": {
             "start": "#/components/schemas/Start",
+            "unbriefed": "#/components/schemas/Unbriefed",
             "prompt": "#/components/schemas/Prompt",
             "stop": "#/components/schemas/Stop"
           }
@@ -622,6 +626,26 @@
           "kind",
           "checkout",
           "prompt",
+          "harness"
+        ]
+      },
+      "Unbriefed": {
+        "description": "Take up the Session without a Brief: check out, then open its one agent conversation and prompt nothing. The Session waits unbriefed for its first message. A checkout or spawn that fails is reported as the Session finished failed, and the Session never starts.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "unbriefed"
+          },
+          "checkout": {
+            "$ref": "#/components/schemas/Checkout"
+          },
+          "harness": {
+            "$ref": "#/components/schemas/Harness"
+          }
+        },
+        "required": [
+          "kind",
+          "checkout",
           "harness"
         ]
       },
@@ -860,6 +884,9 @@
             "$ref": "#/components/schemas/Stderr"
           },
           {
+            "$ref": "#/components/schemas/Ready"
+          },
+          {
             "$ref": "#/components/schemas/Started"
           },
           {
@@ -903,6 +930,7 @@
             "heartbeat": "#/components/schemas/Heartbeat",
             "work": "#/components/schemas/Work",
             "stderr": "#/components/schemas/Stderr",
+            "ready": "#/components/schemas/Ready",
             "started": "#/components/schemas/Started",
             "model": "#/components/schemas/Model",
             "said": "#/components/schemas/Said",
@@ -924,6 +952,18 @@
             "format": "uuid"
           }
         }
+      },
+      "Ready": {
+        "description": "The harness is up and its agent conversation open, with no Turn started: an unbriefed Session is ready for its first message. Not numbered.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "ready"
+          }
+        },
+        "required": [
+          "kind"
+        ]
       },
       "Connected": {
         "description": "The supervisor is on the link, and this is what is running in the Instance.",

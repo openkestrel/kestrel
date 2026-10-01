@@ -13,7 +13,7 @@ use tracing::{info, warn};
 
 use crate::cli::Role;
 use crate::compute::{Driver, Exited, Instance, Supervisor};
-use crate::domain::{Session, Workspace};
+use crate::domain::{Session, SessionState, Workspace};
 use crate::instance;
 use crate::link::{self, credential::Secret};
 use crate::profile;
@@ -311,7 +311,11 @@ async fn execute(
         auth: dispatch.auth.clone().filter(|method| !method.is_empty()),
         model: session.agent.model.clone(),
     };
-    let started = match link::start(store, session, harness).await {
+    let opened = match session.state {
+        SessionState::Unbriefed => link::unbriefed(store, session, harness).await,
+        _ => link::start(store, session, harness).await,
+    };
+    let started = match opened {
         Ok(started) => started,
         Err(error) => {
             work::fail(

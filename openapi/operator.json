@@ -3051,9 +3051,26 @@
             "type": "array",
             "items": { "$ref": "#/components/schemas/PullRequestAvailability" },
             "description": "One per repository fixed on the Workspace, in the checkout's order."
+          },
+          "unfinished_session": {
+            "anyOf": [{ "$ref": "#/components/schemas/UnfinishedSession" }, { "type": "null" }],
+            "description": "The one Session the Workspace has not let go of, while it has one."
           }
         },
-        "required": ["id", "name", "organization", "project", "opened_with", "profile", "checkout", "instance", "held", "correlation", "state", "opened_at", "last_active_at", "sealed_at", "continues", "started_by", "continued_by", "pull_requests"]
+        "required": ["id", "name", "organization", "project", "opened_with", "profile", "checkout", "instance", "held", "correlation", "state", "opened_at", "last_active_at", "sealed_at", "continues", "started_by", "continued_by", "pull_requests", "unfinished_session"]
+      },
+      "UnfinishedSession": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
+          "state": { "type": "string", "enum": ["queued", "working", "waiting", "unbriefed", "ended", "unreachable"] },
+          "preparing": {
+            "type": ["string", "null"],
+            "enum": ["provisioning", "cloning", "harness_ready", null]
+          }
+        },
+        "required": ["id", "name", "state", "preparing"]
       },
       "PullRequestAvailability": {
         "type": "object",
@@ -3111,7 +3128,12 @@
           "id": { "type": "string", "format": "uuid" },
           "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
           "workspace": { "type": "string", "format": "uuid" },
-          "state": { "type": "string", "enum": ["queued", "working", "waiting", "ended", "unreachable"] },
+          "state": { "type": "string", "enum": ["queued", "working", "waiting", "unbriefed", "ended", "unreachable"] },
+          "preparing": {
+            "type": ["string", "null"],
+            "enum": ["provisioning", "cloning", "harness_ready", null],
+            "description": "The step an unbriefed Session is preparing on: provisioning from claim until its supervisor connects, cloning while it checks out, and harness_ready once the harness is up. Null in every other state."
+          },
           "exit": { "anyOf": [{ "$ref": "#/components/schemas/Exit" }, { "type": "null" }] },
           "outcome_message": { "type": ["string", "null"] },
           "instance": { "type": ["string", "null"] },
@@ -3134,7 +3156,7 @@
           "message_buffering": { "type": "boolean" },
           "thought_buffering": { "type": "boolean" }
         },
-        "required": ["id", "name", "workspace", "state", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "worked_model", "title", "options", "commands", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "message_buffering", "thought_buffering"]
+        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "worked_model", "title", "options", "commands", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "message_buffering", "thought_buffering"]
       },
       "SessionOption": {
         "type": "object",

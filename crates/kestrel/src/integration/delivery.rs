@@ -257,6 +257,7 @@ mod tests {
             workspace: workspace.id,
             agent: workspace.opened_with.clone(),
             state: SessionState::Ended,
+            preparing: None,
             exit: None,
             outcome_message: None,
             instance: None,
