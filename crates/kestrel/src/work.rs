@@ -454,14 +454,14 @@ async fn reported(
                     delivery::record_turn(tx, session, &workspace, turn, &said).await?;
                 }
                 tx.workspaces()
-                    .record_active(session.workspace, Timestamp::now())
+                    .record_active(session.organization, session.workspace, Timestamp::now())
                     .await?;
             }
             info!(session = %session.id, "a supervisor reported its agent answered a turn");
         }
         Report::Checkout { repositories } => {
             tx.workspaces()
-                .record_observed(session.workspace, &repositories)
+                .record_observed(session.organization, session.workspace, &repositories)
                 .await?;
             info!(session = %session.id, "a supervisor reported what its checkout holds");
         }
@@ -481,7 +481,7 @@ pub async fn instance(store: &Store, workspace: WorkspaceId) -> Result<Option<St
 pub async fn executes_on(store: &Store, session: &Session, instance: &str) -> Result<()> {
     let mut tx = store.begin().await?;
     tx.workspaces()
-        .record_instance(session.workspace, Some(instance))
+        .record_instance(session.organization, session.workspace, Some(instance))
         .await?;
     tx.workspaces()
         .record_session_instance(session, instance)
@@ -498,7 +498,7 @@ pub async fn instance_lost(store: &Store, session: &Session, because: &str) -> R
         tx.workspaces().forget_supervisor(&instance).await?;
     }
     tx.workspaces()
-        .record_instance(session.workspace, None)
+        .record_instance(session.organization, session.workspace, None)
         .await?;
     let stands = ending(
         &mut tx,

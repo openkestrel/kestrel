@@ -4,7 +4,6 @@ use jiff::{SignedDuration, Timestamp};
 use crate::domain::{
     Exit, Organization, Session, SessionId, SessionState, Workspace, WorkspaceId, WorkspaceState,
 };
-use crate::fanout::{self, Change};
 use crate::instance;
 use crate::log::{Cursor, Entry, Message, Page, Unreadable, Window};
 use crate::participant;
@@ -62,7 +61,6 @@ pub async fn open(
         .await?;
 
     tx.commit().await?;
-    fanout::publish(Change::WorkspaceOpened(&workspace));
 
     Ok(workspace)
 }
@@ -87,7 +85,6 @@ pub async fn seal(store: &Store, id: WorkspaceId) -> Result<Workspace> {
         sealed_at: Some(sealed_at),
         ..workspace
     };
-    fanout::publish(Change::WorkspaceSealed(&sealed));
 
     Ok(sealed)
 }

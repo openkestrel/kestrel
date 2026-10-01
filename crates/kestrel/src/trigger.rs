@@ -13,7 +13,6 @@ use crate::domain::{
     Integration, Occurrence, OnOpenWorkspace, Organization, Schedule, SessionId, Templates,
     Trigger, TriggerId, TriggerState, Workspace, WorkspaceId,
 };
-use crate::fanout::{self, Change};
 use crate::integration::github::{self, EventData, Github};
 use crate::log::Entry;
 use crate::readiness::{Decision, Readiness, Request};
@@ -898,7 +897,6 @@ async fn firing(
             .await?;
     }
     tx.commit().await?;
-    fanout::publish(Change::WorkspaceOpened(&workspace));
 
     Ok(Fired::Opened {
         event: event.record_id,

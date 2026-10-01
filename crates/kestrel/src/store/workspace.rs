@@ -4,9 +4,11 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
 use crate::domain::{
-    Agent, Checkout, Connected, Cost, Event, Exit, Organization, Project, Session, SessionId,
-    SessionState, SubscriptionProfile, Turn, Usage, Workspace, WorkspaceId, WorkspaceState,
+    Agent, Checkout, Connected, Cost, Event, Exit, Organization, OrganizationId, Project, Session,
+    SessionId, SessionState, SubscriptionProfile, Turn, Usage, Workspace, WorkspaceId,
+    WorkspaceState,
 };
+use crate::fanout::Touched;
 use crate::instance::Observed;
 use crate::link::{Instruction, SentInstruction};
 use crate::reference::{self, Candidate, Reference};
@@ -117,11 +119,15 @@ pub struct Opening<'a> {
 
 pub struct Workspaces<'a> {
     connection: &'a mut SqliteConnection,
+    touched: &'a mut Touched,
 }
 
 impl<'a> Workspaces<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection) -> Self {
-        Self { connection }
+    pub(crate) fn over(connection: &'a mut SqliteConnection, touched: &'a mut Touched) -> Self {
+        Self {
+            connection,
+            touched,
+        }
     }
 
     pub async fn open(&mut self, opening: Opening<'_>) -> Result<Workspace> {
@@ -201,6 +207,8 @@ impl<'a> Workspaces<'a> {
             .with_context(|| format!("fixing the repository {url} to the workspace {id}"))?;
         }
 
+        self.touched.workspace(&workspace);
+
         Ok(workspace)
     }
 
@@ -235,16 +243,25 @@ impl<'a> Workspaces<'a> {
             .await
             .with_context(|| format!("sealing the workspace {}", workspace.id))?;
 
+        self.touched.workspace(workspace);
+
         Ok(sealed_at)
     }
 
-    pub async fn record_active(&mut self, workspace: WorkspaceId, at: Timestamp) -> Result<()> {
+    pub async fn record_active(
+        &mut self,
+        organization: OrganizationId,
+        workspace: WorkspaceId,
+        at: Timestamp,
+    ) -> Result<()> {
         sqlx::query("UPDATE workspace SET last_active_at = ? WHERE id = ?")
             .bind(due(at))
             .bind(workspace.to_string())
             .execute(&mut *self.connection)
             .await
             .with_context(|| format!("recording the workspace {workspace} active"))?;
+
+        self.touched.workspace_id(organization, workspace);
 
         Ok(())
     }
@@ -598,7 +615,9 @@ impl<'a> Workspaces<'a> {
             }
         };
 
-        self.record_active(workspace.id, session.enqueued_at)
+        self.touched.session(&session);
+        self.touched.queue(session.organization);
+        self.record_active(workspace.organization.id, workspace.id, session.enqueued_at)
             .await?;
 
         Ok(session)
@@ -632,6 +651,8 @@ impl<'a> Workspaces<'a> {
                 workspace.id
             )
         })?;
+
+        self.touched.workspace(workspace);
 
         Ok(())
     }
@@ -675,6 +696,10 @@ impl<'a> Workspaces<'a> {
             .collect::<Vec<_>>();
         messages.sort_by_key(|(seq, _)| *seq);
 
+        if !messages.is_empty() {
+            self.touched.workspace(workspace);
+        }
+
         Ok(messages.into_iter().map(|(_, message)| message).collect())
     }
 
@@ -707,6 +732,8 @@ impl<'a> Workspaces<'a> {
             )
         })?;
 
+        self.touched.workspace(workspace);
+
         Ok(())
     }
 
@@ -738,6 +765,8 @@ impl<'a> Workspaces<'a> {
         else {
             return Ok(None);
         };
+
+        self.touched.workspace(workspace);
 
         Ok(Some(PendingSession {
             agent: agent::with_id(
@@ -776,6 +805,8 @@ impl<'a> Workspaces<'a> {
             )
         })?;
 
+        self.touched.queue(session.organization);
+
         Ok(())
     }
 
@@ -813,6 +844,11 @@ impl<'a> Workspaces<'a> {
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("marking the session {} unreachable", session.id))?;
+
+        if marked.rows_affected() > 0 {
+            self.touched.session(session);
+            self.touched.queue(session.organization);
+        }
 
         Ok(marked.rows_affected() > 0)
     }
@@ -871,7 +907,12 @@ impl<'a> Workspaces<'a> {
         .with_context(|| format!("claiming the queued session {}", session.id))?;
 
         match claimed {
-            Some(_) => Ok(Some(self.session(session.id).await?)),
+            Some(_) => {
+                self.touched.session(session);
+                self.touched.queue(session.organization);
+
+                Ok(Some(self.session(session.id).await?))
+            }
             None => Ok(None),
         }
     }
@@ -930,6 +971,8 @@ impl<'a> Workspaces<'a> {
         .await
         .with_context(|| format!("recording what session {} used", session.id))?;
 
+        self.touched.session(session);
+
         Ok(())
     }
 
@@ -940,6 +983,8 @@ impl<'a> Workspaces<'a> {
             .execute(&mut *self.connection)
             .await
             .with_context(|| format!("recording the model session {} is on", session.id))?;
+
+        self.touched.session(session);
 
         Ok(())
     }
@@ -957,6 +1002,7 @@ impl<'a> Workspaces<'a> {
     /// `None` forgets an Instance that is gone, so the Workspace's next Session provisions another.
     pub async fn record_instance(
         &mut self,
+        organization: OrganizationId,
         workspace: WorkspaceId,
         instance: Option<&str>,
     ) -> Result<()> {
@@ -967,11 +1013,14 @@ impl<'a> Workspaces<'a> {
             .await
             .with_context(|| format!("recording the instance of the workspace {workspace}"))?;
 
+        self.touched.workspace_id(organization, workspace);
+
         Ok(())
     }
 
     pub async fn record_observed(
         &mut self,
+        organization: OrganizationId,
         workspace: WorkspaceId,
         observed: &[Observed],
     ) -> Result<()> {
@@ -983,6 +1032,8 @@ impl<'a> Workspaces<'a> {
             .with_context(|| {
                 format!("recording what the workspace {workspace}'s checkout holds")
             })?;
+
+        self.touched.workspace_id(organization, workspace);
 
         Ok(())
     }
@@ -1018,7 +1069,8 @@ impl<'a> Workspaces<'a> {
     /// The Workspace lets go of its Instance at once, so no Session is handed one about to be
     /// destroyed.
     pub async fn archive_instance(&mut self, workspace: &Workspace, instance: &str) -> Result<()> {
-        self.record_instance(workspace.id, None).await?;
+        self.record_instance(workspace.organization.id, workspace.id, None)
+            .await?;
         self.forget_supervisor(instance).await?;
         sqlx::query(
             "INSERT INTO instance_archive (instance, organization_id, workspace_id, queued_at)
@@ -1031,6 +1083,8 @@ impl<'a> Workspaces<'a> {
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("queueing the instance {instance} to be archived"))?;
+
+        self.touched.queue(workspace.organization.id);
 
         Ok(())
     }
@@ -1081,11 +1135,22 @@ impl<'a> Workspaces<'a> {
     }
 
     pub async fn instance_archived(&mut self, instance: &str) -> Result<()> {
+        let organization: Option<String> =
+            sqlx::query_scalar("SELECT organization_id FROM instance_archive WHERE instance = ?")
+                .bind(instance)
+                .fetch_optional(&mut *self.connection)
+                .await
+                .with_context(|| format!("reading the organization of the instance {instance}"))?;
+
         sqlx::query("DELETE FROM instance_archive WHERE instance = ?")
             .bind(instance)
             .execute(&mut *self.connection)
             .await
             .with_context(|| format!("recording the instance {instance} archived"))?;
+
+        if let Some(organization) = organization {
+            self.touched.queue(organization.parse()?);
+        }
 
         Ok(())
     }
@@ -1103,6 +1168,8 @@ impl<'a> Workspaces<'a> {
             .with_context(|| {
                 format!("recording the instance session {} executes on", session.id)
             })?;
+
+        self.touched.session(session);
 
         Ok(())
     }
@@ -1212,6 +1279,7 @@ impl<'a> Workspaces<'a> {
     /// through and at what version.
     pub async fn record_connected(&mut self, instance: &str, version: &str) -> Result<()> {
         let now = Timestamp::now().to_string();
+        let sessions = self.live_sessions_on(instance).await?;
         sqlx::query("UPDATE supervisor SET reached_at = ?, version = ? WHERE instance = ?")
             .bind(&now)
             .bind(version)
@@ -1230,6 +1298,10 @@ impl<'a> Workspaces<'a> {
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("recording the supervisor of {instance} connected"))?;
+
+        for session in sessions {
+            self.touched.session(&session);
+        }
 
         Ok(())
     }
@@ -1257,12 +1329,17 @@ impl<'a> Workspaces<'a> {
         .await
         .with_context(|| format!("recording the supervisor of session {}", session.id))?;
 
+        self.touched.session(session);
+
         Ok(())
     }
 
     /// A lease that has already passed is not revived: the sweep is about to end its Session, and
     /// a control plane coming back takes no supervisor's word for one it has let go.
     pub async fn hold_leases_on(&mut self, instance: &str, until: Timestamp) -> Result<()> {
+        let now = Timestamp::now();
+        let sessions = self.live_sessions_on(instance).await?;
+
         sqlx::query(
             "UPDATE session SET lease_expires_at = ?
              WHERE instance = ? AND state IN (SELECT value FROM json_each(?))
@@ -1271,10 +1348,16 @@ impl<'a> Workspaces<'a> {
         .bind(due(until))
         .bind(instance)
         .bind(live()?)
-        .bind(due(Timestamp::now()))
+        .bind(due(now))
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("holding the leases of the sessions on {instance}"))?;
+
+        for session in sessions {
+            if session.lease_expires_at.is_some_and(|at| at > now) {
+                self.touched.session(&session);
+            }
+        }
 
         Ok(())
     }
@@ -1321,6 +1404,8 @@ impl<'a> Workspaces<'a> {
         .await
         .with_context(|| format!("holding the lease of session {} until {until}", session.id))?;
 
+        self.touched.session(session);
+
         Ok(())
     }
 
@@ -1349,6 +1434,10 @@ impl<'a> Workspaces<'a> {
                 .execute(&mut *self.connection)
                 .await
                 .with_context(|| format!("recording the session {} started", session.id))?;
+
+        if started.rows_affected() > 0 {
+            self.touched.session(session);
+        }
 
         Ok(started.rows_affected() > 0)
     }
@@ -1406,7 +1495,9 @@ impl<'a> Workspaces<'a> {
         if ended.rows_affected() == 0 {
             return Ok(false);
         }
-        self.record_active(session.workspace, Timestamp::now())
+        self.touched.session(session);
+        self.touched.queue(session.organization);
+        self.record_active(session.organization, session.workspace, Timestamp::now())
             .await?;
 
         Ok(true)
@@ -1485,6 +1576,9 @@ impl<'a> Workspaces<'a> {
             return Ok(None);
         }
 
+        self.touched.session(session);
+        self.touched.queue(session.organization);
+
         self.turn(session).await.map(Some)
     }
 
@@ -1540,6 +1634,9 @@ impl<'a> Workspaces<'a> {
                 .bind(SessionState::Working.as_str())
                 .execute(&mut *self.connection)
                 .await?;
+
+            self.touched.session(session);
+            self.touched.queue(session.organization);
         }
         Ok(answered.map(|row| (row.get("seq"), row.get("from_seq"))))
     }

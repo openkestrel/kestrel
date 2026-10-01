@@ -18,6 +18,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteRow};
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use tracing::trace;
 
+use crate::fanout::{Notices, Touched};
 use crate::keyring::Keyring;
 use crate::log::Log;
 use crate::store::agent::Agents;
@@ -39,6 +40,7 @@ pub struct Store {
     pool: SqlitePool,
     reads: SqlitePool,
     keyring: Arc<Keyring>,
+    notices: Notices,
 }
 
 impl Store {
@@ -69,7 +71,14 @@ impl Store {
             pool,
             reads,
             keyring: Arc::new(Keyring::beside(data_dir)?),
+            notices: Notices::default(),
         })
+    }
+
+    /// The change hub every transaction on this store publishes to, and which the operator
+    /// boundary subscribes its change streams to.
+    pub fn notices(&self) -> Notices {
+        self.notices.clone()
     }
 
     /// Takes the write lock up front: SQLite refuses a deferred transaction that reads and then
@@ -87,6 +96,8 @@ impl Store {
         Ok(Tx {
             transaction: transaction?,
             keyring: &self.keyring,
+            touched: Touched::default(),
+            publishes: Some(self.notices.clone()),
         })
     }
 
@@ -96,6 +107,8 @@ impl Store {
         Ok(Tx {
             transaction: self.reads.begin().await?,
             keyring: &self.keyring,
+            touched: Touched::default(),
+            publishes: None,
         })
     }
 }
@@ -121,6 +134,9 @@ pub fn busy(error: &anyhow::Error) -> bool {
 pub struct Tx<'a> {
     transaction: Transaction<'a, Sqlite>,
     keyring: &'a Keyring,
+    touched: Touched,
+    /// None on a read, which never publishes: `Touched` is only collected where a write commits.
+    publishes: Option<Notices>,
 }
 
 impl Tx<'_> {
@@ -145,11 +161,11 @@ impl Tx<'_> {
     }
 
     pub fn workspaces(&mut self) -> Workspaces<'_> {
-        Workspaces::over(&mut self.transaction)
+        Workspaces::over(&mut self.transaction, &mut self.touched)
     }
 
     pub fn queue(&mut self) -> Queue<'_> {
-        Queue::over(&mut self.transaction)
+        Queue::over(&mut self.transaction, &mut self.touched)
     }
 
     pub fn integrations(&mut self) -> Integrations<'_> {
@@ -161,11 +177,21 @@ impl Tx<'_> {
     }
 
     pub fn pull_requests(&mut self) -> PullRequests<'_> {
-        PullRequests::over(&mut self.transaction)
+        PullRequests::over(&mut self.transaction, &mut self.touched)
     }
 
     pub async fn commit(self) -> Result<()> {
-        self.transaction.commit().await?;
+        let Tx {
+            transaction,
+            touched,
+            publishes,
+            ..
+        } = self;
+        transaction.commit().await?;
+        if let Some(notices) = publishes {
+            notices.publish(touched);
+        }
+
         Ok(())
     }
 }
@@ -193,7 +219,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::domain::{Agent, Organization, Project};
+    use crate::domain::{Agent, Organization, Project, Workspace};
     use crate::log::Entry;
 
     async fn declared(store: &Store) -> (Organization, Project, Agent) {
@@ -224,6 +250,38 @@ mod tests {
         tx.commit().await.unwrap();
 
         (organization, project, agent)
+    }
+
+    async fn opened_with_notices(
+        store: &Store,
+    ) -> (Organization, Workspace, crate::fanout::Subscription) {
+        let (organization, project, agent) = declared(store).await;
+        let mut changes = store.notices().subscribe(organization.id);
+
+        let mut tx = store.begin().await.unwrap();
+        let workspace = tx
+            .workspaces()
+            .open(workspace::Opening {
+                organization: &organization,
+                project: &project,
+                agent: &agent,
+                profile: None,
+                branch: None,
+                correlation: None,
+                continues: None,
+                started_by: None,
+            })
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        // Opening is a notice of its own; waiting it out leaves only what each test writes.
+        let opened = tokio::time::timeout(std::time::Duration::from_secs(1), changes.recv())
+            .await
+            .expect("opening the workspace raised no notice");
+        assert!(matches!(opened, Some(crate::fanout::Watch::Change(_))));
+
+        (organization, workspace, changes)
     }
 
     #[test]
@@ -261,6 +319,44 @@ mod tests {
         let mut read = store.read().await.unwrap();
 
         assert!(read.organizations().declare("acme", None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_transcript_entry_alone_raises_no_notice() {
+        let data_dir = TempDir::new().unwrap();
+        let store = Store::open(data_dir.path()).await.unwrap();
+        let (_, workspace, mut changes) = opened_with_notices(&store).await;
+
+        let mut tx = store.begin().await.unwrap();
+        tx.log()
+            .append(
+                &workspace,
+                Entry::ParticipantJoined {
+                    participant: "builder".to_owned(),
+                },
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let waited =
+            tokio::time::timeout(std::time::Duration::from_millis(400), changes.recv()).await;
+        assert!(waited.is_err(), "a transcript append raised a notice");
+    }
+
+    #[tokio::test]
+    async fn a_write_that_never_commits_raises_no_notice() {
+        let data_dir = TempDir::new().unwrap();
+        let store = Store::open(data_dir.path()).await.unwrap();
+        let (_, workspace, mut changes) = opened_with_notices(&store).await;
+
+        let mut tx = store.begin().await.unwrap();
+        tx.workspaces().seal(&workspace).await.unwrap();
+        drop(tx);
+
+        let waited =
+            tokio::time::timeout(std::time::Duration::from_millis(400), changes.recv()).await;
+        assert!(waited.is_err(), "a rolled-back write raised a notice");
     }
 
     #[tokio::test]

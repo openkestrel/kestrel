@@ -3,6 +3,7 @@ use jiff::Timestamp;
 use sqlx::{Row, SqliteConnection};
 
 use crate::domain::{Exit, Organization, SessionId, SessionState};
+use crate::fanout::Touched;
 use crate::store::workspace::{UNSATISFIED_BLOCKER, held_input, live, profile_held};
 
 /// What a work role that can dispatch recorded on start: the Active-Work Slot limit it
@@ -15,11 +16,15 @@ pub struct Recorded {
 
 pub struct Queue<'a> {
     connection: &'a mut SqliteConnection,
+    touched: &'a mut Touched,
 }
 
 impl<'a> Queue<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection) -> Self {
-        Self { connection }
+    pub(crate) fn over(connection: &'a mut SqliteConnection, touched: &'a mut Touched) -> Self {
+        Self {
+            connection,
+            touched,
+        }
     }
 
     /// `None` says no work role is dispatching.
@@ -56,6 +61,8 @@ impl<'a> Queue<'a> {
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("recording a work role that dispatches {slots} slots"))?;
+
+        self.touched.every_queue();
 
         Ok(())
     }

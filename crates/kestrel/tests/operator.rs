@@ -4329,6 +4329,7 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::INSTANCES, "get"),
         (operator::QUEUE, "get"),
         (operator::TRANSCRIPT, "get"),
+        (operator::CHANGES, "get"),
     ];
     assert_eq!(
         described,

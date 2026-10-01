@@ -6,6 +6,7 @@ use sqlx::{Row, SqliteConnection};
 use crate::domain::{
     Event, Organization, OrganizationId, PullRequest, Workspace, WorkspaceId, WorkspaceState,
 };
+use crate::fanout::Touched;
 use crate::store::{due, integration, workspace};
 
 pub enum Considered {
@@ -16,11 +17,15 @@ pub enum Considered {
 
 pub struct PullRequests<'a> {
     connection: &'a mut SqliteConnection,
+    touched: &'a mut Touched,
 }
 
 impl<'a> PullRequests<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection) -> Self {
-        Self { connection }
+    pub(crate) fn over(connection: &'a mut SqliteConnection, touched: &'a mut Touched) -> Self {
+        Self {
+            connection,
+            touched,
+        }
     }
 
     /// Only a signed GitHub Integration's: a generic webhook may name any type it likes.
@@ -81,7 +86,7 @@ impl<'a> PullRequests<'a> {
     /// A value already fresher at its source is kept, so a delivery that arrives late cannot
     /// roll the Workspace's state back.
     pub async fn learn(&mut self, workspace: &Workspace, learned: &PullRequest) -> Result<()> {
-        sqlx::query(
+        let learned_at = sqlx::query(
             "INSERT INTO pull_request
                  (workspace_id, organization_id, repository, number, url, title, state,
                   head_branch, head_revision, updated_at, event_record_id)
@@ -114,6 +119,10 @@ impl<'a> PullRequests<'a> {
                 learned.url, workspace.id
             )
         })?;
+
+        if learned_at.rows_affected() > 0 {
+            self.touched.workspace(workspace);
+        }
 
         Ok(())
     }

@@ -57,6 +57,16 @@ id it received (`kestrel-client/src/transcript.rs`) and gives up after 30 s unre
 across omitted entries: the page returns the highest examined seq, and the stream sends a `cursor`
 event when omitted entries advance it beyond the last delivered entry. The cursor remains global.
 
+### Change notices
+
+`GET …/changes` is SSE, per Organization. It opens with an `open` event, then a `change` event
+naming each Workspace, Session or queue that changed, coalesced to at most one per resource per
+250 ms at the window's trailing edge. No event carries an id and `Last-Event-ID` is ignored: a
+notice is a hint to refetch, never a cursor, and a subscriber that falls behind the bounded
+buffer is sent `resync`. The store transaction collects what its writes touched and the hub
+publishes after commit, so a refused or rolled-back write raises nothing, and a Transcript append
+alone raises nothing. The CLI does not consume it ([ADR-0035](../adr/0035-organization-change-notices-and-workspace-presence.md)).
+
 ### Pull requests
 
 A Workspace read carries `pull_requests`: one item per fixed repository, in checkout order.

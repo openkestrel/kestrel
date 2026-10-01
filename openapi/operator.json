@@ -1821,6 +1821,41 @@
           }
         }
       }
+    },
+    "/operator/organizations/{organization}/changes": {
+      "get": {
+        "operationId": "changes",
+        "summary": "Stream the Organization's change notices.",
+        "description": "Opens with an `open` event, then sends a `change` event naming each Workspace, Session or queue that changed, at most once per resource per 250 ms. A notice says what changed, never what it changed to. No event carries an id and `Last-Event-ID` is ignored: a notice is a hint to refetch, never a cursor. A subscriber that falls behind the bounded buffer is sent `resync` instead of a silent gap.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stream is open. `open` and `resync` mean every subscribed view must be refetched; `change` names one resource.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangesEvent"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3866,6 +3901,69 @@
       "CursorEvent": {
         "type": "string",
         "description": "A cursor event carries the highest examined workspace:seq as its SSE id and data, so a filtered read resumes beyond omitted entries."
+      },
+      "ChangesEvent": {
+        "description": "SSE names: open (Refetch) on connect and on reconnect, change (Change) for one resource that changed, and resync (Refetch) for a subscriber that fell behind the bounded buffer. No event carries an id.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Change"
+          },
+          {
+            "$ref": "#/components/schemas/Refetch"
+          }
+        ]
+      },
+      "Change": {
+        "description": "One resource that changed: a Workspace or Session by id, or the Organization's queue, which carries no id. Never a copy of its state.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "resource": {
+                "const": "workspace"
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "resource",
+              "id"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "resource": {
+                "const": "session"
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "resource",
+              "id"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "resource": {
+                "const": "queue"
+              }
+            },
+            "required": [
+              "resource"
+            ]
+          }
+        ]
+      },
+      "Refetch": {
+        "description": "The event that means refetch every view the Client subscribes to. It carries no fields.",
+        "type": "object"
       }
     }
   }
