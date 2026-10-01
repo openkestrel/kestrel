@@ -82,11 +82,7 @@ function content(entry: Delivered, mode: Disclosure, row: Row): ReactNode {
 			return (
 				<p className="text-muted-foreground text-xs">
 					{value.participant} changed {value.option}
-					{value.refused
-						? `: ${value.refused}`
-						: value.to
-							? ` to ${value.to}`
-							: ""}
+					{value.refused ? `: ${value.refused}` : value.to ? ` to ${value.to}` : ""}
 				</p>
 			);
 		case "instance_released":

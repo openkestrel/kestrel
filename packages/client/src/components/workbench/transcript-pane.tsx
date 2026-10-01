@@ -8,7 +8,10 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "#/components/ui/toggle-group";
 import { useTranscript } from "#/operator/currency";
 import type { Currency } from "#/operator/currency";
+import type { Session, Workspace } from "#/operator/generated";
 import { flow } from "#/operator/transcript-view";
+import { Composer } from "./composer";
+import { SessionHeader } from "./session-header";
 import { ActivityRow } from "./transcript/activity-row";
 import { EntryRow, type Disclosure } from "./transcript/entry-row";
 import { LiveLine } from "./transcript/live-line";
@@ -23,12 +26,16 @@ export function TranscriptPane({
 	currency,
 	organization,
 	workspace,
-	empty,
+	read,
+	session,
+	workspaces,
 }: {
 	currency: Currency;
 	organization: string;
 	workspace: string;
-	empty: { project: string; branch: string };
+	read: Workspace;
+	session: Session | undefined;
+	workspaces: Workspace[] | undefined;
 }) {
 	const transcript = useTranscript(currency, organization, workspace);
 	const [mode, setMode] = useState<Disclosure>("line");
@@ -39,6 +46,14 @@ export function TranscriptPane({
 
 	return (
 		<>
+			<SessionHeader
+				live={transcript.sessionState}
+				organization={organization}
+				presence={transcript.presence}
+				read={read}
+				session={session}
+				workspaces={workspaces}
+			/>
 			<div className="flex shrink-0 items-center border-b px-2 py-1.5">
 				<ToggleGroup
 					aria-label="Disclosure"
@@ -61,7 +76,7 @@ export function TranscriptPane({
 					{emptyOfEverything ? (
 						<ConversationEmptyState
 							title="Transcript"
-							description={`${empty.project} on ${empty.branch}`}
+							description={`${read.project} on ${read.checkout.branch}`}
 						/>
 					) : (
 						<>
@@ -94,6 +109,7 @@ export function TranscriptPane({
 				</ConversationContent>
 				<ConversationScrollButton />
 			</Conversation>
+			<Composer organization={organization} read={read} session={session} workspace={workspace} />
 		</>
 	);
 }
