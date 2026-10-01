@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Refusal } from "#/components/refusal";
 import { Skeleton } from "#/components/ui/skeleton";
 import { TranscriptPane } from "#/components/workbench/transcript-pane";
+import { WorkPane } from "#/components/workbench/work-pane";
 import { PaneHeading, Workbench } from "#/components/workbench/workbench";
 import { WorkspacesPane } from "#/components/workbench/workspaces-pane";
 import { workspaceQuery } from "#/operator/queries";
@@ -42,7 +43,14 @@ function WorkspaceView() {
 					)}
 				</>
 			}
-			work={<PaneHeading>Work</PaneHeading>}
+			work={
+				<WorkPane
+					currency={currency}
+					organization={organization}
+					workspace={workspace}
+					record={shown.data}
+				/>
+			}
 		/>
 	);
 }

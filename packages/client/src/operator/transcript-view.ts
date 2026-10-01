@@ -139,6 +139,12 @@ export function entryText(entry: Entry): string {
 			return `${entry.agent} started`;
 		case "session_ended":
 			return "Session ended";
+		case "turn_interrupted":
+			return `Interrupted by ${entry.participant}`;
+		case "option_changed":
+			return entry.refused
+				? `Option ${entry.option} refused: ${entry.refused}`
+				: `Option ${entry.option}: ${entry.from ?? "default"} → ${entry.to ?? "default"}`;
 		case "thought":
 			return typeof entry.text === "string" ? entry.text : "Thought";
 		case "plan":
