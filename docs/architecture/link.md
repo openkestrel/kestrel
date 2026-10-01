@@ -134,18 +134,19 @@ effects (ADR-0004).
 | `thought {text, completion}` | yes | Appends narration `Thought`. |
 | `plan {entries, completion}` | yes | Appends one narration plan replacement. |
 | `tool_call {call_id, title, tool_kind, status, input, result, closing_reason, completion}` | yes | Appends one completed detail entry. |
-| `session_state {tools, message_buffering, thought_buffering}` | no | Replaces the Session’s transient snapshot in serve-role memory; reconnect resends it. |
-| `used {usage}` | yes | Records cumulative context use and cost. |
+| `session_state {tools, message_buffering, thought_buffering, usage?}` | no | Replaces the Session’s transient snapshot in serve-role memory; reconnect resends it. |
+| `usage {usage}` | no | Held in serve-role memory beside the running tools: at most one a second, at the window's trailing edge, and never recorded (ADR-0041). |
 | `session_info {title, options, commands}` | no | Records the harness's whole bookkeeping state on the Session (ADR-0041). Sent when it changes, at most once a second, and again after a reconnect. |
 | `checkout {repositories}` | yes | Replaces the Workspace's observed git state (decides Unpublished Work). |
-| `answered` | yes | Closes the open Turn, moves the Session to Waiting, records a delivery. |
-| `finished {exit}` | yes | Ends the Session. |
+| `answered {usage?}` | yes | Closes the open Turn, moves the Session to Waiting, records a delivery, and records the usage it carries. |
+| `finished {exit, usage?}` | yes | Ends the Session, recording the usage it carries. |
 
 **Numbered reports are exactly-once.** The supervisor numbers each Session's reports from 1 and
 resends from the first one not acknowledged. The control plane keeps `session.reports_taken`: the
 next number is applied, an old one is acknowledged and ignored, and a gap is refused with `400`. A
-supervisor sends completed units immediately, and `model` and `used` as they arrive. It reports
-`checkout` and then `answered` or `finished` at the Turn boundary.
+supervisor sends completed units immediately, and `model` as it arrives. Usage and bookkeeping are
+transient and unnumbered; a Turn's answer and a Session's end carry the usage that stands. It
+reports `checkout` and then `answered` or `finished` at the Turn boundary.
 
 ## Authentication
 

@@ -183,8 +183,10 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
                 tools: vec![],
                 message_buffering: false,
                 thought_buffering: false,
+                usage: Some(usage()),
             },
         ),
+        (Some("a-session"), None, Report::Usage { usage: usage() }),
         (Some("a-session"), None, Report::Ready),
         (
             Some("a-session"),
@@ -230,9 +232,18 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
             Some(3),
             Report::Finished {
                 exit: Exit::Succeeded,
+                usage: Some(usage()),
             },
         ),
     ]
+}
+
+fn usage() -> link::Usage {
+    link::Usage {
+        context_used: 1_200,
+        context_size: 200_000,
+        cost: None,
+    }
 }
 
 #[tokio::test]

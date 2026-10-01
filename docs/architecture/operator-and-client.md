@@ -50,9 +50,10 @@ several matching is `Declined::Missing` or `Declined::Ambiguous`, naming the can
 `GET …/sessions/{session}` serves the Session's whole bookkeeping state — the harness's config
 options with their current and offered values, its title for the conversation, and the commands it
 offers — kept current by the supervisor for the Session's whole life ([ADR-0041](../adr/0041-a-sessions-options-are-its-harnesss-config-options.md)).
-`worked_model` is the Model-category option's current value. The read carries a strong `ETag` over
-its body and answers `304` to a matching `If-None-Match`, because a reconnecting Client refetches
-every view it subscribes to.
+`worked_model` is the Model-category option's current value. `usage` is what the harness has spent:
+the live figure for the Turn in flight, and otherwise what the last Turn's answer or the Session's
+end recorded. The read carries a strong `ETag` over its body and answers `304` to a matching
+`If-None-Match`, because a reconnecting Client refetches every view it subscribes to.
 
 ### Streaming the Transcript
 
@@ -75,9 +76,10 @@ events carry global cursors. The stream sends a `cursor` event when omitted entr
 beyond the last delivered entry or Activity.
 
 A follow starts every connect with a transient `session_state` snapshot, including empty state,
-then sends changes to running tools and buffering flags. These events have no id and are never
-stored. The CLI passes `--kinds` and `--no-summaries` to the read, prints each closed Activity once
-across reconnects, and prints a caught-up open summary on a non-follow read.
+then sends changes to running tools, buffering flags and the usage the harness reports — at most
+one usage change a second, at the window's trailing edge, and never a row. These events have no id
+and are never stored. The CLI passes `--kinds` and `--no-summaries` to the read, prints each closed
+Activity once across reconnects, and prints a caught-up open summary on a non-follow read.
 
 A follow that stays open past caught-up registers a follower. It is handed one `follower` event
 (`id`, `lease_seconds`) and then a `presence` event carrying the whole current set

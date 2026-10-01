@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::domain::Usage;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Repository {
     pub repository: String,
@@ -156,17 +158,26 @@ pub struct RunningTool {
     pub started_at: Timestamp,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SessionState {
     pub tools: Vec<RunningTool>,
     pub message_buffering: bool,
     pub thought_buffering: bool,
+    /// What the harness has spent so far, held in memory and never a row (ADR-0041).
+    #[serde(default)]
+    pub usage: Option<Usage>,
 }
 
 impl Summaries {
     pub fn report_session(&self, instance: &str, session: &str, state: SessionState) {
         if let Some(live) = self.0.lock().unwrap().get_mut(instance) {
             live.sessions.insert(session.to_owned(), state);
+        }
+    }
+
+    pub fn report_usage(&self, instance: &str, session: &str, usage: Usage) {
+        if let Some(live) = self.0.lock().unwrap().get_mut(instance) {
+            live.sessions.entry(session.to_owned()).or_default().usage = Some(usage);
         }
     }
     pub fn current_session(&self, session: &crate::domain::Session) -> SessionState {

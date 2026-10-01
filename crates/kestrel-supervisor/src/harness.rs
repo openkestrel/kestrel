@@ -61,6 +61,8 @@ pub struct Worked {
     pub allowed: Vec<Subject>,
     pub on: Option<On>,
     pub failed: Option<String>,
+    /// What the harness had spent when the turn ended, for the report that persists it.
+    pub usage: Option<crate::link::Usage>,
 }
 
 /// Which model the agent works the turn on — the one its Session named, or the one the harness
@@ -161,6 +163,7 @@ impl Conversation {
                 allowed: Vec::new(),
                 on: None,
                 failed: Some("the agent conversation ended unannounced".to_owned()),
+                usage: None,
             })
         })
     }
@@ -263,6 +266,7 @@ async fn conversing(
         completer: Completer::default(),
         allowed: Vec::new(),
         on: None,
+        usage: None,
         reports: turns.clone(),
         diagnostics: harness.stderr.clone(),
         replaying: false,
@@ -886,6 +890,8 @@ struct Hearing {
     completer: Completer,
     allowed: Vec<Subject>,
     on: Option<On>,
+    /// What the harness last said it spent, for the report a turn's answer carries.
+    usage: Option<crate::link::Usage>,
     reports: mpsc::UnboundedSender<ConversationEvent>,
     diagnostics: mpsc::UnboundedSender<String>,
     replaying: bool,
@@ -1118,6 +1124,11 @@ impl Hearing {
         }
         self.announce();
         let completed = self.completer.update(update, jiff::Timestamp::now());
+        for report in &completed.reports {
+            if let crate::link::Report::Usage { usage } = report {
+                self.usage = Some(usage.clone());
+            }
+        }
         self.emit(completed);
     }
     fn worked(&mut self, failed: Option<String>) -> Worked {
@@ -1135,6 +1146,7 @@ impl Hearing {
             allowed: std::mem::take(&mut self.allowed),
             on: self.on.take(),
             failed,
+            usage: self.usage.clone(),
         }
     }
 }
@@ -1217,6 +1229,7 @@ mod tests {
                 completer: Completer::default(),
                 allowed: Vec::new(),
                 on: None,
+                usage: None,
                 reports,
                 diagnostics: mpsc::unbounded_channel().0,
                 replaying: false,

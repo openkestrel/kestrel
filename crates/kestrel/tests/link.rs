@@ -347,9 +347,8 @@ async fn the_link_takes_every_report_the_published_openapi_document_describes() 
             "model": "scripted-mini",
         },
         "said": {"kind": "said", "completion": {"started_at": "2026-09-29T12:00:00Z", "finished_at": "2026-09-29T12:00:00Z", "turn_outcome": null}, "seq": 1, "message": "what the agent said"},
-        "used": {
-            "kind": "used",
-            "seq": 1,
+        "usage": {
+            "kind": "usage",
             "usage": {
                 "context_used": 1_200,
                 "context_size": 200_000,
@@ -377,7 +376,7 @@ async fn the_link_takes_every_report_the_published_openapi_document_describes() 
                 {"name": "compact", "description": "Compact the conversation", "input_hint": "/compact"},
             ],
         },
-        "answered": {"kind": "answered", "seq": 1},
+        "answered": {"kind": "answered", "seq": 1, "usage": {"context_used": 1_200, "context_size": 200_000, "cost": {"amount": 0.42, "currency": "USD"}}},
         "checkout": {
             "kind": "checkout",
             "seq": 1,
@@ -398,10 +397,10 @@ async fn the_link_takes_every_report_the_published_openapi_document_describes() 
                 },
             ],
         },
-        "finished": {"kind": "finished", "seq": 1, "exit": {"status": "succeeded"}},        "thought": {"kind": "thought", "seq": 1, "text": "thinking", "completion": {"started_at": "2026-09-29T12:00:00Z", "finished_at": "2026-09-29T12:00:00Z", "turn_outcome": null}},
+        "finished": {"kind": "finished", "seq": 1, "exit": {"status": "succeeded"}, "usage": {"context_used": 1_200, "context_size": 200_000, "cost": {"amount": 0.42, "currency": "USD"}}},        "thought": {"kind": "thought", "seq": 1, "text": "thinking", "completion": {"started_at": "2026-09-29T12:00:00Z", "finished_at": "2026-09-29T12:00:00Z", "turn_outcome": null}},
         "plan": {"kind": "plan", "seq": 1, "entries": [], "completion": {"started_at": "2026-09-29T12:00:00Z", "finished_at": "2026-09-29T12:00:00Z", "turn_outcome": null}},
         "tool_call": {"kind":"tool_call", "seq":1, "call_id":"call", "title":"read", "tool_kind":"read", "status":"completed", "input":{}, "result":[], "closing_reason":null, "completion":{"started_at":"2026-09-30T12:00:00Z", "finished_at":"2026-09-30T12:00:00Z", "turn_outcome":null}},
-        "session_state": {"kind":"session_state", "tools":[], "message_buffering":false, "thought_buffering":false},
+        "session_state": {"kind":"session_state", "tools":[], "message_buffering":false, "thought_buffering":false, "usage": {"context_used": 1_200, "context_size": 200_000, "cost": {"amount": 0.42, "currency": "USD"}}},
 
 
     });
@@ -433,6 +432,25 @@ async fn the_link_takes_every_report_the_published_openapi_document_describes() 
     }
 
     kestrel.teardown().await;
+}
+
+/// The next event with this name, skipping whatever else a follow sends first: a follow registers
+/// and says its presence once it has caught up, and entries and activities may come first.
+async fn until_named(
+    stream: &mut support::link_client::Events,
+    name: &str,
+) -> support::link_client::Event {
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+
+    loop {
+        let patience = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match stream.next_within(patience).await {
+            Next::Event(event) if event.name.as_deref() == Some(name) => return event,
+            Next::Event(_) => {}
+            Next::Quiet => panic!("the stream never said {name}"),
+            Next::Closed => panic!("the stream closed before it said {name}"),
+        }
+    }
 }
 
 fn published() -> serde_json::Value {
@@ -714,6 +732,7 @@ async fn completed_units_replay_once_and_filtered_pages_walk_the_global_cursor()
             tools: vec![],
             message_buffering: true,
             thought_buffering: false,
+            usage: None,
         },
     };
     assert!(
@@ -958,10 +977,7 @@ async fn a_transcript_follow_replaces_activity_and_snapshots_session_state_witho
         session.workspace
     );
     let mut stream = support::link_client::Events::over(client.get(&base).send().await.unwrap());
-    let Next::Event(snapshot) = stream.next_within(PATIENCE).await else {
-        panic!("no snapshot")
-    };
-    assert_eq!(snapshot.name.as_deref(), Some("session_state"));
+    let snapshot = until_named(&mut stream, "session_state").await;
     assert_eq!(snapshot.id, None);
     let state: serde_json::Value = serde_json::from_str(&snapshot.data).unwrap();
     assert_eq!(state["tools"], json!([]));
@@ -1004,6 +1020,7 @@ async fn a_transcript_follow_replaces_activity_and_snapshots_session_state_witho
             }],
             message_buffering: true,
             thought_buffering: false,
+            usage: None,
         },
     };
     assert_eq!(
@@ -1012,10 +1029,7 @@ async fn a_transcript_follow_replaces_activity_and_snapshots_session_state_witho
             .status(),
         StatusCode::ACCEPTED
     );
-    let Next::Event(change) = stream.next_within(PATIENCE).await else {
-        panic!("no change")
-    };
-    assert_eq!(change.name.as_deref(), Some("session_state"));
+    let change = until_named(&mut stream, "session_state").await;
     assert_eq!(change.id, None);
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&change.data).unwrap()["message_buffering"],
@@ -1273,6 +1287,17 @@ fn published_transcript_reads_describe_activities_ranges_and_snapshots() {
                     .as_array()
                     .unwrap()
                     .contains(&json!("tools"))
+            );
+            assert!(
+                snapshot["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("usage")),
+                "the session_state snapshot does not document the usage it carries"
+            );
+            assert_eq!(
+                snapshot["properties"]["usage"]["anyOf"][0]["$ref"],
+                "#/components/schemas/Usage"
             );
             assert!(
                 document["components"]["schemas"]["Event"]["oneOf"]

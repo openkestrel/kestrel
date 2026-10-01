@@ -648,15 +648,29 @@ async fn a_completed_message_is_readable_before_a_slow_turn_answers() {
     }
     let all = operator_entries(&kestrel, &workspace, Some("shared_state,narration")).await;
     assert!(!serde_json::to_string(&all).unwrap().contains("late text"));
-    assert_eq!(
-        kestrel
-            .session(session.id)
+    let path = kestrel::operator::SESSION
+        .replace("{organization}", "acme")
+        .replace("{session}", &session.id.to_string());
+    // The usage report is a transient one at the window's trailing edge, so it is waited for.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let shown: serde_json::Value = reqwest::Client::new()
+            .get(format!("{}{path}", kestrel.operator()))
+            .send()
             .await
-            .usage
-            .unwrap()
-            .context_used,
-        12
-    );
+            .expect("the operator boundary should answer")
+            .json()
+            .await
+            .expect("the session as JSON");
+        if shown["usage"]["context_used"] == 12 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the late usage update did not reach the read: {shown}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     kestrel.teardown().await;
 }
 

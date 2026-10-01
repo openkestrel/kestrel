@@ -7,6 +7,8 @@ use kestrel::operator;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use support::Kestrel;
+use support::scripted_agent::{self, Script};
+use support::supervisor;
 
 /// Longer than the hub's 250 ms coalescing window, so a quiet gap is really quiet.
 const QUIET: Duration = Duration::from_millis(600);
@@ -114,6 +116,13 @@ async fn notices_until_quiet(stream: &mut Stream) -> Vec<Frame> {
     }
 
     frames
+}
+
+fn names(frames: &[Frame]) -> Vec<String> {
+    frames
+        .iter()
+        .map(|frame| format!("{}({})", frame.name, frame.data))
+        .collect()
 }
 
 fn names_changed(frames: &[Frame], resource: &str, id: Option<&str>) -> bool {
@@ -393,16 +402,52 @@ fn the_published_operator_document_describes_the_change_stream_and_its_events() 
     );
 }
 
-fn names(frames: &[Frame]) -> Vec<String> {
-    frames
-        .iter()
-        .map(|frame| format!("{}({})", frame.name, frame.data))
-        .collect()
-}
-
 fn resolve<'a>(document: &'a Value, reference: &str) -> &'a Value {
     reference
         .trim_start_matches("#/")
         .split('/')
         .fold(document, |document, step| &document[step])
+}
+
+/// Live usage is held in memory and never written, so it raises no change notice.
+#[tokio::test]
+async fn live_usage_raises_no_change_notice() {
+    let kestrel = Kestrel::dispatching_to(
+        supervisor::binary(),
+        &scripted_agent::playing(Script::BurstsUsage),
+    )
+    .await;
+    declare_organization(&kestrel, "acme").await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+
+    let mut changes = Stream::open(&kestrel, "acme").await;
+    assert_eq!(
+        changes.next(QUIET).await.expect("an open event").name,
+        "open"
+    );
+
+    let session = kestrel.enqueue_session(workspace.id).await;
+    let started = notices_until_quiet(&mut changes).await;
+    assert!(
+        names_changed(&started, "session", Some(&session.id.to_string())),
+        "the started session raised no session notice: {started:?}",
+        started = names(&started)
+    );
+
+    // The burst and its trailing-edge report land after the start's notices settled; neither
+    // writes a row, so nothing more may arrive.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut late = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        if let Some(frame) = changes.next(QUIET).await {
+            late.push(frame);
+        }
+    }
+    assert!(
+        late.is_empty(),
+        "live usage raised a notice: {late:?}",
+        late = names(&late)
+    );
+
+    kestrel.teardown().await;
 }

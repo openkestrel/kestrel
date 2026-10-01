@@ -934,7 +934,7 @@
             "$ref": "#/components/schemas/Said"
           },
           {
-            "$ref": "#/components/schemas/Used"
+            "$ref": "#/components/schemas/UsageReport"
           },
           {
             "$ref": "#/components/schemas/SessionInfo"
@@ -972,7 +972,7 @@
             "started": "#/components/schemas/Started",
             "model": "#/components/schemas/Model",
             "said": "#/components/schemas/Said",
-            "used": "#/components/schemas/Used",
+            "usage": "#/components/schemas/UsageReport",
             "session_info": "#/components/schemas/SessionInfo",
             "answered": "#/components/schemas/Answered",
             "checkout": "#/components/schemas/CheckoutObserved",
@@ -1126,18 +1126,15 @@
           "completion"
         ]
       },
-      "Used": {
-        "description": "What the Harness has spent so far. Recorded on the Session, and never in a Transcript.",
+      "UsageReport": {
+        "description": "What the Harness has spent so far, unnumbered and transient: held in memory beside the running tools, sent at most once a second at the window's trailing edge, and never recorded (ADR-0041).",
         "type": "object",
         "properties": {
           "kind": {
-            "const": "used"
+            "const": "usage"
           },
           "usage": {
             "$ref": "#/components/schemas/Usage"
-          },
-          "seq": {
-            "$ref": "#/components/schemas/Seq"
           },
           "session": {
             "type": "string",
@@ -1147,12 +1144,11 @@
         "required": [
           "kind",
           "session",
-          "seq",
           "usage"
         ]
       },
       "Answered": {
-        "description": "The agent answered the turn, and its conversation waits for another prompt. The Session goes on.",
+        "description": "The agent answered the turn, and its conversation waits for another prompt. The Session goes on. It carries what the Harness had spent when the turn ended, which is what the Session read keeps.",
         "type": "object",
         "properties": {
           "kind": {
@@ -1164,6 +1160,10 @@
           "session": {
             "type": "string",
             "format": "uuid"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage",
+            "description": "What the Harness had spent when the turn ended. Absent for a supervisor that never heard a usage update."
           }
         },
         "required": [
@@ -1284,7 +1284,7 @@
         ]
       },
       "Finished": {
-        "description": "The Session is over, and this is how it went: its conversation failed, or it never started. The supervisor lets the Session go after saying so, and stays on the link.",
+        "description": "The Session is over, and this is how it went: its conversation failed, or it never started. The supervisor lets the Session go after saying so, and stays on the link. It carries what the Harness had spent when it ended, so a Session that ends mid-turn still records it.",
         "type": "object",
         "properties": {
           "kind": {
@@ -1299,6 +1299,10 @@
           "session": {
             "type": "string",
             "format": "uuid"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage",
+            "description": "What the Harness had spent when the Session ended. Absent for a supervisor that never heard a usage update."
           }
         },
         "required": [
@@ -2348,7 +2352,7 @@
         ]
       },
       "SessionState": {
-        "description": "A whole transient Session snapshot, sent on changes and reconnect. Unnumbered; never enters the Transcript.",
+        "description": "A whole transient Session snapshot, sent on changes and reconnect: the running tools, whether a message or thought is still buffering, and what the Harness has spent. Unnumbered; never enters the Transcript and never recorded.",
         "type": "object",
         "properties": {
           "kind": {
@@ -2369,6 +2373,10 @@
           },
           "thought_buffering": {
             "type": "boolean"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage",
+            "description": "What the Harness has spent so far. Absent until it reports one."
           }
         },
         "required": [

@@ -24,10 +24,10 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Agent, Client, ConnectionTo, Error, Result, Stdio};
 use clap::Parser;
 use kestrel_scripted_agent::{
-    CHATTER, CHATTERED_LINES, CHATTERED_MESSAGES, COMMAND, COMMAND_DESCRIPTION, COMMAND_HINT,
-    CONFIDED, CUSTOM_CATEGORY, CUSTOM_OPTION, DEFAULT_MODEL, FIRST_MEMORY, LAST_MEMORY, LOGIN,
-    MODE_OPTION, MUTTERED, OTHER_MODE, OTHER_MODEL, OVERLONG, REFRESHED, REPEATS, STARTING_MODE,
-    SWITCHED_MODE, Script, TITLE, chattered, conversed,
+    BURSTED_SIZE, BURSTED_USAGE, CHATTER, CHATTERED_LINES, CHATTERED_MESSAGES, COMMAND,
+    COMMAND_DESCRIPTION, COMMAND_HINT, CONFIDED, CUSTOM_CATEGORY, CUSTOM_OPTION, DEFAULT_MODEL,
+    FIRST_MEMORY, LAST_MEMORY, LOGIN, MODE_OPTION, MUTTERED, OTHER_MODE, OTHER_MODEL, OVERLONG,
+    REFRESHED, REPEATS, STARTING_MODE, SWITCHED_MODE, Script, TITLE, chattered, conversed,
 };
 
 const SESSION: &str = "scripted";
@@ -41,6 +41,10 @@ const KEPT: &str = ".scripted-session";
 const DIED: &str = ".scripted-session-died";
 const PROMPT_SEPARATOR: char = '\u{1e}';
 const VANISHING: Duration = Duration::from_millis(100);
+/// How long `BurstsUsage` lets the Session's start settle before it reports.
+const BURST_SETTLED: Duration = Duration::from_millis(1_000);
+/// How long `BurstsUsage` stays in its turn after reporting, so a follower sees the live value.
+const BURST_PATIENCE: Duration = Duration::from_millis(2_500);
 
 #[derive(Debug, Parser)]
 #[command(name = "kestrel-scripted-agent", version)]
@@ -270,6 +274,25 @@ async fn play(
             SessionUpdate::UsageUpdate(UsageUpdate::new(12, 100)),
         )?;
         std::future::pending::<()>().await;
+    }
+    if script == Script::BurstsUsage {
+        // Long enough that the notices the Session's start raised have settled first.
+        tokio::time::sleep(BURST_SETTLED).await;
+        for used in [
+            BURSTED_USAGE / 4,
+            BURSTED_USAGE / 2,
+            BURSTED_USAGE * 3 / 4,
+            BURSTED_USAGE,
+        ] {
+            update(
+                connection,
+                SessionUpdate::UsageUpdate(UsageUpdate::new(used, BURSTED_SIZE)),
+            )?;
+        }
+        // Long enough for the trailing-edge usage report to go up, and to watch for notices.
+        tokio::time::sleep(BURST_PATIENCE).await;
+        say(connection, "message-1", "spent")?;
+        return Ok(StopReason::EndTurn);
     }
     if matches!(script, Script::CancelledText | Script::FailedText) {
         say(connection, "message", "observed message")?;
