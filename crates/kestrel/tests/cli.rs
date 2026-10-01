@@ -1325,6 +1325,7 @@ fn transcript_kinds_select_the_entries_the_client_streams() {
         "workspace",
         "transcript",
         &workspace,
+        "--no-summaries",
         "--json",
         "kind,entry",
     ]);
@@ -1335,6 +1336,7 @@ fn transcript_kinds_select_the_entries_the_client_streams() {
         &workspace,
         "--kinds",
         "narration",
+        "--no-summaries",
         "--json",
         "seq,kind,session_id,entry",
     ]);
@@ -1352,6 +1354,7 @@ fn transcript_kinds_select_the_entries_the_client_streams() {
         &workspace,
         "--kinds",
         "narration,shared_state",
+        "--no-summaries",
         "--json",
         "seq,kind,entry",
     ]);
