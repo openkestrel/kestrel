@@ -3,7 +3,7 @@
 ### Issue tracker
 
 Issues are tracked in GitHub (`openkestrel/kestrel`). Fetch one with
-`gh issue view <number> --comments`; the rest is in `docs/agents/issue-tracker.md`.
+`gh issue view <number> --repo openkestrel/kestrel --comments`; the rest is in `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
