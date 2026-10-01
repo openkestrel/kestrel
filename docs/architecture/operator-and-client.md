@@ -51,6 +51,12 @@ id it received (`kestrel-client/src/transcript.rs`) and gives up after 30 s unre
 across omitted entries: the page returns the highest examined seq, and the stream sends a `cursor`
 event when omitted entries advance it beyond the last delivered entry. The cursor remains global.
 
+`GET …/workspaces/{workspace}/transcript/payloads/{payload}` fetches an oversized body field as
+its original bytes and media type. The entry's `payload_fields` lists fields holding references;
+other JSON values remain inline even if they resemble a reference. A reference identifies its
+Workspace, entry seq and field. Another Workspace's reference is `404`; a reference whose entry
+expired is `410` after its content is removed. Internal prompt and delivery reads resolve references.
+
 ### Pull requests
 
 A Workspace read carries `pull_requests`: one item per fixed repository, in checkout order.
