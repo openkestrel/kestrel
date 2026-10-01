@@ -1,24 +1,24 @@
-//! An Agent's model is configuration rather than a rebuild (ADR-0007).
+//! An Agent's model, mode and thought level are configuration rather than a rebuild (ADR-0007).
 
 use anyhow::Result;
 
-use crate::domain::Agent;
-use crate::store::{Declared, Store};
+use crate::domain::{Agent, Declared};
+use crate::store::{Declared as DeclaredRecord, Store};
 
 pub async fn declare(
     store: &Store,
     organization: &str,
     name: &str,
     harness: &str,
-    model: Option<&str>,
-) -> Result<Declared<Agent>> {
-    let model = names(model);
+    declared: &Declared,
+) -> Result<DeclaredRecord<Agent>> {
+    let declared = Declared::named(declared.clone());
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
 
     let declared = tx
         .agents()
-        .declare(&organization, name, harness, model)
+        .declare(&organization, name, harness, &declared)
         .await?;
     tx.commit().await?;
 

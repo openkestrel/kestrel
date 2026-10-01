@@ -9,9 +9,9 @@ use jiff::{SignedDuration, Timestamp};
 pub mod apply;
 
 use crate::domain::{
-    Agent, CorrelationMiss, DisableReason, Event, EventRecordId, Fires, Firing, FiringBudget,
-    Integration, Occurrence, OnOpenWorkspace, Organization, Schedule, SessionId, StartedBy,
-    Templates, Trigger, TriggerId, TriggerState, Workspace, WorkspaceId,
+    Agent, CorrelationMiss, Declared, DisableReason, Event, EventRecordId, Fires, Firing,
+    FiringBudget, Integration, Occurrence, OnOpenWorkspace, Organization, Schedule, SessionId,
+    StartedBy, Templates, Trigger, TriggerId, TriggerState, Workspace, WorkspaceId,
 };
 use crate::integration::github::{self, EventData, Github};
 use crate::log::Entry;
@@ -79,6 +79,7 @@ pub struct Declaration<'a> {
     pub templates: &'a Templates,
     pub project: &'a str,
     pub agent: &'a str,
+    pub declared: &'a Declared,
     pub allows: &'a [String],
     pub profile: Option<&'a str>,
 }
@@ -199,6 +200,7 @@ pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trig
                 declaration.templates,
                 &project,
                 &agent,
+                declaration.declared,
                 &allows,
                 profile.as_ref(),
                 false,
@@ -214,6 +216,7 @@ pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trig
                     declaration.templates,
                     &project,
                     &agent,
+                    declaration.declared,
                     &allows,
                     profile.as_ref(),
                     false,
@@ -229,6 +232,7 @@ pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trig
                     declaration.templates,
                     &project,
                     &agent,
+                    declaration.declared,
                     &allows,
                     profile.as_ref(),
                     false,
@@ -251,6 +255,7 @@ fn same_declaration(
     templates: &Templates,
     project: &crate::domain::Project,
     agent: &Agent,
+    declared: &Declared,
     allows: &[Agent],
     profile: Option<&crate::domain::SubscriptionProfile>,
     applied: bool,
@@ -269,6 +274,7 @@ fn same_declaration(
         && trigger.templates == *templates
         && trigger.project.id == project.id
         && trigger.agent.id == agent.id
+        && trigger.declared == *declared
         && names(&trigger.allows) == names(allows)
         && trigger.profile.as_ref().map(|profile| profile.id) == profile.map(|profile| profile.id)
         && trigger.applied == applied
@@ -389,6 +395,7 @@ pub async fn test_declared(
             name: declared.name.clone(),
             fires: Fires::On(declared.filter.clone()),
             templates: declared.templates.clone(),
+            declared: declared.declared.clone(),
             state: TriggerState::Enabled,
             disabled_because: None,
             firing_budget: FiringBudget::default(),
@@ -886,7 +893,7 @@ async fn firing(
 
     let session = tx
         .workspaces()
-        .enqueue_session(&workspace, Some(agent), None)
+        .enqueue_session(&workspace, Some(agent), trigger.declared.clone())
         .await?;
     tx.triggers()
         .record_opened_firing(trigger, event, &workspace, worked_ahead.as_deref())
@@ -946,6 +953,7 @@ async fn started(
         &workspace,
         PendingSession {
             agent,
+            declared: trigger.declared.clone(),
             trigger: trigger.name.clone(),
             brief: rendered.brief,
         },

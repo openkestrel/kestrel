@@ -116,6 +116,8 @@ pub enum Script {
     SwitchesModel,
     /// Offers only legacy `modes` and no Mode-category option, and switches mode mid-turn.
     LegacyModes,
+    /// Offers only legacy `modes` and no Mode-category option, and keeps the mode it is set to.
+    LegacyModesKept,
 }
 
 impl Script {
@@ -159,6 +161,7 @@ impl Script {
             Script::Repeats => "repeats",
             Script::SwitchesModel => "switches-model",
             Script::LegacyModes => "legacy-modes",
+            Script::LegacyModesKept => "legacy-modes-kept",
         }
     }
 }

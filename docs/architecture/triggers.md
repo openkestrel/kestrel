@@ -75,7 +75,7 @@ firing a Trigger twice.
 
 `trigger::render` fills the brief, branch and correlation from the Event with minijinja in strict
 mode, bounded by fuel, recursion and output size (`template.rs`). The Agent, Project, Subscription
-Profile and model never render from an Event ([ADR-0013](../adr/0013-an-event-supplies-data-never-authority.md)).
+Profile and declared model, mode and thought level never render from an Event ([ADR-0013](../adr/0013-an-event-supplies-data-never-authority.md)).
 A render failure fails the firing and starts nothing.
 
 ### Choosing the Agent

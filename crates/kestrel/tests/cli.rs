@@ -437,6 +437,62 @@ fn a_session_show_says_the_title_its_options_and_its_commands() {
 }
 
 #[test]
+fn workspace_open_declares_the_mode_its_first_session_runs_in() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.boot();
+    declared(&booted);
+    let opened = booted.run(&[
+        "workspace",
+        "open",
+        "--project",
+        support::repository::NAME,
+        "--agent",
+        "builder",
+        "--mode",
+        kestrel_scripted_agent::SWITCHED_MODE,
+        "--brief",
+        "go",
+        "--as-participant",
+        "operator",
+    ]);
+    let workspace = opened
+        .split('\t')
+        .next()
+        .expect("the workspace's name")
+        .to_owned();
+
+    let listed = booted.until(
+        &[
+            "session",
+            "list",
+            "--workspace",
+            &workspace,
+            "--json",
+            "id,state",
+        ],
+        |listed| listed.iter().any(|session| session["state"] == "waiting"),
+        "answer its first turn",
+    );
+    let session = listed[0]["id"].as_str().expect("the session's identifier");
+    let shown: Value = serde_json::from_str(&booted.run(&[
+        "session",
+        "show",
+        session,
+        "--json",
+        "mode,worked_model",
+    ]))
+    .expect("the session's fields as JSON");
+
+    assert_eq!(
+        shown["mode"],
+        kestrel_scripted_agent::SWITCHED_MODE,
+        "the mode the open declared was not set on the harness: {shown}"
+    );
+
+    booted.terminated();
+}
+
+#[test]
 fn a_role_boots_on_an_empty_data_directory_and_makes_its_database() {
     let kestrel = Kestrel::new();
 

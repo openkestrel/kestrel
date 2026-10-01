@@ -12,6 +12,8 @@ fn harness() -> link::Harness {
         command: "opencode acp".to_owned(),
         auth: None,
         model: None,
+        mode: None,
+        thought_level: None,
     }
 }
 
@@ -37,7 +39,7 @@ impl Fixture {
             .await
             .unwrap();
         tx.agents()
-            .declare(&organization, "builder", "opencode", None)
+            .declare(&organization, "builder", "opencode", &Declared::default())
             .await
             .unwrap();
         tx.commit().await.unwrap();
@@ -46,7 +48,9 @@ impl Fixture {
         )
         .await
         .unwrap();
-        let queued = enqueue(&store, workspace.id, None, None).await.unwrap();
+        let queued = enqueue(&store, workspace.id, None, Declared::default())
+            .await
+            .unwrap();
         // This fixture drives turns, so its Session is claimed as one with work to do rather than
         // as an unbriefed one waiting for its first message.
         let session = {
@@ -128,7 +132,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         .await
         .unwrap();
     tx.agents()
-        .declare(&organization, "builder", "codex", None)
+        .declare(&organization, "builder", "codex", &Declared::default())
         .await
         .unwrap();
     tx.profiles()

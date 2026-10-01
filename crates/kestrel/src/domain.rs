@@ -67,14 +67,51 @@ pub struct Project {
     pub branch: String,
 }
 
+/// The three categories a declaration may name, each a Harness value id: a category named none
+/// for is the Harness's own default (ADR-0041).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Declared {
+    pub model: Option<String>,
+    pub mode: Option<String>,
+    pub thought_level: Option<String>,
+}
+
+impl Declared {
+    /// This declaration over one below it, category by category.
+    pub fn over(self, below: Self) -> Self {
+        Self {
+            model: self.model.or(below.model),
+            mode: self.mode.or(below.mode),
+            thought_level: self.thought_level.or(below.thought_level),
+        }
+    }
+
+    /// A value named as nothing is a value nobody named.
+    pub fn named(values: Self) -> Self {
+        fn named(value: Option<String>) -> Option<String> {
+            value.filter(|value| !value.is_empty())
+        }
+
+        Self {
+            model: named(values.model),
+            mode: named(values.mode),
+            thought_level: named(values.thought_level),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.model.is_none() && self.mode.is_none() && self.thought_level.is_none()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Agent {
     pub id: AgentId,
     pub organization: OrganizationId,
     pub name: String,
     pub harness: String,
-    /// None when the Agent names none, and the Harness's own default is the answer.
-    pub model: Option<String>,
+    /// What the Agent declares for the Harness's model, mode and thought level.
+    pub declared: Declared,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -392,6 +429,9 @@ pub struct Trigger {
     pub templates: Templates,
     pub project: Project,
     pub agent: Agent,
+    /// What the Trigger declares for its Sessions' model, mode and thought level, over the
+    /// Agent's and under a Session's own (ADR-0041).
+    pub declared: Declared,
     pub allows: Vec<Agent>,
     pub profile: Option<SubscriptionProfile>,
     pub state: TriggerState,

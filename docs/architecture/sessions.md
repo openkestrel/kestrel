@@ -52,6 +52,19 @@ stateDiagram-v2
   changed in one place changes both: unless older held input is prompted first, a free slot
   claims position 1.
 
+## Declared options
+
+A Session starts with the harness options its declaration named: `model`, `mode` and
+`thought_level`, each a harness value id, resolved per category — the Session's own over its
+Trigger's over its Agent's, a category named none staying at the harness's default (ADR-0041).
+The resolved values are frozen onto the Session at enqueue (`session.model`, `session.mode`,
+`session.thought_level`) and travel to the supervisor in the `start` instruction's `harness`.
+The supervisor checks each declared category against what the harness offers at setup and fails
+the Session naming the category and the value when there is no way to set it or the value is not
+offered; a declared mode a harness offers only as a legacy `modes` entry is set through
+`session/set_mode`. Recovery applies the declared values again. `PUT …/agents/{agent}/model`
+reaches no Session already enqueued.
+
 ## The unfinished Session
 
 A Workspace has at most one **Unfinished Session**: queued, working, waiting or unbriefed. Its

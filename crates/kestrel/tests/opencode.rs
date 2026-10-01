@@ -72,7 +72,9 @@ impl Driven {
                 Harness {
                     command: HARNESS.to_owned(),
                     auth: None,
-                    model: driven.session.agent.model.clone(),
+                    model: driven.session.agent.declared.model.clone(),
+                    mode: driven.session.agent.declared.mode.clone(),
+                    thought_level: driven.session.agent.declared.thought_level.clone(),
                 },
             )
             .await;

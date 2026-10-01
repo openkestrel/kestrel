@@ -104,6 +104,8 @@ impl Supervisor {
             command: self.harness.clone(),
             auth: None,
             model: (!self.model.is_empty()).then(|| self.model.clone()),
+            mode: None,
+            thought_level: None,
         }
     }
 

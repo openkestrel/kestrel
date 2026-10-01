@@ -220,7 +220,8 @@ mod tests {
 
     use super::*;
     use crate::domain::{
-        Agent, Organization, Project, SessionOption, SessionOptionKind, Workspace,
+        Agent, Declared as DomainDeclared, Organization, Project, SessionOption, SessionOptionKind,
+        Workspace,
     };
     use crate::fanout::{Resource, Subscription, Watch};
     use crate::log::Entry;
@@ -246,7 +247,15 @@ mod tests {
             .record;
         let agent = tx
             .agents()
-            .declare(&organization, "builder", "opencode", Some("claude-opus-5"))
+            .declare(
+                &organization,
+                "builder",
+                "opencode",
+                &DomainDeclared {
+                    model: Some("claude-opus-5".to_owned()),
+                    ..DomainDeclared::default()
+                },
+            )
             .await
             .unwrap()
             .record;
@@ -333,7 +342,7 @@ mod tests {
         let mut tx = store.begin().await.unwrap();
         let session = tx
             .workspaces()
-            .enqueue_session(&workspace, None, None)
+            .enqueue_session(&workspace, None, DomainDeclared::default())
             .await
             .unwrap();
         tx.commit().await.unwrap();

@@ -45,9 +45,9 @@ use jiff::{SignedDuration, Timestamp};
 use kestrel::agent;
 use kestrel::compute::{Docker, Driver, LocalExec};
 use kestrel::domain::{
-    Agent, Correlation, CorrelationMiss, Direction, Event, EventRecordId, Exit, Fires, Integration,
-    Occurrence, OnOpenWorkspace, Organization, Project, Schedule, Session, SessionId, SessionState,
-    SubscriptionProfile, Templates, Trigger, Turn, Workspace, WorkspaceId,
+    Agent, Correlation, CorrelationMiss, Declared, Direction, Event, EventRecordId, Exit, Fires,
+    Integration, Occurrence, OnOpenWorkspace, Organization, Project, Schedule, Session, SessionId,
+    SessionState, SubscriptionProfile, Templates, Trigger, Turn, Workspace, WorkspaceId,
 };
 use kestrel::instance;
 use kestrel::integration::{self, Connecting, Registration};
@@ -208,6 +208,8 @@ pub fn harness_playing(script: scripted_agent::Script) -> link::Harness {
         command: scripted_agent::playing(script),
         auth: None,
         model: None,
+        mode: None,
+        thought_level: None,
     }
 }
 
@@ -563,6 +565,20 @@ impl Kestrel {
             .expect("the agent should declare")
     }
 
+    /// An Agent that declares what it wants for the Harness's model, mode and thought level.
+    pub async fn declare_agent_declaring(
+        &self,
+        organization: &Organization,
+        name: &str,
+        harness: &str,
+        declared: Declared,
+    ) -> Agent {
+        agent::declare(&self.store, &organization.name, name, harness, &declared)
+            .await
+            .expect("the agent should declare")
+            .record
+    }
+
     pub async fn try_declare_agent(
         &self,
         organization: &Organization,
@@ -570,9 +586,18 @@ impl Kestrel {
         harness: &str,
         model: Option<&str>,
     ) -> anyhow::Result<Agent> {
-        agent::declare(&self.store, &organization.name, name, harness, model)
-            .await
-            .map(|declared| declared.record)
+        agent::declare(
+            &self.store,
+            &organization.name,
+            name,
+            harness,
+            &Declared {
+                model: model.map(str::to_owned),
+                ..Declared::default()
+            },
+        )
+        .await
+        .map(|declared| declared.record)
     }
 
     pub async fn set_agent_model(
@@ -739,6 +764,34 @@ impl Kestrel {
         .await
     }
 
+    /// A Trigger that declares what it wants for its Sessions' model, mode and thought level.
+    pub async fn declare_trigger_declaring(
+        &self,
+        organization: &str,
+        name: &str,
+        filter: &str,
+        project: &str,
+        agent: &str,
+        declared: Declared,
+    ) -> Trigger {
+        trigger::declare(
+            &self.store,
+            Declaration {
+                organization,
+                name,
+                fires: &Fires::On(filter.parse().expect("the filter should parse")),
+                templates: &templates(BRIEF, None, None),
+                project,
+                agent,
+                declared: &declared,
+                allows: &[],
+                profile: None,
+            },
+        )
+        .await
+        .expect("the trigger should declare")
+    }
+
     pub async fn declare_trigger_rendering(
         &self,
         organization: &str,
@@ -815,6 +868,7 @@ impl Kestrel {
                 templates: &templates,
                 project,
                 agent,
+                declared: &Declared::default(),
                 allows: &[],
                 profile: None,
             },
@@ -845,6 +899,7 @@ impl Kestrel {
                 templates: &templates(BRIEF, None, correlation),
                 project: "kestrel",
                 agent,
+                declared: &Declared::default(),
                 allows: &allows
                     .iter()
                     .map(|&name| name.to_owned())
@@ -911,6 +966,7 @@ impl Kestrel {
                 templates: &templates,
                 project: "kestrel",
                 agent,
+                declared: &Declared::default(),
                 allows: &allows
                     .iter()
                     .map(|&name| name.to_owned())
@@ -1017,6 +1073,7 @@ impl Kestrel {
                 templates,
                 project: "kestrel",
                 agent: "builder",
+                declared: &Declared::default(),
                 allows: &[],
                 profile: None,
             },
@@ -1442,14 +1499,14 @@ impl Kestrel {
     /// What `session enqueue` still lets through directly, with nothing ever posted to the
     /// Workspace: a Session its first Turn has no instruction for.
     pub async fn enqueue_session_with_nothing_posted(&self, workspace: WorkspaceId) -> Session {
-        work::enqueue(&self.store, workspace, None, None)
+        work::enqueue(&self.store, workspace, None, Declared::default())
             .await
             .expect("the session should enqueue")
     }
 
     pub async fn try_enqueue_session(&self, workspace: WorkspaceId) -> anyhow::Result<Session> {
         self.instructed(workspace).await?;
-        work::enqueue(&self.store, workspace, None, None).await
+        work::enqueue(&self.store, workspace, None, Declared::default()).await
     }
 
     pub async fn enqueue_session_as(&self, workspace: WorkspaceId, agent: &str) -> Session {
@@ -1464,7 +1521,7 @@ impl Kestrel {
         agent: &str,
     ) -> anyhow::Result<Session> {
         self.instructed(workspace).await?;
-        work::enqueue(&self.store, workspace, Some(agent), None).await
+        work::enqueue(&self.store, workspace, Some(agent), Declared::default()).await
     }
 
     pub async fn enqueue_session_naming(
@@ -1483,7 +1540,30 @@ impl Kestrel {
         model: Option<&str>,
     ) -> anyhow::Result<Session> {
         self.instructed(workspace).await?;
-        work::enqueue(&self.store, workspace, None, model).await
+        work::enqueue(
+            &self.store,
+            workspace,
+            None,
+            Declared {
+                model: model.map(str::to_owned),
+                ..Declared::default()
+            },
+        )
+        .await
+    }
+
+    /// A Session that declares what it wants for the Harness's model, mode and thought level.
+    pub async fn enqueue_session_declaring(
+        &self,
+        workspace: WorkspaceId,
+        declared: Declared,
+    ) -> Session {
+        self.instructed(workspace)
+            .await
+            .expect("the message should post");
+        work::enqueue(&self.store, workspace, None, declared)
+            .await
+            .expect("the session should enqueue")
     }
 
     /// What a fixture calling straight into `work::enqueue` skips: the message a real operator

@@ -4,7 +4,8 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
 use crate::domain::{
-    Agent, Checkout, Connected, Cost, Exit, Organization, OrganizationId, Preparing, Project,
+    Agent, Checkout, Connected, Cost, Declared, Exit, Organization, OrganizationId, Preparing,
+    Project,
     Session, SessionCommand, SessionId, SessionOption, SessionState, StartedBy,
     SubscriptionProfile, Turn, Usage, Workspace, WorkspaceId, WorkspaceState,
 };
@@ -24,8 +25,8 @@ macro_rules! sessions_where {
                     (SELECT name FROM agent WHERE agent.id = session.agent_id) AS agent_name,
                     harness, state, preparing, exit, exit_because, outcome_message, instance,
                     supervisor, enqueued_at, started_at, ended_at, lease_expires_at, connected_at,
-                    supervisor_version, model, worked_model, title, config_options, commands,
-                    context_used, context_size, cost_amount,
+                    supervisor_version, model, mode, thought_level, worked_model, title,
+                    config_options, commands, context_used, context_size, cost_amount,
                     cost_currency",
             $columns,
             "
@@ -102,6 +103,7 @@ pub struct PendingMessage {
 
 pub struct PendingSession {
     pub agent: Agent,
+    pub declared: Declared,
     pub trigger: String,
     pub brief: String,
 }
@@ -573,12 +575,13 @@ impl<'a> Workspaces<'a> {
         }
     }
 
-    /// No `agent` continues with the latest Session's; `model` stands in for whatever the Agent names.
+    /// No `agent` continues with the latest Session's; `declared` is the Session's own and the
+    /// Trigger's, resolved over whatever the Agent names, category by category.
     pub async fn enqueue_session(
         &mut self,
         workspace: &Workspace,
         agent: Option<&Agent>,
-        model: Option<&str>,
+        declared: Declared,
     ) -> Result<Session> {
         let agent = match agent {
             Some(agent) => agent.clone(),
@@ -591,7 +594,7 @@ impl<'a> Workspaces<'a> {
                 organization: workspace.organization.id,
                 workspace: workspace.id,
                 agent: Agent {
-                    model: model.map(str::to_owned).or_else(|| agent.model.clone()),
+                    declared: declared.clone().over(agent.declared.clone()),
                     ..agent.clone()
                 },
                 state: SessionState::Queued,
@@ -614,9 +617,9 @@ impl<'a> Workspaces<'a> {
 
             let inserted = sqlx::query(
                 "INSERT INTO session
-                     (id, name, organization_id, workspace_id, agent_id, harness, model, state,
-                      enqueued_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     (id, name, organization_id, workspace_id, agent_id, harness, model, mode,
+                      thought_level, state, enqueued_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT (organization_id, name) DO NOTHING",
             )
             .bind(session.id.to_string())
@@ -625,7 +628,9 @@ impl<'a> Workspaces<'a> {
             .bind(session.workspace.to_string())
             .bind(session.agent.id.to_string())
             .bind(&session.agent.harness)
-            .bind(&session.agent.model)
+            .bind(&session.agent.declared.model)
+            .bind(&session.agent.declared.mode)
+            .bind(&session.agent.declared.thought_level)
             .bind(session.state.as_str())
             .bind(due(session.enqueued_at))
             .execute(&mut *self.connection)
@@ -732,15 +737,19 @@ impl<'a> Workspaces<'a> {
     ) -> Result<()> {
         sqlx::query(
             "INSERT INTO pending_session (
-                 workspace_id, organization_id, seq, agent_id, trigger, brief, received_at
+                 workspace_id, organization_id, seq, agent_id, model, mode, thought_level,
+                 trigger, brief, received_at
              )
-             SELECT ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?
+             SELECT ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ?, ?, ?, ?
              FROM pending_session
              WHERE workspace_id = ?",
         )
         .bind(workspace.id.to_string())
         .bind(workspace.organization.id.to_string())
         .bind(pending.agent.id.to_string())
+        .bind(&pending.declared.model)
+        .bind(&pending.declared.mode)
+        .bind(&pending.declared.thought_level)
         .bind(&pending.trigger)
         .bind(&pending.brief)
         .bind(due(Timestamp::now()))
@@ -773,7 +782,7 @@ impl<'a> Workspaces<'a> {
                    SELECT 1 FROM pending_message m
                    WHERE m.workspace_id = ?1 AND m.received_at < pending_session.received_at
                )
-             RETURNING agent_id, trigger, brief",
+             RETURNING agent_id, model, mode, thought_level, trigger, brief",
         )
         .bind(workspace.id.to_string())
         .fetch_optional(&mut *self.connection)
@@ -797,6 +806,11 @@ impl<'a> Workspaces<'a> {
                 row.get::<String, _>("agent_id").parse()?,
             )
             .await?,
+            declared: Declared {
+                model: row.get("model"),
+                mode: row.get("mode"),
+                thought_level: row.get("thought_level"),
+            },
             trigger: row.get("trigger"),
             brief: row.get("brief"),
         }))
@@ -1946,7 +1960,11 @@ fn session(row: &SqliteRow) -> Result<Session> {
             organization: row.get::<String, _>("organization_id").parse()?,
             name: row.get("agent_name"),
             harness: row.get("harness"),
-            model: row.get("model"),
+            declared: Declared {
+                model: row.get("model"),
+                mode: row.get("mode"),
+                thought_level: row.get("thought_level"),
+            },
         },
         state: row.get::<String, _>("state").parse()?,
         preparing: row

@@ -309,7 +309,9 @@ async fn execute(
     let harness = link::Harness {
         command: command.to_owned(),
         auth: dispatch.auth.clone().filter(|method| !method.is_empty()),
-        model: session.agent.model.clone(),
+        model: session.agent.declared.model.clone(),
+        mode: session.agent.declared.mode.clone(),
+        thought_level: session.agent.declared.thought_level.clone(),
     };
     let opened = match session.state {
         SessionState::Unbriefed => link::unbriefed(store, session, harness).await,

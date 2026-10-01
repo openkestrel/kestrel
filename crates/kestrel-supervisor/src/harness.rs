@@ -14,9 +14,10 @@ use agent_client_protocol::schema::v1::{
     ContentBlock, ErrorCode, InitializeRequest, InitializeResponse, LoadSessionRequest,
     NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigId,
-    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption,
-    SessionConfigSelectOptions, SessionConfigValueId, SessionId, SessionModeId, SessionModeState,
-    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, StopReason, TextContent,
+    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelect,
+    SessionConfigSelectOption, SessionConfigSelectOptions, SessionConfigValueId, SessionId,
+    SessionModeId, SessionModeState, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason, TextContent,
 };
 use agent_client_protocol::{
     AcpAgent, AcpAgentConfig, Client, ConnectionTo, Error, LineDirection,
@@ -43,6 +44,10 @@ pub struct Harness {
     pub auth: Option<String>,
     /// The model the Session named, if it named one.
     pub model: Option<String>,
+    /// The mode the Session named, if it named one.
+    pub mode: Option<String>,
+    /// The thought level the Session named, if it named one.
+    pub thought_level: Option<String>,
     pub stderr: mpsc::UnboundedSender<String>,
 }
 
@@ -64,11 +69,38 @@ pub struct On {
     pub model: String,
 }
 
-/// What to ask the agent to set, and what it is on once it has. Nothing is set for a Session
-/// that named no model: the agent is already on the default it advertised.
-struct Selects {
-    id: Option<SessionConfigId>,
-    on: On,
+/// The categories a Session declared, each a harness value id (ADR-0041). A category named none
+/// for stays at whatever the harness already offers.
+#[derive(Debug, Default, Clone, Copy)]
+struct Declared<'a> {
+    model: Option<&'a str>,
+    mode: Option<&'a str>,
+    thought_level: Option<&'a str>,
+}
+
+impl Harness {
+    fn declared(&self) -> Declared<'_> {
+        Declared {
+            model: self.model.as_deref(),
+            mode: self.mode.as_deref(),
+            thought_level: self.thought_level.as_deref(),
+        }
+    }
+}
+
+/// What a Session's declaration asks the agent to set, decided before anything is sent: one
+/// entry per category that differs from what the harness already offers.
+struct Planned {
+    choices: Vec<Choice>,
+    /// The model the harness is on, whether or not this Session named one, for the report.
+    on: Option<On>,
+}
+
+enum Choice {
+    /// A config option the harness categorized as this.
+    Option { id: SessionConfigId, value: String },
+    /// A legacy mode, which has no Mode-category option to set.
+    Mode(String),
 }
 
 /// Long enough for an agent between turns to see its connection close; one mid-turn is cut off.
@@ -514,12 +546,14 @@ async fn set_up(
         connection,
         &set_up.session_id,
         set_up.config_options.as_deref(),
-        harness.model.as_deref(),
+        set_up.modes.as_ref(),
+        &harness.declared(),
     )
     .await?;
     let mut heard = heard.lock().expect("the observation lock");
     heard.hold(selected.options.or(set_up.config_options), set_up.modes);
     heard.model(selected.on);
+    heard.mode(selected.mode);
 
     Ok((
         set_up.session_id,
@@ -576,53 +610,189 @@ async fn recover(
         connection,
         conversed,
         config_options.as_deref(),
-        harness.model.as_deref(),
+        modes.as_ref(),
+        &harness.declared(),
     )
     .await?;
-    heard
-        .lock()
-        .expect("the observation lock")
-        .hold(selected.options.or(config_options), modes);
+    let mut heard = heard.lock().expect("the observation lock");
+    heard.hold(selected.options.or(config_options), modes);
+    heard.mode(selected.mode);
 
     Ok(())
 }
 
-/// What a `session/new`, `session/load` or `session/resume` led to once the named model, if any,
-/// was selected: the agent's state and the list its answer carried.
+/// What a `session/new`, `session/load` or `session/resume` led to once the declared categories,
+/// if any, were selected: the agent's state and the list its answer carried.
 struct Selected {
     on: Option<On>,
     options: Option<Vec<SessionConfigOption>>,
+    /// A legacy mode set through `session/set_mode`.
+    mode: Option<SessionModeId>,
 }
 
 async fn select(
     connection: &ConnectionTo<agent_client_protocol::Agent>,
     conversed: &SessionId,
     offered: Option<&[SessionConfigOption]>,
-    model: Option<&str>,
+    modes: Option<&SessionModeState>,
+    declared: &Declared<'_>,
 ) -> Result<Selected, Error> {
-    let Some(selects) = selects_the_model(offered.unwrap_or_default(), model)? else {
-        return Ok(Selected {
-            on: None,
-            options: None,
-        });
-    };
+    let planned = planned(offered.unwrap_or_default(), modes, declared)?;
     let mut options = None;
-    if let Some(id) = selects.id {
-        let answered = connection
-            .send_request(SetSessionConfigOptionRequest::new(
-                conversed.clone(),
-                id,
-                SessionConfigValueId::new(selects.on.model.clone()),
-            ))
-            .block_task()
-            .await?;
-        options = Some(answered.config_options);
+    let mut mode = None;
+
+    for choice in planned.choices {
+        match choice {
+            Choice::Option { id, value, .. } => {
+                let answered = connection
+                    .send_request(SetSessionConfigOptionRequest::new(
+                        conversed.clone(),
+                        id,
+                        SessionConfigValueId::new(value),
+                    ))
+                    .block_task()
+                    .await?;
+                options = Some(answered.config_options);
+            }
+            Choice::Mode(value) => {
+                connection
+                    .send_request(SetSessionModeRequest::new(
+                        conversed.clone(),
+                        SessionModeId::new(value.clone()),
+                    ))
+                    .block_task()
+                    .await?;
+                mode = Some(SessionModeId::new(value));
+            }
+        }
     }
 
     Ok(Selected {
-        on: Some(selects.on),
+        on: planned.on,
         options,
+        mode,
     })
+}
+
+/// What each declared category asks of the agent: the option the harness categorized as it, or
+/// a legacy mode among `modes`. A category the harness offers no way to set fails rather than
+/// running on something the Session did not name.
+fn planned(
+    offered: &[SessionConfigOption],
+    modes: Option<&SessionModeState>,
+    declared: &Declared<'_>,
+) -> Result<Planned, Error> {
+    let mut choices = Vec::new();
+
+    // The model the harness is on is reported whether or not this Session named one.
+    let mut on = None;
+    if let Some((id, select)) = selectable(offered, "model") {
+        on = Some(On {
+            model: select.current_value.0.to_string(),
+        });
+        if let Some(named) = declared.model {
+            check_offered("model", named, &select.options)?;
+            if select.current_value.0.as_ref() != named {
+                on = Some(On {
+                    model: named.to_owned(),
+                });
+                choices.push(Choice::Option {
+                    id: id.clone(),
+                    value: named.to_owned(),
+                });
+            }
+        }
+    } else if let Some(named) = declared.model {
+        return Err(no_option("model", named));
+    }
+
+    for (category, named) in [
+        ("mode", declared.mode),
+        ("thought_level", declared.thought_level),
+    ] {
+        let Some(named) = named else {
+            continue;
+        };
+        if let Some((id, select)) = selectable(offered, category) {
+            check_offered(category, named, &select.options)?;
+            if select.current_value.0.as_ref() != named {
+                choices.push(Choice::Option {
+                    id: id.clone(),
+                    value: named.to_owned(),
+                });
+            }
+        } else if category == "mode" {
+            if modes.is_some_and(|modes| {
+                modes
+                    .available_modes
+                    .iter()
+                    .any(|mode| mode.id.0.as_ref() == named)
+            }) {
+                choices.push(Choice::Mode(named.to_owned()));
+            } else {
+                return Err(no_option(category, named));
+            }
+        } else {
+            return Err(no_option(category, named));
+        }
+    }
+
+    Ok(Planned { choices, on })
+}
+
+/// The option a harness categorized as this, when it is one a client can select.
+fn selectable<'o>(
+    offered: &'o [SessionConfigOption],
+    category: &str,
+) -> Option<(&'o SessionConfigId, &'o SessionConfigSelect)> {
+    offered
+        .iter()
+        .find(|option| {
+            option
+                .category
+                .as_ref()
+                .and_then(category_of)
+                .is_some_and(|categorized| categorized == category)
+        })
+        .and_then(|option| match &option.kind {
+            SessionConfigKind::Select(select) => Some((&option.id, select)),
+            _ => None,
+        })
+}
+
+fn category_of(category: &SessionConfigOptionCategory) -> Option<&'static str> {
+    match category {
+        SessionConfigOptionCategory::Model => Some("model"),
+        SessionConfigOptionCategory::Mode => Some(MODE),
+        SessionConfigOptionCategory::ThoughtLevel => Some("thought_level"),
+        _ => None,
+    }
+}
+
+/// Config options are optional and every agent ships a default (ADR-0007), so a harness may
+/// offer no way to set a category. One whose Session named a value for it then fails rather than
+/// quietly running on something else.
+fn no_option(category: &str, named: &str) -> Error {
+    Error::internal_error().data(format!(
+        "this agent lets no client select a {category}, and this session named {named}"
+    ))
+}
+
+fn check_offered(
+    category: &str,
+    named: &str,
+    options: &SessionConfigSelectOptions,
+) -> Result<(), Error> {
+    let offered: Vec<String> = selectable_values(options)
+        .map(|value| value.to_string())
+        .collect();
+    if offered.iter().any(|value| value == named) {
+        return Ok(());
+    }
+
+    Err(Error::internal_error().data(format!(
+        "this agent does not offer the {category} {named}, which this session named"
+    )))
 }
 
 /// ACP's `terminal` method launches an interactive process for someone to log in at, so an
@@ -660,55 +830,6 @@ fn offered(methods: &[AuthMethod]) -> String {
         .map(|method| method.id().0.to_string())
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-/// Config options are optional and every agent ships a default (ADR-0007), so an agent may
-/// offer no model to select. One whose Session named a model then fails rather than quietly
-/// running on something else; one whose Session named none runs on a model nobody can name.
-fn selects_the_model(
-    offered: &[SessionConfigOption],
-    named: Option<&str>,
-) -> Result<Option<Selects>, Error> {
-    let selectable = offered
-        .iter()
-        .find(|option| option.category == Some(SessionConfigOptionCategory::Model))
-        .and_then(|option| match &option.kind {
-            SessionConfigKind::Select(select) => Some((&option.id, select)),
-            _ => None,
-        });
-
-    let Some((id, select)) = selectable else {
-        return match named {
-            Some(model) => Err(Error::internal_error().data(format!(
-                "this agent lets no client select a model, and this session named {model}"
-            ))),
-            None => Ok(None),
-        };
-    };
-    let offered: Vec<String> = selectable_values(&select.options)
-        .map(|value| value.to_string())
-        .collect();
-
-    let Some(model) = named else {
-        return Ok(Some(Selects {
-            id: None,
-            on: On {
-                model: select.current_value.0.to_string(),
-            },
-        }));
-    };
-    if !offered.iter().any(|value| value == model) {
-        return Err(Error::internal_error().data(format!(
-            "this agent does not offer the model {model}, which this session named"
-        )));
-    }
-
-    Ok(Some(Selects {
-        id: Some(id.clone()),
-        on: On {
-            model: model.to_owned(),
-        },
-    }))
 }
 
 fn selectable_values(options: &SessionConfigSelectOptions) -> impl Iterator<Item = Arc<str>> {
@@ -944,6 +1065,13 @@ impl Hearing {
             }));
         }
         self.on = on;
+    }
+    /// A legacy mode set through `session/set_mode`, kept as the mode the Session is on.
+    fn mode(&mut self, mode: Option<SessionModeId>) {
+        if let Some(mode) = mode {
+            self.info.current_mode = Some(mode);
+            self.announce();
+        }
     }
     /// Takes the options a `session/new`, `session/load`, `session/resume` or a
     /// `session/set_config_option` answer carried, when it carried any, and says the whole state
@@ -1256,29 +1384,63 @@ mod tests {
 
     #[test]
     fn the_model_a_session_named_is_set_through_the_option_the_agent_categorized_as_one() {
-        let selects = selects_the_model(&models(&["fast", "thorough"]), Some("thorough"))
-            .expect("the model should be selectable")
-            .expect("an agent that offers a model");
+        let planned = planned(
+            &models(&["fast", "thorough"]),
+            None,
+            &Declared {
+                model: Some("thorough"),
+                ..Declared::default()
+            },
+        )
+        .expect("the model should be selectable");
 
-        assert_eq!(selects.id.expect("a model to set").0.as_ref(), "model");
-        assert_eq!(selects.on.model, "thorough");
+        match planned.choices.as_slice() {
+            [Choice::Option { id, value }] => {
+                assert_eq!(id.0.as_ref(), "model");
+                assert_eq!(value, "thorough");
+            }
+            other => panic!("expected one option to set, got {}", other.len()),
+        }
+        assert_eq!(planned.on.expect("the model it is on").model, "thorough");
     }
 
     #[test]
     fn a_session_that_named_no_model_sets_nothing_and_is_on_what_the_agent_already_was() {
-        let selects = selects_the_model(&models(&["fast", "thorough"]), None)
-            .expect("naming no model should not fail")
-            .expect("an agent that offers a model");
+        let planned = planned(&models(&["fast", "thorough"]), None, &Declared::default())
+            .expect("naming no model should not fail");
 
-        assert!(selects.id.is_none());
-        assert_eq!(selects.on.model, "fast");
+        assert!(planned.choices.is_empty());
+        assert_eq!(planned.on.expect("the model it is on").model, "fast");
+    }
+
+    #[test]
+    fn a_category_already_at_the_declared_value_is_not_set() {
+        let planned = planned(
+            &models(&["fast", "thorough"]),
+            None,
+            &Declared {
+                model: Some("fast"),
+                ..Declared::default()
+            },
+        )
+        .expect("the model should be selectable");
+
+        assert!(planned.choices.is_empty());
+        assert_eq!(planned.on.expect("the model it is on").model, "fast");
     }
 
     #[test]
     fn a_model_an_agent_does_not_offer_is_refused_rather_than_swapped_for_one_it_does() {
-        let refused = selects_the_model(&models(&["fast"]), Some("thorough"))
-            .err()
-            .expect("a model the agent does not offer");
+        let refused = planned(
+            &models(&["fast"]),
+            None,
+            &Declared {
+                model: Some("thorough"),
+                ..Declared::default()
+            },
+        )
+        .err()
+        .expect("a model the agent does not offer");
 
         assert!(
             refused
@@ -1289,9 +1451,16 @@ mod tests {
 
     #[test]
     fn an_agent_that_lets_no_client_select_a_model_fails_a_session_that_named_one() {
-        let refused = selects_the_model(&[], Some("thorough"))
-            .err()
-            .expect("an agent with no model to select");
+        let refused = planned(
+            &[],
+            None,
+            &Declared {
+                model: Some("thorough"),
+                ..Declared::default()
+            },
+        )
+        .err()
+        .expect("an agent with no model to select");
 
         assert!(
             refused
@@ -1303,10 +1472,143 @@ mod tests {
     #[test]
     fn an_agent_that_lets_no_client_select_a_model_works_a_session_that_named_none() {
         assert!(
-            selects_the_model(&[], None)
+            planned(&[], None, &Declared::default())
                 .expect("naming no model should not fail")
-                .is_none()
+                .choices
+                .is_empty()
         );
+    }
+
+    #[test]
+    fn a_declared_mode_is_set_through_the_option_the_agent_categorized_as_one() {
+        let planned = planned(
+            &[a_mode_option("build")],
+            None,
+            &Declared {
+                mode: Some("plan"),
+                ..Declared::default()
+            },
+        )
+        .expect("the mode should be selectable");
+
+        match planned.choices.as_slice() {
+            [Choice::Option { id, value }] => {
+                assert_eq!(id.0.as_ref(), "mode");
+                assert_eq!(value, "plan");
+            }
+            other => panic!("expected one option to set, got {}", other.len()),
+        }
+    }
+
+    #[test]
+    fn a_declared_mode_matching_a_legacy_mode_is_set_through_session_set_mode() {
+        let legacy = SessionModeState::new(
+            "build",
+            vec![
+                SessionMode::new("build", "Build"),
+                SessionMode::new("plan", "Plan"),
+            ],
+        );
+        let planned = planned(
+            &[],
+            Some(&legacy),
+            &Declared {
+                mode: Some("plan"),
+                ..Declared::default()
+            },
+        )
+        .expect("a legacy mode the harness offers");
+
+        match planned.choices.as_slice() {
+            [Choice::Mode(value)] => assert_eq!(value, "plan"),
+            other => panic!("expected one mode to set, got {}", other.len()),
+        }
+    }
+
+    #[test]
+    fn a_mode_a_harness_offers_no_way_to_set_fails_naming_the_category_and_the_value() {
+        let refused = planned(
+            &[],
+            None,
+            &Declared {
+                mode: Some("plan"),
+                ..Declared::default()
+            },
+        )
+        .err()
+        .expect("a mode the harness offers no way to set");
+
+        let why = refused.data.expect("a reason").to_string();
+        assert!(why.contains("mode"), "{why}");
+        assert!(why.contains("plan"), "{why}");
+
+        let refused = planned(
+            &[a_mode_option("build")],
+            None,
+            &Declared {
+                mode: Some("review"),
+                ..Declared::default()
+            },
+        )
+        .err()
+        .expect("a mode the harness does not offer");
+
+        let why = refused.data.expect("a reason").to_string();
+        assert!(why.contains("mode"), "{why}");
+        assert!(why.contains("review"), "{why}");
+    }
+
+    #[test]
+    fn a_thought_level_the_harness_does_not_offer_fails_naming_the_category_and_the_value() {
+        let refused = planned(
+            &models(&["fast"]),
+            None,
+            &Declared {
+                thought_level: Some("high"),
+                ..Declared::default()
+            },
+        )
+        .err()
+        .expect("a thought level the harness does not offer");
+
+        let why = refused.data.expect("a reason").to_string();
+        assert!(why.contains("thought_level"), "{why}");
+        assert!(why.contains("high"), "{why}");
+    }
+
+    #[test]
+    fn a_declared_thought_level_the_harness_offers_is_set() {
+        let offered = vec![
+            SessionConfigOption::new(
+                "thinking",
+                "Thinking",
+                SessionConfigKind::Select(SessionConfigSelect::new(
+                    "low",
+                    vec![
+                        SessionConfigSelectOption::new("low", "Low"),
+                        SessionConfigSelectOption::new("high", "High"),
+                    ],
+                )),
+            )
+            .category(SessionConfigOptionCategory::ThoughtLevel),
+        ];
+        let planned = planned(
+            &offered,
+            None,
+            &Declared {
+                thought_level: Some("high"),
+                ..Declared::default()
+            },
+        )
+        .expect("a thought level the harness offers");
+
+        match planned.choices.as_slice() {
+            [Choice::Option { id, value }] => {
+                assert_eq!(id.0.as_ref(), "thinking");
+                assert_eq!(value, "high");
+            }
+            other => panic!("expected one option to set, got {}", other.len()),
+        }
     }
 
     #[test]
@@ -1327,7 +1629,17 @@ mod tests {
             .category(SessionConfigOptionCategory::Model),
         ];
 
-        assert!(selects_the_model(&grouped, Some("thorough")).is_ok());
+        assert!(
+            planned(
+                &grouped,
+                None,
+                &Declared {
+                    model: Some("thorough"),
+                    ..Declared::default()
+                },
+            )
+            .is_ok()
+        );
     }
 
     #[test]
