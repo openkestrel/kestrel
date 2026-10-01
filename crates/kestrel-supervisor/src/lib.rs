@@ -319,10 +319,10 @@ async fn attend(
                 }
             }
             _ = checking.tick() => {
-                if let Some(carrying) = &supervising.carrying {
-                    if let Some(state) = &carrying.state {
-                        report_state(link, &carrying.session, state).await?;
-                    }
+                if let Some(carrying) = &supervising.carrying
+                    && let Some(state) = &carrying.state
+                {
+                    report_state(link, &carrying.session, state).await?;
                 }
                 if supervising.carrying.as_ref().is_some_and(|carrying| carrying.working) {
                     report_work(link, supervising, false).await?;
