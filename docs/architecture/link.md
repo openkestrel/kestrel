@@ -104,7 +104,9 @@ Each names the Session it is for.
   A checkout or spawn that fails is reported as the Session finished failed, exactly as a `start`'s
   would be.
 - `prompt {prompt}`: the next Turn in the same ACP conversation. Sending it moves the Session from
-  Waiting to Working in the same transaction.
+  Waiting to Working in the same transaction. An unbriefed Session's first `prompt` is its Brief:
+  it moves the Session from Unbriefed to Working, and the supervisor reports `started` as its
+  first Turn begins.
 - `stop`: sent whenever a Session ends, however it ends, so the next Session's `start` always follows
   the last one's `stop`. It ends the harness; the supervisor stays.
 

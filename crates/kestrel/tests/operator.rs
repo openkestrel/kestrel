@@ -972,10 +972,10 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
     )
     .await;
     succeeded(&posted);
-    assert!(
-        posted.err.contains("queued as"),
-        "a post to a queued session becomes its Brief: {}",
-        posted.err
+    assert_eq!(
+        posted.out,
+        vec![session.clone()],
+        "a post to a queued session becomes its Brief and hands back the session"
     );
 
     let completed = kestrel
@@ -1976,7 +1976,7 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(posted["session"].is_null(), "{posted}");
+    assert_eq!(posted["session"]["id"], session_id, "{posted}");
     assert!(posted["held_message"].is_null(), "{posted}");
 
     let (status, shown_session) = got(&kestrel, &session_at("acme", session_id)).await;
@@ -2137,7 +2137,7 @@ async fn an_open_without_a_brief_queues_a_session_a_message_becomes_its_brief() 
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(posted["session"].is_null(), "{posted}");
+    assert_eq!(posted["session"]["id"], opened["session"]["id"], "{posted}");
     assert!(posted["held_message"].is_null(), "{posted}");
     let transcript = kestrel.transcript(workspace).await;
     assert_eq!(
@@ -2148,11 +2148,9 @@ async fn an_open_without_a_brief_queues_a_session_a_message_becomes_its_brief() 
     );
     assert_eq!(
         transcript[2].entry,
-        Entry::Said {
-            participant: "alice".to_owned(),
-            message: "what I want".to_owned(),
-            session_id: None,
-            completion: None,
+        Entry::Brief {
+            trigger: None,
+            brief: "what I want".to_owned(),
         }
     );
 

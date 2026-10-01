@@ -1446,7 +1446,7 @@
         ],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkspaceMessage" } } } },
         "responses": {
-          "200": { "description": "The Session the message started or woke, and the Held Message it left, if it was held rather than recorded at once.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Posted" } } } },
+          "200": { "description": "The Session the message reached: the one it started, woke, or wrote the first Brief for, and the Held Message it left, if it was held rather than recorded at once.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Posted" } } } },
           "403": { "$ref": "#/components/responses/Refused" },
           "400": { "$ref": "#/components/responses/Refused" },
           "404": { "$ref": "#/components/responses/Refused" },

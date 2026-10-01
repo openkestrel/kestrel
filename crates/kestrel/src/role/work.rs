@@ -190,7 +190,7 @@ async fn dispatching(
                 continue;
             }
             Ok(Some(Occupied::Resumed(session))) => {
-                info!(session = %session.id, "a waiting session was prompted with what was held for it");
+                info!(session = %session.id, "a session was prompted with the input held for it");
                 continue;
             }
             Ok(None) => {}

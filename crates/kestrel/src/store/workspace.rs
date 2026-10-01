@@ -5,8 +5,7 @@ use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 
 use crate::domain::{
     Agent, Checkout, Connected, Cost, Declared, Exit, HeldMessage, Organization, OrganizationId,
-    Preparing, Project,
-    Session, SessionCommand, SessionId, SessionOption, SessionState, StartedBy,
+    Preparing, Project, Session, SessionCommand, SessionId, SessionOption, SessionState, StartedBy,
     SubscriptionProfile, Turn, Usage, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::fanout::Touched;
@@ -728,6 +727,49 @@ impl<'a> Workspaces<'a> {
         rows.iter().map(held).collect()
     }
 
+    /// The oldest message held for the Workspace, taken out of the queue. Leaves any that arrived
+    /// after a pending Session, the way `take_held_messages` does. An unbriefed Session's first
+    /// message becomes its Brief rather than draining into a Turn.
+    pub async fn take_oldest_pending_message(
+        &mut self,
+        workspace: &Workspace,
+    ) -> Result<Option<HeldMessage>> {
+        let row = sqlx::query(
+            "UPDATE pending_message SET state = 'taken'
+              WHERE workspace_id = ?
+                AND seq = (
+                    SELECT seq FROM pending_message
+                     WHERE workspace_id = ?
+                       AND state = 'held'
+                       AND NOT EXISTS (
+                           SELECT 1 FROM pending_session s
+                           WHERE s.workspace_id = pending_message.workspace_id
+                             AND s.received_at <= pending_message.received_at
+                       )
+                     ORDER BY seq
+                     LIMIT 1
+                )
+              RETURNING seq, participant, body, received_at, edited_at",
+        )
+        .bind(workspace.id.to_string())
+        .bind(workspace.id.to_string())
+        .fetch_optional(&mut *self.connection)
+        .await
+        .with_context(|| {
+            format!(
+                "taking the oldest held message of the workspace {}",
+                workspace.id
+            )
+        })?;
+
+        let taken = row.as_ref().map(held).transpose()?;
+        if taken.is_some() {
+            self.touched.workspace(workspace);
+        }
+
+        Ok(taken)
+    }
+
     /// Marks taken the messages one Turn takes, in the caller's transaction, so the `Messages`
     /// entry and the state move together. A command message at the front is its own Turn; before
     /// the first one, every message is.
@@ -1162,6 +1204,22 @@ impl<'a> Workspaces<'a> {
             .iter()
             .map(session)
             .collect()
+    }
+
+    /// The unbriefed Sessions whose harness is ready, oldest first: each waits for a free slot to
+    /// take the Brief it has been given as its first Turn.
+    pub async fn unbriefed_sessions(&mut self) -> Result<Vec<Session>> {
+        sqlx::query(sessions_where!(
+            "state = ? AND preparing = ? ORDER BY enqueued_at, id"
+        ))
+        .bind(SessionState::Unbriefed.as_str())
+        .bind(Preparing::HarnessReady.as_str())
+        .fetch_all(&mut *self.connection)
+        .await
+        .context("reading the unbriefed sessions")?
+        .iter()
+        .map(session)
+        .collect()
     }
 
     pub async fn sessions_in(
@@ -1870,14 +1928,18 @@ impl<'a> Workspaces<'a> {
         self.turn(session).await
     }
 
-    /// `None` when the Session was not waiting, so a replayed prompt starts no second turn.
+    /// `None` when the Session was neither waiting nor unbriefed, so a replayed prompt starts no
+    /// second turn. An unbriefed Session leaves its preparing step behind here: it is working now.
     pub async fn prompt_turn(&mut self, session: &Session) -> Result<Option<i64>> {
-        let moved = sqlx::query("UPDATE session SET state = ? WHERE id = ? AND state = ?")
-            .bind(SessionState::Working.as_str())
-            .bind(session.id.to_string())
-            .bind(SessionState::Waiting.as_str())
-            .execute(&mut *self.connection)
-            .await?;
+        let moved = sqlx::query(
+            "UPDATE session SET state = ?, preparing = NULL WHERE id = ? AND state IN (?, ?)",
+        )
+        .bind(SessionState::Working.as_str())
+        .bind(session.id.to_string())
+        .bind(SessionState::Waiting.as_str())
+        .bind(SessionState::Unbriefed.as_str())
+        .execute(&mut *self.connection)
+        .await?;
         if moved.rows_affected() == 0 {
             return Ok(None);
         }

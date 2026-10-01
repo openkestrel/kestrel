@@ -966,9 +966,32 @@ async fn a_transcript_follow_replaces_activity_and_snapshots_session_state_witho
     let state: serde_json::Value = serde_json::from_str(&snapshot.data).unwrap();
     assert_eq!(state["tools"], json!([]));
     assert_eq!(state["message_buffering"], false);
-    for _ in 0..2 {
-        assert!(matches!(stream.next_within(PATIENCE).await, Next::Event(_)));
+    // The follow replays what the Transcript holds, then hands the client its identity: one
+    // follower event, then a presence snapshot, neither of which carries an id. Session-state
+    // changes come after that framing, never interleaved before the follower.
+    loop {
+        let Next::Event(event) = stream.next_within(PATIENCE).await else {
+            panic!("the follow never handed the client its identity")
+        };
+        match event.name.as_deref() {
+            Some("entry" | "activity" | "cursor") => {
+                assert!(event.id.is_some(), "a replayed {event:?} carries a cursor")
+            }
+            Some("follower") => {
+                assert_eq!(event.id, None);
+                let follower: serde_json::Value = serde_json::from_str(&event.data).unwrap();
+                assert!(follower["id"].is_string(), "{follower}");
+                assert!(follower["lease_seconds"].is_u64(), "{follower}");
+                break;
+            }
+            other => panic!("a follow delivered {other:?} before its follower"),
+        }
     }
+    let Next::Event(presence) = stream.next_within(PATIENCE).await else {
+        panic!("no presence snapshot")
+    };
+    assert_eq!(presence.name.as_deref(), Some("presence"));
+    assert_eq!(presence.id, None);
     let transient = Reported {
         session: Some(session.id),
         seq: None,

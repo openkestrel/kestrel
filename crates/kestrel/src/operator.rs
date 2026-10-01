@@ -28,8 +28,7 @@ use crate::declined::{Declined, FieldRefusal, Kind};
 use crate::domain::{
     self, Agent, Connection, Correlation, Declared, Direction, EventRecordId, EventRefusal, Fires,
     Firing, HeldMessage, Integration, Occurrence, Organization, Project, Schedule, Session,
-    StartedBy,
-    SubscriptionProfile, Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
+    StartedBy, SubscriptionProfile, Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::fanout;
 use crate::filter::Filter;

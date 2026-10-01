@@ -3,9 +3,8 @@ use jiff::{SignedDuration, Timestamp};
 
 use crate::declined::{Declined, FieldRefusal, Kind};
 use crate::domain::{
-    Agent, Declared, Exit, HeldMessage, Organization, Project, Session, SessionId, SessionState,
-    StartedBy,
-    SubscriptionProfile, Workspace, WorkspaceId, WorkspaceState,
+    Agent, Declared, Exit, HeldMessage, Organization, Preparing, Project, Session, SessionId,
+    SessionState, StartedBy, SubscriptionProfile, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::instance;
 use crate::log::{Cursor, Entry, Message, Page, Unreadable, Window};
@@ -340,9 +339,13 @@ pub(crate) async fn unfinished_session(
 
 pub(crate) enum PostDestination<'a> {
     Start,
-    Brief,
+    /// A queued Session that has not started its first Turn: the first message becomes its Brief.
+    Brief(&'a Session),
     Held,
     Wake(&'a Session),
+    /// An unbriefed Session: ready, the message becomes its Brief; not ready, it is held for the
+    /// moment the harness is.
+    Unbriefed(&'a Session),
 }
 
 impl UnfinishedSession {
@@ -383,9 +386,14 @@ impl UnfinishedSession {
     pub fn post_destination(&self) -> PostDestination<'_> {
         match &self.session {
             None => PostDestination::Start,
-            Some(session) if session.state == SessionState::Queued => PostDestination::Brief,
+            Some(session) if session.state == SessionState::Queued => {
+                PostDestination::Brief(session)
+            }
             Some(session) if session.state == SessionState::Waiting => {
                 PostDestination::Wake(session)
+            }
+            Some(session) if session.state == SessionState::Unbriefed => {
+                PostDestination::Unbriefed(session)
             }
             Some(_) => PostDestination::Held,
         }
@@ -477,11 +485,17 @@ pub(crate) async fn post_as(
                 held_message: None,
             })
         }
-        PostDestination::Brief => {
-            ensure_joined(tx, workspace, participant).await?;
-            said(tx, workspace, participant, message).await?;
+        // A queued Session with nothing to start it with takes this message as its Brief; one that
+        // already has an instruction has the message said, as it always was.
+        PostDestination::Brief(queued) => {
+            if work::awaiting_a_brief(tx, workspace).await? {
+                brief(tx, workspace, participant, message).await?;
+            } else {
+                ensure_joined(tx, workspace, participant).await?;
+                said(tx, workspace, participant, message).await?;
+            }
             Ok(Posted {
-                session: None,
+                session: Some(queued.clone()),
                 held_message: None,
             })
         }
@@ -504,6 +518,25 @@ pub(crate) async fn post_as(
             Ok(Posted {
                 session: Some(waiting.clone()),
                 held_message: Some(held_message),
+            })
+        }
+        // The message is this Session's first input either way: its Brief now, or held for the
+        // moment the harness is ready. Either way the client is handed the Session it reached, and
+        // the Held Message when the message was held rather than recorded.
+        PostDestination::Unbriefed(unbriefed) => {
+            let held_message = if unbriefed.preparing == Some(Preparing::HarnessReady) {
+                brief_or_hold(tx, workspace, participant, message).await?
+            } else {
+                Some(
+                    tx.workspaces()
+                        .add_pending_message(workspace, participant, message)
+                        .await?,
+                )
+            };
+
+            Ok(Posted {
+                session: Some(unbriefed.clone()),
+                held_message,
             })
         }
     }
@@ -550,6 +583,77 @@ pub async fn withdraw_message(
 /// What the unfinished Session cannot take yet, in arrival order.
 pub async fn held_messages(store: &Store, id: WorkspaceId) -> Result<Vec<HeldMessage>> {
     store.begin().await?.workspaces().held_messages(id).await
+}
+
+/// The first message a Session with no first Turn is given becomes its Brief, whoever wrote it
+/// joining directly before it. Anything after it is held for the Turn that follows the first. A
+/// held message is handed back so its author can still edit or withdraw it.
+async fn brief_or_hold(
+    tx: &mut Tx<'_>,
+    workspace: &Workspace,
+    participant: &str,
+    message: &str,
+) -> Result<Option<HeldMessage>> {
+    if work::awaiting_a_brief(tx, workspace).await? {
+        brief(tx, workspace, participant, message).await?;
+        Ok(None)
+    } else {
+        tx.workspaces()
+            .add_pending_message(workspace, participant, message)
+            .await
+            .map(Some)
+    }
+}
+
+async fn brief(
+    tx: &mut Tx<'_>,
+    workspace: &Workspace,
+    participant: &str,
+    message: &str,
+) -> Result<()> {
+    ensure_joined(tx, workspace, participant).await?;
+    tx.log()
+        .append(
+            workspace,
+            Entry::Brief {
+                trigger: None,
+                brief: message.to_owned(),
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// A message posted before the harness was ready becomes the Brief the moment it is: the oldest
+/// one is taken out of the held queue and written down, with its author's join. The rest stay
+/// held for the Turn after the first.
+pub(crate) async fn first_held_becomes_the_brief(
+    tx: &mut Tx<'_>,
+    workspace: &Workspace,
+) -> Result<bool> {
+    if !work::awaiting_a_brief(tx, workspace).await? {
+        return Ok(false);
+    }
+    let Some(pending) = tx
+        .workspaces()
+        .take_oldest_pending_message(workspace)
+        .await?
+    else {
+        return Ok(false);
+    };
+    ensure_joined(tx, workspace, &pending.participant).await?;
+    tx.log()
+        .append(
+            workspace,
+            Entry::Brief {
+                trigger: None,
+                brief: pending.message,
+            },
+        )
+        .await?;
+
+    Ok(true)
 }
 
 async fn ensure_joined(tx: &mut Tx<'_>, workspace: &Workspace, participant: &str) -> Result<()> {
@@ -731,9 +835,11 @@ mod tests {
     #[test]
     fn unfinished_session_rules_cover_every_phase_with_and_without_held_input() {
         use SessionState::{Ended, Queued, Unbriefed, Unreachable, Waiting, Working};
-        let brief: fn(&PostDestination) -> bool = |post| matches!(post, PostDestination::Brief);
+        let brief: fn(&PostDestination) -> bool = |post| matches!(post, PostDestination::Brief(_));
         let held: fn(&PostDestination) -> bool = |post| matches!(post, PostDestination::Held);
         let wake: fn(&PostDestination) -> bool = |post| matches!(post, PostDestination::Wake(_));
+        let unbriefed: fn(&PostDestination) -> bool =
+            |post| matches!(post, PostDestination::Unbriefed(_));
         #[rustfmt::skip]
         let cases = [
             Case { state: Queued,      held_input: false, in_flight: true,  post: brief },
@@ -742,8 +848,8 @@ mod tests {
             Case { state: Working,     held_input: true,  in_flight: true,  post: held },
             Case { state: Waiting,     held_input: false, in_flight: false, post: wake },
             Case { state: Waiting,     held_input: true,  in_flight: true,  post: wake },
-            Case { state: Unbriefed,   held_input: false, in_flight: false, post: held },
-            Case { state: Unbriefed,   held_input: true,  in_flight: true,  post: held },
+            Case { state: Unbriefed,   held_input: false, in_flight: false, post: unbriefed },
+            Case { state: Unbriefed,   held_input: true,  in_flight: true,  post: unbriefed },
             Case { state: Ended,       held_input: false, in_flight: false, post: held },
             Case { state: Ended,       held_input: true,  in_flight: true,  post: held },
             Case { state: Unreachable, held_input: false, in_flight: true,  post: held },

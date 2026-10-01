@@ -46,9 +46,9 @@ use kestrel::agent;
 use kestrel::compute::{Docker, Driver, LocalExec};
 use kestrel::domain::{
     Agent, Correlation, CorrelationMiss, Declared, Direction, Event, EventRecordId, Exit, Fires,
-    HeldMessage, Integration, Occurrence, OnOpenWorkspace, Organization, Project, Schedule, Session,
-    SessionCommand, SessionId, SessionState, SubscriptionProfile, Templates, Trigger, Turn,
-    Workspace, WorkspaceId,
+    HeldMessage, Integration, Occurrence, OnOpenWorkspace, Organization, Project, Schedule,
+    Session, SessionCommand, SessionId, SessionState, SubscriptionProfile, Templates, Trigger,
+    Turn, Workspace, WorkspaceId,
 };
 use kestrel::instance;
 use kestrel::integration::{self, Connecting, Registration};
@@ -1965,6 +1965,12 @@ impl Kestrel {
         work::report_on(&self.store, session, None, work::Report::Ready)
             .await
             .expect("the ready report should be taken");
+    }
+
+    pub async fn report_answered(&self, session: &Session, seq: i64) {
+        work::report_on(&self.store, session, Some(seq), work::Report::Answered)
+            .await
+            .expect("the answer should be taken");
     }
 
     pub async fn instances_to_archive(&self) -> Vec<String> {

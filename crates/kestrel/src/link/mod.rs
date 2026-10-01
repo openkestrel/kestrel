@@ -242,7 +242,7 @@ pub async fn unbriefed(
 /// that started this Session, with everything the Transcript held before them labeled as context
 /// ahead of them. `None` is a Workspace with nothing to start a Session with.
 pub(crate) async fn instruction(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Option<String>> {
-    if let Some(brief) = tx.log().unfollowed_brief(workspace).await? {
+    if let Some((brief, _)) = tx.log().unfollowed_brief(workspace).await? {
         return Ok(Some(brief));
     }
 
