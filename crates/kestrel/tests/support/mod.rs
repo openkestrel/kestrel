@@ -1268,6 +1268,28 @@ impl Kestrel {
             .expect("the message should reach the transcript");
     }
 
+    pub async fn expire_payload_entry(&self, workspace: WorkspaceId, seq: i64) {
+        let pool = database(self.data_dir()).await;
+        let mut tx = pool.begin().await.expect("an expiry transaction");
+        sqlx::query("DELETE FROM transcript_payload WHERE workspace_id = ? AND seq = ?")
+            .bind(workspace.to_string())
+            .bind(seq)
+            .execute(&mut *tx)
+            .await
+            .expect("payload removed");
+        sqlx::query("UPDATE transcript_entry SET body = json_object('type', 'expired') WHERE workspace_id = ? AND seq = ? AND kind != 'shared_state'")
+            .bind(workspace.to_string()).bind(seq).execute(&mut *tx).await.expect("a tombstone");
+        tx.commit().await.expect("expiry should commit");
+        pool.close().await;
+    }
+
+    pub async fn refuse_payload_writes(&self) {
+        let pool = database(self.data_dir()).await;
+        sqlx::query("CREATE TRIGGER refuse_payload BEFORE INSERT ON transcript_payload BEGIN SELECT RAISE(ABORT, 'payload write failed'); END")
+            .execute(&pool).await.expect("a payload write fault");
+        pool.close().await;
+    }
+
     pub async fn try_said(&self, session: &Session, message: &str) -> anyhow::Result<()> {
         let mut tx = self.store.begin().await.expect("a transaction");
         let workspace = tx.workspaces().get(session.workspace).await?;
