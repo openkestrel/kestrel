@@ -176,6 +176,29 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
                 lines: vec!["level=INFO message=init".to_owned()],
             },
         ),
+        (
+            Some("a-session"),
+            None,
+            Report::SessionState {
+                tools: vec![],
+                message_buffering: false,
+                thought_buffering: false,
+            },
+        ),
+        (
+            Some("a-session"),
+            Some(1),
+            Report::ToolCall {
+                call_id: "call".to_owned(),
+                title: "read".to_owned(),
+                tool_kind: "read".to_owned(),
+                status: "completed".to_owned(),
+                input: serde_json::json!({"path":"a"}),
+                result: serde_json::json!({"output":"read"}),
+                closing_reason: None,
+                completion: link::Completion::at("2026-09-30T12:00:00Z".parse().unwrap()),
+            },
+        ),
         (Some("a-session"), Some(1), Report::Started),
         (
             Some("a-session"),

@@ -21,7 +21,7 @@ use tracing::{info, warn};
 
 use crate::domain::{Checkout, Session, SessionId, Workspace};
 use crate::link::credential::Secret;
-use crate::log::{self, Cursor, Unreadable, Window};
+use crate::log::{Cursor, Unreadable, Window};
 use crate::profile;
 use crate::provider;
 use crate::role::serve;
@@ -144,7 +144,7 @@ struct Recorded {
     session_id: Option<SessionId>,
     seq: i64,
     appended_at: String,
-    entry: log::Entry,
+    entry: serde_json::Value,
 }
 
 pub fn router(
@@ -395,8 +395,12 @@ async fn entries(
         .transpose()
         .map_err(|error| Refused::BadRequest(error.to_string()))?
         .unwrap_or_default();
-    let page =
-        workspace::transcript(&control_plane.store, linked.workspace, from, window, &kinds).await?;
+    let mut tx = control_plane.store.read().await?;
+    let workspace = tx.workspaces().get(linked.workspace).await?;
+    let page = tx
+        .log()
+        .stored_page(&workspace, from, window, &kinds)
+        .await?;
 
     Ok(Json(Entries {
         entries: page
@@ -424,6 +428,25 @@ async fn report(
     let (linked, _) = authenticated(&control_plane, &headers, &instance).await?;
     if let work::Report::Work { repositories } = reported.report {
         control_plane.summaries.report(&instance, repositories);
+        return Ok(StatusCode::ACCEPTED.into_response());
+    }
+    if let work::Report::SessionState {
+        tools,
+        message_buffering,
+        thought_buffering,
+    } = &reported.report
+    {
+        work::report(&control_plane.store, &linked.instance, reported.clone()).await?;
+        let session = reported.session.expect("validated session report");
+        control_plane.summaries.report_session(
+            &instance,
+            &session.to_string(),
+            crate::live_work::SessionState {
+                tools: tools.clone(),
+                message_buffering: *message_buffering,
+                thought_buffering: *thought_buffering,
+            },
+        );
         return Ok(StatusCode::ACCEPTED.into_response());
     }
     let connected = matches!(reported.report, work::Report::Connected { .. });

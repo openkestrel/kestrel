@@ -52,6 +52,7 @@ pub struct Summary {
 struct Live {
     streams: usize,
     summary: Option<Summary>,
+    sessions: HashMap<String, SessionState>,
 }
 
 #[derive(Clone, Default)]
@@ -145,4 +146,36 @@ pub async fn read(
     Ok(Work::NotAnswering {
         message: "the Instance isn't answering",
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunningTool {
+    pub call_id: String,
+    pub title: String,
+    pub status: String,
+    pub started_at: Timestamp,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionState {
+    pub tools: Vec<RunningTool>,
+    pub message_buffering: bool,
+    pub thought_buffering: bool,
+}
+
+impl Summaries {
+    pub fn report_session(&self, instance: &str, session: &str, state: SessionState) {
+        if let Some(live) = self.0.lock().unwrap().get_mut(instance) {
+            live.sessions.insert(session.to_owned(), state);
+        }
+    }
+    pub fn session(&self, instance: &str, session: &str) -> SessionState {
+        self.0
+            .lock()
+            .unwrap()
+            .get(instance)
+            .and_then(|live| live.sessions.get(session))
+            .cloned()
+            .unwrap_or_default()
+    }
 }

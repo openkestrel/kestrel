@@ -9,6 +9,7 @@ use crate::domain::{Exit, Session, SessionId, Turn, Usage, WorkspaceId};
 use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
 use crate::link;
+use crate::live_work::RunningTool;
 use crate::log::{Completion, Entry, Message, PlanEntry};
 use crate::store::workspace::{PendingMessage, Taken};
 use crate::store::{Store, Tx};
@@ -48,6 +49,21 @@ pub enum Report {
         entries: Vec<PlanEntry>,
         completion: Completion,
     },
+    ToolCall {
+        call_id: String,
+        title: String,
+        tool_kind: String,
+        status: String,
+        input: serde_json::Value,
+        result: serde_json::Value,
+        closing_reason: Option<String>,
+        completion: Completion,
+    },
+    SessionState {
+        tools: Vec<RunningTool>,
+        message_buffering: bool,
+        thought_buffering: bool,
+    },
     Used {
         usage: Usage,
     },
@@ -66,12 +82,14 @@ impl Report {
             Report::Connected { .. }
             | Report::Heartbeat
             | Report::Stderr { .. }
-            | Report::Work { .. } => false,
+            | Report::Work { .. }
+            | Report::SessionState { .. } => false,
             Report::Started
             | Report::Model { .. }
             | Report::Said { .. }
             | Report::Thought { .. }
             | Report::Plan { .. }
+            | Report::ToolCall { .. }
             | Report::Used { .. }
             | Report::Answered
             | Report::Checkout { .. }
@@ -434,6 +452,35 @@ async fn reported(
                     Entry::Plan {
                         session_id: session.id,
                         entries,
+                        completion,
+                    },
+                )
+                .await?;
+        }
+        Report::SessionState { .. } => {}
+        Report::ToolCall {
+            call_id,
+            title,
+            tool_kind,
+            status,
+            input,
+            result,
+            closing_reason,
+            completion,
+        } => {
+            let workspace = tx.workspaces().get(session.workspace).await?;
+            tx.log()
+                .append(
+                    &workspace,
+                    Entry::ToolCall {
+                        session_id: session.id,
+                        call_id,
+                        title,
+                        tool_kind,
+                        status,
+                        input,
+                        result,
+                        closing_reason,
                         completion,
                     },
                 )

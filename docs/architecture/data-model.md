@@ -62,6 +62,7 @@ erDiagram
 | `firing` | One Trigger × one Event | `outcome` ∈ opened, fed, ignored, held, canceled, failed; `CHECK`s tie `workspace_id`, `failure` and `considered_at` to it. |
 | `workspace`, `workspace_repository` | The durable place | Checkout fixed at open (`base`, `branch`, repositories). `instance`, `observed` (last git report) and `last_active_at` are current values. |
 | `transcript_entry` | The Transcript | `(workspace_id, seq)`; indexed by Workspace, kind and seq. `session_id` attributes entries; `body` is a JSON `log::Entry` tagged by `type`. |
+| `transcript_payload` | Transcript body fields over 64 KiB | Stored atomically with the entry; `(workspace_id, seq, field)` owns each payload. Strings are UTF-8 bytes and other values compact JSON. |
 | `session` | One harness execution | State, lease, the Instance and supervisor it ran on, exit, usage, models, `reports_taken`. |
 | `turn` | One prompt and answer | `from_seq` anchors which Transcript entries are this Turn's response. |
 | `supervisor` | An Instance's supervisor | One row per Instance: its name, version, when it last reached the link, and its link credential's digest. Replaced when another is started; deleted when the Instance is let go. |

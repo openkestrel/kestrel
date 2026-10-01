@@ -42,6 +42,17 @@ pub enum Entry {
         entries: Vec<PlanEntry>,
         completion: Completion,
     },
+    ToolCall {
+        session_id: SessionId,
+        call_id: String,
+        title: String,
+        tool_kind: String,
+        status: String,
+        input: serde_json::Value,
+        result: serde_json::Value,
+        closing_reason: Option<String>,
+        completion: Completion,
+    },
     Messages {
         messages: Vec<Message>,
     },
@@ -97,6 +108,7 @@ impl fmt::Display for Entry {
                     .collect::<Vec<_>>()
                     .join("  ")
             ),
+            Entry::ToolCall { title, status, .. } => write!(f, "tool call  {title}  {status}"),
             Entry::Messages { messages } => write!(
                 f,
                 "messages  {}",
@@ -153,13 +165,21 @@ impl<'a> Log<'a> {
     /// in, so one sealed after the caller read it refuses all the same.
     pub async fn append(&mut self, workspace: &Workspace, entry: Entry) -> Result<TranscriptEntry> {
         let appended_at = Timestamp::now();
+        let seq: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(seq), 0) + 1 FROM transcript_entry WHERE workspace_id = ?",
+        )
+        .bind(workspace.id.to_string())
+        .fetch_one(&mut *self.connection)
+        .await?;
+        let mut body = serde_json::to_value(&entry)?;
+        let payloads = externalize(workspace.id, seq, &mut body)?;
 
         let appended = sqlx::query(
             "INSERT INTO transcript_entry (workspace_id, organization_id, seq, body, appended_at, kind, session_id)
              SELECT
                  ?,
                  ?,
-                 (SELECT COALESCE(MAX(seq), 0) + 1 FROM transcript_entry WHERE workspace_id = ?),
+                 ?,
                  ?,
                  ?,
                  ?,
@@ -169,8 +189,8 @@ impl<'a> Log<'a> {
         )
         .bind(workspace.id.to_string())
         .bind(workspace.organization.id.to_string())
-        .bind(workspace.id.to_string())
-        .bind(serde_json::to_string(&entry)?)
+        .bind(seq)
+        .bind(serde_json::to_string(&body)?)
         .bind(appended_at.to_string())
         .bind(entry.kind().as_str())
         .bind(entry.session_id().map(|id| id.to_string()))
@@ -185,6 +205,15 @@ impl<'a> Log<'a> {
                 workspace.id
             )
         })?;
+
+        let seq: i64 = appended.get("seq");
+        for payload in payloads {
+            sqlx::query("INSERT INTO transcript_payload (id, workspace_id, organization_id, seq, field, media_type, content) VALUES (?, ?, ?, ?, ?, ?, ?)")
+                .bind(payload.id).bind(workspace.id.to_string())
+                .bind(workspace.organization.id.to_string()).bind(seq)
+                .bind(payload.field).bind(payload.media_type).bind(payload.content)
+                .execute(&mut *self.connection).await?;
+        }
 
         Ok(TranscriptEntry {
             kind: entry.kind(),
@@ -221,7 +250,7 @@ impl<'a> Log<'a> {
         participant: &str,
     ) -> Result<Option<String>> {
         let latest = sqlx::query(
-            "SELECT body
+            "SELECT seq, body
              FROM transcript_entry
              WHERE workspace_id = ? AND json_extract(body, '$.type') = 'said'
                AND json_extract(body, '$.participant') = ?
@@ -243,14 +272,19 @@ impl<'a> Log<'a> {
             return Ok(None);
         };
 
-        Ok(match serde_json::from_str(row.get("body"))? {
-            Entry::Said {
-                participant: said_by,
-                message,
-                ..
-            } if said_by == participant => Some(message),
-            _ => None,
-        })
+        Ok(
+            match self
+                .hydrate(workspace.id, row.get("seq"), row.get("body"))
+                .await?
+            {
+                Entry::Said {
+                    participant: said_by,
+                    message,
+                    ..
+                } if said_by == participant => Some(message),
+                _ => None,
+            },
+        )
     }
 
     /// What one participant said after a Turn was prompted, oldest first, which is that Turn's
@@ -262,7 +296,7 @@ impl<'a> Log<'a> {
         participant: &str,
     ) -> Result<Vec<String>> {
         let rows = sqlx::query(
-            "SELECT body
+            "SELECT seq, body
              FROM transcript_entry
              WHERE workspace_id = ? AND seq > ?
                AND json_extract(body, '$.type') = 'said'
@@ -280,7 +314,9 @@ impl<'a> Log<'a> {
                 participant: who,
                 message,
                 ..
-            } = serde_json::from_str(row.get("body"))?
+            } = self
+                .hydrate(workspace.id, row.get("seq"), row.get("body"))
+                .await?
                 && who == participant
             {
                 said.push(message);
@@ -296,7 +332,7 @@ impl<'a> Log<'a> {
     /// started an earlier Session is not mistaken for one starting this one.
     pub async fn unfollowed_brief(&mut self, workspace: &Workspace) -> Result<Option<String>> {
         let said = sqlx::query(
-            "SELECT body
+            "SELECT seq, body
              FROM transcript_entry
              WHERE workspace_id = ?
                AND kind = 'shared_state'
@@ -318,10 +354,15 @@ impl<'a> Log<'a> {
         let [only] = said.as_slice() else {
             return Ok(None);
         };
-        Ok(match serde_json::from_str(only.get("body"))? {
-            Entry::Brief { brief, .. } => Some(brief),
-            _ => None,
-        })
+        Ok(
+            match self
+                .hydrate(workspace.id, only.get("seq"), only.get("body"))
+                .await?
+            {
+                Entry::Brief { brief, .. } => Some(brief),
+                _ => None,
+            },
+        )
     }
 
     /// Every entry the Transcript holds before the messages starting the Session about to begin,
@@ -329,7 +370,7 @@ impl<'a> Log<'a> {
     /// reads as context rather than as its own instruction.
     pub async fn context_before_starting(&mut self, workspace: &Workspace) -> Result<Vec<Entry>> {
         let rows = sqlx::query(
-            "SELECT body
+            "SELECT seq, body
              FROM transcript_entry
              WHERE workspace_id = ?
                AND kind = 'shared_state'
@@ -352,9 +393,14 @@ impl<'a> Log<'a> {
         .await
         .with_context(|| format!("reading the transcript of workspace {}", workspace.id))?;
 
-        rows.iter()
-            .map(|row| Ok(serde_json::from_str(row.get("body"))?))
-            .collect()
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(
+                self.hydrate(workspace.id, row.get("seq"), row.get("body"))
+                    .await?,
+            );
+        }
+        Ok(entries)
     }
 
     /// The Said and Messages entries the Transcript holds since the Workspace's last Session
@@ -362,7 +408,7 @@ impl<'a> Log<'a> {
     /// ordered oldest first: the message or messages that started the Session about to begin.
     pub async fn starting_messages(&mut self, workspace: &Workspace) -> Result<Vec<Message>> {
         let rows = sqlx::query(
-            "SELECT body
+            "SELECT seq, body
              FROM transcript_entry
              WHERE workspace_id = ?
                AND json_extract(body, '$.type') IN ('said', 'messages')
@@ -380,7 +426,10 @@ impl<'a> Log<'a> {
 
         let mut messages = Vec::new();
         for row in rows {
-            match serde_json::from_str(row.get("body"))? {
+            match self
+                .hydrate(workspace.id, row.get("seq"), row.get("body"))
+                .await?
+            {
                 Entry::Said {
                     participant,
                     message,
@@ -404,9 +453,85 @@ impl<'a> Log<'a> {
         window: Window,
         kinds: &Kinds,
     ) -> Result<Page, Unreadable> {
-        let from = self.position(workspace, from).await?;
+        let page = self.stored_page(workspace, from, window, kinds).await?;
+        let mut entries = Vec::new();
+        for record in page.entries {
+            entries.push(TranscriptEntry {
+                kind: record.kind,
+                session_id: record.session_id,
+                seq: record.seq,
+                appended_at: record.appended_at,
+                entry: self
+                    .hydrate(workspace.id, record.seq, &record.entry.to_string())
+                    .await?,
+            });
+        }
+        Ok(Page {
+            entries,
+            cursor: page.cursor,
+            more: page.more,
+        })
+    }
 
+    pub async fn stored_page(
+        &mut self,
+        workspace: &Workspace,
+        from: Option<Cursor>,
+        window: Window,
+        kinds: &Kinds,
+    ) -> Result<StoredPage, Unreadable> {
+        let from = self.position(workspace, from).await?;
         Ok(self.after(workspace, from, window, kinds).await?)
+    }
+
+    async fn hydrate(&mut self, workspace: WorkspaceId, seq: i64, body: &str) -> Result<Entry> {
+        let mut body: serde_json::Value = serde_json::from_str(body)?;
+        if body.get("payload_fields").is_none() {
+            return Ok(serde_json::from_value(body)?);
+        }
+        let payloads = sqlx::query("SELECT field, media_type, content FROM transcript_payload WHERE workspace_id = ? AND seq = ?")
+            .bind(workspace.to_string()).bind(seq).fetch_all(&mut *self.connection).await?;
+        for payload in payloads {
+            let content: Vec<u8> = payload.get("content");
+            let field: String = payload.get("field");
+            body[&field] = if payload.get::<String, _>("media_type") == "application/json" {
+                serde_json::from_slice(&content)?
+            } else {
+                serde_json::Value::String(String::from_utf8(content)?)
+            };
+        }
+        Ok(serde_json::from_value(body)?)
+    }
+
+    pub async fn payload(&mut self, workspace: &Workspace, id: &str) -> Result<PayloadRead> {
+        let mut parts = id.split(':');
+        let position = match (parts.next(), parts.next(), parts.next(), parts.next()) {
+            (Some(owner), Some(seq), Some(field), None)
+                if owner == workspace.id.to_string() && CONTENT_FIELDS.contains(&field) =>
+            {
+                seq.parse::<i64>().ok().filter(|seq| *seq > 0)
+            }
+            _ => None,
+        };
+        let Some(seq) = position else {
+            return Ok(PayloadRead::Missing);
+        };
+        let row = sqlx::query("SELECT media_type, content FROM transcript_payload WHERE workspace_id = ? AND organization_id = ? AND id = ?")
+            .bind(workspace.id.to_string()).bind(workspace.organization.id.to_string()).bind(id)
+            .fetch_optional(&mut *self.connection).await?;
+        if let Some(row) = row {
+            return Ok(PayloadRead::Available(Payload {
+                media_type: row.get("media_type"),
+                content: row.get("content"),
+            }));
+        }
+        let expired: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM transcript_entry WHERE workspace_id = ? AND seq = ? AND json_extract(body, '$.type') = 'expired')")
+            .bind(workspace.id.to_string()).bind(seq).fetch_one(&mut *self.connection).await?;
+        Ok(if expired {
+            PayloadRead::Gone
+        } else {
+            PayloadRead::Missing
+        })
     }
 
     async fn position(
@@ -447,7 +572,7 @@ impl<'a> Log<'a> {
         from: Option<Cursor>,
         window: Window,
         kinds: &Kinds,
-    ) -> Result<Page> {
+    ) -> Result<StoredPage> {
         let rows = sqlx::query(
             "SELECT seq, body, appended_at, kind, session_id
              FROM transcript_entry
@@ -467,7 +592,7 @@ impl<'a> Log<'a> {
             .iter()
             .take(window.0)
             .map(|row| {
-                Ok(TranscriptEntry {
+                Ok(StoredTranscriptEntry {
                     kind: row.get::<String, _>("kind").parse()?,
                     session_id: row
                         .get::<Option<String>, _>("session_id")
@@ -491,7 +616,7 @@ impl<'a> Log<'a> {
             .into_iter()
             .filter(|entry| kinds.contains(entry.kind))
             .collect();
-        Ok(Page {
+        Ok(StoredPage {
             cursor,
             entries,
             more,
@@ -643,13 +768,16 @@ impl Entry {
     pub const fn kind(&self) -> Kind {
         match self {
             Self::Thought { .. } | Self::Plan { .. } => Kind::Narration,
+            Self::ToolCall { .. } => Kind::Detail,
             _ => Kind::SharedState,
         }
     }
     pub const fn session_id(&self) -> Option<SessionId> {
         match self {
             Self::Said { session_id, .. } => *session_id,
-            Self::Thought { session_id, .. } | Self::Plan { session_id, .. } => Some(*session_id),
+            Self::Thought { session_id, .. }
+            | Self::Plan { session_id, .. }
+            | Self::ToolCall { session_id, .. } => Some(*session_id),
             Self::SessionStarted { session, .. } | Self::SessionEnded { session, .. } => {
                 Some(*session)
             }
@@ -688,4 +816,81 @@ impl Completion {
             turn_outcome: None,
         }
     }
+}
+
+pub struct StoredTranscriptEntry {
+    pub kind: Kind,
+    pub session_id: Option<SessionId>,
+    pub seq: i64,
+    pub appended_at: Timestamp,
+    pub entry: serde_json::Value,
+}
+
+pub struct StoredPage {
+    pub entries: Vec<StoredTranscriptEntry>,
+    pub cursor: Option<Cursor>,
+    pub more: bool,
+}
+
+pub struct Payload {
+    pub media_type: String,
+    pub content: Vec<u8>,
+}
+
+struct NewPayload {
+    id: String,
+    field: String,
+    media_type: &'static str,
+    content: Vec<u8>,
+}
+
+const CONTENT_FIELDS: &[&str] = &[
+    "brief", "message", "text", "entries", "messages", "input", "result",
+];
+
+fn externalize(
+    workspace: WorkspaceId,
+    seq: i64,
+    body: &mut serde_json::Value,
+) -> Result<Vec<NewPayload>> {
+    let mut payloads = Vec::new();
+    for &field in CONTENT_FIELDS {
+        let Some(value) = body.get_mut(field) else {
+            continue;
+        };
+        let text = matches!(field, "brief" | "message" | "text")
+            .then(|| value.as_str())
+            .flatten();
+        let (content, media_type) = match text {
+            Some(text) => (text.as_bytes().to_vec(), "text/plain; charset=utf-8"),
+            None => (serde_json::to_vec(value)?, "application/json"),
+        };
+        if content.len() <= 64 * 1024 {
+            continue;
+        }
+        let id = format!("{workspace}:{seq}:{field}");
+        *value =
+            serde_json::json!({"payload_id": id, "bytes": content.len(), "media_type": media_type});
+        payloads.push(NewPayload {
+            id,
+            field: field.to_owned(),
+            media_type,
+            content,
+        });
+    }
+    if !payloads.is_empty() {
+        body["payload_fields"] = serde_json::json!(
+            payloads
+                .iter()
+                .map(|payload| &payload.field)
+                .collect::<Vec<_>>()
+        );
+    }
+    Ok(payloads)
+}
+
+pub enum PayloadRead {
+    Available(Payload),
+    Gone,
+    Missing,
 }

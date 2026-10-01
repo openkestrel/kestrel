@@ -885,6 +885,12 @@
           },
           {
             "$ref": "#/components/schemas/Plan"
+          },
+          {
+            "$ref": "#/components/schemas/ToolCall"
+          },
+          {
+            "$ref": "#/components/schemas/SessionState"
           }
         ],
         "discriminator": {
@@ -902,7 +908,9 @@
             "checkout": "#/components/schemas/CheckoutObserved",
             "finished": "#/components/schemas/Finished",
             "thought": "#/components/schemas/Thought",
-            "plan": "#/components/schemas/Plan"
+            "plan": "#/components/schemas/Plan",
+            "tool_call": "#/components/schemas/ToolCall",
+            "session_state": "#/components/schemas/SessionState"
           }
         },
         "properties": {
@@ -1383,6 +1391,9 @@
           },
           {
             "$ref": "#/components/schemas/PlanEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ToolCallEntry"
           }
         ],
         "discriminator": {
@@ -1396,7 +1407,8 @@
             "session_ended": "#/components/schemas/SessionEnded",
             "instance_released": "#/components/schemas/InstanceReleased",
             "thought": "#/components/schemas/ThoughtEntry",
-            "plan": "#/components/schemas/PlanEntry"
+            "plan": "#/components/schemas/PlanEntry",
+            "tool_call": "#/components/schemas/ToolCallEntry"
           }
         }
       },
@@ -1424,10 +1436,24 @@
             "type": "string"
           },
           "brief": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
           },
           "type": {
             "const": "brief"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -1490,14 +1516,28 @@
         "type": "object",
         "properties": {
           "messages": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "$ref": "#/components/schemas/SpokenMessage"
-            }
+            "oneOf": [
+              {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/components/schemas/SpokenMessage"
+                }
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
           },
           "type": {
             "const": "messages"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -1513,7 +1553,21 @@
             "type": "string"
           },
           "message": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -1818,10 +1872,24 @@
             "$ref": "#/components/schemas/Completion"
           },
           "entries": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PlanEntry"
+                }
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
+          },
+          "payload_fields": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/PlanEntry"
-            }
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -1845,7 +1913,21 @@
             "$ref": "#/components/schemas/Completion"
           },
           "text": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -1915,6 +1997,198 @@
           "entries",
           "completion"
         ]
+      },
+      "ToolCallEntry": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "tool_call"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tool_kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "input": {
+            "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+          },
+          "result": {
+            "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+          },
+          "closing_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
+          }
+        },
+        "required": [
+          "type",
+          "session_id",
+          "call_id",
+          "title",
+          "tool_kind",
+          "status",
+          "input",
+          "result",
+          "closing_reason",
+          "completion"
+        ]
+      },
+      "RunningTool": {
+        "type": "object",
+        "properties": {
+          "call_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "call_id",
+          "title",
+          "status",
+          "started_at"
+        ]
+      },
+      "ToolCall": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "tool_call"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tool_kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "input": {},
+          "result": {},
+          "closing_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          }
+        },
+        "required": [
+          "kind",
+          "session",
+          "seq",
+          "call_id",
+          "title",
+          "tool_kind",
+          "status",
+          "input",
+          "result",
+          "closing_reason",
+          "completion"
+        ]
+      },
+      "SessionState": {
+        "description": "A whole transient Session snapshot, sent on changes and reconnect. Unnumbered; never enters the Transcript.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "session_state"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningTool"
+            }
+          },
+          "message_buffering": {
+            "type": "boolean"
+          },
+          "thought_buffering": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "session",
+          "tools",
+          "message_buffering",
+          "thought_buffering"
+        ]
+      },
+      "PayloadReference": {
+        "type": "object",
+        "description": "A body field exceeding 65536 bytes, fetched under its owning Workspace; message, thought and brief text use raw UTF-8, while plans, batched messages and tool input/results use compact JSON.",
+        "properties": {
+          "payload_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f-]+:[1-9][0-9]*:[a-z_]+$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 65537
+          },
+          "media_type": {
+            "enum": [
+              "text/plain; charset=utf-8",
+              "application/json"
+            ]
+          }
+        },
+        "required": [
+          "payload_id",
+          "bytes",
+          "media_type"
+        ],
+        "additionalProperties": false
       }
     }
   }
