@@ -52,8 +52,10 @@ export const queueQuery = (organization: string) =>
 			operator.read<Queue>(operatorPath("organizations", organization, "queue"), { signal }),
 	});
 
+// Expansions and payloads are lazy reads of recorded entries, not current-state views: they sit
+// outside the Organization/Workspace prefix so a change notice never refetches them.
 export const transcriptKey = (organization: string, workspace: string) =>
-	["organizations", organization, "workspaces", workspace, "transcript"] as const;
+	["transcript", organization, workspace] as const;
 
 // One Activity's expansion: its own seq range, every kind, read on demand.
 export const transcriptRangeQuery = (organization: string, workspace: string, range: Range) =>

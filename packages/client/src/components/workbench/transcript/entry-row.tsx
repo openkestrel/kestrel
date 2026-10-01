@@ -31,7 +31,7 @@ function content(entry: Delivered, mode: Disclosure, row: Row): ReactNode {
 		case "said":
 			return (
 				<p>
-					<span className="font-medium">{value.participant}</span>{" "}
+					<span className="font-medium">{value.participant}:</span>{" "}
 					{typeof value.message === "string" ? (
 						value.message
 					) : (
@@ -45,7 +45,7 @@ function content(entry: Delivered, mode: Disclosure, row: Row): ReactNode {
 					{withKeys(value.messages, (message) => `${entry.seq}:${message.participant}`).map(
 						({ item: message, key }) => (
 							<li key={key}>
-								<span className="font-medium">{message.participant}</span>{" "}
+								<span className="font-medium">{message.participant}:</span>{" "}
 								{typeof message.message === "string" ? (
 									message.message
 								) : (
