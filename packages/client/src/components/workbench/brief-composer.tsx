@@ -4,9 +4,9 @@ import { Refusal } from "#/components/refusal";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Textarea } from "#/components/ui/textarea";
-import { declaredName, rememberDeclaredName } from "#/lib/declared-name";
 import type { Workspace } from "#/operator/generated";
 import { postMessage } from "#/operator/getting-ready";
+import { participant } from "#/operator/participant";
 import { workspaceKey } from "#/operator/queries";
 
 // The least a person needs to send the Brief. The composer ticket owns turns, held-message edits,
@@ -14,18 +14,22 @@ import { workspaceKey } from "#/operator/queries";
 export function BriefComposer({
 	organization,
 	record,
+	briefed,
 }: {
 	organization: string;
 	record: Workspace | undefined;
+	// Once the Brief is written the turn composer takes over; this keeps its message field only so
+	// the element a person was typing into is not torn out from under them mid-handoff.
+	briefed: boolean;
 }) {
 	const queryClient = useQueryClient();
 	const [message, setMessage] = useState("");
-	const [name, setName] = useState(() => declaredName());
+	const [name, setName] = useState(() => participant.name() ?? "");
 
 	const post = useMutation({
 		mutationFn: () => postMessage(organization, record?.name ?? "", name.trim(), message.trim()),
 		onSuccess: () => {
-			rememberDeclaredName(name);
+			participant.remember(name);
 			setMessage("");
 			if (record) {
 				void queryClient.invalidateQueries({
@@ -58,7 +62,7 @@ export function BriefComposer({
 				</section>
 			)}
 			<form onSubmit={submit} className="grid gap-2">
-				{name.trim() === "" && (
+				{!briefed && name.trim() === "" && (
 					<Input
 						aria-label="Your name"
 						placeholder="Your name"

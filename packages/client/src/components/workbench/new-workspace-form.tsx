@@ -10,7 +10,6 @@ import { Label } from "#/components/ui/label";
 import { NativeSelect } from "#/components/ui/native-select";
 import { Skeleton } from "#/components/ui/skeleton";
 import { Textarea } from "#/components/ui/textarea";
-import { declaredName, rememberDeclaredName } from "#/lib/declared-name";
 import {
 	AN_EMPTY_DRAFT,
 	draftOf,
@@ -28,6 +27,7 @@ import {
 	resolvedModel,
 	resolvedRepositories,
 } from "#/operator/opening";
+import { participant } from "#/operator/participant";
 import { queueQuery } from "#/operator/queries";
 import { openingQueueLine } from "#/operator/queue-line";
 import { Refused } from "#/operator/transport";
@@ -53,7 +53,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 	const queue = useQuery(queueQuery(organization));
 
 	const [held, setHeld] = useState<NewWorkspaceDraft | undefined>(() => draftOf(organization));
-	const [name, setName] = useState(() => declaredName());
+	const [name, setName] = useState(() => participant.name() ?? "");
 	const [missing, setMissing] = useState<Record<string, string>>({});
 
 	// Deriving the preselection keeps it out of an effect: once the person changes anything it is
@@ -79,7 +79,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 	const opening = useMutation({
 		mutationFn: (declaration: WorkspaceDeclaration) => openWorkspace(organization, declaration),
 		onSuccess: (opened) => {
-			rememberDeclaredName(name);
+			participant.remember(name);
 			void navigate({
 				to: "/organizations/$organization/workspaces/$workspace",
 				params: { organization, workspace: opened.workspace.name },

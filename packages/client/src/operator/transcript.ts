@@ -25,6 +25,8 @@ export type TranscriptSnapshot = {
 	cursor: string | undefined;
 	presence: Presence | undefined;
 	sealed: boolean;
+	/** The mirror was created from a cursor this browser had already stored. */
+	resumed: boolean;
 };
 
 const LIMIT = 500;
@@ -38,12 +40,14 @@ export class TranscriptMirror {
 	private presenceValue: Presence | undefined;
 	private sealedValue = false;
 	private readonly listeners = new Set<() => void>();
+	private resumedValue = false;
 	private cached: TranscriptSnapshot;
 
 	constructor(private readonly storageKey?: string) {
 		const restored = this.restore();
 		this.cursorValue = restored?.cursor;
 		this.highest = restored?.seq ?? 0;
+		this.resumedValue = restored !== undefined;
 		this.cached = this.snapshotOf();
 	}
 
@@ -161,6 +165,7 @@ export class TranscriptMirror {
 			cursor: this.cursorValue,
 			presence: this.presenceValue,
 			sealed: this.sealedValue,
+			resumed: this.resumedValue,
 		};
 	}
 
