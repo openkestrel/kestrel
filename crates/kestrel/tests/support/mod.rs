@@ -1643,9 +1643,14 @@ impl Kestrel {
         link::start(&self.store, session, harness())
             .await
             .expect("the session should start");
-        work::report_on(&self.store, session, Some(1), work::Report::Answered)
-            .await
-            .expect("the answer should be reported");
+        work::report_on(
+            &self.store,
+            session,
+            Some(1),
+            work::Report::Answered { usage: None },
+        )
+        .await
+        .expect("the answer should be reported");
 
         self.session(session.id).await
     }

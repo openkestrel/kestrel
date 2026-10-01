@@ -173,7 +173,7 @@ async fn a_turns_response_reaches_the_issue_before_the_session_ends() {
         },
     )
     .await;
-    report(&link, &session, &on, 3, Report::Answered).await;
+    report(&link, &session, &on, 3, Report::Answered { usage: None }).await;
 
     let bodies = replies(&stub, 1).await;
     assert!(bodies[0].contains("the first answer"), "{}", bodies[0]);
@@ -219,7 +219,7 @@ async fn a_final_message_repeating_a_combined_turn_response_is_not_posted_again(
         )
         .await;
     }
-    report(&link, &session, &on, 4, Report::Answered).await;
+    report(&link, &session, &on, 4, Report::Answered { usage: None }).await;
     replies(&stub, 1).await;
     report(
         &link,
@@ -239,6 +239,7 @@ async fn a_final_message_repeating_a_combined_turn_response_is_not_posted_again(
         6,
         Report::Finished {
             exit: Exit::Succeeded,
+            usage: None,
         },
     )
     .await;
@@ -272,7 +273,7 @@ async fn new_final_information_after_a_turn_is_saved_and_reported_once() {
         },
     )
     .await;
-    report(&link, &session, &on, 3, Report::Answered).await;
+    report(&link, &session, &on, 3, Report::Answered { usage: None }).await;
     replies(&stub, 1).await;
 
     report(
@@ -293,6 +294,7 @@ async fn new_final_information_after_a_turn_is_saved_and_reported_once() {
         5,
         Report::Finished {
             exit: Exit::Succeeded,
+            usage: None,
         },
     )
     .await;
@@ -336,7 +338,7 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
         },
     )
     .await;
-    report(&link, &session, &on, 3, Report::Answered).await;
+    report(&link, &session, &on, 3, Report::Answered { usage: None }).await;
     let bodies = replies(&stub, 1).await;
     assert!(bodies[0].contains("the first answer"), "{}", bodies[0]);
 
@@ -358,7 +360,7 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
         },
     )
     .await;
-    report(&link, &session, &on, 5, Report::Answered).await;
+    report(&link, &session, &on, 5, Report::Answered { usage: None }).await;
 
     let bodies = replies(&stub, 2).await;
     assert!(bodies[1].contains("the second answer"), "{}", bodies[1]);
@@ -390,6 +392,7 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
         7,
         Report::Finished {
             exit: Exit::Succeeded,
+            usage: None,
         },
     )
     .await;
@@ -415,6 +418,7 @@ async fn a_session_that_answered_no_turn_still_says_how_it_ended() {
         2,
         Report::Finished {
             exit: Exit::Succeeded,
+            usage: None,
         },
     )
     .await;
@@ -453,7 +457,7 @@ async fn a_failed_session_posts_its_turns_response_and_then_the_failure() {
         },
     )
     .await;
-    report(&link, &session, &on, 3, Report::Answered).await;
+    report(&link, &session, &on, 3, Report::Answered { usage: None }).await;
     replies(&stub, 1).await;
 
     report(
@@ -465,6 +469,7 @@ async fn a_failed_session_posts_its_turns_response_and_then_the_failure() {
             exit: Exit::Failed {
                 because: "the agent answered the prompt with nothing".to_owned(),
             },
+            usage: None,
         },
     )
     .await;
@@ -501,7 +506,7 @@ async fn a_turn_response_that_landed_while_the_control_plane_died_is_not_posted_
         },
     )
     .await;
-    report(&link, &session, &on, 3, Report::Answered).await;
+    report(&link, &session, &on, 3, Report::Answered { usage: None }).await;
     let landed = replies(&stub, 1).await.remove(0);
     assert!(landed.contains("the answer that landed"), "{landed}");
 

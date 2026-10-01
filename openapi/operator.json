@@ -4164,7 +4164,7 @@
         ]
       },
       "TranscriptSessionState": {
-        "description": "Transient session_state SSE snapshot on every follow connect, including empty state, then changes. Never has an event id and never enters the Transcript. session_id is null when no unfinished Session exists.",
+        "description": "Transient session_state SSE snapshot on every follow connect, including empty state, then changes. Never has an event id and never enters the Transcript. session_id is null when no unfinished Session exists; usage is the latest the Harness reported, live, or null.",
         "type": "object",
         "properties": {
           "session_id": {
@@ -4185,13 +4185,25 @@
           },
           "thought_buffering": {
             "type": "boolean"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the Harness has spent so far, kept in memory while the Session is live; null until it reports one."
           }
         },
         "required": [
           "session_id",
           "tools",
           "message_buffering",
-          "thought_buffering"
+          "thought_buffering",
+          "usage"
         ]
       },
       "Event": {

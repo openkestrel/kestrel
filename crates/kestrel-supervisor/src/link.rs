@@ -233,19 +233,28 @@ pub enum Report {
         tools: Vec<RunningTool>,
         message_buffering: bool,
         thought_buffering: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
     },
-    Used {
+    /// What the harness has spent, unnumbered and idempotent: at most one a second, at the
+    /// window's trailing edge, and never a row (ADR-0041).
+    Usage {
         usage: Usage,
     },
     /// The Session's whole bookkeeping state, unnumbered and idempotent: a change is said once,
     /// and the whole state is said again after a reconnect (ADR-0041).
     SessionInfo(SessionInfo),
-    Answered,
+    Answered {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
+    },
     Checkout {
         repositories: Vec<Observed>,
     },
     Finished {
         exit: Exit,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
     },
 }
 
@@ -264,9 +273,9 @@ impl Report {
             Report::Plan { .. } => "plan",
             Report::ToolCall { .. } => "tool_call",
             Report::SessionState { .. } => "session_state",
-            Report::Used { .. } => "used",
+            Report::Usage { .. } => "usage",
             Report::SessionInfo { .. } => "session_info",
-            Report::Answered => "answered",
+            Report::Answered { .. } => "answered",
             Report::Checkout { .. } => "checkout",
             Report::Finished { .. } => "finished",
         }

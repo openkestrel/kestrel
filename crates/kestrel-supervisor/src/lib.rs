@@ -31,6 +31,9 @@ const STDERR_REPORT_PATIENCE: Duration = Duration::from_secs(5);
 /// At most one bookkeeping report a second, at the window's trailing edge, however chatty the
 /// harness is (ADR-0041).
 const SESSION_INFO_EVERY: Duration = Duration::from_secs(1);
+/// At most one usage report a second per Session, at the window's trailing edge, however often
+/// the harness reports what it has spent (ADR-0041).
+const USAGE_EVERY: Duration = Duration::from_secs(1);
 /// Long enough for the last lines of an agent that has just exited, which are often why.
 const STDERR_DRAINING: Duration = Duration::from_secs(1);
 
@@ -81,6 +84,10 @@ struct Carrying {
     /// up the link: at most one report a second, at the window's trailing edge (ADR-0041).
     info: Option<link::SessionInfo>,
     info_due: Option<tokio::time::Instant>,
+    /// What the harness has spent so far, and when that is due up the link: the same window as
+    /// the bookkeeping report.
+    usage: Option<link::Usage>,
+    usage_due: Option<tokio::time::Instant>,
 }
 
 impl Carrying {
@@ -93,6 +100,18 @@ impl Carrying {
         self.info = Some(info);
         if self.info_due.is_none() {
             self.info_due = Some(tokio::time::Instant::now() + SESSION_INFO_EVERY);
+        }
+    }
+
+    /// Takes what the harness last spent, arming the report the first time one is held; a value
+    /// identical to the one already held is dropped here.
+    fn hold_usage(&mut self, usage: link::Usage) {
+        if self.usage.as_ref() == Some(&usage) {
+            return;
+        }
+        self.usage = Some(usage);
+        if self.usage_due.is_none() {
+            self.usage_due = Some(tokio::time::Instant::now() + USAGE_EVERY);
         }
     }
 }
@@ -158,10 +177,28 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
     status
 }
 
-async fn report_state(link: &Link, session: &str, state: &Report) -> Result<(), link::Error> {
+/// Sends the Session's whole transient state, with what the harness has spent folded in: a
+/// snapshot that missed the usage report still carries the latest value.
+async fn report_state(link: &Link, carrying: &Carrying) -> Result<(), link::Error> {
+    let Some(Report::SessionState {
+        tools,
+        message_buffering,
+        thought_buffering,
+        ..
+    }) = &carrying.state
+    else {
+        return Ok(());
+    };
+    let state = Report::SessionState {
+        tools: tools.clone(),
+        message_buffering: *message_buffering,
+        thought_buffering: *thought_buffering,
+        usage: carrying.usage.clone(),
+    };
+
     match tokio::time::timeout(
         Duration::from_secs(1),
-        link.report(state, Some(session), None),
+        link.report(&state, Some(&carrying.session), None),
     )
     .await
     {
@@ -265,6 +302,9 @@ async fn attend(
         {
             match event {
                 harness::ConversationEvent::State(state) => carrying.state = Some(state),
+                harness::ConversationEvent::Report(Report::Usage { usage }) => {
+                    carrying.hold_usage(usage)
+                }
                 harness::ConversationEvent::Report(report) => carrying.saying.push_back(report),
                 harness::ConversationEvent::Worked(worked) => {
                     carrying.working = false;
@@ -274,10 +314,8 @@ async fn attend(
             }
         }
     }
-    if let Some(carrying) = supervising.carrying.as_ref()
-        && let Some(state) = &carrying.state
-    {
-        match report_state(link, &carrying.session, state).await {
+    if let Some(carrying) = supervising.carrying.as_ref() {
+        match report_state(link, carrying).await {
             Ok(()) => {}
             Err(link::Error::Session(why)) => {
                 if let Some(carrying) = supervising.carrying.take() {
@@ -301,6 +339,9 @@ async fn attend(
     if let Some(carrying) = supervising.carrying.as_mut() {
         if carrying.info.is_some() {
             carrying.info_due = Some(tokio::time::Instant::now());
+        }
+        if carrying.usage.is_some() {
+            carrying.usage_due = Some(tokio::time::Instant::now());
         }
     }
     let mut checking = tokio::time::interval_at(
@@ -333,6 +374,10 @@ async fn attend(
             .carrying
             .as_ref()
             .and_then(|carrying| carrying.info_due);
+        let usage_due = supervising
+            .carrying
+            .as_ref()
+            .and_then(|carrying| carrying.usage_due);
         tokio::select! {
             delivered = instructions.next() => {
                 let delivered = match delivered? {
@@ -362,7 +407,7 @@ async fn attend(
                     match event {
                         harness::ConversationEvent::State(state) => {
                             carrying.state = Some(state);
-                            match report_state(link, &carrying.session, carrying.state.as_ref().unwrap()).await {
+                            match report_state(link, carrying).await {
                                 Ok(()) => {}
                                 Err(link::Error::Session(why)) => {
                                     if let Some(carrying) = supervising.carrying.take() {
@@ -371,6 +416,9 @@ async fn attend(
                                 }
                                 Err(error) => return Err(error),
                             }
+                        }
+                        harness::ConversationEvent::Report(Report::Usage { usage }) => {
+                            carrying.hold_usage(usage);
                         }
                         harness::ConversationEvent::Report(Report::SessionInfo(info)) => {
                             carrying.hold(info);
@@ -388,10 +436,8 @@ async fn attend(
                 }
             }
             _ = checking.tick() => {
-                if let Some(carrying) = &supervising.carrying
-                    && let Some(state) = &carrying.state
-                {
-                    report_state(link, &carrying.session, state).await?;
+                if let Some(carrying) = &supervising.carrying {
+                    report_state(link, carrying).await?;
                 }
                 if supervising.carrying.as_ref().is_some_and(|carrying| carrying.working) {
                     report_work(link, supervising, false).await?;
@@ -400,6 +446,11 @@ async fn attend(
             _ = until_session_info_due(info_due) => {
                 if let Some(carrying) = supervising.carrying.as_mut() {
                     say_session_info(link, carrying, diagnostics).await?;
+                }
+            }
+            _ = until_usage_due(usage_due) => {
+                if let Some(carrying) = supervising.carrying.as_mut() {
+                    say_usage(link, carrying, diagnostics).await?;
                 }
             }
             () = give_up_timer => {
@@ -504,6 +555,37 @@ async fn until_session_info_due(due: Option<tokio::time::Instant>) {
     }
 }
 
+/// Sends what the harness has spent once it is due: at most one report a second, at the window's
+/// trailing edge. The latest value is what the control plane needs, so a burst collapses into one.
+async fn say_usage(
+    link: &Link,
+    carrying: &mut Carrying,
+    diagnostics: &dyn Diagnostics,
+) -> Result<(), link::Error> {
+    let Some(usage) = carrying.usage.clone() else {
+        return Ok(());
+    };
+    if carrying
+        .usage_due
+        .is_some_and(|due| tokio::time::Instant::now() < due)
+    {
+        return Ok(());
+    }
+    link.report(&Report::Usage { usage }, Some(&carrying.session), None)
+        .await?;
+    carrying.usage_due = None;
+    diagnostics.info(&format!("reported usage for {}", carrying.session));
+
+    Ok(())
+}
+
+async fn until_usage_due(due: Option<tokio::time::Instant>) {
+    match due {
+        Some(due) => tokio::time::sleep_until(due).await,
+        None => std::future::pending().await,
+    }
+}
+
 /// Everything left to do for the Session before waiting on the link again: `false` once it has
 /// said all it has to say about a Session that is over.
 async fn carried(
@@ -527,6 +609,7 @@ async fn carried(
     }
     say(link, carrying, diagnostics).await?;
     say_session_info(link, carrying, diagnostics).await?;
+    say_usage(link, carrying, diagnostics).await?;
     if carrying.finished {
         return Ok(false);
     }
@@ -645,12 +728,15 @@ async fn start_carrying(
             tools: Vec::new(),
             message_buffering: false,
             thought_buffering: false,
+            usage: None,
         }),
         refreshed: BTreeMap::new(),
         written: None,
         saying: VecDeque::new(),
         info: None,
         info_due: None,
+        usage: None,
+        usage_due: None,
     };
     match checkout::check_out(&carrying.checkout).await {
         Ok(()) => {
@@ -672,6 +758,7 @@ async fn start_carrying(
             });
             carrying.saying.push_back(Report::Finished {
                 exit: Exit::Failed { because },
+                usage: carrying.usage.clone(),
             });
         }
     }
@@ -754,6 +841,7 @@ async fn conversation(
             carrying.finished = true;
             carrying.saying.push_back(Report::Finished {
                 exit: Exit::Failed { because },
+                usage: carrying.usage.clone(),
             });
             Ok(None)
         }
@@ -821,14 +909,16 @@ fn everything_left_to_say(
     worked: harness::Worked,
     observed: Vec<link::Observed>,
 ) -> impl Iterator<Item = Report> {
+    let harness::Worked { failed, usage, .. } = worked;
     std::iter::once(Report::Checkout {
         repositories: observed,
     })
-    .chain(std::iter::once(match worked.failed {
+    .chain(std::iter::once(match failed {
         Some(because) => Report::Finished {
             exit: Exit::Failed { because },
+            usage,
         },
-        None => Report::Answered,
+        None => Report::Answered { usage },
     }))
 }
 

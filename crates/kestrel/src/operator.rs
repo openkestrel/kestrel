@@ -209,7 +209,7 @@ struct Read {
     sealed: bool,
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 struct TranscriptSessionState {
     session_id: Option<domain::SessionId>,
     #[serde(flatten)]
@@ -742,6 +742,8 @@ impl SessionRecord {
     fn live(session: Session, summaries: &crate::live_work::Summaries) -> Self {
         let state = summaries.current_session(&session);
         let mut record = Self::read(session);
+        // The live figure is the Turn in flight; the recorded one is the last Turn answered.
+        record.usage = state.usage.or(record.usage);
         record.tools = state.tools;
         record.message_buffering = state.message_buffering;
         record.thought_buffering = state.thought_buffering;

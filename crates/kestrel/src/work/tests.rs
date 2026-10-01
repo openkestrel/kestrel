@@ -184,7 +184,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         Reported {
             session: Some(first_session.id),
             seq: Some(1),
-            report: Report::Answered,
+            report: Report::Answered { usage: None },
         },
     )
     .await
@@ -254,7 +254,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         Reported {
             session: Some(alex_session.id),
             seq: Some(1),
-            report: Report::Answered,
+            report: Report::Answered { usage: None },
         },
     )
     .await
@@ -310,14 +310,15 @@ async fn reports_record_the_session_and_its_transcript_together() {
         .await
         .unwrap();
     fixture
-        .report(Some(4), Report::Used { usage: usage() })
+        .report(None, Report::Usage { usage: usage() })
         .await
         .unwrap();
     fixture
         .report(
-            Some(5),
+            Some(4),
             Report::Finished {
                 exit: Exit::Succeeded,
+                usage: Some(usage()),
             },
         )
         .await
@@ -421,9 +422,10 @@ async fn numbered_reports_refuse_missing_and_invalid_numbers_without_effects() {
             message: "refused".to_owned(),
             completion: crate::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
-        Report::Used { usage: usage() },
+        Report::Answered { usage: None },
         Report::Finished {
             exit: Exit::Succeeded,
+            usage: None,
         },
     ] {
         assert!(matches!(
@@ -604,7 +606,13 @@ async fn a_failed_append_rolls_back_the_session_change_and_report_acceptance() {
     assert_eq!(fixture.entries().await, before);
 
     fixture
-        .report_on(Some(1), Report::Used { usage: usage() })
+        .report_on(
+            Some(1),
+            Report::Finished {
+                exit: Exit::Succeeded,
+                usage: Some(usage()),
+            },
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -629,6 +637,7 @@ async fn a_finished_report_keeps_the_exit_that_already_stands() {
             Some(1),
             Report::Finished {
                 exit: Exit::Succeeded,
+                usage: None,
             },
         )
         .await

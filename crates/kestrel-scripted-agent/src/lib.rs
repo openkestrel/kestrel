@@ -41,6 +41,10 @@ pub const SWITCHED_MODE: &str = "plan";
 pub const OTHER_MODE: &str = "review";
 /// What the `Repeats` script sends, identically, over and over inside one turn.
 pub const REPEATS: usize = 20;
+/// What the `BurstsUsage` script reports it has spent: one burst whose last value is
+/// [`BURSTED_USAGE`], inside a context of [`BURSTED_SIZE`] tokens.
+pub const BURSTED_USAGE: u64 = 400;
+pub const BURSTED_SIZE: u64 = 1_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Script {
@@ -116,6 +120,8 @@ pub enum Script {
     SwitchesModel,
     /// Offers only legacy `modes` and no Mode-category option, and switches mode mid-turn.
     LegacyModes,
+    /// Reports what it has spent several times in one burst, then answers the turn.
+    BurstsUsage,
 }
 
 impl Script {
@@ -159,6 +165,7 @@ impl Script {
             Script::Repeats => "repeats",
             Script::SwitchesModel => "switches-model",
             Script::LegacyModes => "legacy-modes",
+            Script::BurstsUsage => "bursts-usage",
         }
     }
 }

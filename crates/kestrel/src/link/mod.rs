@@ -484,6 +484,7 @@ async fn report(
         tools,
         message_buffering,
         thought_buffering,
+        usage,
     } = &reported.report
     {
         work::report(&control_plane.store, &linked.instance, reported.clone()).await?;
@@ -495,8 +496,17 @@ async fn report(
                 tools: tools.clone(),
                 message_buffering: *message_buffering,
                 thought_buffering: *thought_buffering,
+                usage: usage.clone(),
             },
         );
+        return Ok(StatusCode::ACCEPTED.into_response());
+    }
+    if let work::Report::Usage { usage } = &reported.report {
+        work::report(&control_plane.store, &linked.instance, reported.clone()).await?;
+        let session = reported.session.expect("validated session report");
+        control_plane
+            .summaries
+            .report_usage(&instance, &session.to_string(), usage.clone());
         return Ok(StatusCode::ACCEPTED.into_response());
     }
     let connected = matches!(reported.report, work::Report::Connected { .. });

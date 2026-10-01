@@ -68,8 +68,12 @@ pub enum Report {
         tools: Vec<RunningTool>,
         message_buffering: bool,
         thought_buffering: bool,
+        #[serde(default)]
+        usage: Option<Usage>,
     },
-    Used {
+    /// What the harness has spent, unnumbered and transient: held in memory beside the running
+    /// tools, never a row (ADR-0041).
+    Usage {
         usage: Usage,
     },
     /// The Session's whole bookkeeping state: what the harness calls the conversation, the options
@@ -83,12 +87,17 @@ pub enum Report {
         #[serde(default)]
         commands: Vec<SessionCommand>,
     },
-    Answered,
+    Answered {
+        #[serde(default)]
+        usage: Option<Usage>,
+    },
     Checkout {
         repositories: Vec<Observed>,
     },
     Finished {
         exit: Exit,
+        #[serde(default)]
+        usage: Option<Usage>,
     },
 }
 
@@ -101,6 +110,7 @@ impl Report {
             | Report::Work { .. }
             | Report::Ready
             | Report::SessionState { .. }
+            | Report::Usage { .. }
             | Report::SessionInfo { .. } => false,
             Report::Started
             | Report::Model { .. }
@@ -108,8 +118,7 @@ impl Report {
             | Report::Thought { .. }
             | Report::Plan { .. }
             | Report::ToolCall { .. }
-            | Report::Used { .. }
-            | Report::Answered
+            | Report::Answered { .. }
             | Report::Checkout { .. }
             | Report::Finished { .. } => true,
         }
@@ -536,6 +545,7 @@ async fn reported(
                 .await?;
         }
         Report::SessionState { .. } => {}
+        Report::Usage { .. } => {}
         Report::ToolCall {
             call_id,
             title,
@@ -564,11 +574,7 @@ async fn reported(
                 )
                 .await?;
         }
-        Report::Used { usage } => {
-            info!(session = %session.id, %usage, "a supervisor reported what its agent used");
-            tx.workspaces().record_usage(session, &usage).await?;
-        }
-        Report::Answered => {
+        Report::Answered { usage } => {
             if let Some((turn, from_seq)) = tx.workspaces().answer_turn(session).await? {
                 let workspace = tx.workspaces().get(session.workspace).await?;
                 let said = tx
@@ -581,6 +587,10 @@ async fn reported(
                 tx.workspaces()
                     .record_active(session.organization, session.workspace, Timestamp::now())
                     .await?;
+                if let Some(usage) = usage {
+                    info!(session = %session.id, %usage, "a supervisor reported what its agent used");
+                    tx.workspaces().record_usage(session, &usage).await?;
+                }
             }
             info!(session = %session.id, "a supervisor reported its agent answered a turn");
         }
@@ -590,8 +600,12 @@ async fn reported(
                 .await?;
             info!(session = %session.id, "a supervisor reported what its checkout holds");
         }
-        Report::Finished { exit } => {
+        Report::Finished { exit, usage } => {
             let stands = ending(tx, session, exit).await?;
+            if let Some(usage) = usage {
+                info!(session = %session.id, %usage, "a supervisor reported what its agent used");
+                tx.workspaces().record_usage(session, &usage).await?;
+            }
             info!(session = %session.id, %stands, "a supervisor reported its session finished");
         }
     }

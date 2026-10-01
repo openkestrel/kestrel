@@ -117,7 +117,7 @@ impl Completer {
                     ));
                 }
             }
-            SessionUpdate::UsageUpdate(usage) => completed.reports.push(Report::Used {
+            SessionUpdate::UsageUpdate(usage) => completed.reports.push(Report::Usage {
                 usage: Usage {
                     context_used: usage.used,
                     context_size: usage.size,
@@ -167,6 +167,8 @@ impl Completer {
                 .collect(),
             message_buffering: self.messages.open.is_some(),
             thought_buffering: self.thoughts.open.is_some(),
+            // Filled in when the state goes up the link, which is what holds the latest usage.
+            usage: None,
         }
     }
 
