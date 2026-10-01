@@ -35,6 +35,9 @@ pub struct Dispatch {
     pub auth: Option<String>,
     pub max_active_sessions: NonZeroUsize,
     pub serialized: Vec<String>,
+    /// How long a supervisor gives an interrupted turn to answer its cancel before it ends the
+    /// harness.
+    pub interrupt_deadline: Duration,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -396,6 +399,7 @@ async fn supervised(
     tx.commit().await?;
 
     let lease = work::LEASE.as_secs().to_string();
+    let interrupt_deadline = dispatch.interrupt_deadline.as_secs().to_string();
     let mut supervisor = instance.supervise(&[
         ("KESTREL_LINK", dispatch.link.as_str()),
         ("KESTREL_INSTANCE", &name),
@@ -404,6 +408,7 @@ async fn supervised(
         // How long a Session's lease is held out for, so a supervisor nothing answers can let its
         // Session go once the lease has certainly lapsed.
         ("KESTREL_LEASE", &lease),
+        ("KESTREL_INTERRUPT_DEADLINE", &interrupt_deadline),
     ])?;
     let mut tx = store.begin().await?;
     tx.workspaces()

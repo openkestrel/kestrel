@@ -118,6 +118,11 @@ pub enum Script {
     LegacyModes,
     /// Offers only legacy `modes` and no Mode-category option, and keeps the mode it is set to.
     LegacyModesKept,
+    /// Says a message and works at a tool call until the client cancels the turn, then answers
+    /// `cancelled` with the tool call still open.
+    WorksUntilCancelled,
+    /// Works at a turn that never ends and never answers a cancel.
+    IgnoresCancel,
 }
 
 impl Script {
@@ -162,6 +167,8 @@ impl Script {
             Script::SwitchesModel => "switches-model",
             Script::LegacyModes => "legacy-modes",
             Script::LegacyModesKept => "legacy-modes-kept",
+            Script::WorksUntilCancelled => "works-until-cancelled",
+            Script::IgnoresCancel => "ignores-cancel",
         }
     }
 }

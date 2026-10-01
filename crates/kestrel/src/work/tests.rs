@@ -202,6 +202,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     let second_queued = workspace::post(&store, second.id, "operator", "start please")
         .await
         .unwrap()
+        .session
         .expect("a fresh workspace's first message starts a session");
     let second_session = match occupy(&store, 1, &["codex".to_owned()]).await.unwrap() {
         Some(Occupied::Claimed(claimed)) => claimed,

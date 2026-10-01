@@ -11,13 +11,14 @@ use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthMethod, AuthenticateRequest, AvailableCommand, AvailableCommandInput,
-    ContentBlock, ErrorCode, InitializeRequest, InitializeResponse, LoadSessionRequest,
-    NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigId,
-    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelect,
-    SessionConfigSelectOption, SessionConfigSelectOptions, SessionConfigValueId, SessionId,
-    SessionModeId, SessionModeState, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason, TextContent,
+    CancelNotification, ContentBlock, ErrorCode, InitializeRequest, InitializeResponse,
+    LoadSessionRequest, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
+    SelectedPermissionOutcome, SessionConfigId, SessionConfigKind, SessionConfigOption,
+    SessionConfigOptionCategory, SessionConfigSelect, SessionConfigSelectOption,
+    SessionConfigSelectOptions, SessionConfigValueId, SessionId, SessionModeId, SessionModeState,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
+    StopReason, TextContent,
 };
 use agent_client_protocol::{
     AcpAgent, AcpAgentConfig, Client, ConnectionTo, Error, LineDirection,
@@ -48,6 +49,8 @@ pub struct Harness {
     pub mode: Option<String>,
     /// The thought level the Session named, if it named one.
     pub thought_level: Option<String>,
+    /// How long an interrupted Turn is given to answer its cancel before the harness is ended.
+    pub interrupt_deadline: Duration,
     pub stderr: mpsc::UnboundedSender<String>,
 }
 
@@ -106,10 +109,18 @@ enum Choice {
 /// Long enough for an agent between turns to see its connection close; one mid-turn is cut off.
 const CLOSING: Duration = Duration::from_millis(500);
 
+/// The channels one conversation's task listens on: the next prompt, and a request to cancel the
+/// Turn in flight.
+struct Channels {
+    prompts: mpsc::UnboundedReceiver<String>,
+    interrupts: mpsc::UnboundedReceiver<()>,
+}
+
 /// One ACP conversation for the whole Session, held apart from the link so that losing the link
 /// loses nothing of it (ADR-0024). Dropping it kills the agent.
 pub struct Conversation {
     prompts: mpsc::UnboundedSender<String>,
+    interrupts: mpsc::UnboundedSender<()>,
     turns: mpsc::UnboundedReceiver<ConversationEvent>,
     task: JoinHandle<()>,
 }
@@ -124,6 +135,7 @@ impl Conversation {
         root: PathBuf,
     ) -> Self {
         let (prompts, prompted) = mpsc::unbounded_channel();
+        let (interrupts, interrupted) = mpsc::unbounded_channel();
         let (answered, turns) = mpsc::unbounded_channel();
         if let Some(first) = first {
             prompts
@@ -134,12 +146,16 @@ impl Conversation {
             harness.clone(),
             provider,
             root,
-            prompted,
+            Channels {
+                prompts: prompted,
+                interrupts: interrupted,
+            },
             answered,
         ));
 
         Self {
             prompts,
+            interrupts,
             turns,
             task,
         }
@@ -148,6 +164,11 @@ impl Conversation {
     pub fn prompt(&self, prompt: String) {
         // A conversation that is over says so as its last turn, which is where that is heard.
         let _ = self.prompts.send(prompt);
+    }
+
+    /// Asks the agent to cancel the Turn in flight; the conversation goes on.
+    pub fn interrupt(&self) {
+        let _ = self.interrupts.send(());
     }
 
     /// Cancel-safe, so a caller may stop waiting on it and come back.
@@ -256,13 +277,14 @@ async fn conversing(
     harness: Harness,
     provider: BTreeMap<String, String>,
     root: PathBuf,
-    mut prompts: mpsc::UnboundedReceiver<String>,
+    mut channels: Channels,
     turns: mpsc::UnboundedSender<ConversationEvent>,
 ) {
     let heard = Arc::new(Mutex::new(Hearing {
         completer: Completer::default(),
         allowed: Vec::new(),
         on: None,
+        interrupting: false,
         reports: turns.clone(),
         diagnostics: harness.stderr.clone(),
         replaying: false,
@@ -276,7 +298,7 @@ async fn conversing(
             &harness,
             &provider,
             &root,
-            &mut prompts,
+            &mut channels,
             &turns,
             &heard,
             &mut continuity,
@@ -311,7 +333,7 @@ async fn living(
     harness: &Harness,
     provider: &BTreeMap<String, String>,
     root: &Path,
-    prompts: &mut mpsc::UnboundedReceiver<String>,
+    channels: &mut Channels,
     turns: &mpsc::UnboundedSender<ConversationEvent>,
     heard: &Arc<Mutex<Hearing>>,
     continuity: &mut Continuity,
@@ -372,14 +394,20 @@ async fn living(
                         .lock()
                         .expect("what the agent said should not be poisoned");
                     heard.completer.produced = true;
-                    let outcome = match permission::allow_once(&request.options) {
-                        Some(option) => {
-                            heard.allowed.push(Subject::from(&request));
-                            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-                                option,
-                            ))
+                    // A request that arrives while the Turn is being cancelled is answered
+                    // `cancelled`, which is not a denial: the agent is stopping anyway.
+                    let outcome = if heard.interrupting {
+                        RequestPermissionOutcome::Cancelled
+                    } else {
+                        match permission::allow_once(&request.options) {
+                            Some(option) => {
+                                heard.allowed.push(Subject::from(&request));
+                                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                                    option,
+                                ))
+                            }
+                            None => RequestPermissionOutcome::Cancelled,
                         }
-                        None => RequestPermissionOutcome::Cancelled,
                     };
                     drop(heard);
 
@@ -415,7 +443,7 @@ async fn living(
                     let prompt = match continuity.in_flight.clone() {
                         Some(prompt) => prompt,
                         None => tokio::select! {
-                            prompt = prompts.recv() => match prompt {
+                            prompt = channels.prompts.recv() => match prompt {
                                 Some(prompt) => prompt,
                                 None => return Ok(Ended::HungUp),
                             },
@@ -432,14 +460,51 @@ async fn living(
                         .expect("the observation lock")
                         .completer
                         .begin();
-                    let answered = match connection
-                        .send_request(PromptRequest::new(
-                            conversed.clone(),
-                            vec![ContentBlock::Text(TextContent::new(prompt))],
-                        ))
-                        .block_task()
-                        .await
-                    {
+                    let mut prompting = Box::pin(
+                        connection
+                            .send_request(PromptRequest::new(
+                                conversed.clone(),
+                                vec![ContentBlock::Text(TextContent::new(prompt))],
+                            ))
+                            .block_task(),
+                    );
+                    let mut cancelled = false;
+                    let mut give_up_at = None;
+                    let answered = loop {
+                        tokio::select! {
+                            answered = prompting.as_mut() => break answered,
+                            Some(()) = channels.interrupts.recv(), if !cancelled => {
+                                connection
+                                    .send_notification(CancelNotification::new(conversed.clone()))?;
+                                heard.lock().expect("the observation lock").interrupting = true;
+                                cancelled = true;
+                                give_up_at = Some(tokio::time::Instant::now() + harness.interrupt_deadline);
+                            }
+                            () = until(give_up_at) => {
+                                let mut heard = heard.lock().expect("the observation lock");
+                                heard.interrupting = false;
+                                // `Answered` is the boundary that closes open units
+                                // `unresolved`; the exit below says why the Turn never came back.
+                                let completed = heard.completer.boundary(
+                                    TurnOutcome::Answered {
+                                        stop_reason: "cancelled".to_owned(),
+                                    },
+                                    jiff::Timestamp::now(),
+                                );
+                                heard.emit(completed);
+                                drop(heard);
+                                return Ok(Ended::Over(format!(
+                                    "the agent did not answer the interrupt within {:?}, and its ACP \
+                                     continuity is lost",
+                                    harness.interrupt_deadline
+                                )));
+                            }
+                        }
+                    };
+                    // The Turn is over: nothing queued after it belongs to it.
+                    while channels.interrupts.try_recv().is_ok() {}
+                    heard.lock().expect("the observation lock").interrupting = false;
+                    let answered = match answered {
                         Ok(answered) => answered,
                         Err(error) => return Ok(ended(&error)),
                     };
@@ -452,6 +517,13 @@ async fn living(
                                 .completer
                                 .boundary(TurnOutcome::Cancelled, jiff::Timestamp::now());
                             heard.emit(completed);
+                            if cancelled {
+                                drop(heard);
+                                // kestrel asked for this one: the conversation and the Instance
+                                // stay, and the Turn is reported interrupted rather than ended.
+                                let _ = turns.send(ConversationEvent::Interrupted);
+                                continue;
+                            }
                         }
                         return Ok(Ended::Over(because));
                     }
@@ -860,6 +932,14 @@ fn bounded(line: &str) -> String {
     format!("{}… [truncated]", &line[..end])
 }
 
+/// Waits until a deadline that a Turn being cancelled armed, or forever while it is not.
+async fn until(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
+    }
+}
+
 /// Why a turn that stopped for anything but ending it ends the conversation too.
 fn stopped_short(stop: StopReason) -> Option<String> {
     let because = match stop {
@@ -877,6 +957,8 @@ fn stopped_short(stop: StopReason) -> Option<String> {
 pub enum ConversationEvent {
     Report(Report),
     Worked(Worked),
+    /// The working Turn was cancelled at kestrel's request: the conversation stays open.
+    Interrupted,
     State(Report),
     /// The conversation is open, with no Turn started: what an unbriefed Session waits for.
     Ready,
@@ -886,6 +968,9 @@ struct Hearing {
     completer: Completer,
     allowed: Vec<Subject>,
     on: Option<On>,
+    /// A cancel is in flight: permission requests are answered `cancelled` until the Turn
+    /// returns.
+    interrupting: bool,
     reports: mpsc::UnboundedSender<ConversationEvent>,
     diagnostics: mpsc::UnboundedSender<String>,
     replaying: bool,
@@ -1217,6 +1302,7 @@ mod tests {
                 completer: Completer::default(),
                 allowed: Vec::new(),
                 on: None,
+                interrupting: false,
                 reports,
                 diagnostics: mpsc::unbounded_channel().0,
                 replaying: false,

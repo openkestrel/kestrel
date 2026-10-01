@@ -4,10 +4,10 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 
 use crate::domain::{
-    Agent, Checkout, Connected, Cost, Declared, Exit, HeldMessage, Organization, OrganizationId,
-    Preparing, Project,
-    Session, SessionCommand, SessionId, SessionOption, SessionState, StartedBy,
-    SubscriptionProfile, Turn, Usage, Workspace, WorkspaceId, WorkspaceState,
+    Agent, Checkout, Connected, Cost, Declared, Exit, HeldMessage, Interrupting, Organization,
+    OrganizationId, Preparing, Project, Session, SessionCommand, SessionId, SessionOption,
+    SessionState, StartedBy, SubscriptionProfile, Turn, Usage, Workspace, WorkspaceId,
+    WorkspaceState,
 };
 use crate::fanout::Touched;
 use crate::instance::Observed;
@@ -26,8 +26,8 @@ macro_rules! sessions_where {
                     harness, state, preparing, exit, exit_because, outcome_message, instance,
                     supervisor, enqueued_at, started_at, ended_at, lease_expires_at, connected_at,
                     supervisor_version, model, mode, thought_level, worked_model, title,
-                    config_options, commands, context_used, context_size, cost_amount,
-                    cost_currency",
+                    config_options, commands, interrupting_participant, interrupting_at,
+                    context_used, context_size, cost_amount, cost_currency",
             $columns,
             "
              FROM session
@@ -633,6 +633,7 @@ impl<'a> Workspaces<'a> {
                 title: None,
                 options: Vec::new(),
                 commands: Vec::new(),
+                interrupting: None,
                 enqueued_at: Timestamp::now(),
                 started_at: None,
                 ended_at: None,
@@ -1934,17 +1935,82 @@ impl<'a> Workspaces<'a> {
         .with_context(|| format!("answering the turn of the session {}", session.id))?;
 
         if answered.is_some() {
-            sqlx::query("UPDATE session SET state = ? WHERE id = ? AND state = ?")
-                .bind(SessionState::Waiting.as_str())
-                .bind(session.id.to_string())
-                .bind(SessionState::Working.as_str())
-                .execute(&mut *self.connection)
-                .await?;
+            // An interrupt the turn outran is cleared here, so a Turn that ended as it would
+            // have leaves nothing pending behind it.
+            sqlx::query(
+                "UPDATE session
+                 SET state = ?, interrupting_participant = NULL, interrupting_at = NULL
+                 WHERE id = ? AND state = ?",
+            )
+            .bind(SessionState::Waiting.as_str())
+            .bind(session.id.to_string())
+            .bind(SessionState::Working.as_str())
+            .execute(&mut *self.connection)
+            .await?;
 
             self.touched.session(session);
             self.touched.queue(session.organization);
         }
         Ok(answered.map(|row| (row.get("seq"), row.get("from_seq"))))
+    }
+
+    /// Records the request only if none is already pending, so a second interrupt sends nothing
+    /// more down the link.
+    pub async fn request_interrupt(
+        &mut self,
+        session: &Session,
+        participant: &str,
+    ) -> Result<bool> {
+        let set = sqlx::query(
+            "UPDATE session SET interrupting_participant = ?, interrupting_at = ?
+             WHERE id = ? AND state = ? AND interrupting_participant IS NULL",
+        )
+        .bind(participant)
+        .bind(Timestamp::now().to_string())
+        .bind(session.id.to_string())
+        .bind(SessionState::Working.as_str())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("interrupting the session {}", session.id))?;
+
+        if set.rows_affected() == 1 {
+            self.touched.session(session);
+        }
+
+        Ok(set.rows_affected() == 1)
+    }
+
+    /// Reads the pending interrupt and clears it, so the report that follows names who asked once.
+    pub async fn take_interrupting(&mut self, session: &Session) -> Result<Option<Interrupting>> {
+        let row = sqlx::query(
+            "SELECT interrupting_participant, interrupting_at FROM session WHERE id = ?",
+        )
+        .bind(session.id.to_string())
+        .fetch_one(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading the interrupt of the session {}", session.id))?;
+
+        let (Some(participant), Some(requested_at)) = (
+            row.get::<Option<String>, _>("interrupting_participant"),
+            timestamp(&row, "interrupting_at")?,
+        ) else {
+            return Ok(None);
+        };
+
+        sqlx::query(
+            "UPDATE session SET interrupting_participant = NULL, interrupting_at = NULL WHERE id = ?",
+        )
+        .bind(session.id.to_string())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("clearing the interrupt of the session {}", session.id))?;
+
+        self.touched.session(session);
+
+        Ok(Some(Interrupting {
+            participant,
+            requested_at,
+        }))
     }
 
     pub async fn turns(&mut self, session: SessionId) -> Result<Vec<Turn>> {
@@ -2148,6 +2214,16 @@ fn session(row: &SqliteRow) -> Result<Session> {
         title: row.get("title"),
         options: read_json(row, "config_options")?,
         commands: read_json(row, "commands")?,
+        interrupting: match (
+            row.get::<Option<String>, _>("interrupting_participant"),
+            timestamp(row, "interrupting_at")?,
+        ) {
+            (Some(participant), Some(requested_at)) => Some(Interrupting {
+                participant,
+                requested_at,
+            }),
+            _ => None,
+        },
         enqueued_at: row.get::<String, _>("enqueued_at").parse()?,
         started_at: timestamp(row, "started_at")?,
         ended_at: timestamp(row, "ended_at")?,

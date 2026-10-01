@@ -63,6 +63,10 @@ pub enum Entry {
         session: SessionId,
         exit: Exit,
     },
+    TurnInterrupted {
+        session: SessionId,
+        participant: String,
+    },
     InstanceReleased {
         participant: String,
         instance: String,
@@ -123,6 +127,10 @@ impl fmt::Display for Entry {
                     .join("  ")
             ),
             Entry::SessionEnded { session, exit } => write!(f, "session ended  {session}  {exit}"),
+            Entry::TurnInterrupted {
+                session,
+                participant,
+            } => write!(f, "turn interrupted  {session}  {participant}"),
             Entry::InstanceReleased {
                 participant,
                 instance,
@@ -942,9 +950,9 @@ impl Entry {
             Self::Thought { session_id, .. }
             | Self::Plan { session_id, .. }
             | Self::ToolCall { session_id, .. } => Some(*session_id),
-            Self::SessionStarted { session, .. } | Self::SessionEnded { session, .. } => {
-                Some(*session)
-            }
+            Self::SessionStarted { session, .. }
+            | Self::SessionEnded { session, .. }
+            | Self::TurnInterrupted { session, .. } => Some(*session),
             _ => None,
         }
     }

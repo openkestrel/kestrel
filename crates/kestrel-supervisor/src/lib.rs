@@ -33,6 +33,8 @@ const STDERR_REPORT_PATIENCE: Duration = Duration::from_secs(5);
 const SESSION_INFO_EVERY: Duration = Duration::from_secs(1);
 /// Long enough for the last lines of an agent that has just exited, which are often why.
 const STDERR_DRAINING: Duration = Duration::from_secs(1);
+/// How long an interrupted Turn is given to answer its cancel before its harness is ended.
+const INTERRUPT_DEADLINE: Duration = Duration::from_secs(30);
 
 pub trait Diagnostics {
     fn info(&self, message: &str);
@@ -54,6 +56,7 @@ struct Supervising {
     carrying: Option<Carrying>,
     checkout: Option<Checkout>,
     summary: Option<Vec<link::WorkRepository>>,
+    interrupt_deadline: Duration,
 }
 
 /// One Session's part of the supervisor's life. The conversation goes on whether or not the link
@@ -128,6 +131,7 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
         carrying: None,
         checkout: None,
         summary: None,
+        interrupt_deadline: interrupt_deadline(variables),
     };
 
     let alive = tokio::spawn(saying_it_is_alive(Arc::clone(&link)));
@@ -270,6 +274,10 @@ async fn attend(
                     carrying.working = false;
                     worked_on(carrying, worked, diagnostics).await;
                 }
+                harness::ConversationEvent::Interrupted => {
+                    carrying.working = false;
+                    carrying.saying.push_back(Report::Interrupted);
+                }
                 harness::ConversationEvent::Ready => carrying.ready = true,
             }
         }
@@ -379,6 +387,11 @@ async fn attend(
                         harness::ConversationEvent::Worked(worked) => {
                             carrying.working = false;
                             worked_on(carrying, worked, diagnostics).await;
+                            report_work(link, supervising, true).await?;
+                        }
+                        harness::ConversationEvent::Interrupted => {
+                            carrying.working = false;
+                            carrying.saying.push_back(Report::Interrupted);
                             report_work(link, supervising, true).await?;
                         }
                         harness::ConversationEvent::Ready => {
@@ -597,10 +610,21 @@ async fn instructed(
                 None => diagnostics.info("prompted before the session started"),
             }
         }
+        Instruction::Interrupt if carrying_it => {
+            match supervising.carrying.as_ref() {
+                Some(carrying) if carrying.working => match carrying.conversation.as_ref() {
+                    Some(conversation) => conversation.interrupt(),
+                    // The Turn has not reached the harness yet; it will end as it would have.
+                    None => diagnostics.info("interrupted before the session started"),
+                },
+                _ => diagnostics.info("interrupted a session with no turn in flight"),
+            }
+        }
         Instruction::Stop
         | Instruction::Start { .. }
         | Instruction::Unbriefed { .. }
         | Instruction::Prompt { .. }
+        | Instruction::Interrupt
         | Instruction::Unrecognized => {}
     }
 }
@@ -636,6 +660,7 @@ async fn start_carrying(
             model: harness.model,
             mode: harness.mode,
             thought_level: harness.thought_level,
+            interrupt_deadline: supervising.interrupt_deadline,
             stderr: stderr.clone(),
         },
         conversation: None,
@@ -842,6 +867,14 @@ fn dialled(variables: &BTreeMap<String, String>) -> Option<Link> {
     Some(Link::to(base, instance, credential))
 }
 
+/// How long an interrupted Turn is given to answer its cancel, in seconds, as the control plane
+/// told this Instance when it started its supervisor.
+fn interrupt_deadline(variables: &BTreeMap<String, String>) -> Duration {
+    set(variables, "KESTREL_INTERRUPT_DEADLINE")
+        .and_then(|seconds| seconds.parse::<u64>().ok())
+        .map_or(INTERRUPT_DEADLINE, Duration::from_secs)
+}
+
 /// How long the control plane holds a Session's lease out, in seconds, as it told this Instance
 /// when it started its supervisor. A supervisor handed no lease has no bound to derive and keeps
 /// every Session's harness through any outage until it is stopped.
@@ -962,6 +995,22 @@ mod tests {
         assert_eq!(
             give_up_after(&variables(&[("KESTREL_LEASE", "120")])),
             Some(Duration::from_secs(120) + GIVE_UP_MARGIN)
+        );
+    }
+
+    #[test]
+    fn the_interrupt_deadline_is_thirty_seconds_unless_configuration_says_otherwise() {
+        assert_eq!(interrupt_deadline(&variables(&[])), INTERRUPT_DEADLINE);
+        assert_eq!(
+            interrupt_deadline(&variables(&[("KESTREL_INTERRUPT_DEADLINE", "1")])),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            interrupt_deadline(&variables(&[(
+                "KESTREL_INTERRUPT_DEADLINE",
+                "not a number"
+            )])),
+            INTERRUPT_DEADLINE
         );
     }
 

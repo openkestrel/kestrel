@@ -717,6 +717,15 @@ enum SessionCommand {
         /// `latest`
         session: String,
     },
+    /// Cancel a Session's working turn without ending it, so held messages go to the agent at once
+    Interrupt {
+        /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
+        /// `latest`
+        session: String,
+        /// The participant asking
+        #[arg(long)]
+        as_participant: String,
+    },
     /// End a Session: it succeeds between turns, and fails mid-turn or before it started
     Stop {
         /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
@@ -1554,6 +1563,27 @@ async fn run() -> Result<()> {
                 &presentation,
                 &api.get(&["organizations", &organization, "sessions", &session])
                     .await?,
+            )?;
+        }
+        Command::Session(SessionCommand::Interrupt {
+            session,
+            as_participant,
+        }) => {
+            let organization = scoping.resolve().await?.organization;
+            show(
+                &presentation,
+                &view::INTERRUPTED,
+                &api.post(
+                    &[
+                        "organizations",
+                        &organization,
+                        "sessions",
+                        &session,
+                        "interrupt",
+                    ],
+                    &json!({ "participant": as_participant }),
+                )
+                .await?,
             )?;
         }
         Command::Session(SessionCommand::Stop { session }) => {

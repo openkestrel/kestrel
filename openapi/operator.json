@@ -1606,6 +1606,26 @@
         }
       }
     },
+    "/operator/organizations/{organization}/sessions/{session}/interrupt": {
+      "post": {
+        "operationId": "interruptSession",
+        "summary": "Interrupt a Session's working Turn.",
+        "description": "The Turn is cancelled without ending the Session: its conversation and Instance stay, and a Held Message becomes the next Turn at once. A Session that is not working is refused 409, naming its phase. A second interrupt while one is pending answers 202 and sends nothing more.",
+        "parameters": [
+          { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "session", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SessionInterrupt" } } } },
+        "responses": {
+          "202": { "description": "The Session, with the pending interrupt on it while the request is in flight.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
+          "400": { "$ref": "#/components/responses/Refused" },
+          "404": { "$ref": "#/components/responses/Refused" },
+          "409": { "$ref": "#/components/responses/Refused" },
+          "422": { "$ref": "#/components/responses/Refused" },
+          "503": { "$ref": "#/components/responses/Refused" }
+        }
+      }
+    },
     "/operator/organizations/{organization}/triggers": {
       "get": {
         "operationId": "listTriggers",
@@ -3297,6 +3317,7 @@
           "title": { "type": ["string", "null"], "description": "The harness's own name for the conversation, or null until it says one." },
           "options": { "type": "array", "description": "The harness's whole config-option list (ADR-0041).", "items": { "$ref": "#/components/schemas/SessionOption" } },
           "commands": { "type": "array", "description": "The commands the harness offers for this Session.", "items": { "$ref": "#/components/schemas/SessionCommand" } },
+          "interrupting": { "anyOf": [{ "$ref": "#/components/schemas/Interrupting" }, { "type": "null" }], "description": "Who asked the working Turn to stop, while the request is in flight." },
           "enqueued_at": { "type": "string", "format": "date-time" },
           "started_at": { "type": ["string", "null"], "format": "date-time" },
           "ended_at": { "type": ["string", "null"], "format": "date-time" },
@@ -3308,7 +3329,7 @@
           "message_buffering": { "type": "boolean" },
           "thought_buffering": { "type": "boolean" }
         },
-        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "commands", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "message_buffering", "thought_buffering"]
+        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "message_buffering", "thought_buffering"]
       },
       "SessionOption": {
         "type": "object",
@@ -3353,6 +3374,25 @@
           "input_hint": { "type": ["string", "null"] }
         },
         "required": ["name", "description", "input_hint"]
+      },
+      "Interrupting": {
+        "type": "object",
+        "description": "A person's request that a Session's working Turn stop.",
+        "properties": {
+          "participant": { "type": "string" },
+          "requested_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["participant", "requested_at"]
+      },
+      "SessionInterrupt": {
+        "type": "object",
+        "properties": {
+          "participant": {
+            "type": "string",
+            "description": "The person asking. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization."
+          }
+        },
+        "required": ["participant"]
       },
       "Exit": {
         "oneOf": [
@@ -4011,6 +4051,9 @@
             "$ref": "#/components/schemas/SessionEnded"
           },
           {
+            "$ref": "#/components/schemas/TurnInterrupted"
+          },
+          {
             "$ref": "#/components/schemas/InstanceReleased"
           },
           {
@@ -4039,6 +4082,7 @@
             "said": "#/components/schemas/Message",
             "messages": "#/components/schemas/Messages",
             "session_ended": "#/components/schemas/SessionEnded",
+            "turn_interrupted": "#/components/schemas/TurnInterrupted",
             "instance_released": "#/components/schemas/InstanceReleased",
             "thought": "#/components/schemas/ThoughtEntry",
             "plan": "#/components/schemas/PlanEntry",
@@ -4233,6 +4277,27 @@
           "type",
           "session",
           "exit"
+        ]
+      },
+      "TurnInterrupted": {
+        "description": "A person interrupted a working Turn without ending the Session.",
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "participant": {
+            "type": "string"
+          },
+          "type": {
+            "const": "turn_interrupted"
+          }
+        },
+        "required": [
+          "type",
+          "session",
+          "participant"
         ]
       },
       "Exit": {

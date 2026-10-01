@@ -28,8 +28,7 @@ use crate::declined::{Declined, FieldRefusal, Kind};
 use crate::domain::{
     self, Agent, Connection, Correlation, Declared, Direction, EventRecordId, EventRefusal, Fires,
     Firing, HeldMessage, Integration, Occurrence, Organization, Project, Schedule, Session,
-    StartedBy,
-    SubscriptionProfile, Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
+    StartedBy, SubscriptionProfile, Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::fanout;
 use crate::filter::Filter;
@@ -104,6 +103,8 @@ pub const WORKSPACE_INSTANCE_RELEASE: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/instance/release";
 pub const SESSIONS: &str = "/operator/organizations/{organization}/workspaces/{workspace}/sessions";
 pub const SESSION: &str = "/operator/organizations/{organization}/sessions/{session}";
+pub const SESSION_INTERRUPT: &str =
+    "/operator/organizations/{organization}/sessions/{session}/interrupt";
 pub const SESSION_STOP: &str = "/operator/organizations/{organization}/sessions/{session}/stop";
 pub const TRANSCRIPT: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/transcript";
@@ -277,6 +278,7 @@ pub fn router(
         .route(WORKSPACE_INSTANCE_RELEASE, post(release_instance))
         .route(SESSIONS, get(sessions).post(enqueue_session))
         .route(SESSION, get(show_session))
+        .route(SESSION_INTERRUPT, post(interrupt_session))
         .route(SESSION_STOP, post(stop_session))
         .route(TRANSCRIPT, get(transcript))
         .route(TRANSCRIPT_PAYLOAD, get(transcript_payload))
@@ -411,6 +413,11 @@ struct SessionDeclaration {
     model: Option<String>,
     mode: Option<String>,
     thought_level: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SessionInterrupt {
+    participant: Option<String>,
 }
 
 impl SessionDeclaration {
@@ -624,6 +631,8 @@ struct SessionRecord {
     title: Option<String>,
     options: Vec<SessionOptionRecord>,
     commands: Vec<domain::SessionCommand>,
+    /// Who asked the working Turn to stop, while the request is in flight.
+    interrupting: Option<domain::Interrupting>,
     enqueued_at: Timestamp,
     started_at: Option<Timestamp>,
     ended_at: Option<Timestamp>,
@@ -810,6 +819,7 @@ impl SessionRecord {
                 })
                 .collect(),
             commands: session.commands,
+            interrupting: session.interrupting,
             enqueued_at: session.enqueued_at,
             started_at: session.started_at,
             ended_at: session.ended_at,
@@ -2397,6 +2407,26 @@ fn matches_etag(asked: &str, tag: &str) -> bool {
         let candidate = candidate.trim();
         candidate == "*" || candidate.strip_prefix("W/").unwrap_or(candidate) == tag
     })
+}
+
+async fn interrupt_session(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, session)): Path<(String, String)>,
+    interrupt: Result<Json<SessionInterrupt>, JsonRejection>,
+) -> Result<(StatusCode, Json<SessionRecord>), Refused> {
+    let Json(interrupt) = interrupt?;
+    let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
+    let interrupting = work::interrupt(
+        &control_plane.store,
+        session.id,
+        interrupt.participant.as_deref().unwrap_or_default(),
+    )
+    .await?;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(SessionRecord::read(interrupting)),
+    ))
 }
 
 async fn stop_session(

@@ -4,8 +4,7 @@ use jiff::{SignedDuration, Timestamp};
 use crate::declined::{Declined, FieldRefusal, Kind};
 use crate::domain::{
     Agent, Declared, Exit, HeldMessage, Organization, Project, Session, SessionId, SessionState,
-    StartedBy,
-    SubscriptionProfile, Workspace, WorkspaceId, WorkspaceState,
+    StartedBy, SubscriptionProfile, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::instance;
 use crate::log::{Cursor, Entry, Message, Page, Unreadable, Window};
@@ -712,6 +711,7 @@ mod tests {
             title: None,
             options: Vec::new(),
             commands: Vec::new(),
+            interrupting: None,
             enqueued_at: Timestamp::now(),
             started_at: None,
             ended_at: None,

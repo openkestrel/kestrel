@@ -37,6 +37,13 @@ stateDiagram-v2
   supervisor's `finished`, a stop, the lease sweep, the claimant failing) sets the exit, and later
   callers get the exit that stands. Ending appends `SessionEnded`, invalidates the link
   credential, records the Outcome delivery, and cascades Unreachable to dependents of a failure.
+- **A working Turn can be interrupted without ending the Session.** `work::interrupt` records
+  `interrupting {participant, requested_at}` on the Session and sends the link an `interrupt`
+  instruction; only a working Turn is interruptible, so every other phase is refused naming itself.
+  On the supervisor's `interrupted` report the control plane writes shared-state
+  `TurnInterrupted {session, participant}`, clears `interrupting`, closes the Turn, and prompts any
+  Held Message at once on the slot the Turn held; with none held the Session becomes Waiting. An
+  interrupted Turn never fails its Session and never trails.
 - **Stopping a Waiting Session succeeds** (`SessionState::stop_exit`). It has answered everything
   it was asked; ending it mid-turn is a failure.
 - **Unreachable has no exit.** A queued Session whose blocker failed never ran, so nothing failed

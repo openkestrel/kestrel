@@ -5,15 +5,17 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
+use crate::declined::Declined;
 use crate::domain::{
-    Declared, Exit, HeldMessage, Session, SessionCommand, SessionId, SessionOption, Turn, Usage,
-    Workspace, WorkspaceId,
+    Declared, Exit, HeldMessage, Session, SessionCommand, SessionId, SessionOption, SessionState,
+    Turn, Usage, Workspace, WorkspaceId,
 };
 use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
 use crate::link;
 use crate::live_work::RunningTool;
 use crate::log::{Completion, Entry, Message, PlanEntry};
+use crate::participant;
 use crate::store::workspace::Taken;
 use crate::store::{Store, Tx};
 use crate::workspace;
@@ -85,6 +87,8 @@ pub enum Report {
         commands: Vec<SessionCommand>,
     },
     Answered,
+    /// The working Turn was interrupted: its open units were closed and no answer follows.
+    Interrupted,
     Checkout {
         repositories: Vec<Observed>,
     },
@@ -111,6 +115,7 @@ impl Report {
             | Report::ToolCall { .. }
             | Report::Used { .. }
             | Report::Answered
+            | Report::Interrupted
             | Report::Checkout { .. }
             | Report::Finished { .. } => true,
         }
@@ -585,6 +590,29 @@ async fn reported(
             }
             info!(session = %session.id, "a supervisor reported its agent answered a turn");
         }
+        Report::Interrupted => {
+            let workspace = tx.workspaces().get(session.workspace).await?;
+            if let Some(interrupting) = tx.workspaces().take_interrupting(session).await? {
+                tx.log()
+                    .append(
+                        &workspace,
+                        Entry::TurnInterrupted {
+                            session: session.id,
+                            participant: interrupting.participant,
+                        },
+                    )
+                    .await?;
+            }
+            if tx.workspaces().answer_turn(session).await?.is_some() {
+                tx.workspaces()
+                    .record_active(session.organization, session.workspace, Timestamp::now())
+                    .await?;
+            }
+            // The slot the interrupted Turn held goes straight to what is held for it, so the
+            // Workspace never waits between the two.
+            prompt_pending(tx, session).await?;
+            info!(session = %session.id, "a supervisor reported its agent's turn interrupted");
+        }
         Report::Checkout { repositories } => {
             tx.workspaces()
                 .record_observed(session.organization, session.workspace, &repositories)
@@ -670,6 +698,36 @@ pub async fn supervisor_exited(store: &Store, instance: &str, because: &str) -> 
 
 pub async fn turns(store: &Store, session: SessionId) -> Result<Vec<Turn>> {
     store.begin().await?.workspaces().turns(session).await
+}
+
+/// Anyone who can post can interrupt a working Turn: the Session keeps its conversation and its
+/// Instance, and a second request while one is pending sends nothing more.
+pub async fn interrupt(store: &Store, id: SessionId, participant: &str) -> Result<Session> {
+    let mut tx = store.begin().await?;
+    let session = tx.workspaces().session(id).await?;
+    let organization = tx.organizations().by_id(session.organization).await?;
+    let participant = participant::accepted(&mut tx, &organization, participant).await?;
+
+    if session.state != SessionState::Working {
+        return Err(Declined::Taken(format!(
+            "the session {id} is {}, and only a working turn can be interrupted",
+            session.state
+        ))
+        .into());
+    }
+    if tx
+        .workspaces()
+        .request_interrupt(&session, &participant)
+        .await?
+    {
+        tx.workspaces()
+            .send_instruction(&session, link::Instruction::Interrupt)
+            .await?;
+    }
+    let interrupting = tx.workspaces().session(id).await?;
+    tx.commit().await?;
+
+    Ok(interrupting)
 }
 
 /// A waiting Session has done everything asked of it, so stopping it there is how it

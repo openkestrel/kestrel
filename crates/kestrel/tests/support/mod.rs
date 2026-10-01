@@ -46,9 +46,9 @@ use kestrel::agent;
 use kestrel::compute::{Docker, Driver, LocalExec};
 use kestrel::domain::{
     Agent, Correlation, CorrelationMiss, Declared, Direction, Event, EventRecordId, Exit, Fires,
-    HeldMessage, Integration, Occurrence, OnOpenWorkspace, Organization, Project, Schedule, Session,
-    SessionCommand, SessionId, SessionState, SubscriptionProfile, Templates, Trigger, Turn,
-    Workspace, WorkspaceId,
+    HeldMessage, Integration, Occurrence, OnOpenWorkspace, Organization, Project, Schedule,
+    Session, SessionCommand, SessionId, SessionState, SubscriptionProfile, Templates, Trigger,
+    Turn, Workspace, WorkspaceId,
 };
 use kestrel::instance;
 use kestrel::integration::{self, Connecting, Registration};
@@ -168,12 +168,17 @@ impl Drop for Cleanup {
     }
 }
 
+/// How long a supervisor gives an interrupted turn to answer its cancel, unless a test shortens
+/// it.
+pub const DEFAULT_INTERRUPT_DEADLINE: Duration = Duration::from_secs(30);
+
 /// What the work role provisions an Environment with.
 #[derive(Clone)]
 pub struct Provisions {
     driver: Driver,
     harnesses: Vec<HarnessCommand>,
     max_active_sessions: NonZeroUsize,
+    interrupt_deadline: Duration,
 }
 
 /// The harness an Agent names unless a test says otherwise, spawned as whatever the test plays.
@@ -302,6 +307,22 @@ impl Kestrel {
             driver: Driver::LocalExec(LocalExec::running(supervisor)),
             harnesses: spawning(harnesses),
             max_active_sessions: NonZeroUsize::new(maximum).expect("at least one active session"),
+            interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
+        }))
+        .await
+    }
+
+    /// Dispatched with an interrupt deadline short enough for a test to watch it pass.
+    pub async fn dispatching_with_a_quick_interrupt(
+        supervisor: &Path,
+        command: &str,
+        deadline: Duration,
+    ) -> Self {
+        Self::booted(Some(Provisions {
+            driver: Driver::LocalExec(LocalExec::running(supervisor)),
+            harnesses: spawning(&[(HARNESS, command)]),
+            max_active_sessions: NonZeroUsize::new(2).expect("at least one active session"),
+            interrupt_deadline: deadline,
         }))
         .await
     }
@@ -323,6 +344,7 @@ impl Kestrel {
                 driver: Driver::Docker(Docker::provisioning_from(image)),
                 harnesses: spawning(harnesses),
                 max_active_sessions: NonZeroUsize::new(2).unwrap(),
+                interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
             }),
             kestrel::presence::LEASE,
         )
@@ -372,6 +394,7 @@ impl Kestrel {
             auth: None,
             max_active_sessions: provisions.max_active_sessions,
             serialized: vec![SERIALIZED.to_owned()],
+            interrupt_deadline: provisions.interrupt_deadline,
         });
         let roles = tokio::spawn(all_in_one.run(dispatch, shutdown.clone()));
 
@@ -1351,6 +1374,20 @@ impl Kestrel {
         self.walk(id, None, Window::DEFAULT).await
     }
 
+    /// The whole Transcript, narration and detail included: the default read is shared state
+    /// alone.
+    pub async fn every_entry(&self, id: WorkspaceId) -> Vec<Entry> {
+        let kinds: kestrel::log::Kinds =
+            "shared_state,narration,detail".parse().expect("every kind");
+        workspace::transcript(&self.store, id, None, Window::DEFAULT, &kinds)
+            .await
+            .expect("the transcript should read")
+            .entries
+            .into_iter()
+            .map(|recorded| recorded.entry)
+            .collect()
+    }
+
     /// One bounded window is the only read there is, so a whole Transcript is a walk.
     pub async fn walk(
         &self,
@@ -1985,6 +2022,44 @@ impl Kestrel {
             .expect("the workspace's instance should read")
     }
 
+    pub async fn interrupt(
+        &self,
+        session: SessionId,
+        participant: &str,
+    ) -> anyhow::Result<Session> {
+        work::interrupt(&self.store, session, participant).await
+    }
+
+    /// Every instruction the control plane has sent down the link for this Session, in order.
+    pub async fn instructions(&self, session: &Session) -> Vec<Instruction> {
+        let pool = database(self.data_dir()).await;
+        let bodies: Vec<String> = sqlx::query_scalar(
+            "SELECT body FROM link_instruction WHERE session_id = ? ORDER BY seq",
+        )
+        .bind(session.id.to_string())
+        .fetch_all(&pool)
+        .await
+        .expect("the session's instructions");
+        pool.close().await;
+
+        bodies
+            .into_iter()
+            .map(|body| serde_json::from_str(&body).expect("an instruction body"))
+            .collect()
+    }
+
+    pub async fn report_answered(&self, session: &Session) {
+        work::report_on(&self.store, session, Some(1), work::Report::Answered)
+            .await
+            .expect("the answer should be reported");
+    }
+
+    pub async fn report_interrupted(&self, session: &Session) {
+        work::report_on(&self.store, session, Some(1), work::Report::Interrupted)
+            .await
+            .expect("the interruption should be reported");
+    }
+
     pub async fn instruct(&self, session: &Session, instruction: Instruction) {
         self.try_instruct(session, instruction)
             .await
@@ -2179,6 +2254,7 @@ impl Stopped {
                 }],
                 max_active_sessions: NonZeroUsize::new(maximum)
                     .expect("at least one active session"),
+                interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
             }),
             self.follow_lease,
         )
