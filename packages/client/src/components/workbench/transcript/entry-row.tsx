@@ -74,6 +74,21 @@ function content(entry: Delivered, mode: Disclosure, row: Row): ReactNode {
 			return <p className="text-muted-foreground text-xs">{value.agent} started</p>;
 		case "session_ended":
 			return <p className="text-muted-foreground text-xs">Session ended</p>;
+		case "turn_interrupted":
+			return (
+				<p className="text-muted-foreground text-xs">{value.participant} interrupted the turn</p>
+			);
+		case "option_changed":
+			return (
+				<p className="text-muted-foreground text-xs">
+					{value.participant} changed {value.option}
+					{value.refused
+						? `: ${value.refused}`
+						: value.to
+							? ` to ${value.to}`
+							: ""}
+				</p>
+			);
 		case "instance_released":
 			return <p className="text-muted-foreground text-xs">Instance released</p>;
 		case "expired":
