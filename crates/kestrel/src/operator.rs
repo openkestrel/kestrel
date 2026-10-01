@@ -133,6 +133,9 @@ struct Reading {
 
 #[derive(Deserialize)]
 struct Following {
+    summaries: Option<bool>,
+    first_seq: Option<i64>,
+    last_seq: Option<i64>,
     follow: Option<bool>,
     kinds: Option<String>,
 }
@@ -159,8 +162,16 @@ enum Because {
 }
 
 struct Read {
-    page: log::StoredPage,
+    page: log::TranscriptPage,
+    session_state: TranscriptSessionState,
     sealed: bool,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
+struct TranscriptSessionState {
+    session_id: Option<domain::SessionId>,
+    #[serde(flatten)]
+    state: crate::live_work::SessionState,
 }
 
 pub fn router(
@@ -2236,12 +2247,32 @@ async fn transcript(
         .map_err(|error| Refused::BadRequest(error.to_string()))?
         .unwrap_or_default();
     let from = last_event_id(&headers)?;
-    let mut read = reading(&control_plane.store, workspace, from, &kinds).await?;
+    let summaries = following.summaries.unwrap_or(true);
+    let range = log::SeqRange {
+        first_seq: following.first_seq,
+        last_seq: following.last_seq,
+    };
+    range.validate()?;
+    let mut read = reading(&control_plane, workspace, from, &kinds, summaries, range).await?;
 
     let stream = async_stream::try_stream! {
         let mut delivered = from;
+        let mut session_state = read.session_state.clone();
+        if follow {
+            yield Event::default().event("session_state").json_data(&session_state)?;
+        }
         loop {
+            if follow && read.session_state != session_state {
+                session_state = read.session_state.clone();
+                yield Event::default().event("session_state").json_data(&session_state)?;
+            }
+            let mut activities = read.page.activities.into_iter().peekable();
             for entry in read.page.entries {
+                while activities.peek().is_some_and(|activity| activity.last_seq < entry.seq) {
+                    let activity = activities.next().unwrap();
+                    delivered = Some(Cursor::at(workspace, activity.last_seq));
+                    yield Event::default().id(delivered.unwrap().to_string()).event("activity").json_data(activity)?;
+                }
                 delivered = Some(Cursor::at(workspace, entry.seq));
                 yield Event::default()
                     .id(Cursor::at(workspace, entry.seq).to_string())
@@ -2254,6 +2285,10 @@ async fn transcript(
                         entry: entry.entry,
                     })?;
             }
+            for activity in activities {
+                delivered = Some(Cursor::at(workspace, activity.last_seq));
+                yield Event::default().id(delivered.unwrap().to_string()).event("activity").json_data(activity)?;
+            }
             if let Some(cursor) = read.page.cursor && delivered != Some(cursor) {
                 delivered = Some(cursor);
                 yield Event::default().event("cursor").id(cursor.to_string()).json_data(cursor.to_string())?;
@@ -2262,6 +2297,7 @@ async fn transcript(
                 let because = match (read.sealed, follow) {
                     (true, _) => Some(Because::Sealed),
                     (false, false) => Some(Because::CaughtUp),
+                    (false, true) if range.last_seq.is_some() => Some(Because::CaughtUp),
                     (false, true) => None,
                 };
                 if let Some(because) = because {
@@ -2275,7 +2311,7 @@ async fn transcript(
                 }
             }
 
-            read = reading(&control_plane.store, workspace, read.page.cursor, &kinds)
+            read = reading(&control_plane, workspace, read.page.cursor, &kinds, summaries, range)
                 .await
                 .map_err(Refused::into_error)?;
         }
@@ -2287,12 +2323,14 @@ async fn transcript(
 /// The state is read in the transaction the page is, so a Workspace sealed between the two
 /// cannot end the stream short of its last entry.
 async fn reading(
-    store: &Store,
+    control_plane: &ControlPlane,
     id: WorkspaceId,
     from: Option<Cursor>,
     kinds: &log::Kinds,
+    summaries: bool,
+    range: log::SeqRange,
 ) -> Result<Read, Refused> {
-    let mut tx = store.begin().await?;
+    let mut tx = control_plane.store.read().await?;
     let workspace = tx
         .workspaces()
         .find(id)
@@ -2300,11 +2338,35 @@ async fn reading(
         .ok_or_else(|| Refused::NotFound("no workspace".to_owned()))?;
     let page = tx
         .log()
-        .stored_page(&workspace, from, Window::DEFAULT, kinds)
+        .transcript_page(&workspace, from, Window::DEFAULT, kinds, summaries, range)
         .await?;
 
+    let session = tx
+        .workspaces()
+        .unfinished_session(&workspace)
+        .await?
+        .map(|holding| holding.session);
+    let session_state = TranscriptSessionState {
+        session_id: session.as_ref().map(|session| session.id),
+        state: session
+            .filter(|session| {
+                domain::SessionState::LIVE.contains(&session.state)
+                    && session
+                        .lease_expires_at
+                        .is_some_and(|at| at > Timestamp::now())
+            })
+            .and_then(|session| {
+                session.instance.as_deref().map(|instance| {
+                    control_plane
+                        .summaries
+                        .session(instance, &session.id.to_string())
+                })
+            })
+            .unwrap_or_default(),
+    };
     Ok(Read {
         page,
+        session_state,
         sealed: workspace.state == WorkspaceState::Sealed,
     })
 }

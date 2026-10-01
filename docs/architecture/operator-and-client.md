@@ -46,10 +46,23 @@ stream ends with an `end` event when the Workspace seals or, with `follow=false`
 the last entry. A stream that closes without `end` was cut off; the Client resumes from the last
 id it received (`kestrel-client/src/transcript.rs`) and gives up after 30 s unreachable.
 
-`kinds` selects `shared_state`, `narration` or `detail`, defaulting to shared state. The CLI passes
-`workspace transcript --kinds` through to this read. Both the link page and this stream advance
-across omitted entries: the page returns the highest examined seq, and the stream sends a `cursor`
-event when omitted entries advance it beyond the last delivered entry. The cursor remains global.
+`kinds` selects `shared_state`, `narration` or `detail`, defaulting to shared state, and
+`summaries` defaults to true. An `activity` event summarizes omitted narration and detail between
+every pair of shared-state entries, including when shared state is filtered out. Its `first_seq`
+stays stable across pages and reconnects; open updates replace it, and the final `closed` replacement
+precedes the closing entry even when no detail was added. Counts and metadata are computed from the
+current Transcript at read time, so expired entries contribute only tombstones.
+
+`first_seq` and `last_seq` bound an inclusive expansion range; selecting every kind returns the
+entries behind the Activity. Both the link page and this stream advance across omitted entries:
+the page returns the highest examined seq and an `activities` array, and entry, Activity and `cursor`
+events carry global cursors. The stream sends a `cursor` event when omitted entries advance it
+beyond the last delivered entry or Activity.
+
+A follow starts every connect with a transient `session_state` snapshot, including empty state,
+then sends changes to running tools and buffering flags. These events have no id and are never
+stored. The CLI passes `--kinds` and `--no-summaries` to the read, prints each closed Activity once
+across reconnects, and prints a caught-up open summary on a non-follow read.
 
 `GET …/workspaces/{workspace}/transcript/payloads/{payload}` fetches an oversized body field as
 its original bytes and media type. The entry's `payload_fields` lists fields holding references;

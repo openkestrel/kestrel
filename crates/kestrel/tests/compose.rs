@@ -387,11 +387,13 @@ fn the_commands_usage_documents_are_the_commands_that_work() {
     assert!(opened["opened_at"].is_string(), "{opened}");
 
     let transcript = stack.client(&["workspace", "transcript", "latest"]);
-    assert!(
-        transcript.out[0]
-            .ends_with("\t{\"type\":\"participant_joined\",\"participant\":\"builder\"}"),
-        "USAGE.md shows the Agent joining as the first entry, and the transcript was:\n{:?}",
-        transcript.out
+    let first: Vec<_> = transcript.out[0].splitn(3, '\t').collect();
+    assert_eq!(first[0], "1");
+    assert!(first[1].parse::<jiff::Timestamp>().is_ok());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(first[2]).expect("the entry body"),
+        serde_json::json!({"type": "participant_joined", "participant": "builder"}),
+        "USAGE.md shows the Agent joining as the first entry"
     );
     assert!(
         transcript.err.contains(&format!("cursor  {workspace}:1")),

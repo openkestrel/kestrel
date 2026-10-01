@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::Write as _;
 use std::time::{Duration, Instant};
 
@@ -32,24 +33,38 @@ impl From<reqwest::Error> for Cut {
     }
 }
 
-/// Reads until the control plane ends the stream on purpose, reconnecting from the last entry
-/// printed whenever it is cut off. Returns the cursor the read ended at.
+pub struct Selection<'a> {
+    pub follow: bool,
+    pub kinds: &'a str,
+    pub summaries: bool,
+}
+
 pub async fn read(
     control_plane: &Url,
     organization: &str,
     workspace: &str,
     from: Option<String>,
-    follow: bool,
-    kinds: &str,
+    selection: Selection<'_>,
     presentation: &Presentation,
 ) -> Result<Option<String>> {
     let client = Client::new();
-    let url = transcript(control_plane, organization, workspace, follow, kinds)?;
+    let url = transcript(control_plane, organization, workspace, &selection)?;
+    let mut activities = Activities::default();
     let mut cursor = from;
     let mut heard = Instant::now();
 
     loop {
-        match streamed(&client, &url, &mut cursor, &mut heard, presentation).await {
+        match streamed(
+            &client,
+            &url,
+            &mut cursor,
+            &mut heard,
+            presentation,
+            &selection,
+            &mut activities,
+        )
+        .await
+        {
             Ok(()) => return Ok(cursor),
             Err(Cut::Refused(status, why)) => bail!(Failed::new(
                 crate::api::refused(status),
@@ -73,6 +88,8 @@ async fn streamed(
     cursor: &mut Option<String>,
     heard: &mut Instant,
     presentation: &Presentation,
+    selection: &Selection<'_>,
+    activities: &mut Activities,
 ) -> Result<(), Cut> {
     let mut request = client
         .get(url.clone())
@@ -109,8 +126,31 @@ async fn streamed(
                     })?;
                 *cursor = event.id;
             }
+            Some("activity") => {
+                let activity: Value =
+                    serde_json::from_str(&event.data).map_err(|error| Cut::Failed(error.into()))?;
+                if let Some(line) = activities
+                    .observe(activity, presentation)
+                    .map_err(Cut::Failed)?
+                {
+                    writeln!(stdout, "{line}")
+                        .and_then(|()| stdout.flush())
+                        .map_err(|error| Cut::Failed(error.into()))?;
+                }
+                *cursor = event.id;
+            }
             Some("cursor") => *cursor = event.id,
-            Some("end") => return Ok(()),
+            Some("end") => {
+                if !selection.follow
+                    && let Some(open) = activities.open.take()
+                {
+                    let line = activity_line(&open, presentation).map_err(Cut::Failed)?;
+                    writeln!(stdout, "{line}")
+                        .and_then(|()| stdout.flush())
+                        .map_err(|error| Cut::Failed(error.into()))?;
+                }
+                return Ok(());
+            }
             _ => {}
         }
     }
@@ -129,8 +169,7 @@ fn transcript(
     control_plane: &Url,
     organization: &str,
     workspace: &str,
-    follow: bool,
-    kinds: &str,
+    selection: &Selection<'_>,
 ) -> Result<Url> {
     let mut url = control_plane.clone();
     url.path_segments_mut()
@@ -151,8 +190,55 @@ fn transcript(
             "transcript",
         ]);
     url.query_pairs_mut()
-        .append_pair("follow", if follow { "true" } else { "false" })
-        .append_pair("kinds", kinds);
+        .append_pair("follow", if selection.follow { "true" } else { "false" })
+        .append_pair("kinds", selection.kinds)
+        .append_pair(
+            "summaries",
+            if selection.summaries { "true" } else { "false" },
+        );
 
     Ok(url)
+}
+
+#[derive(Default)]
+struct Activities {
+    printed: HashSet<i64>,
+    open: Option<Value>,
+}
+impl Activities {
+    fn observe(&mut self, activity: Value, presentation: &Presentation) -> Result<Option<String>> {
+        let first = activity["first_seq"]
+            .as_i64()
+            .context("an Activity has no first seq")?;
+        if activity["closed"] == true {
+            self.open = None;
+            if self.printed.insert(first) {
+                return activity_line(&activity, presentation).map(Some);
+            }
+        } else if !self.printed.contains(&first) {
+            self.open = Some(activity);
+        }
+        Ok(None)
+    }
+}
+fn activity_line(activity: &Value, presentation: &Presentation) -> Result<String> {
+    if matches!(presentation, Presentation::Json(_)) {
+        return crate::output::line(presentation, &view::ENTRIES, activity);
+    }
+    let counts = &activity["counts"];
+    Ok(format!(
+        "activity  {}..{}  {} tools, {} failed, {} thoughts, {} plans, {} tombstones{}",
+        activity["first_seq"],
+        activity["last_seq"],
+        counts["tool_calls"],
+        counts["failed_calls"],
+        counts["thoughts"],
+        counts["plans"],
+        counts["tombstones"],
+        if activity["anomaly"] == true {
+            "  interrupted or unresolved"
+        } else {
+            ""
+        }
+    ))
 }
