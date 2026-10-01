@@ -2,7 +2,8 @@
 
 ### Issue tracker
 
-Issues are tracked in GitHub (`openkestrel/kestrel`). See `docs/agents/issue-tracker.md`.
+Issues are tracked in GitHub (`openkestrel/kestrel`). Fetch one with
+`gh issue view <number> --repo openkestrel/kestrel --comments`; the rest is in `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
@@ -34,7 +35,8 @@ other agents, so each local cargo run has a real cost.
   scripted agent itself, so a whole-package or workspace run is many builds, not one.
 - Batch edits before checking; one check after a coherent change, never one per line.
 - Before pushing, `cargo fmt --all`. Leave clippy, the workspace suite and the `#[ignore]`d
-  suites to CI, then read what failed with `gh pr checks` and `gh run view --log-failed`.
+  suites to CI. CI runs only on a pull request, so finish by pushing the branch and opening one;
+  then read what failed with `gh pr checks` and `gh run view --log-failed`.
 - Documentation, skill and agent-guidance changes need no local check.
 
 Where a skill says "the full test suite" or "the project's automated checks", in this repo
