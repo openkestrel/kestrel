@@ -409,6 +409,9 @@ fn the_commands_usage_documents_are_the_commands_that_work() {
         transcript.err
     );
 
+    // An opened Session that never ran reported no checkout, so its instance holds the only
+    // copy it might have: docs/usage/manual-workspaces.md releases it before sealing.
+    stack.ran(&["instance", "release", "latest"]);
     stack.ran(&["workspace", "seal", "latest"]);
 
     assert_eq!(
