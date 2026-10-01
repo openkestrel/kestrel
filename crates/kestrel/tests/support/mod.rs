@@ -47,8 +47,8 @@ use kestrel::compute::{Docker, Driver, LocalExec};
 use kestrel::domain::{
     Agent, Correlation, CorrelationMiss, Declared, Direction, Event, EventRecordId, Exit, Fires,
     HeldMessage, Integration, Occurrence, OnOpenWorkspace, Organization, Project, Schedule,
-    Session, SessionCommand, SessionId, SessionState, SubscriptionProfile, Templates, Trigger,
-    Turn, Workspace, WorkspaceId,
+    Session, SessionCommand, SessionId, SessionOption, SessionState, SubscriptionProfile,
+    Templates, Trigger, Turn, Workspace, WorkspaceId,
 };
 use kestrel::instance;
 use kestrel::integration::{self, Connecting, Registration};
@@ -2007,6 +2007,36 @@ impl Kestrel {
         work::report_on(&self.store, session, None, work::Report::Ready)
             .await
             .expect("the ready report should be taken");
+    }
+
+    /// Starts a claimed Session's conversation on the link, the way the work role does.
+    pub async fn start_on_the_link(&self, session: &Session) {
+        link::start(&self.store, session, harness())
+            .await
+            .expect("the session should start");
+    }
+
+    /// Reports the harness's whole option list, the bookkeeping a supervisor says idempotently.
+    pub async fn report_session_info(&self, session: &Session, options: &[SessionOption]) {
+        work::report_on(
+            &self.store,
+            session,
+            None,
+            work::Report::SessionInfo {
+                title: None,
+                options: options.to_vec(),
+                commands: Vec::new(),
+            },
+        )
+        .await
+        .expect("the session info should be taken");
+    }
+
+    /// Reports what a supervisor answered about a person's option change.
+    pub async fn report_option_changed(&self, session: &Session, seq: i64, changed: work::Report) {
+        work::report_on(&self.store, session, Some(seq), changed)
+            .await
+            .expect("the option change should be taken");
     }
 
     pub async fn report_answered(&self, session: &Session, seq: i64) {

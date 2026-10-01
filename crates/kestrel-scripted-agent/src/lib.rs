@@ -37,6 +37,10 @@ pub const CUSTOM_CATEGORY: &str = "_scripted";
 pub const MODE_OPTION: &str = "mode";
 pub const STARTING_MODE: &str = "build";
 pub const SWITCHED_MODE: &str = "plan";
+/// The ThoughtLevel-category option a scripted agent offers, and the level it starts on.
+pub const THOUGHT_LEVEL_OPTION: &str = "thinking";
+pub const STARTING_THOUGHT_LEVEL: &str = "low";
+pub const OTHER_THOUGHT_LEVEL: &str = "high";
 /// The second mode a legacy-modes script offers beside the one it is on.
 pub const OTHER_MODE: &str = "review";
 /// What the `Repeats` script sends, identically, over and over inside one turn.
@@ -129,6 +133,8 @@ pub enum Script {
     WorksUntilCancelled,
     /// Works at a turn that never ends and never answers a cancel.
     IgnoresCancel,
+    /// Offers the usual options, and refuses every `session/set_config_option` a client sends.
+    RefusesOptions,
 }
 
 impl Script {
@@ -176,6 +182,7 @@ impl Script {
             Script::BurstsUsage => "bursts-usage",
             Script::WorksUntilCancelled => "works-until-cancelled",
             Script::IgnoresCancel => "ignores-cancel",
+            Script::RefusesOptions => "refuses-options",
         }
     }
 }

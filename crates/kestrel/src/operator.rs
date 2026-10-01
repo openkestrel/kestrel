@@ -106,6 +106,9 @@ pub const SESSION: &str = "/operator/organizations/{organization}/sessions/{sess
 pub const SESSION_INTERRUPT: &str =
     "/operator/organizations/{organization}/sessions/{session}/interrupt";
 pub const SESSION_STOP: &str = "/operator/organizations/{organization}/sessions/{session}/stop";
+/// One option a person changes on a Session between Turns (ADR-0041).
+pub const SESSION_OPTIONS: &str =
+    "/operator/organizations/{organization}/sessions/{session}/options";
 pub const TRANSCRIPT: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/transcript";
 pub const TRANSCRIPT_PAYLOAD: &str =
@@ -280,6 +283,7 @@ pub fn router(
         .route(SESSION, get(show_session))
         .route(SESSION_INTERRUPT, post(interrupt_session))
         .route(SESSION_STOP, post(stop_session))
+        .route(SESSION_OPTIONS, post(set_session_option))
         .route(TRANSCRIPT, get(transcript))
         .route(TRANSCRIPT_PAYLOAD, get(transcript_payload))
         .route(FOLLOWER_LEASE, post(renew_follower))
@@ -428,6 +432,14 @@ impl SessionDeclaration {
             thought_level: self.thought_level.clone(),
         }
     }
+}
+
+#[derive(Deserialize)]
+struct OptionChange {
+    participant: String,
+    option: Option<String>,
+    category: Option<String>,
+    value: String,
 }
 
 #[derive(Deserialize)]
@@ -630,6 +642,9 @@ struct SessionRecord {
     worked_model: Option<String>,
     title: Option<String>,
     options: Vec<SessionOptionRecord>,
+    /// Option changes a person asked for while the Session is live, held until the harness
+    /// answers each (ADR-0041).
+    changing_options: Vec<domain::ChangingOption>,
     commands: Vec<domain::SessionCommand>,
     /// Who asked the working Turn to stop, while the request is in flight.
     interrupting: Option<domain::Interrupting>,
@@ -649,8 +664,28 @@ struct SessionRecord {
 struct SessionOptionRecord {
     #[serde(flatten)]
     option: domain::SessionOption,
-    /// ADR-0041's per-harness table is 0.3/34's to fill in; until then nothing warns.
+    /// Whether changing this option makes the next Turn re-read the context without the prompt
+    /// cache, by ADR-0041's per-harness table.
     warns_cache: bool,
+}
+
+/// ADR-0041: a Model, ThoughtLevel or ModelConfig option warns that the next Turn re-reads the
+/// context uncached; Mode never does, and a category the harness keeps the cache for does not
+/// either. At 0.3 the table holds only Claude's per-message effort.
+fn warns_cache(harness: &str, category: Option<&str>) -> bool {
+    let Some(category) = category else {
+        return false;
+    };
+    if !matches!(
+        category,
+        domain::SessionOption::MODEL
+            | domain::SessionOption::THOUGHT_LEVEL
+            | domain::SessionOption::MODEL_CONFIG
+    ) {
+        return false;
+    }
+
+    !(harness == "claude" && category == domain::SessionOption::THOUGHT_LEVEL)
 }
 
 #[derive(Serialize)]
@@ -791,6 +826,15 @@ impl WorkspaceRecord {
 
 impl SessionRecord {
     fn read(session: Session) -> Self {
+        let harness = session.agent.harness.clone();
+        let options = session
+            .options
+            .into_iter()
+            .map(|option| SessionOptionRecord {
+                warns_cache: warns_cache(&harness, option.category.as_deref()),
+                option,
+            })
+            .collect();
         Self {
             id: session.id.to_string(),
             name: session.name,
@@ -804,20 +848,14 @@ impl SessionRecord {
             instance: session.instance,
             supervisor: session.supervisor,
             agent: session.agent.name,
-            harness: session.agent.harness,
+            harness,
             model: session.agent.declared.model,
             mode: session.agent.declared.mode,
             thought_level: session.agent.declared.thought_level,
             worked_model: session.worked_model,
             title: session.title,
-            options: session
-                .options
-                .into_iter()
-                .map(|option| SessionOptionRecord {
-                    option,
-                    warns_cache: false,
-                })
-                .collect(),
+            options,
+            changing_options: session.changing_options,
             commands: session.commands,
             interrupting: session.interrupting,
             enqueued_at: session.enqueued_at,
@@ -2478,6 +2516,67 @@ async fn stop_session(
     Ok(Json(SessionRecord::read(session)))
 }
 
+/// A person changes one of a Session's options between Turns (ADR-0041).
+async fn set_session_option(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, session)): Path<(String, String)>,
+    change: Result<Json<OptionChange>, JsonRejection>,
+) -> Result<(StatusCode, Json<SessionRecord>), Refused> {
+    let Json(change) = change?;
+    let named = match (change.option.as_deref(), change.category.as_deref()) {
+        (Some(option), None) => work::Named::Option(option),
+        (None, Some(category)) => work::Named::Category(category),
+        (Some(_), Some(_)) => {
+            return Err(Refused::Named {
+                status: StatusCode::BAD_REQUEST,
+                field: "option",
+                why: "an option change names an option or a category, not both".to_owned(),
+            });
+        }
+        (None, None) => {
+            return Err(Refused::Named {
+                status: StatusCode::BAD_REQUEST,
+                field: "option",
+                why: "an option change names an option or a category".to_owned(),
+            });
+        }
+    };
+    let written = work::set_option(
+        &control_plane.store,
+        &organization,
+        &session,
+        &change.participant,
+        named,
+        &change.value,
+    )
+    .await
+    .map_err(option_refusal)?;
+
+    Ok((
+        if written.live {
+            StatusCode::ACCEPTED
+        } else {
+            StatusCode::OK
+        },
+        Json(SessionRecord::read(written.session)),
+    ))
+}
+
+fn option_refusal(refused: work::OptionRefusal) -> Refused {
+    match refused {
+        work::OptionRefusal::Phase(why) => Refused::Conflict(why),
+        work::OptionRefusal::Unacceptable { field, why } => Refused::Named {
+            status: StatusCode::BAD_REQUEST,
+            field,
+            why,
+        },
+        work::OptionRefusal::Missing(why) => Refused::NotFound(why),
+        work::OptionRefusal::Named(error) | work::OptionRefusal::Unavailable(error) => {
+            Refused::from(error)
+        }
+    }
+}
+
 async fn resolved(
     control_plane: &ControlPlane,
     organization: &str,
@@ -2921,4 +3020,28 @@ struct Refusal {
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     field: Option<&'static str>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::warns_cache;
+
+    #[test]
+    fn the_cache_warning_table_is_per_category_and_per_harness() {
+        for category in ["model", "thought_level", "model_config"] {
+            assert!(
+                warns_cache("opencode", Some(category)),
+                "{category} warns for opencode"
+            );
+        }
+        assert!(!warns_cache("opencode", Some("mode")));
+        assert!(!warns_cache("opencode", None));
+        assert!(!warns_cache("opencode", Some("_scripted")));
+
+        assert!(
+            !warns_cache("claude", Some("thought_level")),
+            "Claude keeps the prompt cache across a change of effort"
+        );
+        assert!(warns_cache("claude", Some("model")));
+    }
 }

@@ -376,6 +376,30 @@ async fn the_link_takes_every_report_the_published_openapi_document_describes() 
                 {"name": "compact", "description": "Compact the conversation", "input_hint": "/compact"},
             ],
         },
+        "option_changed": {
+            "kind": "option_changed",
+            "seq": 1,
+            "participant": "operator",
+            "option": "model",
+            "category": "model",
+            "from": "scripted-mini",
+            "to": "scripted-max",
+            "options": [
+                {
+                    "id": "model",
+                    "name": "Model",
+                    "description": null,
+                    "category": "model",
+                    "kind": "select",
+                    "current": "scripted-max",
+                    "values": [
+                        {"value": "scripted-mini", "name": "scripted-mini", "description": null},
+                        {"value": "scripted-max", "name": "scripted-max", "description": null},
+                    ],
+                    "groups": [],
+                },
+            ],
+        },
         "answered": {"kind": "answered", "seq": 1, "usage": {"context_used": 1_200, "context_size": 200_000, "cost": {"amount": 0.42, "currency": "USD"}}},
         "interrupted": {"kind": "interrupted", "seq": 1},
         "checkout": {

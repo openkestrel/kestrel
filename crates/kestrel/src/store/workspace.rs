@@ -4,10 +4,10 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 
 use crate::domain::{
-    Agent, Checkout, Connected, Cost, Declared, Exit, HeldMessage, Interrupting, Organization,
-    OrganizationId, Preparing, Project, Session, SessionCommand, SessionId, SessionOption,
-    SessionState, StartedBy, SubscriptionProfile, Turn, Usage, Workspace, WorkspaceId,
-    WorkspaceState,
+    Agent, ChangingOption, Checkout, Connected, Cost, Declared, Exit, HeldMessage, Interrupting,
+    Organization, OrganizationId, Preparing, Project, Session, SessionCommand, SessionId,
+    SessionOption, SessionState, StartedBy, SubscriptionProfile, Turn, Usage, Workspace,
+    WorkspaceId, WorkspaceState,
 };
 use crate::fanout::Touched;
 use crate::instance::Observed;
@@ -26,8 +26,8 @@ macro_rules! sessions_where {
                     harness, state, preparing, exit, exit_because, outcome_message, instance,
                     supervisor, enqueued_at, started_at, ended_at, lease_expires_at, connected_at,
                     supervisor_version, model, mode, thought_level, worked_model, title,
-                    config_options, commands, interrupting_participant, interrupting_at,
-                    context_used, context_size, cost_amount, cost_currency",
+                    config_options, changing_options, commands, interrupting_participant,
+                    interrupting_at, context_used, context_size, cost_amount, cost_currency",
             $columns,
             "
              FROM session
@@ -632,6 +632,7 @@ impl<'a> Workspaces<'a> {
                 worked_model: None,
                 title: None,
                 options: Vec::new(),
+                changing_options: Vec::new(),
                 commands: Vec::new(),
                 interrupting: None,
                 enqueued_at: Timestamp::now(),
@@ -1343,6 +1344,124 @@ impl<'a> Workspaces<'a> {
         Ok(true)
     }
 
+    /// Sets one of the three categories a queued Session declares, checked when it is set up.
+    pub async fn set_declared_option(
+        &mut self,
+        session: &Session,
+        category: &str,
+        value: &str,
+    ) -> Result<()> {
+        let column = match category {
+            SessionOption::MODEL => "model",
+            SessionOption::MODE => "mode",
+            SessionOption::THOUGHT_LEVEL => "thought_level",
+            other => anyhow::bail!("{other} is not a category a queued session declares"),
+        };
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE session SET {column} = ? WHERE id = ?"
+        )))
+        .bind(value)
+        .bind(session.id.to_string())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("setting the {category} of session {}", session.id))?;
+
+        self.touched.session(session);
+
+        Ok(())
+    }
+
+    /// Records the harness's whole option list from the change it answered, without the title and
+    /// commands a bookkeeping report carries.
+    pub async fn record_options(
+        &mut self,
+        session: &Session,
+        options: &[SessionOption],
+    ) -> Result<()> {
+        let worked_model = options
+            .iter()
+            .find(|option| option.is_category(SessionOption::MODEL))
+            .and_then(SessionOption::current_value);
+        sqlx::query(
+            "UPDATE session
+             SET config_options = ?, worked_model = COALESCE(?, worked_model)
+             WHERE id = ?",
+        )
+        .bind(serde_json::to_string(options)?)
+        .bind(worked_model)
+        .bind(session.id.to_string())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("recording what options session {} holds", session.id))?;
+
+        self.touched.session(session);
+
+        Ok(())
+    }
+
+    /// Holds a change until the harness answers it.
+    pub async fn add_changing_option(
+        &mut self,
+        session: &Session,
+        changing: &ChangingOption,
+    ) -> Result<()> {
+        let mut held = self.changing_options(session.id).await?;
+        held.push(changing.clone());
+
+        self.write_changing_options(session, &held).await
+    }
+
+    /// Takes the change an `option_changed` report settled; `None` when it was already taken.
+    pub async fn take_changing_option(
+        &mut self,
+        session: &Session,
+        option: &str,
+        participant: &str,
+    ) -> Result<Option<ChangingOption>> {
+        let mut held = self.changing_options(session.id).await?;
+        let Some(position) = held
+            .iter()
+            .position(|changing| changing.option == option && changing.participant == participant)
+        else {
+            return Ok(None);
+        };
+        let taken = held.remove(position);
+        self.write_changing_options(session, &held).await?;
+
+        Ok(Some(taken))
+    }
+
+    async fn changing_options(&mut self, session: SessionId) -> Result<Vec<ChangingOption>> {
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT changing_options FROM session WHERE id = ?")
+                .bind(session.to_string())
+                .fetch_one(&mut *self.connection)
+                .await
+                .with_context(|| format!("reading what session {session} is changing"))?;
+
+        Ok(match stored {
+            Some(stored) => serde_json::from_str(&stored)?,
+            None => Vec::new(),
+        })
+    }
+
+    async fn write_changing_options(
+        &mut self,
+        session: &Session,
+        held: &[ChangingOption],
+    ) -> Result<()> {
+        sqlx::query("UPDATE session SET changing_options = ? WHERE id = ?")
+            .bind(serde_json::to_string(held)?)
+            .bind(session.id.to_string())
+            .execute(&mut *self.connection)
+            .await
+            .with_context(|| format!("holding what session {} is changing", session.id))?;
+
+        self.touched.session(session);
+
+        Ok(())
+    }
+
     pub async fn instance(&mut self, workspace: WorkspaceId) -> Result<Option<String>> {
         let row = sqlx::query("SELECT instance FROM workspace WHERE id = ?")
             .bind(workspace.to_string())
@@ -1863,7 +1982,7 @@ impl<'a> Workspaces<'a> {
         let ended = sqlx::query(
             "UPDATE session
              SET state = ?, preparing = NULL, ended_at = ?, exit = ?, exit_because = ?,
-                 outcome_message = ?, lease_expires_at = NULL
+                 outcome_message = ?, lease_expires_at = NULL, changing_options = NULL
              WHERE id = ? AND state != ?",
         )
         .bind(SessionState::Ended.as_str())
@@ -2295,6 +2414,7 @@ fn session(row: &SqliteRow) -> Result<Session> {
         worked_model: row.get("worked_model"),
         title: row.get("title"),
         options: read_json(row, "config_options")?,
+        changing_options: read_json(row, "changing_options")?,
         commands: read_json(row, "commands")?,
         interrupting: match (
             row.get::<Option<String>, _>("interrupting_participant"),

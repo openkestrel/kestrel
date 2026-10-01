@@ -65,6 +65,12 @@ pub enum Instruction {
     /// Cancels the Turn the Session is in without ending it; the conversation and the Instance
     /// stay.
     Interrupt,
+    /// Changes one of the Session's harness options before its next prompt (ADR-0041).
+    SetOption {
+        option: String,
+        value: String,
+        participant: String,
+    },
     /// Ends the Session's harness; the supervisor stays on the link.
     Stop,
 }
@@ -76,6 +82,7 @@ impl Instruction {
             Instruction::Unbriefed { .. } => "unbriefed",
             Instruction::Prompt { .. } => "prompt",
             Instruction::Interrupt => "interrupt",
+            Instruction::SetOption { .. } => "set_option",
             Instruction::Stop => "stop",
         }
     }

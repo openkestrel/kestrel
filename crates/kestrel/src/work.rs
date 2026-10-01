@@ -7,8 +7,8 @@ use tracing::{debug, info};
 
 use crate::declined::Declined;
 use crate::domain::{
-    Declared, Exit, HeldMessage, Session, SessionCommand, SessionId, SessionOption, SessionState,
-    Turn, Usage, Workspace, WorkspaceId,
+    ChangingOption, Declared, Exit, HeldMessage, Session, SessionCommand, SessionId, SessionOption,
+    SessionState, Turn, Usage, Workspace, WorkspaceId,
 };
 use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
@@ -90,6 +90,21 @@ pub enum Report {
         #[serde(default)]
         commands: Vec<SessionCommand>,
     },
+    /// The harness answered a person's option change, with the whole list it left or why it
+    /// refused (ADR-0041).
+    OptionChanged {
+        participant: String,
+        option: String,
+        category: String,
+        #[serde(default)]
+        from: Option<String>,
+        #[serde(default)]
+        to: Option<String>,
+        #[serde(default)]
+        refused: Option<String>,
+        #[serde(default)]
+        options: Vec<SessionOption>,
+    },
     Answered {
         #[serde(default)]
         usage: Option<Usage>,
@@ -123,6 +138,7 @@ impl Report {
             | Report::Thought { .. }
             | Report::Plan { .. }
             | Report::ToolCall { .. }
+            | Report::OptionChanged { .. }
             | Report::Answered { .. }
             | Report::Interrupted
             | Report::Checkout { .. }
@@ -417,6 +433,215 @@ pub async fn sessions(store: &Store, workspace: WorkspaceId) -> Result<Vec<Sessi
     tx.workspaces().sessions(&workspace).await
 }
 
+/// Which of the two identifiers a person named: an option's id, or its category.
+pub enum Named<'a> {
+    Option(&'a str),
+    Category(&'a str),
+}
+
+/// Why a person's option change was refused, so a boundary can answer what the caller can act on.
+pub enum OptionRefusal {
+    /// The phase the Session is in, named in the message.
+    Phase(String),
+    /// The request named a value or a category the write cannot use, in that field.
+    Unacceptable {
+        field: &'static str,
+        why: String,
+    },
+    /// The option or category named nothing.
+    Missing(String),
+    /// The participant name rule refused the name.
+    Named(anyhow::Error),
+    Unavailable(anyhow::Error),
+}
+
+impl From<anyhow::Error> for OptionRefusal {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Unavailable(error)
+    }
+}
+
+pub struct OptionSet {
+    pub session: Session,
+    /// True when the change waits on the harness (202); false when it set a queued Session's
+    /// declared value at once (200).
+    pub live: bool,
+}
+
+/// A person changes one of a Session's options between Turns: a queued Session's declared value
+/// now, or a durable instruction the harness applies once for a live one (ADR-0041).
+pub async fn set_option(
+    store: &Store,
+    organization: &str,
+    reference: &str,
+    participant: &str,
+    named: Named<'_>,
+    value: &str,
+) -> Result<OptionSet, OptionRefusal> {
+    let mut tx = store.begin().await?;
+    let organization = tx.organizations().named(organization).await?;
+    let participant = match participant::accepted(&mut tx, &organization, participant).await {
+        Ok(name) => name,
+        Err(error) => return Err(OptionRefusal::Named(error)),
+    };
+    let session = tx
+        .workspaces()
+        .resolved_session(&organization, reference)
+        .await?;
+
+    let live = match session.state {
+        SessionState::Queued => false,
+        SessionState::Waiting => true,
+        SessionState::Unbriefed if !session.options.is_empty() => true,
+        phase => return Err(OptionRefusal::Phase(phase_refusal(phase, &session))),
+    };
+
+    if live {
+        let option = match named {
+            Named::Option(id) => session.options.iter().find(|option| option.id == id),
+            Named::Category(category) => session
+                .options
+                .iter()
+                .find(|option| option.is_category(category)),
+        };
+        let Some(option) = option else {
+            return Err(OptionRefusal::Missing(format!(
+                "the session {} offers no option {}",
+                session.id,
+                match named {
+                    Named::Option(id) => id,
+                    Named::Category(category) => category,
+                }
+            )));
+        };
+        let category = option.category.clone().unwrap_or_else(|| option.id.clone());
+        if !offers(option, value) {
+            return Err(OptionRefusal::Unacceptable {
+                field: "value",
+                why: format!("the {category} option does not offer {value}"),
+            });
+        }
+
+        let changing = ChangingOption {
+            option: option.id.clone(),
+            category,
+            value: value.to_owned(),
+            participant: participant.clone(),
+        };
+        tx.workspaces()
+            .add_changing_option(&session, &changing)
+            .await?;
+        tx.workspaces()
+            .send_instruction(
+                &session,
+                link::Instruction::SetOption {
+                    option: changing.option.clone(),
+                    value: changing.value.clone(),
+                    participant,
+                },
+            )
+            .await?
+            .ok_or_else(|| {
+                OptionRefusal::Phase(format!(
+                    "the session {} is on no instance to change",
+                    session.id
+                ))
+            })?;
+    } else {
+        let category = match named {
+            Named::Category(category) => {
+                if !declares(category) {
+                    return Err(OptionRefusal::Unacceptable {
+                        field: "category",
+                        why: format!(
+                            "a queued session declares {}, {} or {}, not {category}",
+                            SessionOption::MODEL,
+                            SessionOption::MODE,
+                            SessionOption::THOUGHT_LEVEL
+                        ),
+                    });
+                }
+                category
+            }
+            // A queued Session has reported no options, so only a category it declares is one.
+            Named::Option(option) if declares(option) => option,
+            Named::Option(option) => {
+                return Err(OptionRefusal::Missing(format!(
+                    "the queued session {} has no option {option}",
+                    session.id
+                )));
+            }
+        };
+        let from = match category {
+            SessionOption::MODEL => session.agent.declared.model.clone(),
+            SessionOption::MODE => session.agent.declared.mode.clone(),
+            _ => session.agent.declared.thought_level.clone(),
+        };
+        tx.workspaces()
+            .set_declared_option(&session, category, value)
+            .await?;
+        let workspace = tx.workspaces().get(session.workspace).await?;
+        tx.log()
+            .append(
+                &workspace,
+                Entry::OptionChanged {
+                    session: session.id,
+                    participant,
+                    option: category.to_owned(),
+                    category: category.to_owned(),
+                    from,
+                    to: Some(value.to_owned()),
+                    refused: None,
+                },
+            )
+            .await?;
+    }
+
+    let session = tx.workspaces().session(session.id).await?;
+    tx.commit().await?;
+
+    Ok(OptionSet { session, live })
+}
+
+/// The phase a write refuses, named so a caller can tell what the Session is doing.
+fn phase_refusal(phase: SessionState, session: &Session) -> String {
+    match phase {
+        SessionState::Working => format!(
+            "the session {} is working, and an option cannot change mid-turn",
+            session.id
+        ),
+        SessionState::Ended => format!("the session {} has ended", session.id),
+        SessionState::Unreachable => format!("the session {} is unreachable", session.id),
+        SessionState::Unbriefed => format!(
+            "the session {} is unbriefed with no options yet",
+            session.id
+        ),
+        SessionState::Queued | SessionState::Waiting => {
+            format!("the session {} cannot change options", session.id)
+        }
+    }
+}
+
+fn declares(category: &str) -> bool {
+    matches!(
+        category,
+        SessionOption::MODEL | SessionOption::MODE | SessionOption::THOUGHT_LEVEL
+    )
+}
+
+/// Whether an option offers a value: a selection's values, or a boolean's two.
+fn offers(option: &SessionOption, value: &str) -> bool {
+    match &option.kind {
+        crate::domain::SessionOptionKind::Select { values, groups, .. } => {
+            values.iter().any(|offered| offered.value == value)
+                || groups
+                    .iter()
+                    .any(|group| group.values.iter().any(|offered| offered.value == value))
+        }
+        crate::domain::SessionOptionKind::Boolean { .. } => matches!(value, "true" | "false"),
+    }
+}
+
 /// Report acceptance and its effects share one transaction so a failed append remains replayable
 /// (ADR-0004).
 pub async fn report(
@@ -553,6 +778,43 @@ async fn reported(
                 commands = commands.len(),
                 written,
                 "a supervisor reported what its session holds"
+            );
+        }
+        Report::OptionChanged {
+            participant,
+            option,
+            category,
+            from,
+            to,
+            refused,
+            options,
+        } => {
+            let taken = tx
+                .workspaces()
+                .take_changing_option(session, &option, &participant)
+                .await?;
+            if !options.is_empty() {
+                tx.workspaces().record_options(session, &options).await?;
+            }
+            let workspace = tx.workspaces().get(session.workspace).await?;
+            tx.log()
+                .append(
+                    &workspace,
+                    Entry::OptionChanged {
+                        session: session.id,
+                        participant,
+                        option,
+                        category,
+                        from,
+                        to,
+                        refused,
+                    },
+                )
+                .await?;
+            info!(
+                session = %session.id,
+                settled = taken.is_some(),
+                "a supervisor answered a session's option change"
             );
         }
         Report::Said {

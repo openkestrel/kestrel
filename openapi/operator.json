@@ -1626,6 +1626,27 @@
         }
       }
     },
+    "/operator/organizations/{organization}/sessions/{session}/options": {
+      "post": {
+        "operationId": "setSessionOption",
+        "summary": "Change one of a Session's options between Turns.",
+        "description": "A queued Session's declared model, mode or thought level is set at once and checked when the Session is set up (200). A live Session's change is durable and answered by the harness (202), and the Session carries `changing_options` until it settles. A change during a working Turn, on an ended or unreachable Session, or on an unbriefed Session with no options yet is refused, naming the phase.",
+        "parameters": [
+          { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "session", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OptionChange" } } } },
+        "responses": {
+          "200": { "description": "The Session whose declared value changed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
+          "202": { "description": "The change waits on the harness, and the Session's `changing_options` carries it.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
+          "400": { "$ref": "#/components/responses/Refused" },
+          "404": { "$ref": "#/components/responses/Refused" },
+          "409": { "$ref": "#/components/responses/Refused" },
+          "422": { "$ref": "#/components/responses/Refused" },
+          "503": { "$ref": "#/components/responses/Refused" }
+        }
+      }
+    },
     "/operator/organizations/{organization}/triggers": {
       "get": {
         "operationId": "listTriggers",
@@ -3312,6 +3333,28 @@
         },
         "required": ["repositories", "base", "branch"]
       },
+      "OptionChange": {
+        "description": "One option a person changes on a Session: exactly one of `option` (the id the harness reported) or `category` (model, mode or thought_level), and the value to set.",
+        "type": "object",
+        "properties": {
+          "participant": { "type": "string", "minLength": 1, "description": "The person making the change, by the participant name rule." },
+          "option": { "type": ["string", "null"], "description": "The harness option's id. Exactly one of option or category." },
+          "category": { "type": ["string", "null"], "description": "One of model, mode or thought_level. Exactly one of option or category." },
+          "value": { "type": "string", "minLength": 1 }
+        },
+        "required": ["participant", "value"]
+      },
+      "ChangingOption": {
+        "description": "An option change a person asked for while a Session is live, held until the harness answers it (ADR-0041).",
+        "type": "object",
+        "properties": {
+          "option": { "type": "string" },
+          "category": { "type": "string" },
+          "value": { "type": "string" },
+          "participant": { "type": "string" }
+        },
+        "required": ["option", "category", "value", "participant"]
+      },
       "SessionDeclaration": {
         "type": "object",
         "properties": {
@@ -3345,6 +3388,7 @@
           "worked_model": { "type": ["string", "null"], "description": "The Model-category option's current value, kept current by the supervisor (ADR-0041)." },
           "title": { "type": ["string", "null"], "description": "The harness's own name for the conversation, or null until it says one." },
           "options": { "type": "array", "description": "The harness's whole config-option list (ADR-0041).", "items": { "$ref": "#/components/schemas/SessionOption" } },
+          "changing_options": { "type": "array", "description": "Option changes a person asked for while the Session is live, held until the harness answers each (ADR-0041).", "items": { "$ref": "#/components/schemas/ChangingOption" } },
           "commands": { "type": "array", "description": "The commands the harness offers for this Session.", "items": { "$ref": "#/components/schemas/SessionCommand" } },
           "interrupting": { "anyOf": [{ "$ref": "#/components/schemas/Interrupting" }, { "type": "null" }], "description": "Who asked the working Turn to stop, while the request is in flight." },
           "enqueued_at": { "type": "string", "format": "date-time" },
@@ -3358,7 +3402,7 @@
           "message_buffering": { "type": "boolean" },
           "thought_buffering": { "type": "boolean" }
         },
-        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "message_buffering", "thought_buffering"]
+        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "changing_options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "message_buffering", "thought_buffering"]
       },
       "SessionOption": {
         "type": "object",
@@ -3372,7 +3416,7 @@
           "current": { "anyOf": [{ "type": "string" }, { "type": "boolean" }], "description": "The current value: a value id for a select, a boolean for a toggle." },
           "values": { "type": "array", "description": "The offered values of an ungrouped select; empty for a grouped one and for a boolean.", "items": { "$ref": "#/components/schemas/SessionOptionValue" } },
           "groups": { "type": "array", "description": "The offered values of a grouped select; empty for an ungrouped one.", "items": { "$ref": "#/components/schemas/SessionOptionGroup" } },
-          "warns_cache": { "type": "boolean", "description": "Whether changing this option makes the next Turn re-read the context uncached. False everywhere until 0.3/34 fills in the per-harness table." }
+          "warns_cache": { "type": "boolean", "description": "Whether changing this option makes the next Turn re-read the context without the prompt cache. True for a Model, ThoughtLevel or ModelConfig option, except a category kestrel's per-harness table keeps the cache for; at 0.3 that is Claude's ThoughtLevel (ADR-0041)." }
         },
         "required": ["id", "name", "description", "category", "kind", "current", "values", "groups", "warns_cache"]
       },
@@ -4095,6 +4139,9 @@
             "$ref": "#/components/schemas/PullRequestEntry"
           },
           {
+            "$ref": "#/components/schemas/OptionChangedEntry"
+          },
+          {
             "$ref": "#/components/schemas/ToolCallEntry"
           },
           {
@@ -4116,6 +4163,7 @@
             "thought": "#/components/schemas/ThoughtEntry",
             "plan": "#/components/schemas/PlanEntry",
             "pull_request": "#/components/schemas/PullRequestEntry",
+            "option_changed": "#/components/schemas/OptionChangedEntry",
             "tool_call": "#/components/schemas/ToolCallEntry"
           }
         }
@@ -4481,6 +4529,21 @@
           "named",
           "anonymous"
         ]
+      },
+      "OptionChangedEntry": {
+        "description": "A person changed one of a Session's options between Turns (ADR-0041).",
+        "type": "object",
+        "properties": {
+          "type": { "const": "option_changed" },
+          "session": { "type": "string", "format": "uuid" },
+          "participant": { "type": "string", "description": "The person who made the change." },
+          "option": { "type": "string", "description": "The harness option's id, or the category when a queued Session's declared value changed." },
+          "category": { "type": "string" },
+          "from": { "type": ["string", "null"], "description": "What the option was set to before the change." },
+          "to": { "type": ["string", "null"], "description": "What it was set to; null when the harness refused." },
+          "refused": { "type": ["string", "null"], "description": "Why the harness refused, when it did." }
+        },
+        "required": ["type", "session", "participant", "option", "category"]
       },
       "PullRequestEntry": {
         "description": "A verified GitHub Event observed a pull request from the Workspace's declared branch in one of its repositories. Learning it starts no work.",

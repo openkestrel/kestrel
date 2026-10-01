@@ -438,6 +438,105 @@ fn a_session_show_says_the_title_its_options_and_its_commands() {
 }
 
 #[test]
+fn a_session_option_set_changes_an_option_and_warns_about_the_cache() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "info");
+    declared(&booted);
+    let workspace = opened(&booted);
+    booted.run(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "operator",
+        "go",
+    ]);
+
+    let waiting = booted.until(
+        &[
+            "session",
+            "list",
+            "--workspace",
+            &workspace,
+            "--json",
+            "id,state",
+        ],
+        |listed| listed.iter().any(|session| session["state"] == "waiting"),
+        "reach a waiting session",
+    );
+    let session = waiting
+        .iter()
+        .find(|session| session["state"] == "waiting")
+        .and_then(|session| session["id"].as_str())
+        .expect("the waiting session's identifier")
+        .to_owned();
+    // The bookkeeping report is debounced, so the option is waited for before it is changed.
+    booted.until(
+        &["session", "show", &session, "--json", "id,options"],
+        |shown| {
+            shown[0]["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|option| option["category"] == "model")
+        },
+        "report its options",
+    );
+
+    let changed = booted.client(&[
+        "session",
+        "option",
+        "set",
+        &session,
+        "model",
+        kestrel_scripted_agent::OTHER_MODEL,
+        "--as-participant",
+        "operator",
+    ]);
+    assert!(
+        changed.status.success(),
+        "`session option set` failed:\n{}",
+        changed.err
+    );
+    assert!(
+        changed.err.contains("1200"),
+        "the cache warning did not name the context it re-reads:\n{}",
+        changed.err
+    );
+
+    let settled = booted.until(
+        &[
+            "session",
+            "show",
+            &session,
+            "--json",
+            "id,options,changing_options",
+        ],
+        |shown| {
+            let shown = &shown[0];
+            shown["changing_options"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+                && shown["options"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|option| {
+                        option["category"] == "model"
+                            && option["current"] == kestrel_scripted_agent::OTHER_MODEL
+                    })
+        },
+        "apply the changed model",
+    );
+    assert_eq!(
+        settled[0]["changing_options"].as_array().map(Vec::len),
+        Some(0)
+    );
+
+    booted.terminated();
+}
+
+#[test]
 fn workspace_open_declares_the_mode_its_first_session_runs_in() {
     let kestrel = Kestrel::new();
     let booted = kestrel.boot();

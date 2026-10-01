@@ -141,12 +141,26 @@ async fn a_session_read_shows_the_title_its_options_and_its_commands() {
     let model = option(&shown, "model");
     assert_eq!(model["kind"], "select");
     assert_eq!(model["current"], OTHER_MODEL);
-    assert_eq!(model["warns_cache"], false);
+    assert_eq!(
+        model["warns_cache"], true,
+        "changing a model does not warn that the context is re-read uncached"
+    );
     assert!(
         model["values"]
             .as_array()
             .is_some_and(|values| values.iter().any(|value| value["value"] == OTHER_MODEL)),
         "the model option offers no values: {model}"
+    );
+
+    assert_eq!(
+        option(&shown, "mode")["warns_cache"],
+        false,
+        "changing a mode warns about the cache, and ADR-0041 says it does not"
+    );
+    assert_eq!(
+        option(&shown, "thought_level")["warns_cache"],
+        true,
+        "an opencode harness keeps the cache for a thought level, and this one does not"
     );
 
     // A category kestrel does not know is listed under the harness's own string (ADR-0041).
