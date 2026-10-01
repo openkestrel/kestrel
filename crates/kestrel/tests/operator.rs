@@ -4406,7 +4406,7 @@ fn the_published_operator_document_describes_every_transcript_entry() {
             tool_kind: "read".to_owned(),
             status: "completed".to_owned(),
             input: serde_json::json!({}),
-            result: serde_json::json!([]),
+            result: Box::new(serde_json::json!([])),
             closing_reason: None,
             completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
