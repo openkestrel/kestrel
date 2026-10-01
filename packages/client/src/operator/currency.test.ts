@@ -36,7 +36,7 @@ class Wire {
 	private readonly open: ReadableStreamDefaultController<Uint8Array>[] = [];
 	private readonly live = new Set<{ url: string }>();
 
-	constructor() {
+	constructor(private readonly greets = true) {
 		this.operations = transport(async (url, init = {}) => {
 			const method = init.method ?? "GET";
 			const record = { url, method, after: new Headers(init.headers).get("last-event-id") };
@@ -47,7 +47,7 @@ class Wire {
 			const body = new ReadableStream<Uint8Array>({
 				start: (controller) => {
 					this.open.push(controller);
-					if (url.endsWith("/changes")) {
+					if (this.greets && url.endsWith("/changes")) {
 						controller.enqueue(encoder.encode("event: open\ndata: {}\n\n"));
 					}
 				},
@@ -160,6 +160,53 @@ describe("Organization notices", () => {
 		await vi.waitFor(() =>
 			expect(invalidated).toHaveBeenCalledWith({ queryKey: ["organizations", "acme", "queue"] }),
 		);
+
+		tab.close();
+	});
+
+	it("releases a read on a peer's watching claim only once its open handshake arrives", async () => {
+		const bus = new Bus();
+		const tab = new Currency({
+			queryClient: new QueryClient(),
+			operations: new Wire().operations,
+			channel: channelOf(bus),
+			settle: 10_000,
+			now: () => 1,
+		});
+
+		let released = false;
+		void tab.ready("acme").then(() => {
+			released = true;
+		});
+
+		bus.post({
+			kind: "alive",
+			tab: "peer",
+			watching: { organization: "acme", at: 0 },
+			wish: null,
+			open: null,
+		});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(released).toBe(false);
+
+		bus.post({
+			kind: "alive",
+			tab: "peer",
+			watching: null,
+			wish: null,
+			open: "acme",
+		});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(released).toBe(false);
+
+		bus.post({
+			kind: "alive",
+			tab: "peer",
+			watching: { organization: "acme", at: 0 },
+			wish: null,
+			open: "acme",
+		});
+		await vi.waitFor(() => expect(released).toBe(true));
 
 		tab.close();
 	});

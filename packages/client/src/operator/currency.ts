@@ -60,6 +60,7 @@ export class Currency {
 	private readonly timers: ReturnType<typeof setInterval>[] = [];
 	private watching: Watching | null = null;
 	private wish: Wish | null = null;
+	private noticeOpen: string | null = null;
 	private started = false;
 	private greeted = false;
 	private settling: ReturnType<typeof setTimeout> | undefined;
@@ -81,7 +82,7 @@ export class Currency {
 		this.heartbeatMillis = options.heartbeat ?? HEARTBEAT;
 		this.livenessMillis = options.liveness ?? LIVENESS;
 		this.pollMillis = options.poll ?? POLL;
-		this.peers.set(this.tab, { watching: null, wish: null, seen: this.now() });
+		this.peers.set(this.tab, { watching: null, wish: null, open: null, seen: this.now() });
 		this.unlistened = this.channel?.subscribe((message) => this.heard(message)) ?? null;
 	}
 
@@ -207,6 +208,7 @@ export class Currency {
 			tab: this.tab,
 			watching: this.watching,
 			wish: this.wish,
+			open: this.noticeOpen,
 		});
 		this.greeted = true;
 		this.settle();
@@ -225,6 +227,7 @@ export class Currency {
 				this.peers.set(message.tab, {
 					watching: message.watching,
 					wish: message.wish,
+					open: message.open,
 					seen: this.now(),
 				});
 				if (message.kind === "hello" && !known) this.announce();
@@ -265,9 +268,15 @@ export class Currency {
 	}
 
 	private readyToRead(organization: string): boolean {
-		if (this.noticeController && this.noticeOrganization === organization) return true;
+		if (this.noticeOpen === organization) return true;
 		for (const [tab, peer] of this.peers) {
-			if (tab !== this.tab && peer.watching?.organization === organization) return true;
+			if (
+				tab !== this.tab &&
+				peer.watching?.organization === organization &&
+				peer.open === organization
+			) {
+				return true;
+			}
 		}
 		return false;
 	}
@@ -349,6 +358,7 @@ export class Currency {
 		this.noticeController?.abort();
 		this.noticeController = null;
 		this.noticeOrganization = null;
+		this.noticeOpen = null;
 	}
 
 	private async loopNotices(organization: string, controller: AbortController): Promise<void> {
@@ -362,6 +372,11 @@ export class Currency {
 				})) {
 					if (controller.signal.aborted) return;
 					backoff = NOTICE_RETRY;
+					if (this.noticeController === controller && this.noticeOpen !== organization) {
+						this.noticeOpen = organization;
+						this.announce();
+						this.resolveReadies(false);
+					}
 					if (event.event === "change") {
 						const notice = noticeOf(event.data);
 						if (notice) {
