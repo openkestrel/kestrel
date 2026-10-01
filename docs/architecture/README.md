@@ -163,8 +163,8 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
 - **Integration identity** ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)): there
   is no GitHub App. The Integration and the agent's `gh` both use tokens an operator supplies.
 - **Pull request state** ([ADR-0032](../adr/0032-a-pull-request-event-updates-workspace-state-without-a-firing.md)):
-  only `opened` is learned. Reopened, closed, merged and head-moved Events, ordering ties and the
-  sealed case are unbuilt.
+  opened, reopened, closed (including merges) and head-moved Events are learned. The Audit Record
+  that explains unattended attachment verdicts remains `0.4` work.
 - **Split roles**: `serve` and `work` parse separately but run correctly only in one process.
 - **Policy, Approvals, Questions, Workflows, Campaigns** exist in `GLOSSARY.md` and
   [`ROADMAP.md`](../../ROADMAP.md), not in code. `session_dependency` and the Unreachable state are

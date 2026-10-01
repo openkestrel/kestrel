@@ -2965,7 +2965,7 @@
           "state": { "$ref": "#/components/schemas/PullRequestState" },
           "head_branch": { "type": "string" },
           "head_revision": { "type": "string" },
-          "updated_at": { "type": "string", "format": "date-time", "description": "When GitHub last changed it, as the Event said." },
+          "updated_at": { "type": "string", "format": "date-time", "description": "When GitHub last changed it, as the Event or a read back of the pull request said." },
           "event": { "type": "string", "format": "uuid", "description": "The Event the value was learned from." }
         },
         "required": ["repository", "number", "url", "title", "state", "head_branch", "head_revision", "updated_at", "event"]

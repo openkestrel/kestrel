@@ -51,7 +51,7 @@ pub async fn sweeping(store: &Store, wake: &Wake, shutdown: &CancellationToken) 
         elapsing(store, wake, shutdown),
         firing(store, &github, wake.0.subscribe(), shutdown),
         following_up(store, wake.0.subscribe(), shutdown),
-        learning_pull_requests(store, wake.0.subscribe(), shutdown),
+        learning_pull_requests(store, &github, wake.0.subscribe(), shutdown),
         sealing_idle_workspaces(store, shutdown),
         delivering(store, &github, shutdown)
     )?;
@@ -87,11 +87,12 @@ async fn following_up(
 
 async fn learning_pull_requests(
     store: &Store,
+    github: &Github,
     mut woken: watch::Receiver<()>,
     shutdown: &CancellationToken,
 ) -> Result<()> {
     while !shutdown.is_cancelled() {
-        match pull_request::learn(store).await {
+        match pull_request::learn(store, github).await {
             Ok(learned) => {
                 for learned in learned {
                     info!(

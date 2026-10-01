@@ -4,14 +4,30 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
 use crate::domain::{
-    Event, Organization, OrganizationId, PullRequest, Workspace, WorkspaceId, WorkspaceState,
+    Event, EventRecordId, Organization, OrganizationId, PullRequest, Workspace, WorkspaceId,
+    WorkspaceState,
 };
 use crate::store::{due, integration, workspace};
 
 pub enum Considered {
     Attached(WorkspaceId),
+    /// The Event matched only sealed Workspaces, which it may not change.
+    Sealed,
     Unmatched,
     Ambiguous,
+}
+
+/// What one considered Event was decided to be, and which Workspaces it matched.
+pub struct Consideration {
+    pub outcome: String,
+    pub candidates: Vec<(WorkspaceId, WorkspaceState)>,
+}
+
+#[derive(Clone, Copy)]
+enum Freshness {
+    Newer,
+    /// What ties with a value is kept unless the source settled the tie.
+    AtLeast,
 }
 
 pub struct PullRequests<'a> {
@@ -50,59 +66,65 @@ impl<'a> PullRequests<'a> {
         .collect()
     }
 
-    pub async fn open_on_branch(
+    /// Every Workspace on the branch, sealed ones too: those a sealed Workspace matched are
+    /// recorded rather than attached to.
+    pub async fn on_branch(
         &mut self,
         organization: OrganizationId,
         branch: &str,
     ) -> Result<Vec<Workspace>> {
         let ids = sqlx::query(
             "SELECT id FROM workspace
-             WHERE organization_id = ? AND state = ? AND branch = ?
+             WHERE organization_id = ? AND branch = ?
              ORDER BY opened_at, id",
         )
         .bind(organization.to_string())
-        .bind(WorkspaceState::Open.as_str())
         .bind(branch)
         .fetch_all(&mut *self.connection)
         .await
-        .with_context(|| format!("reading the open workspaces on the branch {branch}"))?
+        .with_context(|| format!("reading the workspaces on the branch {branch}"))?
         .iter()
         .map(|row| Ok(row.get::<String, _>("id").parse()?))
         .collect::<Result<Vec<WorkspaceId>>>()?;
 
-        let mut open = Vec::with_capacity(ids.len());
+        let mut on_branch = Vec::with_capacity(ids.len());
         for id in ids {
-            open.push(workspace::read(&mut *self.connection, id).await?);
+            on_branch.push(workspace::read(&mut *self.connection, id).await?);
         }
 
-        Ok(open)
+        Ok(on_branch)
     }
 
     /// A value already fresher at its source is kept, so a delivery that arrives late cannot
     /// roll the Workspace's state back.
     pub async fn learn(&mut self, workspace: &Workspace, learned: &PullRequest) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO pull_request
-                 (workspace_id, organization_id, repository, number, url, title, state,
-                  head_branch, head_revision, updated_at, event_record_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT (workspace_id, url) DO UPDATE SET
-                 title = excluded.title,
-                 state = excluded.state,
-                 head_branch = excluded.head_branch,
-                 head_revision = excluded.head_revision,
-                 updated_at = excluded.updated_at,
-                 event_record_id = excluded.event_record_id
-             WHERE excluded.updated_at > pull_request.updated_at",
+        self.record(workspace, learned, Freshness::Newer).await
+    }
+
+    /// For a tie the Integration itself was read back for: the source's answer replaces what
+    /// it ties with.
+    pub async fn reconcile(&mut self, workspace: &Workspace, learned: &PullRequest) -> Result<()> {
+        self.record(workspace, learned, Freshness::AtLeast).await
+    }
+
+    /// Whether this observation is one the Workspace has not held before. Recording one already
+    /// held says the delivery repeated it, and a repeat appends nothing.
+    pub async fn observe(
+        &mut self,
+        workspace: &Workspace,
+        learned: &PullRequest,
+        action: &str,
+    ) -> Result<bool> {
+        let recorded = sqlx::query(
+            "INSERT INTO pull_request_observation
+                 (workspace_id, url, action, state, head_revision, updated_at, event_record_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (workspace_id, url, action, state, head_revision, updated_at) DO NOTHING",
         )
         .bind(workspace.id.to_string())
-        .bind(workspace.organization.id.to_string())
-        .bind(&learned.repository)
-        .bind(learned.number)
         .bind(&learned.url)
-        .bind(&learned.title)
+        .bind(action)
         .bind(learned.state.as_str())
-        .bind(&learned.head_branch)
         .bind(&learned.head_revision)
         .bind(due(learned.updated_at))
         .bind(learned.event.to_string())
@@ -110,17 +132,23 @@ impl<'a> PullRequests<'a> {
         .await
         .with_context(|| {
             format!(
-                "recording pull request {} on the workspace {}",
+                "recording the observed pull request {} on the workspace {}",
                 learned.url, workspace.id
             )
         })?;
 
-        Ok(())
+        Ok(recorded.rows_affected() > 0)
     }
 
-    pub async fn consider(&mut self, event: &Event, considered: &Considered) -> Result<()> {
+    pub async fn consider(
+        &mut self,
+        event: &Event,
+        considered: &Considered,
+        candidates: &[(WorkspaceId, WorkspaceState)],
+    ) -> Result<()> {
         let (outcome, workspace) = match considered {
             Considered::Attached(workspace) => ("attached", Some(workspace.to_string())),
+            Considered::Sealed => ("sealed", None),
             Considered::Unmatched => ("unmatched", None),
             Considered::Ambiguous => ("ambiguous", None),
         };
@@ -144,7 +172,62 @@ impl<'a> PullRequests<'a> {
             )
         })?;
 
+        for (workspace, state) in candidates {
+            sqlx::query(
+                "INSERT INTO pull_request_candidate (event_record_id, workspace_id, state)
+                 VALUES (?, ?, ?)",
+            )
+            .bind(event.record_id.to_string())
+            .bind(workspace.to_string())
+            .bind(state.as_str())
+            .execute(&mut *self.connection)
+            .await
+            .with_context(|| {
+                format!(
+                    "recording the workspace {workspace} the pull request event {} matched",
+                    event.record_id
+                )
+            })?;
+        }
+
         Ok(())
+    }
+
+    /// What the matching path recorded for one considered Event, whichever way it was decided.
+    pub async fn considered(&mut self, event: EventRecordId) -> Result<Option<Consideration>> {
+        let outcome = sqlx::query_scalar::<_, String>(
+            "SELECT outcome FROM pull_request_attachment WHERE event_record_id = ?",
+        )
+        .bind(event.to_string())
+        .fetch_optional(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading what the pull request event {event} matched"))?;
+        let Some(outcome) = outcome else {
+            return Ok(None);
+        };
+
+        let candidates = sqlx::query(
+            "SELECT workspace_id, state FROM pull_request_candidate
+             WHERE event_record_id = ?
+             ORDER BY workspace_id",
+        )
+        .bind(event.to_string())
+        .fetch_all(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading the candidates of the pull request event {event}"))?
+        .iter()
+        .map(|row| {
+            Ok((
+                row.get::<String, _>("workspace_id").parse()?,
+                row.get::<String, _>("state").parse()?,
+            ))
+        })
+        .collect::<Result<Vec<(WorkspaceId, WorkspaceState)>>>()?;
+
+        Ok(Some(Consideration {
+            outcome,
+            candidates,
+        }))
     }
 
     pub async fn of(&mut self, workspace: WorkspaceId) -> Result<Vec<PullRequest>> {
@@ -164,6 +247,27 @@ impl<'a> PullRequests<'a> {
         .collect()
     }
 
+    pub async fn value(
+        &mut self,
+        workspace: WorkspaceId,
+        url: &str,
+    ) -> Result<Option<PullRequest>> {
+        sqlx::query(
+            "SELECT repository, number, url, title, state, head_branch, head_revision,
+                    updated_at, event_record_id
+             FROM pull_request
+             WHERE workspace_id = ? AND url = ?",
+        )
+        .bind(workspace.to_string())
+        .bind(url)
+        .fetch_optional(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading the pull request {url} of the workspace {workspace}"))?
+        .as_ref()
+        .map(pull_request)
+        .transpose()
+    }
+
     /// Only a signed Integration is delivered pull request Events; one that is polled reads the
     /// issue timeline, which never says a pull request opened.
     pub async fn watched(&mut self, organization: &Organization) -> Result<Vec<String>> {
@@ -179,6 +283,52 @@ impl<'a> PullRequests<'a> {
         .iter()
         .map(|row| Ok(row.get("repository")))
         .collect()
+    }
+
+    async fn record(
+        &mut self,
+        workspace: &Workspace,
+        learned: &PullRequest,
+        freshness: Freshness,
+    ) -> Result<()> {
+        let replacing_ties = matches!(freshness, Freshness::AtLeast);
+        sqlx::query(
+            "INSERT INTO pull_request
+                 (workspace_id, organization_id, repository, number, url, title, state,
+                  head_branch, head_revision, updated_at, event_record_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (workspace_id, url) DO UPDATE SET
+                 title = excluded.title,
+                 state = excluded.state,
+                 head_branch = excluded.head_branch,
+                 head_revision = excluded.head_revision,
+                 updated_at = excluded.updated_at,
+                 event_record_id = excluded.event_record_id
+             WHERE excluded.updated_at > pull_request.updated_at
+                OR (excluded.updated_at = pull_request.updated_at AND ?)",
+        )
+        .bind(workspace.id.to_string())
+        .bind(workspace.organization.id.to_string())
+        .bind(&learned.repository)
+        .bind(learned.number)
+        .bind(&learned.url)
+        .bind(&learned.title)
+        .bind(learned.state.as_str())
+        .bind(&learned.head_branch)
+        .bind(&learned.head_revision)
+        .bind(due(learned.updated_at))
+        .bind(learned.event.to_string())
+        .bind(replacing_ties)
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| {
+            format!(
+                "recording pull request {} on the workspace {}",
+                learned.url, workspace.id
+            )
+        })?;
+
+        Ok(())
     }
 }
 

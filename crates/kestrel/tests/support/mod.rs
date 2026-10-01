@@ -209,6 +209,13 @@ pub fn harness_playing(script: scripted_agent::Script) -> link::Harness {
     }
 }
 
+/// What the matching path recorded for one pull request Event, as the `0.4` Audit Record will
+/// read it: the verdict, and every Workspace the Event matched with the state it was in.
+pub struct Consideration {
+    pub outcome: String,
+    pub candidates: Vec<(WorkspaceId, String)>,
+}
+
 /// Comes back on the address it was listening on, so what an Environment already dialled
 /// still reaches it.
 pub struct Stopped {
@@ -654,6 +661,27 @@ impl Kestrel {
         integration::events(&self.store, organization, 100)
             .await
             .expect("the events should list")
+    }
+
+    /// The verdict the pull request matching path recorded for one considered Event, and every
+    /// Workspace it matched with the state that Workspace was in: what the `0.4` Audit Record
+    /// will read back. `None` when the Event was never considered.
+    pub async fn consideration(&self, event: EventRecordId) -> Option<Consideration> {
+        let mut tx = self.store.read().await.expect("a read transaction");
+        let considered = tx
+            .pull_requests()
+            .considered(event)
+            .await
+            .expect("the consideration should read")?;
+
+        Some(Consideration {
+            outcome: considered.outcome,
+            candidates: considered
+                .candidates
+                .into_iter()
+                .map(|(workspace, state)| (workspace, state.as_str().to_owned()))
+                .collect(),
+        })
     }
 
     pub async fn declare_trigger(

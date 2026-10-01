@@ -20,6 +20,9 @@ pub const API: &str = "https://api.github.com";
 pub const LABELLED: &str = "com.github.issues.labeled";
 pub const COMMENTED: &str = "com.github.issue_comment.created";
 pub const PULL_REQUEST_OPENED: &str = "com.github.pull_request.opened";
+pub const PULL_REQUEST_REOPENED: &str = "com.github.pull_request.reopened";
+pub const PULL_REQUEST_CLOSED: &str = "com.github.pull_request.closed";
+pub const PULL_REQUEST_SYNCHRONIZE: &str = "com.github.pull_request.synchronize";
 
 pub fn at_or_after(event: &Occurrence, origin: &Occurrence) -> bool {
     match event.time.cmp(&origin.time) {
@@ -305,6 +308,32 @@ impl Github {
             })?;
 
         answered(response, &format!("{repository}#{number}")).await
+    }
+
+    /// The pull request as the repository has it now, for settling two deliveries that tie on
+    /// source freshness while they disagree.
+    pub async fn pull_request(
+        &self,
+        integration: &Integration,
+        number: i64,
+    ) -> Result<serde_json::Value, Refused> {
+        let github = integration.github().map_err(Refused::Failed)?;
+        let repository = repository(&github.repository).map_err(Refused::Failed)?;
+        let response = self
+            .request(
+                reqwest::Method::GET,
+                github,
+                &format!("repos/{repository}/pulls/{number}"),
+            )
+            .send()
+            .await
+            .map_err(|error| {
+                Refused::Failed(anyhow!(
+                    "pull request {number} on {repository} could not be read: {error}"
+                ))
+            })?;
+
+        answered(response, &format!("pull request {number} on {repository}")).await
     }
 
     pub async fn readiness(
