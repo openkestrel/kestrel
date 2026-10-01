@@ -98,7 +98,7 @@ impl Stream {
                 .await
                 .expect("a follower event before the deadline");
             match frame.name.as_str() {
-                "entry" | "cursor" => continue,
+                "entry" | "cursor" | "activity" | "session_state" => continue,
                 "follower" => {
                     assert!(frame.id.is_none(), "a follower event carries no id");
 
@@ -121,7 +121,7 @@ impl Stream {
                 .await
                 .expect("a presence event before the deadline");
             match frame.name.as_str() {
-                "entry" | "cursor" => continue,
+                "entry" | "cursor" | "activity" | "session_state" => continue,
                 "presence" => {
                     assert!(frame.id.is_none(), "a presence event carries no id");
 
@@ -141,7 +141,7 @@ impl Stream {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             let frame = self.next(remaining).await?;
             match frame.name.as_str() {
-                "entry" | "cursor" => continue,
+                "entry" | "cursor" | "activity" | "session_state" => continue,
                 "presence" => return Some(frame.data),
                 other => panic!("expected a presence event, got {other}"),
             }
@@ -394,6 +394,7 @@ async fn a_reconnect_gets_a_fresh_snapshot_and_entries_resume_from_its_cursor() 
                 cursor = frame.id;
             }
             "follower" => {}
+            "activity" | "cursor" | "session_state" => {}
             "presence" => break,
             other => panic!("a follow delivered {other} before its presence"),
         }
@@ -523,6 +524,7 @@ async fn the_cli_follow_is_counted_renews_and_prints_no_presence() {
             "--follow",
             "--as-participant",
             "Ada",
+            "--no-summaries",
             "--json",
             "seq,entry",
         ],
