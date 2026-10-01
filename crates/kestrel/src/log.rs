@@ -77,6 +77,22 @@ pub enum Entry {
         action: String,
         state: PullRequestState,
     },
+    /// A person changed one of a Session's options between Turns (ADR-0041).
+    OptionChanged {
+        session: SessionId,
+        participant: String,
+        /// The harness option's id, or the category when a queued Session's declared value
+        /// changed.
+        option: String,
+        category: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        to: Option<String>,
+        /// Why the harness refused, when it did; `to` is absent then.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        refused: Option<String>,
+    },
 }
 
 impl fmt::Display for Entry {
@@ -137,6 +153,24 @@ impl fmt::Display for Entry {
             Entry::PullRequest {
                 url, action, state, ..
             } => write!(f, "pull request {action}  {url}  {}", state.as_str()),
+            Entry::OptionChanged {
+                participant,
+                option,
+                from,
+                to,
+                refused,
+                ..
+            } => {
+                write!(f, "option changed  {participant}  {option}")?;
+                if let Some(from) = from {
+                    write!(f, "  from {from}")?;
+                }
+                match (to, refused) {
+                    (Some(to), _) => write!(f, "  to {to}"),
+                    (None, Some(refused)) => write!(f, "  refused: {refused}"),
+                    (None, None) => Ok(()),
+                }
+            }
         }
     }
 }
@@ -951,6 +985,7 @@ impl Entry {
             Self::SessionStarted { session, .. } | Self::SessionEnded { session, .. } => {
                 Some(*session)
             }
+            Self::OptionChanged { session, .. } => Some(*session),
             _ => None,
         }
     }

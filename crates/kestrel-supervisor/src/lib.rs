@@ -602,10 +602,50 @@ async fn instructed(
                 None => diagnostics.info("prompted before the session started"),
             }
         }
+        Instruction::SetOption {
+            option,
+            value,
+            participant,
+        } if carrying_it => {
+            let outcome = match supervising
+                .carrying
+                .as_mut()
+                .and_then(|carrying| carrying.conversation.as_mut())
+            {
+                Some(conversation) => conversation.set_option(option.clone(), value.clone()).await,
+                None => harness::SetOption::refused(
+                    option,
+                    String::new(),
+                    None,
+                    "the session's harness is not open".to_owned(),
+                ),
+            };
+            diagnostics.info(&format!(
+                "changed {} for {}: {}",
+                outcome.option,
+                participant,
+                outcome
+                    .refused
+                    .as_deref()
+                    .unwrap_or(outcome.to.as_deref().unwrap_or("no value"))
+            ));
+            if let Some(carrying) = supervising.carrying.as_mut() {
+                carrying.saying.push_back(Report::OptionChanged {
+                    participant,
+                    option: outcome.option,
+                    category: outcome.category,
+                    from: outcome.from,
+                    to: outcome.to,
+                    refused: outcome.refused,
+                    options: outcome.options,
+                });
+            }
+        }
         Instruction::Stop
         | Instruction::Start { .. }
         | Instruction::Unbriefed { .. }
         | Instruction::Prompt { .. }
+        | Instruction::SetOption { .. }
         | Instruction::Unrecognized => {}
     }
 }

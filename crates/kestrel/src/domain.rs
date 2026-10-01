@@ -716,6 +716,9 @@ pub struct Session {
     pub title: Option<String>,
     /// The harness's whole config-option list, kept current.
     pub options: Vec<SessionOption>,
+    /// Option changes a person asked for while the Session is live, held until the harness
+    /// answers each (ADR-0041).
+    pub changing_options: Vec<ChangingOption>,
     /// The commands the harness offers for this Session.
     pub commands: Vec<SessionCommand>,
     pub enqueued_at: Timestamp,
@@ -731,6 +734,16 @@ pub struct Turn {
     pub seq: i64,
     pub prompted_at: Timestamp,
     pub answered_at: Option<Timestamp>,
+}
+
+/// One option change a person asked for on a live Session, held from the write until the harness
+/// answers it (ADR-0041).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangingOption {
+    pub option: String,
+    pub category: String,
+    pub value: String,
+    pub participant: String,
 }
 
 /// A Session's harness config option: the whole of what it is, what it may be and what it is now
@@ -766,6 +779,8 @@ pub enum SessionOptionKind {
 impl SessionOption {
     pub const MODE: &'static str = "mode";
     pub const MODEL: &'static str = "model";
+    pub const MODEL_CONFIG: &'static str = "model_config";
+    pub const THOUGHT_LEVEL: &'static str = "thought_level";
 
     /// What the Session read and delivery call the model the agent is on.
     pub fn current_value(&self) -> Option<String> {

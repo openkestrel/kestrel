@@ -5236,6 +5236,7 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::SESSIONS, "post"),
         (operator::SESSION, "get"),
         (operator::SESSION_STOP, "post"),
+        (operator::SESSION_OPTIONS, "post"),
         (operator::TRIGGERS, "get"),
         (operator::TRIGGERS, "post"),
         (operator::TRIGGER, "get"),
@@ -5322,6 +5323,15 @@ fn the_published_operator_document_describes_every_transcript_entry() {
             title: "Learn pull requests".to_owned(),
             action: "opened".to_owned(),
             state: kestrel::domain::PullRequestState::Open,
+        },
+        Entry::OptionChanged {
+            session: SessionId::generate(),
+            participant: "operator".to_owned(),
+            option: "model".to_owned(),
+            category: "model".to_owned(),
+            from: Some("scripted-mini".to_owned()),
+            to: Some("scripted-max".to_owned()),
+            refused: None,
         },
         Entry::ToolCall {
             session_id: SessionId::generate(),

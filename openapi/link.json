@@ -611,6 +611,9 @@
             "$ref": "#/components/schemas/Prompt"
           },
           {
+            "$ref": "#/components/schemas/SetOption"
+          },
+          {
             "$ref": "#/components/schemas/Stop"
           }
         ],
@@ -620,6 +623,7 @@
             "start": "#/components/schemas/Start",
             "unbriefed": "#/components/schemas/Unbriefed",
             "prompt": "#/components/schemas/Prompt",
+            "set_option": "#/components/schemas/SetOption",
             "stop": "#/components/schemas/Stop"
           }
         },
@@ -694,6 +698,33 @@
         "required": [
           "kind",
           "prompt"
+        ]
+      },
+      "SetOption": {
+        "description": "Change one of the Session's harness options before its next prompt. Durable, so it is applied once, in order ahead of any prompt after it (ADR-0041).",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "set_option"
+          },
+          "option": {
+            "description": "The option's id as the harness reported it, or the synthesized mode's id for a harness that offers only legacy modes.",
+            "type": "string"
+          },
+          "value": {
+            "description": "The value to set, as the harness offers it.",
+            "type": "string"
+          },
+          "participant": {
+            "description": "The person making the change, by the participant name rule.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "option",
+          "value",
+          "participant"
         ]
       },
       "Read": {
@@ -940,6 +971,9 @@
             "$ref": "#/components/schemas/SessionInfo"
           },
           {
+            "$ref": "#/components/schemas/OptionChanged"
+          },
+          {
             "$ref": "#/components/schemas/Answered"
           },
           {
@@ -974,6 +1008,7 @@
             "said": "#/components/schemas/Said",
             "used": "#/components/schemas/Used",
             "session_info": "#/components/schemas/SessionInfo",
+            "option_changed": "#/components/schemas/OptionChanged",
             "answered": "#/components/schemas/Answered",
             "checkout": "#/components/schemas/CheckoutObserved",
             "finished": "#/components/schemas/Finished",
@@ -1149,6 +1184,61 @@
           "session",
           "seq",
           "usage"
+        ]
+      },
+      "OptionChanged": {
+        "description": "The harness answered a person's option change: the whole list it left, or why it refused. Numbered, because the control plane settles the pending change and writes the entry once (ADR-0041).",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "option_changed"
+          },
+          "seq": {
+            "$ref": "#/components/schemas/Seq"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "participant": {
+            "description": "The person who asked for the change.",
+            "type": "string"
+          },
+          "option": {
+            "description": "The option's id the change named.",
+            "type": "string"
+          },
+          "category": {
+            "description": "The category the option belongs to.",
+            "type": "string"
+          },
+          "from": {
+            "description": "What the option was set to before the change.",
+            "type": "string"
+          },
+          "to": {
+            "description": "What it was set to. Absent when the harness refused.",
+            "type": "string"
+          },
+          "refused": {
+            "description": "Why the harness refused, when it did.",
+            "type": "string"
+          },
+          "options": {
+            "description": "The harness's whole option list after a change that applied; empty when it refused.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionOption"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "session",
+          "seq",
+          "participant",
+          "option",
+          "category"
         ]
       },
       "Answered": {

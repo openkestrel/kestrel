@@ -723,6 +723,28 @@ enum SessionCommand {
         /// `latest`
         session: String,
     },
+    /// Change one of a Session's options between Turns
+    Option {
+        #[command(subcommand)]
+        command: SessionOptionCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SessionOptionCommand {
+    /// Set an option, by the id the harness gave it or by its category
+    Set {
+        /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
+        /// `latest`
+        session: String,
+        /// The option's id, or one of the categories model, mode or thought_level
+        option: String,
+        /// The value to set, as the harness offers it
+        value: String,
+        /// The person making the change
+        #[arg(long)]
+        as_participant: String,
+    },
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -1568,6 +1590,34 @@ async fn run() -> Result<()> {
                 .await?,
             )?;
         }
+        Command::Session(SessionCommand::Option { command }) => {
+            let SessionOptionCommand::Set {
+                session,
+                option,
+                value,
+                as_participant,
+            } = command;
+            let organization = scoping.resolve().await?.organization;
+            let body = if declares(&option) {
+                json!({ "participant": as_participant, "category": option, "value": value })
+            } else {
+                json!({ "participant": as_participant, "option": option, "value": value })
+            };
+            let changed = api
+                .post(
+                    &[
+                        "organizations",
+                        &organization,
+                        "sessions",
+                        &session,
+                        "options",
+                    ],
+                    &body,
+                )
+                .await?;
+            warn_about_cache(&changed, &option);
+            shown_session(&presentation, &changed)?;
+        }
         Command::Instance(InstanceCommand::List) => {
             let organization = scoping.resolve().await?.organization;
             show(
@@ -1732,10 +1782,60 @@ fn shown_session(presentation: &Presentation, session: &Value) -> Result<()> {
     let mut record = session.clone();
     if !matches!(presentation, Presentation::Json(_)) {
         record["options"] = Value::from(session_options(&record["options"]));
+        record["changing_options"] = Value::from(changing_options(&record["changing_options"]));
         record["commands"] = Value::from(session_commands(&record["commands"]));
     }
 
     show(presentation, &view::SESSION, &record)
+}
+
+/// A change a person asked for that the harness has not answered yet.
+fn changing_options(changing: &Value) -> String {
+    changing
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|change| {
+            format!(
+                "{}: {} ({})",
+                change["option"].as_str().unwrap_or("option"),
+                change["value"].as_str().unwrap_or(""),
+                change["participant"].as_str().unwrap_or("")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// ADR-0041: a change that makes the next Turn re-read the context without the prompt cache says
+/// so, with the size of the context it last reported.
+fn warn_about_cache(changed: &Value, named: &str) {
+    let warns = changed["options"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|option| {
+            option["id"].as_str() == Some(named) || option["category"].as_str() == Some(named)
+        })
+        .is_some_and(|option| option["warns_cache"] == true);
+    if !warns {
+        return;
+    }
+
+    match changed["usage"]["context_used"].as_u64() {
+        Some(tokens) => eprintln!(
+            "changing this makes the next turn re-read the context without the prompt cache: \
+             {tokens} tokens"
+        ),
+        None => eprintln!(
+            "changing this makes the next turn re-read the context without the prompt cache"
+        ),
+    }
+}
+
+/// The three categories a queued Session declares, which the write takes in place of an option id.
+fn declares(category: &str) -> bool {
+    matches!(category, "model" | "mode" | "thought_level")
 }
 
 fn session_options(options: &Value) -> String {

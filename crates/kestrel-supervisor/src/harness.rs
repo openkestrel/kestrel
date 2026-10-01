@@ -24,7 +24,7 @@ use agent_client_protocol::{
     is_incoming_transport_closed,
 };
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::completer::{Completed, Completer};
@@ -110,8 +110,47 @@ const CLOSING: Duration = Duration::from_millis(500);
 /// loses nothing of it (ADR-0024). Dropping it kills the agent.
 pub struct Conversation {
     prompts: mpsc::UnboundedSender<String>,
+    commands: mpsc::UnboundedSender<Command>,
     turns: mpsc::UnboundedReceiver<ConversationEvent>,
     task: JoinHandle<()>,
+}
+
+/// What the control plane asks of a conversation between Turns.
+enum Command {
+    SetOption {
+        option: String,
+        value: String,
+        answered: oneshot::Sender<SetOption>,
+    },
+}
+
+/// What became of one option change the harness was asked to make (ADR-0041).
+pub struct SetOption {
+    pub option: String,
+    pub category: String,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub refused: Option<String>,
+    /// The whole list the harness left, for the change that applied.
+    pub options: Vec<crate::link::SessionOption>,
+}
+
+impl SetOption {
+    pub(crate) fn refused(
+        option: String,
+        category: String,
+        from: Option<String>,
+        why: String,
+    ) -> Self {
+        Self {
+            option,
+            category,
+            from,
+            to: None,
+            refused: Some(why),
+            options: Vec::new(),
+        }
+    }
 }
 
 impl Conversation {
@@ -124,6 +163,7 @@ impl Conversation {
         root: PathBuf,
     ) -> Self {
         let (prompts, prompted) = mpsc::unbounded_channel();
+        let (commands, commanded) = mpsc::unbounded_channel();
         let (answered, turns) = mpsc::unbounded_channel();
         if let Some(first) = first {
             prompts
@@ -135,11 +175,13 @@ impl Conversation {
             provider,
             root,
             prompted,
+            commanded,
             answered,
         ));
 
         Self {
             prompts,
+            commands,
             turns,
             task,
         }
@@ -148,6 +190,34 @@ impl Conversation {
     pub fn prompt(&self, prompt: String) {
         // A conversation that is over says so as its last turn, which is where that is heard.
         let _ = self.prompts.send(prompt);
+    }
+
+    /// Applies one option change between Turns, answering with what the harness left or why it
+    /// refused. Awaited, so a change is ordered ahead of any prompt after it (ADR-0041).
+    pub async fn set_option(&self, option: String, value: String) -> SetOption {
+        let (answered, outcome) = oneshot::channel();
+        let sent = self.commands.send(Command::SetOption {
+            option: option.clone(),
+            value,
+            answered,
+        });
+        if sent.is_err() {
+            return SetOption::refused(
+                option,
+                String::new(),
+                None,
+                "the agent conversation is over".to_owned(),
+            );
+        }
+
+        outcome.await.unwrap_or_else(|_| {
+            SetOption::refused(
+                option,
+                String::new(),
+                None,
+                "the agent conversation ended before the change was applied".to_owned(),
+            )
+        })
     }
 
     /// Cancel-safe, so a caller may stop waiting on it and come back.
@@ -257,6 +327,7 @@ async fn conversing(
     provider: BTreeMap<String, String>,
     root: PathBuf,
     mut prompts: mpsc::UnboundedReceiver<String>,
+    mut commands: mpsc::UnboundedReceiver<Command>,
     turns: mpsc::UnboundedSender<ConversationEvent>,
 ) {
     let heard = Arc::new(Mutex::new(Hearing {
@@ -277,6 +348,7 @@ async fn conversing(
             &provider,
             &root,
             &mut prompts,
+            &mut commands,
             &turns,
             &heard,
             &mut continuity,
@@ -312,6 +384,7 @@ async fn living(
     provider: &BTreeMap<String, String>,
     root: &Path,
     prompts: &mut mpsc::UnboundedReceiver<String>,
+    commands: &mut mpsc::UnboundedReceiver<Command>,
     turns: &mpsc::UnboundedSender<ConversationEvent>,
     heard: &Arc<Mutex<Hearing>>,
     continuity: &mut Continuity,
@@ -414,15 +487,24 @@ async fn living(
                 loop {
                     let prompt = match continuity.in_flight.clone() {
                         Some(prompt) => prompt,
-                        None => tokio::select! {
-                            prompt = prompts.recv() => match prompt {
-                                Some(prompt) => prompt,
-                                None => return Ok(Ended::HungUp),
-                            },
-                            () = connection.incoming_closed() => {
-                                return Ok(Ended::Lost(
-                                    "it closed its connection between turns".to_owned(),
-                                ));
+                        None => loop {
+                            tokio::select! {
+                                prompt = prompts.recv() => match prompt {
+                                    Some(prompt) => break prompt,
+                                    None => return Ok(Ended::HungUp),
+                                },
+                                command = commands.recv() => match command {
+                                    Some(Command::SetOption { option, value, answered }) => {
+                                        let outcome = applying(&connection, heard, &conversed, option, value).await;
+                                        let _ = answered.send(outcome);
+                                    }
+                                    None => return Ok(Ended::HungUp),
+                                },
+                                () = connection.incoming_closed() => {
+                                    return Ok(Ended::Lost(
+                                        "it closed its connection between turns".to_owned(),
+                                    ));
+                                }
                             }
                         },
                     };
@@ -473,6 +555,108 @@ fn ended(error: &Error) -> Ended {
     match is_incoming_transport_closed(error) {
         true => Ended::Lost(described(error)),
         false => Ended::Over(error.to_string()),
+    }
+}
+
+/// Applies one option change between Turns: the option a person named, once, answering with the
+/// whole list the harness left or why it refused (ADR-0041).
+async fn applying(
+    connection: &ConnectionTo<agent_client_protocol::Agent>,
+    heard: &Arc<Mutex<Hearing>>,
+    conversed: &SessionId,
+    option: String,
+    value: String,
+) -> SetOption {
+    let (category, from, real) = {
+        let heard = heard.lock().expect("the observation lock");
+        let Some(held) = heard
+            .info
+            .snapshot()
+            .options
+            .into_iter()
+            .find(|held| held.id == option)
+        else {
+            return SetOption::refused(
+                option.clone(),
+                String::new(),
+                None,
+                format!("this agent offers no option {option}"),
+            );
+        };
+        let category = held.category.clone().unwrap_or_else(|| held.id.clone());
+        let offered = match &held.kind {
+            SessionOptionKind::Select { values, groups, .. } => {
+                values.iter().any(|offered| offered.value == value)
+                    || groups
+                        .iter()
+                        .any(|group| group.values.iter().any(|offered| offered.value == value))
+            }
+            SessionOptionKind::Boolean { .. } => matches!(value.as_str(), "true" | "false"),
+        };
+        if !offered {
+            let why = format!("this agent does not offer the {category} {value}");
+            return SetOption::refused(option, category, held.current_value(), why);
+        }
+        // A synthesized mode has no config option of its own to set, so it goes through
+        // `session/set_mode`.
+        let real = heard
+            .info
+            .options
+            .iter()
+            .any(|real| real.id.0.as_ref() == option);
+
+        (category, held.current_value(), real)
+    };
+
+    if real {
+        let sent = connection
+            .send_request(SetSessionConfigOptionRequest::new(
+                conversed.clone(),
+                SessionConfigId::new(option.clone()),
+                SessionConfigValueId::new(value.clone()),
+            ))
+            .block_task()
+            .await;
+        match sent {
+            Ok(answered) => {
+                let mut heard = heard.lock().expect("the observation lock");
+                heard.hold(Some(answered.config_options), None);
+                let options = heard.info.snapshot().options;
+                SetOption {
+                    option,
+                    category,
+                    from,
+                    to: Some(value),
+                    refused: None,
+                    options,
+                }
+            }
+            Err(error) => SetOption::refused(option, category, from, described(&error)),
+        }
+    } else {
+        let sent = connection
+            .send_request(SetSessionModeRequest::new(
+                conversed.clone(),
+                SessionModeId::new(value.clone()),
+            ))
+            .block_task()
+            .await;
+        match sent {
+            Ok(_) => {
+                let mut heard = heard.lock().expect("the observation lock");
+                heard.mode(Some(SessionModeId::new(value.clone())));
+                let options = heard.info.snapshot().options;
+                SetOption {
+                    option,
+                    category,
+                    from,
+                    to: Some(value),
+                    refused: None,
+                    options,
+                }
+            }
+            Err(error) => SetOption::refused(option, category, from, described(&error)),
+        }
     }
 }
 

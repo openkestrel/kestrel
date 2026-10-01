@@ -39,6 +39,12 @@ pub enum Instruction {
     Prompt {
         prompt: String,
     },
+    /// Changes one of the Session's harness options before its next prompt (ADR-0041).
+    SetOption {
+        option: String,
+        value: String,
+        participant: String,
+    },
     Stop,
     /// A control plane kestrel upgraded under a live Environment (ADR-0002) may send an
     /// instruction this supervisor predates; letting it past keeps the cursor moving.
@@ -52,6 +58,7 @@ impl Instruction {
             Instruction::Start { .. } => "start",
             Instruction::Unbriefed { .. } => "unbriefed",
             Instruction::Prompt { .. } => "prompt",
+            Instruction::SetOption { .. } => "set_option",
             Instruction::Stop => "stop",
             Instruction::Unrecognized => "unrecognized",
         }
@@ -245,6 +252,21 @@ pub enum Report {
     /// The Session's whole bookkeeping state, unnumbered and idempotent: a change is said once,
     /// and the whole state is said again after a reconnect (ADR-0041).
     SessionInfo(SessionInfo),
+    /// The harness answered a person's option change, with the whole list it left or why it
+    /// refused (ADR-0041).
+    OptionChanged {
+        participant: String,
+        option: String,
+        category: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refused: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<SessionOption>,
+    },
     Answered,
     Checkout {
         repositories: Vec<Observed>,
@@ -271,6 +293,7 @@ impl Report {
             Report::SessionState { .. } => "session_state",
             Report::Used { .. } => "used",
             Report::SessionInfo { .. } => "session_info",
+            Report::OptionChanged { .. } => "option_changed",
             Report::Answered => "answered",
             Report::Checkout { .. } => "checkout",
             Report::Finished { .. } => "finished",
@@ -416,6 +439,14 @@ pub enum SessionOptionKind {
 impl SessionOption {
     pub fn is_category(&self, category: &str) -> bool {
         self.category.as_deref() == Some(category)
+    }
+
+    /// What the option is set to now.
+    pub fn current_value(&self) -> Option<String> {
+        match &self.kind {
+            SessionOptionKind::Select { current, .. } => Some(current.clone()),
+            SessionOptionKind::Boolean { current } => Some(current.to_string()),
+        }
     }
 }
 

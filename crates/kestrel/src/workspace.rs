@@ -815,6 +815,7 @@ mod tests {
             worked_model: None,
             title: None,
             options: Vec::new(),
+            changing_options: Vec::new(),
             commands: Vec::new(),
             enqueued_at: Timestamp::now(),
             started_at: None,

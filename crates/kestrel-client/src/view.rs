@@ -155,6 +155,7 @@ pub const SESSION: View = View::Detail(&[
     "worked_model",
     "title",
     "options",
+    "changing_options",
     "commands",
     "enqueued_at",
     "started_at",

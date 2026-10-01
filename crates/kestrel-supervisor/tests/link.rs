@@ -228,6 +228,19 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
         (
             Some("a-session"),
             Some(3),
+            Report::OptionChanged {
+                participant: "operator".to_owned(),
+                option: "model".to_owned(),
+                category: "model".to_owned(),
+                from: Some("scripted-mini".to_owned()),
+                to: Some("scripted-max".to_owned()),
+                refused: None,
+                options: Vec::new(),
+            },
+        ),
+        (
+            Some("a-session"),
+            Some(4),
             Report::Finished {
                 exit: Exit::Succeeded,
             },
@@ -519,6 +532,12 @@ fn the_client_recognises_every_instruction_the_published_document_declares() {
                 "harness": {"command": "opencode acp"},
             }),
             "prompt" => serde_json::json!({"kind": kind, "prompt": "and the tests"}),
+            "set_option" => serde_json::json!({
+                "kind": kind,
+                "option": "model",
+                "value": "scripted-max",
+                "participant": "operator",
+            }),
             _ => serde_json::json!({"kind": kind}),
         };
         let instruction: Instruction = serde_json::from_value(sent).expect("an instruction");

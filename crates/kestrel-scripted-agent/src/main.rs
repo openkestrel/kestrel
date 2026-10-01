@@ -26,8 +26,9 @@ use clap::Parser;
 use kestrel_scripted_agent::{
     CHATTER, CHATTERED_LINES, CHATTERED_MESSAGES, COMMAND, COMMAND_DESCRIPTION, COMMAND_HINT,
     CONFIDED, CUSTOM_CATEGORY, CUSTOM_OPTION, DEFAULT_MODEL, FIRST_MEMORY, LAST_MEMORY, LOGIN,
-    MODE_OPTION, MUTTERED, OTHER_MODE, OTHER_MODEL, OVERLONG, REFRESHED, REPEATS, STARTING_MODE,
-    SWITCHED_MODE, Script, TITLE, chattered, conversed,
+    MODE_OPTION, MUTTERED, OTHER_MODE, OTHER_MODEL, OTHER_THOUGHT_LEVEL, OVERLONG, REFRESHED,
+    REPEATS, STARTING_MODE, STARTING_THOUGHT_LEVEL, SWITCHED_MODE, Script, THOUGHT_LEVEL_OPTION,
+    TITLE, chattered, conversed,
 };
 
 const SESSION: &str = "scripted";
@@ -164,6 +165,12 @@ async fn main() -> Result<()> {
         )
         .on_receive_request(
             async move |set: SetSessionConfigOptionRequest, responder, _connection| {
+                if script == Script::RefusesOptions {
+                    return responder.respond_with_error(
+                        Error::internal_error()
+                            .data("this scripted agent will not change its options"),
+                    );
+                }
                 let Some(selected) = set.value.as_value_id() else {
                     return responder.respond_with_error(
                         Error::invalid_params().data("this agent's options are selections"),
@@ -720,6 +727,18 @@ fn offered(current: impl Into<SessionConfigValueId>) -> Vec<SessionConfigOption>
             )),
         )
         .category(SessionConfigOptionCategory::Mode),
+        SessionConfigOption::new(
+            THOUGHT_LEVEL_OPTION,
+            "Thinking",
+            SessionConfigKind::Select(SessionConfigSelect::new(
+                STARTING_THOUGHT_LEVEL,
+                vec![
+                    SessionConfigSelectOption::new(STARTING_THOUGHT_LEVEL, "Low"),
+                    SessionConfigSelectOption::new(OTHER_THOUGHT_LEVEL, "High"),
+                ],
+            )),
+        )
+        .category(SessionConfigOptionCategory::ThoughtLevel),
         SessionConfigOption::new(
             CUSTOM_OPTION,
             "Verbose",
