@@ -297,14 +297,22 @@ async fn a_session_provisions_an_instance_and_releasing_it_destroys_it_through_t
     let stack = Stack::up();
     let namespace = compose::namespace_for(&docker::repository());
     let workspace = a_workspace(&stack);
-    let session = stack.ran(&[
+    let posted = stack.ran(&[
         "workspace",
         "post",
         &workspace,
         "--as-participant",
         "operator",
         "go",
+        "--json",
+        "session.id",
     ]);
+    let posted: Value = serde_json::from_str(&posted)
+        .unwrap_or_else(|error| panic!("{posted} is no record: {error}"));
+    let session = posted["session"]["id"]
+        .as_str()
+        .expect("the session the post reached")
+        .to_owned();
 
     let instance = compose::until("the session to reach an instance", || {
         listed(&stack, &session).instance
@@ -401,6 +409,9 @@ fn the_commands_usage_documents_are_the_commands_that_work() {
         transcript.err
     );
 
+    // An opened Session that never ran reported no checkout, so its instance holds the only
+    // copy it might have: docs/usage/manual-workspaces.md releases it before sealing.
+    stack.ran(&["instance", "release", "latest"]);
     stack.ran(&["workspace", "seal", "latest"]);
 
     assert_eq!(
@@ -443,14 +454,23 @@ fn a_workspace(stack: &Stack) -> String {
         Some("not-a-key"),
     );
 
-    stack.ran(&[
+    let opened = stack.ran(&[
         "workspace",
         "open",
         "--project",
         "kestrel",
         "--agent",
         "builder",
-    ])
+        "--json",
+        "workspace_id",
+    ]);
+    let opened: Value = serde_json::from_str(&opened)
+        .unwrap_or_else(|error| panic!("{opened} is no record: {error}"));
+
+    opened["workspace_id"]
+        .as_str()
+        .expect("the opened workspace's identifier")
+        .to_owned()
 }
 
 struct Listed {
