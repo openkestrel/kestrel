@@ -30,8 +30,10 @@ test.beforeAll(async ({ request }) => {
 });
 
 async function opened(request: APIRequestContext): Promise<string> {
+	// Opened with a Brief so a later message is recorded as a Said entry: the first message to an
+	// unbriefed Workspace becomes its Brief instead (0.3/17).
 	const response = await request.post("/operator/organizations/acme/workspaces", {
-		data: { project: "kestrel", agent: "builder" },
+		data: { project: "kestrel", agent: "builder", brief: "an opening brief" },
 	});
 	expect(response.ok(), await response.text()).toBe(true);
 	// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the control plane's opened shape.
@@ -243,7 +245,7 @@ test("more than four visible views keep at most four SSE connections", async ({
 	}
 
 	await expect.poll(() => streams.liveWith("follow=true").length, { timeout: 20_000 }).toBe(3);
-	expect(streams.liveWith("/changes")).toHaveLength(1);
+	await expect.poll(() => streams.liveWith("/changes").length, { timeout: 20_000 }).toBe(1);
 
 	for (const [index, page] of pages.entries()) {
 		const followed = streams
@@ -261,7 +263,7 @@ test("more than four visible views keep at most four SSE connections", async ({
 	await leaving.close();
 
 	await expect.poll(() => streams.liveWith("follow=true").length, { timeout: 20_000 }).toBe(3);
-	expect(streams.liveWith("/changes")).toHaveLength(1);
+	await expect.poll(() => streams.liveWith("/changes").length, { timeout: 20_000 }).toBe(1);
 	await expect
 		.poll(() => pages.slice(3).some((page) => streams.everFor(page, "follow=true")), {
 			timeout: 20_000,

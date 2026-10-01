@@ -1,5 +1,5 @@
 import { queryOptions } from "@tanstack/react-query";
-import type { Organization, Queue, Session, Workspace } from "./generated";
+import type { Organization, Queue, Session, Workspace, WorkspaceWork } from "./generated";
 import { type Delivered, readRange, type Range } from "./transcript";
 import { operatorPath, transport } from "./transport";
 
@@ -41,6 +41,27 @@ export const sessionQuery = (organization: string, session: string) =>
 			operator.read<Session>(operatorPath("organizations", organization, "sessions", session), {
 				signal,
 			}),
+	});
+
+// A Workspace's Sessions, oldest first; its latest Session is the one a row shows.
+export const workspaceSessionsQuery = (organization: string, workspace: string) =>
+	queryOptions({
+		queryKey: [...sessionsKey(organization), "workspace", workspace],
+		queryFn: ({ signal }) =>
+			operator.read<Session[]>(
+				operatorPath("organizations", organization, "workspaces", workspace, "sessions"),
+				{ signal },
+			),
+	});
+
+export const workQuery = (organization: string, workspace: string) =>
+	queryOptions({
+		queryKey: [...workspaceKey(organization, workspace), "work"],
+		queryFn: ({ signal }) =>
+			operator.read<WorkspaceWork>(
+				operatorPath("organizations", organization, "workspaces", workspace, "work"),
+				{ signal },
+			),
 	});
 
 export const queueKey = (organization: string) => ["organizations", organization, "queue"];
