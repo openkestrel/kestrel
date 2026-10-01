@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use axum::http::{StatusCode, header};
@@ -27,6 +28,7 @@ pub struct Listening {
     bound: Listen,
     store: Store,
     wake: Wake,
+    follow_lease: Duration,
 }
 
 impl Listening {
@@ -37,7 +39,12 @@ impl Listening {
 
 /// Binding before the role starts is what lets a caller that asked for port 0 learn which
 /// port it got.
-pub async fn bind(store: Store, listen: Listen, wake: Wake) -> Result<Listening> {
+pub async fn bind(
+    store: Store,
+    listen: Listen,
+    wake: Wake,
+    follow_lease: Duration,
+) -> Result<Listening> {
     let link = TcpListener::bind(listen.link)
         .await
         .with_context(|| format!("listening for the link on {}", listen.link))?;
@@ -55,6 +62,7 @@ pub async fn bind(store: Store, listen: Listen, wake: Wake) -> Result<Listening>
         bound,
         store,
         wake,
+        follow_lease,
     })
 }
 
@@ -65,6 +73,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         bound,
         store,
         wake,
+        follow_lease,
     } = listening;
 
     info!(role = %Role::Serve, link = %bound.link, operator = %bound.operator, "role started");
@@ -77,6 +86,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
 
     let summaries = crate::live_work::Summaries::default();
     let reads = crate::live_read::Reads::default();
+    let followers = crate::presence::Followers::new(follow_lease);
     let link_router = link::router(
         store.clone(),
         shutdown.clone(),
@@ -84,7 +94,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         reads.clone(),
     )
     .merge(webhook::router(store.clone(), wake));
-    let operator_router = operator::router(store, shutdown.clone(), summaries, reads);
+    let operator_router = operator::router(store, shutdown.clone(), summaries, reads, followers);
 
     let serving_link = axum::serve(link_listener, link_router)
         .with_graceful_shutdown(shutdown.clone().cancelled_owned());

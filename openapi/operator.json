@@ -1742,7 +1742,7 @@
       "get": {
         "operationId": "transcript",
         "summary": "Stream a Workspace's Transcript.",
-        "description": "Replays every entry after `Last-Event-ID`, in order, each as an `entry` event whose id is the cursor that resumes after it. A read that follows then stays open and delivers entries as they are appended; the stream ends with an `end` event once the Workspace is sealed, or at once for a read that does not follow. A cursor that names no position in this Transcript is refused rather than silently restarting the walk.",
+        "description": "Replays every entry after `Last-Event-ID`, in order, each as an `entry` event whose id is the cursor that resumes after it. A read that follows then stays open and delivers entries as they are appended; the stream ends with an `end` event once the Workspace is sealed, or at once for a read that does not follow. A cursor that names no position in this Transcript is refused rather than silently restarting the walk. A follow that stays open past caught-up registers a follower: it is sent one `follower` event carrying its id and lease, then a `presence` event carrying the whole current set, and a new `presence` event whenever the set changes. Presence events carry no id and never move the cursor, and a read that does not follow registers nobody.",
         "parameters": [
           {
             "name": "organization",
@@ -1772,6 +1772,15 @@
             }
           },
           {
+            "name": "as",
+            "in": "query",
+            "required": false,
+            "description": "The person this follow joins the Workspace's presence as, by the participant name rule; naming an Agent in the Organization is refused. Only a read that stays open past caught-up registers a follower.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "Last-Event-ID",
             "in": "header",
             "required": false,
@@ -1798,7 +1807,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The stream is open. Each event carries an entry or the end of the stream as its data, and its kind as its event name.",
+            "description": "The stream is open. Each event carries an entry, the end of the stream, a follower registration or the whole presence set as its data, and its name as its event name.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -1814,6 +1823,52 @@
             "$ref": "#/components/responses/Refused"
           },
           "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/followers/{id}/lease": {
+      "post": {
+        "operationId": "renewFollower",
+        "summary": "Extend a Workspace follow's presence lease.",
+        "description": "Extends the follower's lease to a full period from now. An unknown follower, or one whose lease has already passed, is refused: a lapsed follow reconnects and registers again rather than being revived.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The follower id a `follower` event carried.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The lease is extended."
+          },
+          "404": {
             "$ref": "#/components/responses/Refused"
           },
           "503": {
@@ -3878,7 +3933,7 @@
         ]
       },
       "Event": {
-        "description": "SSE names: entry (Recorded), cursor (CursorEvent), or end (End). Entry and cursor IDs advance the global Transcript cursor.",
+        "description": "SSE names: entry (Recorded), cursor (CursorEvent), end (End), follower (FollowerEvent), or presence (Presence). Entry and cursor IDs advance the global Transcript cursor; follower and presence carry no id.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/Recorded"
@@ -3888,7 +3943,51 @@
           },
           {
             "$ref": "#/components/schemas/CursorEvent"
+          },
+          {
+            "$ref": "#/components/schemas/FollowerEvent"
+          },
+          {
+            "$ref": "#/components/schemas/Presence"
           }
+        ]
+      },
+      "FollowerEvent": {
+        "description": "A follow that stayed open past caught-up registered: the id it renews by, and the lease in seconds it must renew before. Sent once per follow.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "lease_seconds": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "lease_seconds"
+        ]
+      },
+      "Presence": {
+        "description": "The whole current set of a Workspace's followers, sent when a follow registers and whenever the set changes. A named follow appears once per name, the follower's own included; unnamed follows are counted; an Agent never appears. Carries no Transcript cursor.",
+        "type": "object",
+        "properties": {
+          "named": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "anonymous": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "named",
+          "anonymous"
         ]
       },
       "PullRequestEntry": {
