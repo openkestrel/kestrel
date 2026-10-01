@@ -826,6 +826,14 @@
           "model": {
             "description": "The model the Session named. Absent leaves the harness's default.",
             "type": "string"
+          },
+          "mode": {
+            "description": "The mode the Session named. Absent leaves the harness's default.",
+            "type": "string"
+          },
+          "thought_level": {
+            "description": "The thought level the Session named. Absent leaves the harness's default.",
+            "type": "string"
           }
         },
         "required": [

@@ -200,8 +200,8 @@ mod tests {
 
     use super::*;
     use crate::domain::{
-        Agent, AgentId, Checkout, Organization, OrganizationId, Project, ProjectId, SessionState,
-        WorkspaceId, WorkspaceState,
+        Agent, AgentId, Checkout, Declared, Organization, OrganizationId, Project, ProjectId,
+        SessionState, WorkspaceId, WorkspaceState,
     };
 
     fn a_workspace() -> Workspace {
@@ -245,7 +245,7 @@ mod tests {
             organization,
             name: "builder".to_owned(),
             harness: "opencode".to_owned(),
-            model: None,
+            declared: Declared::default(),
         }
     }
 

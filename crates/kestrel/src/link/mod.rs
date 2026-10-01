@@ -71,7 +71,7 @@ impl Instruction {
 }
 
 /// What the supervisor spawns for one Session, since each Session in a Workspace may choose its
-/// own Agent (ADR-0031).
+/// own Agent (ADR-0031), and what that Session declared for the Harness's options (ADR-0041).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Harness {
     pub command: String,
@@ -79,6 +79,10 @@ pub struct Harness {
     pub auth: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_level: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

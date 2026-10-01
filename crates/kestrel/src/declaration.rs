@@ -1,7 +1,7 @@
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{Correlation, Fires, Templates, Trigger};
+use crate::domain::{Correlation, Declared, Fires, Templates, Trigger};
 use crate::filter::Filter;
 use crate::store::Store;
 use crate::template::Template;
@@ -29,6 +29,18 @@ pub struct Agent {
     pub name: String,
     pub harness: String,
     pub model: Option<String>,
+    pub mode: Option<String>,
+    pub thought_level: Option<String>,
+}
+
+impl Agent {
+    pub fn declared(&self) -> Declared {
+        Declared::named(Declared {
+            model: self.model.clone(),
+            mode: self.mode.clone(),
+            thought_level: self.thought_level.clone(),
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -46,6 +58,19 @@ pub struct TriggerDeclaration {
     #[serde(default)]
     pub allows: Vec<String>,
     pub profile: Option<String>,
+    pub model: Option<String>,
+    pub mode: Option<String>,
+    pub thought_level: Option<String>,
+}
+
+impl TriggerDeclaration {
+    pub fn declared(&self) -> Declared {
+        Declared::named(Declared {
+            model: self.model.clone(),
+            mode: self.mode.clone(),
+            thought_level: self.thought_level.clone(),
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -108,11 +133,6 @@ pub async fn apply(
 ) -> Result<Applied> {
     check_document(document)?;
     let parsed = parse_trigger(&document.trigger)?;
-    let model = document
-        .agent
-        .model
-        .as_deref()
-        .filter(|model| !model.is_empty());
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
 
@@ -130,7 +150,6 @@ pub async fn apply(
             .iter()
             .find(|agent| agent.name == document.agent.name),
         &document.agent,
-        model,
     );
     let trigger_change = trigger_change(
         triggers
@@ -176,7 +195,7 @@ pub async fn apply(
             &organization,
             &document.agent.name,
             &document.agent.harness,
-            model,
+            &document.agent.declared(),
         )
         .await?
         .record;
@@ -185,6 +204,7 @@ pub async fn apply(
         Some(profile) => Some(tx.profiles().named(&organization, profile).await?),
         None => None,
     };
+    let declared = document.trigger.declared();
     let fires = Fires::On(parsed.filter.clone());
     match declarations[2].action {
         Action::Add => {
@@ -196,6 +216,7 @@ pub async fn apply(
                     &parsed.templates,
                     &project,
                     &agent,
+                    &declared,
                     &allows,
                     profile.as_ref(),
                     true,
@@ -214,6 +235,7 @@ pub async fn apply(
                     &parsed.templates,
                     &project,
                     &agent,
+                    &declared,
                     &allows,
                     profile.as_ref(),
                     true,
@@ -334,21 +356,22 @@ fn project_change(project: Option<&crate::domain::Project>, declaration: &Projec
     )
 }
 
-fn agent_change(
-    agent: Option<&crate::domain::Agent>,
-    declaration: &Agent,
-    model: Option<&str>,
-) -> Compared {
+fn agent_change(agent: Option<&crate::domain::Agent>, declaration: &Agent) -> Compared {
+    let declared = declaration.declared();
     compared(
         agent.map(|agent| {
             vec![
                 ("harness", Some(agent.harness.clone())),
-                ("model", agent.model.clone()),
+                ("model", agent.declared.model.clone()),
+                ("mode", agent.declared.mode.clone()),
+                ("thought level", agent.declared.thought_level.clone()),
             ]
         }),
         vec![
             ("harness", Some(declaration.harness.clone())),
-            ("model", model.map(str::to_owned)),
+            ("model", declared.model),
+            ("mode", declared.mode),
+            ("thought level", declared.thought_level),
         ],
     )
 }
@@ -394,6 +417,9 @@ fn trigger_change(
                 Some(parsed.templates.correlation.on_open_workspace().to_string()),
             ),
             ("brief", Some(parsed.templates.brief.to_string())),
+            ("model", declaration.model.clone()),
+            ("mode", declaration.mode.clone()),
+            ("thought level", declaration.thought_level.clone()),
         ],
     )
 }
@@ -446,6 +472,9 @@ fn described_trigger(trigger: &Trigger) -> Vec<(&'static str, Option<String>)> {
             ),
         ),
         ("brief", Some(trigger.templates.brief.to_string())),
+        ("model", trigger.declared.model.clone()),
+        ("mode", trigger.declared.mode.clone()),
+        ("thought level", trigger.declared.thought_level.clone()),
     ]
 }
 

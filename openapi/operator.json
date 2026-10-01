@@ -2489,6 +2489,20 @@
               "null"
             ],
             "description": "The model it works with. Absent or null names none, and the Harness's own default is the answer."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The mode it works in. Absent or null names none, and the Harness's own default is the answer."
+          },
+          "thought_level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The thought level it works at. Absent or null names none, and the Harness's own default is the answer."
           }
         },
         "required": [
@@ -2514,13 +2528,27 @@
               "string",
               "null"
             ]
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thought_level": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "id",
           "name",
           "harness",
-          "model"
+          "model",
+          "mode",
+          "thought_level"
         ]
       },
       "StartPlan": {
@@ -2648,7 +2676,10 @@
           "project": { "type": "string", "minLength": 1 },
           "agent": { "type": "string", "minLength": 1 },
           "allows": { "type": "array", "items": { "type": "string" }, "default": [] },
-          "profile": { "type": ["string", "null"] }
+          "profile": { "type": ["string", "null"] },
+          "model": { "type": ["string", "null"], "description": "The model its Sessions run with. Omitted, the Agent's, then the Harness's default." },
+          "mode": { "type": ["string", "null"], "description": "The mode its Sessions run in. Omitted, the Agent's, then the Harness's default." },
+          "thought_level": { "type": ["string", "null"], "description": "The thought level its Sessions run at. Omitted, the Agent's, then the Harness's default." }
         },
         "required": ["name", "brief", "project", "agent"],
         "oneOf": [
@@ -2687,10 +2718,13 @@
           "agent": { "type": "string" },
           "allows": { "type": "array", "items": { "type": "string" } },
           "profile": { "type": ["string", "null"] },
+          "model": { "type": ["string", "null"], "description": "The model its Sessions run with, or null for the Agent's or Harness's default." },
+          "mode": { "type": ["string", "null"], "description": "The mode its Sessions run in, or null for the Agent's or Harness's default." },
+          "thought_level": { "type": ["string", "null"], "description": "The thought level its Sessions run at, or null for the Agent's or Harness's default." },
           "applied": { "type": "boolean", "description": "Whether a trigger file declared it, rather than flags." },
           "declared_at": { "type": "string", "format": "date-time" }
         },
-        "required": ["id", "organization", "name", "state", "disabled_because", "firing_budget", "filter", "every", "cron", "zone", "admits_outsiders", "brief", "branch", "correlation", "on_miss", "on_open_workspace", "project", "agent", "allows", "profile", "applied", "declared_at"]
+        "required": ["id", "organization", "name", "state", "disabled_because", "firing_budget", "filter", "every", "cron", "zone", "admits_outsiders", "brief", "branch", "correlation", "on_miss", "on_open_workspace", "project", "agent", "allows", "profile", "model", "mode", "thought_level", "applied", "declared_at"]
       },
       "TriggerTest": {
         "type": "object",
@@ -2743,7 +2777,10 @@
                 "project": { "type": "string" },
                 "agent": { "type": "string" },
                 "allows": { "type": "array", "items": { "type": "string" } },
-                "profile": { "type": ["string", "null"] }
+                "profile": { "type": ["string", "null"] },
+                "model": { "type": ["string", "null"], "description": "The model its Sessions run with. Omitted, the Agent's, then the Harness's default." },
+                "mode": { "type": ["string", "null"], "description": "The mode its Sessions run in. Omitted, the Agent's, then the Harness's default." },
+                "thought_level": { "type": ["string", "null"], "description": "The thought level its Sessions run at. Omitted, the Agent's, then the Harness's default." }
               },
               "required": ["filter", "brief", "project", "agent"],
               "additionalProperties": false
@@ -3002,6 +3039,14 @@
             "type": ["string", "null"],
             "description": "The model the first Session runs on. Omitted, the Agent's, then the Harness's default."
           },
+          "mode": {
+            "type": ["string", "null"],
+            "description": "The mode the first Session runs in. Omitted, the Agent's, then the Harness's default."
+          },
+          "thought_level": {
+            "type": ["string", "null"],
+            "description": "The thought level the first Session runs at. Omitted, the Agent's, then the Harness's default."
+          },
           "brief": {
             "type": ["string", "null"],
             "description": "The Brief the Workspace starts with, handed to the agent exactly as given. Omitted, the first Session waits for its first message to become the Brief."
@@ -3102,7 +3147,9 @@
         "type": "object",
         "properties": {
           "agent": { "type": ["string", "null"], "description": "Omitted, the Agent of the Workspace's latest Session." },
-          "model": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." }
+          "model": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." },
+          "mode": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." },
+          "thought_level": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." }
         }
       },
       "Session": {
@@ -3118,7 +3165,9 @@
           "supervisor": { "type": ["string", "null"] },
           "agent": { "type": "string" },
           "harness": { "type": "string" },
-          "model": { "type": ["string", "null"], "description": "What the Session names, or null for its Harness's default." },
+          "model": { "type": ["string", "null"], "description": "What the Session names for its Harness's model, or null for its Harness's default." },
+          "mode": { "type": ["string", "null"], "description": "What the Session names for its Harness's mode, or null for its Harness's default." },
+          "thought_level": { "type": ["string", "null"], "description": "What the Session names for its Harness's thought level, or null for its Harness's default." },
           "worked_model": { "type": ["string", "null"], "description": "The Model-category option's current value, kept current by the supervisor (ADR-0041)." },
           "title": { "type": ["string", "null"], "description": "The harness's own name for the conversation, or null until it says one." },
           "options": { "type": "array", "description": "The harness's whole config-option list (ADR-0041).", "items": { "$ref": "#/components/schemas/SessionOption" } },
@@ -3134,7 +3183,7 @@
           "message_buffering": { "type": "boolean" },
           "thought_buffering": { "type": "boolean" }
         },
-        "required": ["id", "name", "workspace", "state", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "worked_model", "title", "options", "commands", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "message_buffering", "thought_buffering"]
+        "required": ["id", "name", "workspace", "state", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "commands", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "message_buffering", "thought_buffering"]
       },
       "SessionOption": {
         "type": "object",

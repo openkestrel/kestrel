@@ -5,14 +5,17 @@ use std::time::Duration;
 use jiff::SignedDuration;
 use kestrel::cron::Cron;
 use kestrel::domain::{
-    CorrelationMiss, Direction, Event, Schedule, SessionState, StartedBy, TriggerState, Workspace,
+    CorrelationMiss, Declared, Direction, Event, Schedule, SessionState, StartedBy, TriggerState,
+    Workspace,
 };
 use kestrel::log::{Entry, Message};
 use kestrel::trigger::Rendered;
+use kestrel::trigger::apply::Action;
+use kestrel_scripted_agent::{STARTING_MODE, SWITCHED_MODE};
 use support::github_stub::{self, GithubStub};
-use support::scripted_agent::Script;
-use support::supervisor::Supervisor;
-use support::{A_PROVIDER_KEY, Kestrel, PROVIDER_KEY, labelled_on, templates};
+use support::scripted_agent::{self, Script};
+use support::supervisor::{self, Supervisor};
+use support::{A_PROVIDER_KEY, HARNESS, Kestrel, PROVIDER_KEY, labelled_on, repository, templates};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 const REPOSITORY: &str = "jtmthf/kestrel";
@@ -1692,6 +1695,148 @@ async fn a_trigger_that_fires_on_events_is_tested_against_a_named_one() {
         .expect_err("a test of a matching trigger needs an event");
 
     assert!(format!("{refusal:#}").contains("so a test names one"));
+
+    kestrel.teardown().await;
+}
+
+/// A Trigger's declared mode overrides its Agent's for the Session it starts, and the dispatched
+/// harness is set to it before its first prompt.
+#[tokio::test]
+async fn a_triggers_declared_mode_overrides_its_agents_for_the_session_it_starts() {
+    let stub = GithubStub::start();
+    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    let kestrel = Kestrel::dispatching_to(
+        supervisor::binary(),
+        &scripted_agent::playing(Script::Speaks),
+    )
+    .await;
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            repository::NAME,
+            &[repository::url().to_owned()],
+            repository::BRANCH,
+        )
+        .await;
+    kestrel
+        .declare_agent_declaring(
+            &organization,
+            "builder",
+            HARNESS,
+            Declared {
+                mode: Some(STARTING_MODE.to_owned()),
+                ..Declared::default()
+            },
+        )
+        .await;
+    kestrel
+        .hold_provider_credential(&organization, PROVIDER_KEY, A_PROVIDER_KEY)
+        .await;
+    kestrel
+        .declare_trigger_declaring(
+            "acme",
+            "ready",
+            &labelled_on(REPOSITORY, READY),
+            repository::NAME,
+            "builder",
+            Declared {
+                mode: Some(SWITCHED_MODE.to_owned()),
+                ..Declared::default()
+            },
+        )
+        .await;
+    watching(&kestrel, &stub).await;
+
+    recorded(&kestrel, 1).await;
+    let workspace = opened(&kestrel, 1).await.remove(0);
+    let session = kestrel.sessions(workspace.id).await.remove(0);
+
+    assert_eq!(
+        session.agent.declared.mode.as_deref(),
+        Some(SWITCHED_MODE),
+        "the Trigger's mode did not override the Agent's"
+    );
+
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    loop {
+        let shown = kestrel.session(session.id).await;
+        if let Some(mode) = shown
+            .options
+            .iter()
+            .find(|option| option.is_category("mode"))
+            .and_then(|option| option.current_value())
+        {
+            assert_eq!(
+                mode, SWITCHED_MODE,
+                "the dispatched harness was not set to the Trigger's mode"
+            );
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the session never reported the mode it was set to"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    kestrel.teardown().await;
+}
+
+fn applying_ready_for_mode(label: &str, mode: &str) -> String {
+    format!(
+        r#"
+triggers:
+  ready:
+    filter:
+      all:
+        - exact: {{source: "https://github.com/{REPOSITORY}"}}
+        - exact: {{type: com.github.issues.labeled}}
+        - exact: {{data.label.name: {label}}}
+    brief: "Work on {{{{ event.data.issue.title }}}}"
+    project: kestrel
+    agent: builder
+    mode: {mode}
+"#
+    )
+}
+
+#[tokio::test]
+async fn reapplying_a_declaration_file_reports_a_changed_mode_as_a_change_to_its_trigger() {
+    let kestrel = Kestrel::boot().await;
+    an_organization(&kestrel, "acme").await;
+
+    let added = kestrel
+        .apply_triggers("acme", &applying_ready_for_mode(READY, "build"))
+        .await;
+    assert_eq!(added.changes.len(), 1);
+    assert_eq!(added.changes[0].action, Action::Add);
+
+    let changed = kestrel
+        .apply_triggers("acme", &applying_ready_for_mode(READY, "plan"))
+        .await;
+    assert_eq!(changed.changes.len(), 1);
+    let change = &changed.changes[0];
+    assert_eq!(change.name, "ready");
+    assert_eq!(change.action, Action::Change);
+    assert!(
+        change.differences.iter().any(|difference| {
+            difference.field == "mode"
+                && difference.was.as_deref() == Some("build")
+                && difference.becomes.as_deref() == Some("plan")
+        }),
+        "the mode change was not reported: {:?}",
+        change.differences
+    );
+
+    let unchanged = kestrel
+        .apply_triggers("acme", &applying_ready_for_mode(READY, "plan"))
+        .await;
+    assert!(
+        unchanged.changes.is_empty(),
+        "an identical file was reported as a change: {:?}",
+        unchanged.changes
+    );
 
     kestrel.teardown().await;
 }

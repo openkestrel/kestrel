@@ -74,7 +74,9 @@ impl Driven {
                 Harness {
                     command: lineage.command().to_owned(),
                     auth: (!auth.is_empty()).then(|| auth.to_owned()),
-                    model: session.agent.model.clone(),
+                    model: session.agent.declared.model.clone(),
+                    mode: session.agent.declared.mode.clone(),
+                    thought_level: session.agent.declared.thought_level.clone(),
                 },
             )
             .await;

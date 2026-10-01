@@ -3,7 +3,7 @@ use jiff::{SignedDuration, Timestamp};
 
 use crate::declined::{Declined, FieldRefusal, Kind};
 use crate::domain::{
-    Agent, Exit, Organization, Project, Session, SessionId, SessionState, StartedBy,
+    Agent, Declared, Exit, Organization, Project, Session, SessionId, SessionState, StartedBy,
     SubscriptionProfile, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::instance;
@@ -24,7 +24,7 @@ pub struct Open<'a> {
     pub profile: Option<&'a str>,
     pub branch: Option<&'a str>,
     pub continues: Option<&'a str>,
-    pub model: Option<&'a str>,
+    pub declared: Declared,
     pub brief: Option<&'a str>,
     pub participant: Option<&'a str>,
 }
@@ -36,7 +36,7 @@ pub(crate) struct Resolved<'a> {
     pub profile: Option<SubscriptionProfile>,
     pub continues: Option<Workspace>,
     pub branch: Option<&'a str>,
-    pub model: Option<&'a str>,
+    pub declared: Declared,
     pub brief: Option<&'a str>,
     pub participant: Option<String>,
 }
@@ -79,7 +79,7 @@ pub async fn open_without_a_session(
             profile,
             branch,
             continues,
-            model: None,
+            declared: Declared::default(),
             brief: None,
             participant: None,
         },
@@ -144,7 +144,7 @@ pub(crate) async fn opened_in(
     }
     let session = tx
         .workspaces()
-        .enqueue_session(&workspace, Some(&resolved.agent), resolved.model)
+        .enqueue_session(&workspace, Some(&resolved.agent), resolved.declared.clone())
         .await?;
 
     Ok((workspace, session))
@@ -189,12 +189,18 @@ async fn resolved<'a>(
         )
         .into());
     }
-    if open.model.is_some_and(|model| model.trim().is_empty()) {
-        return Err(FieldRefusal::unacceptable(
-            "model",
-            "a model cannot be empty; omit it for the Agent's",
-        )
-        .into());
+    for (field, value) in [
+        ("model", &open.declared.model),
+        ("mode", &open.declared.mode),
+        ("thought_level", &open.declared.thought_level),
+    ] {
+        if value.as_ref().is_some_and(|value| value.trim().is_empty()) {
+            return Err(FieldRefusal::unacceptable(
+                field,
+                format!("a {field} cannot be empty; omit it for the Agent's"),
+            )
+            .into());
+        }
     }
     if open.brief.is_some_and(|brief| brief.trim().is_empty()) {
         return Err(FieldRefusal::unacceptable(
@@ -223,7 +229,7 @@ async fn resolved<'a>(
         profile,
         continues,
         branch: open.branch,
-        model: open.model,
+        declared: Declared::named(open.declared),
         brief: open.brief,
         participant,
     })
@@ -437,7 +443,7 @@ pub(crate) async fn post_as(
             said(tx, workspace, participant, message).await?;
             Ok(Some(
                 tx.workspaces()
-                    .enqueue_session(workspace, None, None)
+                    .enqueue_session(workspace, None, Declared::default())
                     .await?,
             ))
         }
@@ -530,7 +536,7 @@ pub(crate) async fn briefed(
         .await?;
 
     tx.workspaces()
-        .enqueue_session(workspace, Some(&pending.agent), None)
+        .enqueue_session(workspace, Some(&pending.agent), pending.declared)
         .await
 }
 
@@ -610,7 +616,7 @@ mod tests {
                 organization,
                 name: "builder".into(),
                 harness: "opencode".into(),
-                model: None,
+                declared: Declared::default(),
             },
             state,
             exit: None,

@@ -67,7 +67,7 @@ async fn declared(kestrel: &Kestrel) -> Vec<String> {
         for agent in kestrel.agents(&organization).await {
             declared.push(format!(
                 "agent {} {} {:?}",
-                agent.name, agent.harness, agent.model
+                agent.name, agent.harness, agent.declared.model
             ));
         }
         for held in kestrel.provider_credentials_held(&organization).await {

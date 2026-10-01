@@ -530,6 +530,8 @@ async fn instructed(
                     command: harness.command,
                     auth: harness.auth,
                     model: harness.model,
+                    mode: harness.mode,
+                    thought_level: harness.thought_level,
                     stderr: stderr.clone(),
                 },
                 conversation: None,

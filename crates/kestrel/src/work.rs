@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 use crate::domain::{
-    Exit, Session, SessionCommand, SessionId, SessionOption, Turn, Usage, WorkspaceId,
+    Declared, Exit, Session, SessionCommand, SessionId, SessionOption, Turn, Usage, WorkspaceId,
 };
 use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
@@ -181,7 +181,7 @@ pub async fn enqueue(
     store: &Store,
     workspace: WorkspaceId,
     agent: Option<&str>,
-    model: Option<&str>,
+    declared: Declared,
 ) -> Result<Session> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(workspace).await?;
@@ -203,7 +203,7 @@ pub async fn enqueue(
     };
     let session = tx
         .workspaces()
-        .enqueue_session(&workspace, named.as_ref(), model)
+        .enqueue_session(&workspace, named.as_ref(), declared)
         .await?;
     tx.commit().await?;
 
@@ -761,7 +761,7 @@ async fn continue_pending(tx: &mut Tx<'_>, workspace: WorkspaceId) -> Result<Opt
 
     Ok(Some(
         tx.workspaces()
-            .enqueue_session(&workspace, None, None)
+            .enqueue_session(&workspace, None, Declared::default())
             .await?,
     ))
 }

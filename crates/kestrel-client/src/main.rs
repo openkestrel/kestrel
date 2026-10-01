@@ -563,6 +563,12 @@ enum WorkspaceCommand {
         /// The model the first Session runs on. Without it, the Agent's
         #[arg(long)]
         model: Option<String>,
+        /// The mode the first Session runs in. Without it, the Agent's
+        #[arg(long)]
+        mode: Option<String>,
+        /// The thought level the first Session runs at. Without it, the Agent's
+        #[arg(long)]
+        thought_level: Option<String>,
         /// The name the Brief is written under. Without it, it is the operator's
         #[arg(long)]
         as_participant: Option<String>,
@@ -658,6 +664,12 @@ enum SessionCommand {
         /// The model it works with, or none for its Agent's or Harness's default
         #[arg(long)]
         model: Option<String>,
+        /// The mode it works in, or none for its Agent's or Harness's default
+        #[arg(long)]
+        mode: Option<String>,
+        /// The thought level it works at, or none for its Agent's or Harness's default
+        #[arg(long)]
+        thought_level: Option<String>,
     },
     /// List every Session in a Workspace
     List {
@@ -1186,6 +1198,8 @@ async fn run() -> Result<()> {
             continues,
             brief,
             model,
+            mode,
+            thought_level,
             as_participant,
         }) => {
             let organization = scoping.resolve().await?.organization;
@@ -1200,6 +1214,8 @@ async fn run() -> Result<()> {
                         "branch": branch,
                         "continues": continues,
                         "model": model,
+                        "mode": mode,
+                        "thought_level": thought_level,
                         "brief": brief,
                         "participant": as_participant,
                     }),
@@ -1402,6 +1418,8 @@ async fn run() -> Result<()> {
             workspace,
             agent,
             model,
+            mode,
+            thought_level,
         }) => {
             let organization = scoping.resolve().await?.organization;
             show(
@@ -1415,7 +1433,12 @@ async fn run() -> Result<()> {
                         &workspace,
                         "sessions",
                     ],
-                    &json!({ "agent": agent, "model": model }),
+                    &json!({
+                        "agent": agent,
+                        "model": model,
+                        "mode": mode,
+                        "thought_level": thought_level,
+                    }),
                 )
                 .await?,
             )?;

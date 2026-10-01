@@ -26,8 +26,8 @@ use crate::cron::Cron;
 use crate::declaration;
 use crate::declined::{Declined, FieldRefusal, Kind};
 use crate::domain::{
-    self, Agent, Connection, Correlation, Direction, EventRecordId, EventRefusal, Fires, Firing,
-    Integration, Occurrence, Organization, Project, Schedule, Session, StartedBy,
+    self, Agent, Connection, Correlation, Declared, Direction, EventRecordId, EventRefusal, Fires,
+    Firing, Integration, Occurrence, Organization, Project, Schedule, Session, StartedBy,
     SubscriptionProfile, Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::fanout;
@@ -41,7 +41,7 @@ use crate::provider::{self, Held};
 use crate::queue;
 use crate::role::serve;
 use crate::store::organization::NoSuchOrganization;
-use crate::store::{self, Declared, Store};
+use crate::store::{self, Declared as DeclaredRecord, Store};
 use crate::template::Template;
 use crate::trigger::{self, apply};
 use crate::{instance, pull_request, start, work, workspace};
@@ -337,6 +337,18 @@ struct AgentDeclaration {
     name: String,
     harness: String,
     model: Option<String>,
+    mode: Option<String>,
+    thought_level: Option<String>,
+}
+
+impl AgentDeclaration {
+    fn declared(&self) -> Declared {
+        Declared::named(Declared {
+            model: self.model.clone(),
+            mode: self.mode.clone(),
+            thought_level: self.thought_level.clone(),
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -347,8 +359,20 @@ struct WorkspaceDeclaration {
     branch: Option<String>,
     continues: Option<String>,
     model: Option<String>,
+    mode: Option<String>,
+    thought_level: Option<String>,
     brief: Option<String>,
     participant: Option<String>,
+}
+
+impl WorkspaceDeclaration {
+    fn declared(&self) -> Declared {
+        Declared {
+            model: self.model.clone(),
+            mode: self.mode.clone(),
+            thought_level: self.thought_level.clone(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -361,6 +385,18 @@ struct WorkspaceMessage {
 struct SessionDeclaration {
     agent: Option<String>,
     model: Option<String>,
+    mode: Option<String>,
+    thought_level: Option<String>,
+}
+
+impl SessionDeclaration {
+    fn declared(&self) -> Declared {
+        Declared {
+            model: self.model.clone(),
+            mode: self.mode.clone(),
+            thought_level: self.thought_level.clone(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -380,6 +416,19 @@ struct TriggerDeclaration {
     #[serde(default)]
     allows: Vec<String>,
     profile: Option<String>,
+    model: Option<String>,
+    mode: Option<String>,
+    thought_level: Option<String>,
+}
+
+impl TriggerDeclaration {
+    fn declared(&self) -> Declared {
+        Declared::named(Declared {
+            model: self.model.clone(),
+            mode: self.mode.clone(),
+            thought_level: self.thought_level.clone(),
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -436,6 +485,8 @@ struct AgentRecord {
     name: String,
     harness: String,
     model: Option<String>,
+    mode: Option<String>,
+    thought_level: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -521,6 +572,8 @@ struct SessionRecord {
     agent: String,
     harness: String,
     model: Option<String>,
+    mode: Option<String>,
+    thought_level: Option<String>,
     worked_model: Option<String>,
     title: Option<String>,
     options: Vec<SessionOptionRecord>,
@@ -567,6 +620,9 @@ struct TriggerRecord {
     agent: String,
     allows: Vec<String>,
     profile: Option<String>,
+    model: Option<String>,
+    mode: Option<String>,
+    thought_level: Option<String>,
     applied: bool,
     declared_at: Timestamp,
 }
@@ -615,7 +671,9 @@ impl From<Agent> for AgentRecord {
             id: agent.id.to_string(),
             name: agent.name,
             harness: agent.harness,
-            model: agent.model,
+            model: agent.declared.model,
+            mode: agent.declared.mode,
+            thought_level: agent.declared.thought_level,
         }
     }
 }
@@ -676,7 +734,9 @@ impl SessionRecord {
             supervisor: session.supervisor,
             agent: session.agent.name,
             harness: session.agent.harness,
-            model: session.agent.model,
+            model: session.agent.declared.model,
+            mode: session.agent.declared.mode,
+            thought_level: session.agent.declared.thought_level,
             worked_model: session.worked_model,
             title: session.title,
             options: session
@@ -779,6 +839,9 @@ impl From<Trigger> for TriggerRecord {
             agent: trigger.agent.name,
             allows: trigger.allows.into_iter().map(|agent| agent.name).collect(),
             profile: trigger.profile.map(|profile| profile.name),
+            model: trigger.declared.model,
+            mode: trigger.declared.mode,
+            thought_level: trigger.declared.thought_level,
             applied: trigger.applied,
             declared_at: trigger.declared_at,
         }
@@ -938,7 +1001,7 @@ async fn declare_agent(
         &organization,
         &declaration.name,
         &declaration.harness,
-        declaration.model.as_deref(),
+        &declaration.declared(),
     )
     .await?;
 
@@ -1418,6 +1481,7 @@ async fn declare_trigger(
             templates: &templates,
             project: &declaration.project,
             agent: &declaration.agent,
+            declared: &declaration.declared(),
             allows: &declaration.allows,
             profile: declaration.profile.as_deref(),
         },
@@ -1972,7 +2036,7 @@ async fn open_workspace(
             profile: declaration.profile.as_deref(),
             branch: declaration.branch.as_deref(),
             continues: declaration.continues.as_deref(),
-            model: declaration.model.as_deref(),
+            declared: declaration.declared(),
             brief: declaration.brief.as_deref(),
             participant: declaration.participant.as_deref(),
         },
@@ -2185,7 +2249,7 @@ async fn enqueue_session(
         &control_plane.store,
         workspace.id,
         declaration.agent.as_deref(),
-        declaration.model.as_deref(),
+        declaration.declared(),
     )
     .await
     .map_err(workspace_refusal)?;
@@ -2313,7 +2377,7 @@ fn named(name: &str) -> Result<(), Refused> {
     Ok(())
 }
 
-fn answered<T, R>(declared: Declared<T>) -> Response
+fn answered<T, R>(declared: DeclaredRecord<T>) -> Response
 where
     R: From<T> + Serialize,
 {

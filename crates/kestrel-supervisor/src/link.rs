@@ -164,7 +164,8 @@ pub enum AnswerBody {
     Raw(reqwest::Body),
 }
 
-/// What to spawn for the Session, which may be another Agent's than the last Session's.
+/// What to spawn for the Session, which may be another Agent's than the last Session's, and
+/// what the Session declared for the harness's options.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Harness {
     pub command: String,
@@ -172,6 +173,10 @@ pub struct Harness {
     pub auth: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub thought_level: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

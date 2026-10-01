@@ -17,8 +17,9 @@ use agent_client_protocol::schema::v1::{
     SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelect,
     SessionConfigSelectOption, SessionConfigValueId, SessionInfoUpdate, SessionMode,
     SessionModeState, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionConfigOptionResponse, StopReason, TextContent, ToolCall, ToolCallStatus,
-    ToolCallUpdate, ToolCallUpdateFields, UnstructuredCommandInput, UsageUpdate,
+    SetSessionConfigOptionResponse, SetSessionModeRequest, SetSessionModeResponse, StopReason,
+    TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+    UnstructuredCommandInput, UsageUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Error, Result, Stdio};
 use clap::Parser;
@@ -55,6 +56,10 @@ async fn main() -> Result<()> {
     let prompted_so_far: Arc<Mutex<Vec<String>>> = Arc::default();
     let opened_against: Arc<Mutex<Option<PathBuf>>> = Arc::default();
     let located = Arc::clone(&opened_against);
+    let options: Arc<Mutex<Vec<SessionConfigOption>>> = Arc::default();
+    let offered_options = Arc::clone(&options);
+    let loaded_options = Arc::clone(&options);
+    let set_options = Arc::clone(&options);
 
     Agent
         .builder()
@@ -115,8 +120,16 @@ async fn main() -> Result<()> {
 
                 responder.respond(match script {
                     Script::Decides => NewSessionResponse::new(SESSION),
-                    Script::LegacyModes => NewSessionResponse::new(SESSION).modes(legacy_modes()),
-                    _ => NewSessionResponse::new(SESSION).config_options(offered(DEFAULT_MODEL)),
+                    Script::LegacyModes | Script::LegacyModesKept => {
+                        NewSessionResponse::new(SESSION).modes(legacy_modes())
+                    }
+                    _ => {
+                        let offered = offered(DEFAULT_MODEL);
+                        *offered_options
+                            .lock()
+                            .expect("the offered options should not be poisoned") = offered.clone();
+                        NewSessionResponse::new(SESSION).config_options(offered)
+                    }
                 })
             },
             agent_client_protocol::on_receive_request!(),
@@ -141,7 +154,11 @@ async fn main() -> Result<()> {
                         &conversed(turn + 1, &kept[..turn]),
                     )?;
                 }
-                responder.respond(LoadSessionResponse::new().config_options(offered(DEFAULT_MODEL)))
+                let offered = offered(DEFAULT_MODEL);
+                *loaded_options
+                    .lock()
+                    .expect("the offered options should not be poisoned") = offered.clone();
+                responder.respond(LoadSessionResponse::new().config_options(offered))
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -149,13 +166,48 @@ async fn main() -> Result<()> {
             async move |set: SetSessionConfigOptionRequest, responder, _connection| {
                 let Some(selected) = set.value.as_value_id() else {
                     return responder.respond_with_error(
-                        Error::invalid_params().data("this agent's model is a selection"),
+                        Error::invalid_params().data("this agent's options are selections"),
                     );
                 };
 
-                responder.respond(SetSessionConfigOptionResponse::new(offered(
-                    selected.clone(),
-                )))
+                {
+                    let mut offered = set_options
+                        .lock()
+                        .expect("the offered options should not be poisoned");
+                    let Some(option) = offered.iter_mut().find(|option| option.id == set.config_id)
+                    else {
+                        return responder.respond_with_error(
+                            Error::invalid_params()
+                                .data(format!("this agent offers no option {}", set.config_id.0)),
+                        );
+                    };
+                    match &mut option.kind {
+                        SessionConfigKind::Select(select) => {
+                            select.current_value = selected.clone();
+                        }
+                        SessionConfigKind::Boolean(boolean) => {
+                            boolean.current_value = selected.0.as_ref() == "true";
+                        }
+                        _ => {}
+                    }
+                }
+
+                responder.respond(SetSessionConfigOptionResponse::new(
+                    set_options
+                        .lock()
+                        .expect("the offered options should not be poisoned")
+                        .clone(),
+                ))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |set: SetSessionModeRequest, responder, connection| {
+                update(
+                    &connection,
+                    SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(set.mode_id)),
+                )?;
+                responder.respond(SetSessionModeResponse::new())
             },
             agent_client_protocol::on_receive_request!(),
         )
