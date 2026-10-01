@@ -128,6 +128,7 @@ effects (ADR-0004).
 | `tool_call {call_id, title, tool_kind, status, input, result, closing_reason, completion}` | yes | Appends one completed detail entry. |
 | `session_state {tools, message_buffering, thought_buffering}` | no | Replaces the Session’s transient snapshot in serve-role memory; reconnect resends it. |
 | `used {usage}` | yes | Records cumulative context use and cost. |
+| `session_info {title, options, commands}` | no | Records the harness's whole bookkeeping state on the Session (ADR-0041). Sent when it changes, at most once a second, and again after a reconnect. |
 | `checkout {repositories}` | yes | Replaces the Workspace's observed git state (decides Unpublished Work). |
 | `answered` | yes | Closes the open Turn, moves the Session to Waiting, records a delivery. |
 | `finished {exit}` | yes | Ends the Session. |

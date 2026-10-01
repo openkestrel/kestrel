@@ -1537,7 +1537,8 @@
           { "name": "session", "in": "path", "required": true, "schema": { "type": "string" } }
         ],
         "responses": {
-          "200": { "description": "The Session.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
+          "200": { "description": "The Session.", "headers": { "ETag": { "description": "A strong validator over the body exactly as served. A read that changes nothing answers the same tag.", "schema": { "type": "string" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
+          "304": { "description": "The Session has not changed since the tag the request carried in `If-None-Match`.", "headers": { "ETag": { "description": "The tag the read would have served.", "schema": { "type": "string" } } } },
           "404": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
           "503": { "$ref": "#/components/responses/Refused" }
@@ -3118,7 +3119,10 @@
           "agent": { "type": "string" },
           "harness": { "type": "string" },
           "model": { "type": ["string", "null"], "description": "What the Session names, or null for its Harness's default." },
-          "worked_model": { "type": ["string", "null"] },
+          "worked_model": { "type": ["string", "null"], "description": "The Model-category option's current value, kept current by the supervisor (ADR-0041)." },
+          "title": { "type": ["string", "null"], "description": "The harness's own name for the conversation, or null until it says one." },
+          "options": { "type": "array", "description": "The harness's whole config-option list (ADR-0041).", "items": { "$ref": "#/components/schemas/SessionOption" } },
+          "commands": { "type": "array", "description": "The commands the harness offers for this Session.", "items": { "$ref": "#/components/schemas/SessionCommand" } },
           "enqueued_at": { "type": "string", "format": "date-time" },
           "started_at": { "type": ["string", "null"], "format": "date-time" },
           "ended_at": { "type": ["string", "null"], "format": "date-time" },
@@ -3130,7 +3134,51 @@
           "message_buffering": { "type": "boolean" },
           "thought_buffering": { "type": "boolean" }
         },
-        "required": ["id", "name", "workspace", "state", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "worked_model", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "message_buffering", "thought_buffering"]
+        "required": ["id", "name", "workspace", "state", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "worked_model", "title", "options", "commands", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "message_buffering", "thought_buffering"]
+      },
+      "SessionOption": {
+        "type": "object",
+        "description": "A harness config option, whole: what it is, what it may be and what it is now.",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": ["string", "null"] },
+          "category": { "type": ["string", "null"], "description": "`mode`, `model`, `model_config`, `thought_level`, or the harness's own string, which may begin with `_`." },
+          "kind": { "type": "string", "enum": ["select", "boolean"] },
+          "current": { "anyOf": [{ "type": "string" }, { "type": "boolean" }], "description": "The current value: a value id for a select, a boolean for a toggle." },
+          "values": { "type": "array", "description": "The offered values of an ungrouped select; empty for a grouped one and for a boolean.", "items": { "$ref": "#/components/schemas/SessionOptionValue" } },
+          "groups": { "type": "array", "description": "The offered values of a grouped select; empty for an ungrouped one.", "items": { "$ref": "#/components/schemas/SessionOptionGroup" } },
+          "warns_cache": { "type": "boolean", "description": "Whether changing this option makes the next Turn re-read the context uncached. False everywhere until 0.3/34 fills in the per-harness table." }
+        },
+        "required": ["id", "name", "description", "category", "kind", "current", "values", "groups", "warns_cache"]
+      },
+      "SessionOptionValue": {
+        "type": "object",
+        "properties": {
+          "value": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": ["string", "null"] }
+        },
+        "required": ["value", "name", "description"]
+      },
+      "SessionOptionGroup": {
+        "type": "object",
+        "properties": {
+          "group": { "type": "string" },
+          "name": { "type": "string" },
+          "values": { "type": "array", "items": { "$ref": "#/components/schemas/SessionOptionValue" } }
+        },
+        "required": ["group", "name", "values"]
+      },
+      "SessionCommand": {
+        "type": "object",
+        "description": "A command the harness offers for the Session, as a composer lists it.",
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "input_hint": { "type": ["string", "null"] }
+        },
+        "required": ["name", "description", "input_hint"]
       },
       "Exit": {
         "oneOf": [

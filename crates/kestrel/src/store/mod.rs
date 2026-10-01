@@ -219,7 +219,10 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::domain::{Agent, Organization, Project, Workspace};
+    use crate::domain::{
+        Agent, Organization, Project, SessionOption, SessionOptionKind, Workspace,
+    };
+    use crate::fanout::{Resource, Subscription, Watch};
     use crate::log::Entry;
 
     async fn declared(store: &Store) -> (Organization, Project, Agent) {
@@ -319,6 +322,90 @@ mod tests {
         let mut read = store.read().await.unwrap();
 
         assert!(read.organizations().declare("acme", None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_session_option_write_raises_a_session_notice_and_an_identical_one_raises_nothing() {
+        let data_dir = TempDir::new().unwrap();
+        let store = Store::open(data_dir.path()).await.unwrap();
+        let (_, workspace, mut changes) = opened_with_notices(&store).await;
+
+        let mut tx = store.begin().await.unwrap();
+        let session = tx
+            .workspaces()
+            .enqueue_session(&workspace, None, None)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        // The enqueue raised notices of its own; waiting them out leaves only the write under test.
+        assert!(a_session_notice(&mut changes).await);
+
+        let options = vec![SessionOption {
+            id: "model".to_owned(),
+            name: "Model".to_owned(),
+            description: None,
+            category: Some("model".to_owned()),
+            kind: SessionOptionKind::Select {
+                current: "scripted-max".to_owned(),
+                values: Vec::new(),
+                groups: Vec::new(),
+            },
+        }];
+        let mut tx = store.begin().await.unwrap();
+        assert!(
+            tx.workspaces()
+                .record_session_info(&session, Some("a title"), &options, &[])
+                .await
+                .unwrap()
+        );
+        tx.commit().await.unwrap();
+        assert!(
+            a_session_notice(&mut changes).await,
+            "a Session-row option write raised no Session notice"
+        );
+
+        let mut tx = store.begin().await.unwrap();
+        assert!(
+            !tx.workspaces()
+                .record_session_info(&session, Some("a title"), &options, &[])
+                .await
+                .unwrap()
+        );
+        tx.commit().await.unwrap();
+        let waited = tokio::time::timeout(std::time::Duration::from_millis(400), async {
+            a_session_notice(&mut changes).await
+        })
+        .await;
+        assert!(
+            !waited.unwrap_or(false),
+            "an option write that changed nothing raised a notice"
+        );
+
+        let session = store
+            .read()
+            .await
+            .unwrap()
+            .workspaces()
+            .session(session.id)
+            .await
+            .unwrap();
+        assert_eq!(session.title.as_deref(), Some("a title"));
+        assert_eq!(session.worked_model.as_deref(), Some("scripted-max"));
+    }
+
+    async fn a_session_notice(changes: &mut Subscription) -> bool {
+        let waited = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                match changes.recv().await {
+                    Some(Watch::Change(Resource::Session(_))) => return true,
+                    Some(_) => continue,
+                    None => return false,
+                }
+            }
+        })
+        .await;
+
+        waited.unwrap_or(false)
     }
 
     #[tokio::test]

@@ -45,6 +45,15 @@ A Workspace or Session in a path is resolved on the server (`reference.rs`): its
 UUID, any unambiguous prefix of either, or `latest` for the most recent in scope. Nothing or
 several matching is `Declined::Missing` or `Declined::Ambiguous`, naming the candidates.
 
+### Session reads
+
+`GET …/sessions/{session}` serves the Session's whole bookkeeping state — the harness's config
+options with their current and offered values, its title for the conversation, and the commands it
+offers — kept current by the supervisor for the Session's whole life ([ADR-0041](../adr/0041-a-sessions-options-are-its-harnesss-config-options.md)).
+`worked_model` is the Model-category option's current value. The read carries a strong `ETag` over
+its body and answers `304` to a matching `If-None-Match`, because a reconnecting Client refetches
+every view it subscribes to.
+
 ### Streaming the Transcript
 
 `GET …/workspaces/{workspace}/transcript` is SSE. Each entry is an event whose id is a cursor; the

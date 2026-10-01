@@ -5,7 +5,9 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::domain::{Exit, Session, SessionId, Turn, Usage, WorkspaceId};
+use crate::domain::{
+    Exit, Session, SessionCommand, SessionId, SessionOption, Turn, Usage, WorkspaceId,
+};
 use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
 use crate::link;
@@ -67,6 +69,17 @@ pub enum Report {
     Used {
         usage: Usage,
     },
+    /// The Session's whole bookkeeping state: what the harness calls the conversation, the options
+    /// it offers and their current values, and the commands it takes. Idempotent and unnumbered,
+    /// so a reconnect can say it again (ADR-0041).
+    SessionInfo {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        options: Vec<SessionOption>,
+        #[serde(default)]
+        commands: Vec<SessionCommand>,
+    },
     Answered,
     Checkout {
         repositories: Vec<Observed>,
@@ -83,7 +96,8 @@ impl Report {
             | Report::Heartbeat
             | Report::Stderr { .. }
             | Report::Work { .. }
-            | Report::SessionState { .. } => false,
+            | Report::SessionState { .. }
+            | Report::SessionInfo { .. } => false,
             Report::Started
             | Report::Model { .. }
             | Report::Said { .. }
@@ -420,6 +434,24 @@ async fn reported(
         Report::Model { model } => {
             tx.workspaces().record_worked_model(session, &model).await?;
             info!(session = %session.id, model, "a supervisor reported the model its agent is on");
+        }
+        Report::SessionInfo {
+            title,
+            options,
+            commands,
+        } => {
+            let written = tx
+                .workspaces()
+                .record_session_info(session, title.as_deref(), &options, &commands)
+                .await?;
+            info!(
+                session = %session.id,
+                title = title.as_deref().unwrap_or_default(),
+                options = options.len(),
+                commands = commands.len(),
+                written,
+                "a supervisor reported what its session holds"
+            );
         }
         Report::Said {
             message,

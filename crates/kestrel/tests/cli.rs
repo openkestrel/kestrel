@@ -367,6 +367,62 @@ fn transcribed(kestrel: &Booted, workspace: &str) -> Vec<String> {
 }
 
 #[test]
+fn a_session_show_says_the_title_its_options_and_its_commands() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Announces, "info");
+    declared(&booted);
+    let workspace = opened(&booted);
+    booted.run(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "operator",
+        "go",
+    ]);
+
+    let listed = booted.until(
+        &[
+            "session",
+            "list",
+            "--workspace",
+            &workspace,
+            "--json",
+            "id,title",
+        ],
+        |listed| listed.iter().any(|session| !session["title"].is_null()),
+        "show the harness's title",
+    );
+    let session = listed
+        .iter()
+        .find(|session| !session["title"].is_null())
+        .and_then(|session| session["id"].as_str())
+        .expect("the session's identifier")
+        .to_owned();
+
+    let shown = booted.run(&["session", "show", &session]);
+
+    assert!(
+        shown.contains(kestrel_scripted_agent::TITLE),
+        "the title is not shown:\n{shown}"
+    );
+    assert!(
+        shown.contains("model: scripted-max"),
+        "the model option's current value is not shown as `category: current`:\n{shown}"
+    );
+    assert!(
+        shown.contains("mode: plan"),
+        "the mode option's current value is not shown:\n{shown}"
+    );
+    assert!(
+        shown.contains("compact"),
+        "the commands are not shown:\n{shown}"
+    );
+
+    booted.terminated();
+}
+
+#[test]
 fn a_role_boots_on_an_empty_data_directory_and_makes_its_database() {
     let kestrel = Kestrel::new();
 

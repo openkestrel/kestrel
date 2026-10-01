@@ -658,6 +658,12 @@ pub struct Session {
     pub supervisor: Option<String>,
     /// What the Harness reported it worked on.
     pub worked_model: Option<String>,
+    /// The harness's own name for the conversation, kept current.
+    pub title: Option<String>,
+    /// The harness's whole config-option list, kept current.
+    pub options: Vec<SessionOption>,
+    /// The commands the harness offers for this Session.
+    pub commands: Vec<SessionCommand>,
     pub enqueued_at: Timestamp,
     pub started_at: Option<Timestamp>,
     pub ended_at: Option<Timestamp>,
@@ -671,6 +677,77 @@ pub struct Turn {
     pub seq: i64,
     pub prompted_at: Timestamp,
     pub answered_at: Option<Timestamp>,
+}
+
+/// A Session's harness config option: the whole of what it is, what it may be and what it is now
+/// (ADR-0041). `category` is kestrel's own name for a well-known option, or the harness's own
+/// string, which may begin with `_`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOption {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(flatten)]
+    pub kind: SessionOptionKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionOptionKind {
+    Select {
+        current: String,
+        #[serde(default)]
+        values: Vec<SessionOptionValue>,
+        #[serde(default)]
+        groups: Vec<SessionOptionGroup>,
+    },
+    Boolean {
+        current: bool,
+    },
+}
+
+impl SessionOption {
+    pub const MODE: &'static str = "mode";
+    pub const MODEL: &'static str = "model";
+
+    /// What the Session read and delivery call the model the agent is on.
+    pub fn current_value(&self) -> Option<String> {
+        match &self.kind {
+            SessionOptionKind::Select { current, .. } => Some(current.clone()),
+            SessionOptionKind::Boolean { current } => Some(current.to_string()),
+        }
+    }
+
+    pub fn is_category(&self, category: &str) -> bool {
+        self.category.as_deref() == Some(category)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOptionValue {
+    pub value: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOptionGroup {
+    pub group: String,
+    pub name: String,
+    pub values: Vec<SessionOptionValue>,
+}
+
+/// A command the harness offers for the Session, as a composer lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCommand {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub input_hint: Option<String>,
 }
 
 /// What the Harness has spent on behalf of a Session, cumulative rather than per turn.

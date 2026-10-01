@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, Request, State};
-use axum::http::header::{HOST, ORIGIN};
+use axum::http::header::{CONTENT_TYPE, ETAG, HOST, IF_NONE_MATCH, ORIGIN};
 use axum::http::uri::Authority;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
@@ -17,6 +17,7 @@ use axum::{BoxError, Json, Router};
 use futures_core::Stream;
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
+use sha2::Digest as _;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -521,6 +522,9 @@ struct SessionRecord {
     harness: String,
     model: Option<String>,
     worked_model: Option<String>,
+    title: Option<String>,
+    options: Vec<SessionOptionRecord>,
+    commands: Vec<domain::SessionCommand>,
     enqueued_at: Timestamp,
     started_at: Option<Timestamp>,
     ended_at: Option<Timestamp>,
@@ -531,6 +535,14 @@ struct SessionRecord {
     tools: Vec<crate::live_work::RunningTool>,
     message_buffering: bool,
     thought_buffering: bool,
+}
+
+#[derive(Serialize)]
+struct SessionOptionRecord {
+    #[serde(flatten)]
+    option: domain::SessionOption,
+    /// ADR-0041's per-harness table is 0.3/34's to fill in; until then nothing warns.
+    warns_cache: bool,
 }
 
 #[derive(Serialize)]
@@ -666,6 +678,16 @@ impl SessionRecord {
             harness: session.agent.harness,
             model: session.agent.model,
             worked_model: session.worked_model,
+            title: session.title,
+            options: session
+                .options
+                .into_iter()
+                .map(|option| SessionOptionRecord {
+                    option,
+                    warns_cache: false,
+                })
+                .collect(),
+            commands: session.commands,
             enqueued_at: session.enqueued_at,
             started_at: session.started_at,
             ended_at: session.ended_at,
@@ -2174,10 +2196,43 @@ async fn enqueue_session(
 async fn show_session(
     State(control_plane): State<ControlPlane>,
     Path((organization, session)): Path<(String, String)>,
-) -> Result<Json<SessionRecord>, Refused> {
+    headers: HeaderMap,
+) -> Result<Response, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
+    let record = SessionRecord::live(session, &control_plane.summaries);
+    let body = serde_json::to_string(&record).map_err(anyhow::Error::from)?;
+    let tag = strong_etag(&body);
 
-    Ok(Json(SessionRecord::live(session, &control_plane.summaries)))
+    if headers
+        .get(IF_NONE_MATCH)
+        .and_then(|asked| asked.to_str().ok())
+        .is_some_and(|asked| matches_etag(asked, &tag))
+    {
+        return Ok((StatusCode::NOT_MODIFIED, [(ETAG, tag)]).into_response());
+    }
+
+    Ok((
+        [(CONTENT_TYPE, "application/json".to_owned()), (ETAG, tag)],
+        body,
+    )
+        .into_response())
+}
+
+/// A strong validator over the exact bytes served, so two reads of one unchanged Session answer
+/// the same tag and any change answers a new one (ADR-0041).
+fn strong_etag(body: &str) -> String {
+    let digest = sha2::Sha256::digest(body.as_bytes());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+
+    format!("\"{hex}\"")
+}
+
+/// RFC 9110's If-None-Match comparison: weak tags match weak, and `*` matches any.
+fn matches_etag(asked: &str, tag: &str) -> bool {
+    asked.split(',').any(|candidate| {
+        let candidate = candidate.trim();
+        candidate == "*" || candidate.strip_prefix("W/").unwrap_or(candidate) == tag
+    })
 }
 
 async fn stop_session(
