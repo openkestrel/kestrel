@@ -14,7 +14,10 @@ export function SessionQueueLine({
 	if (!line) return null;
 
 	return (
-		<output data-queue-line className="block shrink-0 border-b px-4 py-2 text-muted-foreground text-xs">
+		<output
+			data-queue-line
+			className="block shrink-0 border-b px-4 py-2 text-muted-foreground text-xs"
+		>
 			{line}
 		</output>
 	);

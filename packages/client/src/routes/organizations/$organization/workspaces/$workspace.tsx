@@ -2,7 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Refusal } from "#/components/refusal";
 import { Skeleton } from "#/components/ui/skeleton";
+import { BriefComposer } from "#/components/workbench/brief-composer";
 import { SessionQueueLine } from "#/components/workbench/session-queue-line";
+import { SessionStatus } from "#/components/workbench/session-status";
 import { TranscriptPane } from "#/components/workbench/transcript-pane";
 import { WorkPane } from "#/components/workbench/work-pane";
 import { PaneHeading, Workbench } from "#/components/workbench/workbench";
@@ -37,12 +39,14 @@ function WorkspaceView() {
 					) : (
 						<>
 							<SessionQueueLine organization={organization} workspace={shown.data.id} />
+							<SessionStatus organization={organization} record={shown.data} />
 							<TranscriptPane
 								currency={currency}
 								organization={organization}
 								workspace={workspace}
 								empty={{ project: shown.data.project, branch: shown.data.checkout.branch }}
 							/>
+							<BriefComposer organization={organization} record={shown.data} />
 						</>
 					)}
 				</>
