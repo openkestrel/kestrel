@@ -333,13 +333,18 @@ impl<'a> Log<'a> {
         Ok(said)
     }
 
-    /// The Brief that started this Session, if nothing has said anything since it: participants
-    /// joining, Sessions starting and pull requests learned are not something said. Bounded to what the Transcript holds
-    /// since the Workspace's last Session ended, or since it opened if none has, so a Brief that
-    /// started an earlier Session is not mistaken for one starting this one.
-    pub async fn unfollowed_brief(&mut self, workspace: &Workspace) -> Result<Option<String>> {
+    /// The Brief that started this Session, and when it was written, if nothing has said anything
+    /// since it: participants joining, Sessions starting and pull requests learned are not
+    /// something said. Bounded to what the Transcript holds since the Workspace's last Session
+    /// ended, or since it opened if none has, so a Brief that started an earlier Session is not
+    /// mistaken for one starting this one. The moment orders an unbriefed Session's first Turn
+    /// against held input.
+    pub async fn unfollowed_brief(
+        &mut self,
+        workspace: &Workspace,
+    ) -> Result<Option<(String, Timestamp)>> {
         let said = sqlx::query(
-            "SELECT seq, body
+            "SELECT seq, body, appended_at
              FROM transcript_entry
              WHERE workspace_id = ?
                AND kind = 'shared_state'
@@ -361,12 +366,13 @@ impl<'a> Log<'a> {
         let [only] = said.as_slice() else {
             return Ok(None);
         };
+        let written_at = only.get::<String, _>("appended_at").parse()?;
         Ok(
             match self
                 .hydrate(workspace.id, only.get("seq"), only.get("body"))
                 .await?
             {
-                Entry::Brief { brief, .. } => Some(brief),
+                Entry::Brief { brief, .. } => Some((brief, written_at)),
                 _ => None,
             },
         )

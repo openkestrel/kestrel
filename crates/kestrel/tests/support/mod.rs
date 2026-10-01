@@ -1793,6 +1793,12 @@ impl Kestrel {
             .expect("the ready report should be taken");
     }
 
+    pub async fn report_answered(&self, session: &Session, seq: i64) {
+        work::report_on(&self.store, session, Some(seq), work::Report::Answered)
+            .await
+            .expect("the answer should be taken");
+    }
+
     pub async fn instances_to_archive(&self) -> Vec<String> {
         instance::to_archive(&self.store)
             .await

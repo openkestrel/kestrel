@@ -365,6 +365,7 @@ fn transcribed(kestrel: &Booted, workspace: &str) -> Vec<String> {
                     format!("session started {} {}", entry["session"], entry["agent"])
                 }
                 "said" => format!("said {} {}", entry["participant"], entry["message"]),
+                "brief" => format!("brief {}", entry["brief"]),
                 "session_ended" => format!(
                     "session ended {} {}",
                     entry["session"], entry["exit"]["status"]
@@ -760,7 +761,7 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
         vec![
             "1 participant joined builder".to_owned(),
             "2 participant joined operator".to_owned(),
-            "3 said operator go".to_owned(),
+            "3 brief go".to_owned(),
             format!("4 session started {session} builder"),
             "8 said builder half of one message, and the other half".to_owned(),
             "9 said builder a second message".to_owned(),

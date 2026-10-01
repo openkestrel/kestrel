@@ -587,6 +587,11 @@ async fn instructed(
         Instruction::Prompt { prompt } if carrying_it => {
             if let Some(carrying) = supervising.carrying.as_mut() {
                 carrying.working = true;
+                // An unbriefed Session's first Prompt is its Brief: it has started now.
+                if carrying.prompt.is_none() {
+                    carrying.prompt = Some(prompt.clone());
+                    carrying.saying.push_back(Report::Started);
+                }
             }
             match supervising
                 .carrying

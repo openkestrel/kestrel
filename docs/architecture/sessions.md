@@ -69,6 +69,14 @@ What arrives while one exists is held, never interleaved:
 Session wins over pending messages. Several held messages reach the agent as one attributed prompt
 (`work::follow_up`); a lone one reaches it verbatim so a leading skill invocation still works.
 
+A message to a Session that has not started its first Turn is different: it becomes the Brief. That
+is immediate for a queued Session and for one already `harness_ready`, and happens the moment the
+supervisor reports ready when the Session is still preparing. The message is taken out of the held
+queue and written down with its author's join directly before it. Later posts are held, and the
+first Turn's prompt is the Brief alone, verbatim; held messages follow it as the next Turn once a
+slot frees. The first Turn competes by when the Brief was written against held input and queued
+Sessions, and the serialized-Profile rule applies to it then, not at dispatch.
+
 ## Execution
 
 `role/work.rs::dispatching` loops every 100 ms:
@@ -77,12 +85,13 @@ Session wins over pending messages. Several held messages reach the agent as one
    that supervisor so the next Session starts another.
 2. Stop the supervisor of, and destroy, each Instance queued in `instance_archive` (`archive`).
 3. `work::occupy`: if a slot is free, claim the oldest claimable queued Session, or, if held input
-   for a Waiting Session is older, prompt that instead. A queued Session whose Workspace has no
-   Brief and nothing posted is claimed whether or not a slot is free, and without the serialized
-   Profile check: it has no Turn to run, so it provisions as Unbriefed while the person writes.
-   `work::awaiting_a_brief` is the one rule the dispatcher and the queue share. Claiming sets
-   Working or Unbriefed and starts a 2-minute lease in one guarded update, so a Session is
-   dispatched at most once.
+   for a Waiting Session or an unbriefed Session's first Turn asked earlier, prompt that instead.
+   A queued Session whose Workspace has no Brief and nothing posted is claimed whether or not a
+   slot is free, and without the serialized Profile check: it has no Turn to run, so it provisions
+   as Unbriefed while the person writes. `work::awaiting_a_brief` is the one rule the dispatcher
+   and the queue share. Claiming sets Working or Unbriefed and starts a 2-minute lease in one
+   guarded update, so a Session is dispatched at most once. Prompting an unbriefed Session's Brief
+   moves it to Working and starts its first Turn.
 4. For a claim, `execute` in its own task:
    - Fail early if nothing can reach a model (no Provider Credential, Subscription Profile, or
      configured ACP login), or the work role has no command for the Agent's harness.

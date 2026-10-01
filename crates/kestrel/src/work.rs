@@ -250,33 +250,80 @@ pub async fn occupy(
     let mut tx = store.begin().await?;
     let full = tx.workspaces().occupying_slots().await? >= slots;
     let held = tx.workspaces().oldest_held_input(serialized).await?;
-    let occupied = match claiming(
-        &mut tx,
-        serialized,
-        held.as_ref().map(|(_, since)| *since),
-        full,
-    )
-    .await?
-    {
+    let first_turn = oldest_unstarted_brief(&mut tx, serialized).await?;
+    let input_since = match (&held, &first_turn) {
+        (Some((_, held_at)), Some((_, brief_at))) => Some((*held_at).min(*brief_at)),
+        (Some((_, at)), None) | (None, Some((_, at))) => Some(*at),
+        (None, None) => None,
+    };
+    let occupied = match claiming(&mut tx, serialized, input_since, full).await? {
         Some(claimed) => Occupied::Claimed(claimed),
         None => {
-            // A full pool still lets an unbriefed Session provision, but leaves held input for a
-            // slot that frees.
+            // A full pool still lets an unbriefed Session provision, but leaves held input and
+            // first Turns for a slot that frees.
             if full {
                 tx.commit().await?;
                 return Ok(None);
             }
-            let Some((session, _)) = held else {
-                tx.commit().await?;
-                return Ok(None);
+            let (session, is_first_turn) = match (held, first_turn) {
+                (Some((_, held_at)), Some((first_turn, brief_at))) if brief_at < held_at => {
+                    (first_turn, true)
+                }
+                (Some((held, _)), _) => (held, false),
+                (None, Some((first_turn, _))) => (first_turn, true),
+                (None, None) => {
+                    tx.commit().await?;
+                    return Ok(None);
+                }
             };
-            prompt_pending(&mut tx, &session).await?;
+            if is_first_turn {
+                prompt_brief(&mut tx, &session).await?;
+            } else {
+                prompt_pending(&mut tx, &session).await?;
+            }
             Occupied::Resumed(tx.workspaces().session(session.id).await?)
         }
     };
     tx.commit().await?;
 
     Ok(Some(occupied))
+}
+
+/// The first Turn waiting on a slot: an unbriefed Session whose harness is ready and whose Brief
+/// nothing has followed yet, by when that Brief was written. It competes with held input and
+/// queued Sessions for a free slot, and the serialized-Profile rule applies to it here rather
+/// than at dispatch (ADR-0025).
+async fn oldest_unstarted_brief(
+    tx: &mut Tx<'_>,
+    serialized: &[String],
+) -> Result<Option<(Session, Timestamp)>> {
+    let mut waiting = Vec::new();
+    for session in tx.workspaces().unbriefed_sessions().await? {
+        if tx.workspaces().holds_profile(&session, serialized).await? {
+            continue;
+        }
+        let workspace = tx.workspaces().get(session.workspace).await?;
+        if let Some((_, written_at)) = tx.log().unfollowed_brief(&workspace).await? {
+            waiting.push((session, written_at));
+        }
+    }
+    waiting.sort_by_key(|(_, written_at)| *written_at);
+
+    Ok(waiting.into_iter().next())
+}
+
+/// An unbriefed Session's first Turn: its Brief, verbatim, as an ordinary prompt in the
+/// conversation its start opened.
+async fn prompt_brief(tx: &mut Tx<'_>, session: &Session) -> Result<()> {
+    let workspace = tx.workspaces().get(session.workspace).await?;
+    let brief = tx
+        .log()
+        .unfollowed_brief(&workspace)
+        .await?
+        .map(|(brief, _)| brief)
+        .ok_or_else(|| anyhow::anyhow!("the session {} has no Brief to prompt", session.id))?;
+
+    link::prompt(tx, session, brief).await
 }
 
 /// A queued Session whose Workspace holds nothing to start it with: dispatch claims it without an
@@ -448,6 +495,11 @@ async fn reported(
         }
         Report::Ready => {
             if tx.workspaces().record_ready(session).await? {
+                // The first message posted while it was preparing becomes its Brief now.
+                let workspace = tx.workspaces().get(session.workspace).await?;
+                if workspace::first_held_becomes_the_brief(tx, &workspace).await? {
+                    info!(session = %session.id, "the first held message became the Brief");
+                }
                 info!(session = %session.id, "a supervisor reported its harness ready");
             }
         }
