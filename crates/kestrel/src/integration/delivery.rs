@@ -7,7 +7,9 @@ use anyhow::Result;
 use jiff::Timestamp;
 use tracing::warn;
 
-use crate::domain::{Delivery, Direction, Event, Exit, Integration, Session, SessionId, Workspace};
+use crate::domain::{
+    Delivery, Direction, Event, Exit, Integration, Session, SessionId, StartedBy, Workspace,
+};
 use crate::integration::back_off;
 use crate::integration::github::{Github, MARKER, Refused};
 use crate::store::{Store, Tx};
@@ -23,7 +25,7 @@ fn marker(session: SessionId, turn: Option<i64>) -> String {
 
 /// The surface a Workspace came in through, when it came in through one that carries outbound.
 async fn surface(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Option<(Integration, Event)>> {
-    let Some(started_by) = workspace.started_by else {
+    let Some(StartedBy::Event(started_by)) = workspace.started_by.clone() else {
         return Ok(None);
     };
 

@@ -196,6 +196,17 @@ pub async fn enqueue(
     Ok(session)
 }
 
+/// Whether a Session has ever been enqueued in the Workspace: `session enqueue` only continues
+/// one, so a Workspace's first Session comes from its open (ADR-0038).
+pub async fn has_had_session(store: &Store, workspace: WorkspaceId) -> Result<bool> {
+    store
+        .read()
+        .await?
+        .workspaces()
+        .has_had_session(workspace)
+        .await
+}
+
 /// A queued Session is dispatched at most once: what this hands back is already active, so a
 /// second claimant asking at the same moment is handed something else, or nothing.
 pub async fn claim(store: &Store, serialized: &[String]) -> Result<Option<Session>> {

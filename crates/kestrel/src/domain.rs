@@ -606,6 +606,14 @@ pub struct Checkout {
     pub branch: String,
 }
 
+/// What started a Workspace: the Event whose firing opened it, or the Brief's author an operator
+/// named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartedBy {
+    Event(EventRecordId),
+    Participant(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct Workspace {
     pub id: WorkspaceId,
@@ -622,7 +630,7 @@ pub struct Workspace {
     pub last_active_at: Timestamp,
     pub sealed_at: Option<Timestamp>,
     pub continues: Option<WorkspaceId>,
-    pub started_by: Option<EventRecordId>,
+    pub started_by: Option<StartedBy>,
 }
 
 impl Workspace {

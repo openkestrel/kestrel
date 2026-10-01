@@ -29,6 +29,27 @@ impl std::error::Error for Declined {}
 pub struct FieldRefusal {
     pub field: &'static str,
     pub message: String,
+    pub kind: Kind,
+}
+
+/// Which `Declined` a named field's refusal stands for, so a boundary answers it with the same
+/// status the unnamed form would carry.
+#[derive(Debug, Clone, Copy)]
+pub enum Kind {
+    Unacceptable,
+    Missing,
+    Ambiguous,
+    Taken,
+}
+
+impl FieldRefusal {
+    pub fn unacceptable(field: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            field,
+            message: message.into(),
+            kind: Kind::Unacceptable,
+        }
+    }
 }
 
 impl fmt::Display for FieldRefusal {

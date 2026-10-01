@@ -538,7 +538,7 @@ enum InstanceCommand {
 
 #[derive(Debug, Subcommand)]
 enum WorkspaceCommand {
-    /// Open a Workspace against a Project and an Agent
+    /// Open a Workspace against a Project and an Agent, and enqueue its first Session
     Open {
         /// The Project its work happens against
         #[arg(long)]
@@ -556,6 +556,16 @@ enum WorkspaceCommand {
         /// unambiguous prefix of its identifier, or `latest`
         #[arg(long, value_name = "WORKSPACE")]
         continues: Option<String>,
+        /// The Brief the Workspace starts with; `@FILE` reads it from a file and `-` from
+        /// standard input
+        #[arg(long)]
+        brief: Option<String>,
+        /// The model the first Session runs on. Without it, the Agent's
+        #[arg(long)]
+        model: Option<String>,
+        /// The name the Brief is written under. Without it, it is the operator's
+        #[arg(long)]
+        as_participant: Option<String>,
     },
     /// List every Workspace in the Organization
     List,
@@ -1171,12 +1181,14 @@ async fn run() -> Result<()> {
             profile,
             branch,
             continues,
+            brief,
+            model,
+            as_participant,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
-                &presentation,
-                &view::DECLARED,
-                &api.post(
+            let brief = brief.as_deref().map(given).transpose()?;
+            let opened = api
+                .post(
                     &["organizations", &organization, "workspaces"],
                     &json!({
                         "project": project,
@@ -1184,9 +1196,21 @@ async fn run() -> Result<()> {
                         "profile": profile,
                         "branch": branch,
                         "continues": continues,
+                        "model": model,
+                        "brief": brief,
+                        "participant": as_participant,
                     }),
                 )
-                .await?,
+                .await?;
+            show(
+                &presentation,
+                &view::OPENED,
+                &json!({
+                    "workspace": opened["workspace"]["name"],
+                    "workspace_id": opened["workspace"]["id"],
+                    "session": opened["session"]["name"],
+                    "session_id": opened["session"]["id"],
+                }),
             )?;
         }
         Command::Workspace(WorkspaceCommand::List) => {

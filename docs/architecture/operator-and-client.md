@@ -108,8 +108,13 @@ headings. Each command's `--json` returns the operator response.
 
 - `POST …/declaration` applies a whole document (Projects, Agents, Triggers) in one transaction;
   `…/declaration/preview` is the same transaction rolled back and returns the difference.
+- `POST …/workspaces` is the one open: it opens a Workspace and enqueues its first Session in one
+  transaction, with an optional Brief, model and declared name, or refuses and leaves nothing
+  behind ([ADR-0038](../adr/0038-a-session-may-start-before-its-brief.md), `workspace.rs`). A
+  refusal names the request `field` it concerns.
 - `POST /operator/starts` backs `kestrel start`: it adds whatever is missing to run a first Session
-  and refuses to change anything that exists (`start.rs`).
+  and refuses to change anything that exists (`start.rs`). It opens through the same write.
+- `session enqueue` only continues a Workspace: it refuses one that has never had a Session.
 
 ## The Client
 

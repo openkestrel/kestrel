@@ -1105,7 +1105,7 @@ impl Kestrel {
         agent: &str,
         profile: &str,
     ) -> Workspace {
-        workspace::open(
+        workspace::open_without_a_session(
             &self.store,
             organization,
             project,
@@ -1136,7 +1136,7 @@ impl Kestrel {
         agent: &str,
         branch: &str,
     ) -> Workspace {
-        workspace::open(
+        workspace::open_without_a_session(
             &self.store,
             organization,
             project,
@@ -1169,7 +1169,7 @@ impl Kestrel {
         continues: Option<WorkspaceId>,
     ) -> anyhow::Result<Workspace> {
         let continues = continues.map(|sealed| sealed.to_string());
-        workspace::open(
+        workspace::open_without_a_session(
             &self.store,
             organization,
             project,

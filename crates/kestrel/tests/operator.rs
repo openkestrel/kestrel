@@ -151,6 +151,7 @@ const INTEGRATION: &str = "id,kind,repository,carries,polled_every,webhook_path,
 const EVENT: &str = "record,integration,event";
 const TRIGGER: &str = "id,name,state,brief";
 const WORKSPACE: &str = "id,name,state,continues";
+const OPENED: &str = "workspace,workspace_id,session,session_id";
 const SESSION: &str = "id,name,workspace,state,model";
 const ENTRY: &str = "seq,entry";
 
@@ -871,13 +872,23 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
                 "--agent",
                 "builder",
                 "--json",
-                WORKSPACE,
+                OPENED,
             ],
         )
         .await,
     );
-    let workspace = opened[0]["id"].as_str().expect("a workspace id").to_owned();
-    let workspace_name = generated_name(&opened[0]).to_owned();
+    let workspace = opened[0]["workspace_id"]
+        .as_str()
+        .expect("a workspace id")
+        .to_owned();
+    let workspace_name = opened[0]["workspace"]
+        .as_str()
+        .expect("a workspace name")
+        .to_owned();
+    let session = opened[0]["session_id"]
+        .as_str()
+        .expect("a session id")
+        .to_owned();
 
     let listed = recorded(
         &client(
@@ -893,7 +904,10 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
         )
         .await,
     );
-    assert_eq!(listed, opened);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["id"], workspace);
+    assert_eq!(listed[0]["name"], workspace_name);
+    generated_name(&listed[0]);
     let shown = recorded(
         &client(
             &kestrel,
@@ -901,51 +915,66 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
         )
         .await,
     );
-    assert_eq!(shown, opened);
-    assert_eq!(shown[0]["name"], workspace_name);
+    assert_eq!(shown, listed);
 
-    let posted = recorded(
+    let queued = recorded(
         &client(
             &kestrel,
             &[
-                "workspace",
-                "post",
-                &workspace,
-                "--as-participant",
-                "operator",
-                "start with the operator boundary",
+                "session",
+                "show",
+                &session,
+                "--organization",
+                "acme",
                 "--json",
                 SESSION,
             ],
         )
         .await,
     );
-    let session = posted[0]["id"].as_str().expect("a session id");
-    let first_session_name = generated_name(&posted[0]).to_owned();
-    assert_eq!(posted[0]["workspace"], workspace);
-    assert_eq!(posted[0]["state"], "queued");
-    assert_eq!(
-        recorded(
-            &client(
-                &kestrel,
-                &[
-                    "session",
-                    "list",
-                    "--workspace",
-                    &workspace,
-                    "--json",
-                    SESSION
-                ]
-            )
-            .await
-        ),
-        posted
+    assert_eq!(queued[0]["workspace"], workspace);
+    assert_eq!(queued[0]["state"], "queued");
+    let first_session_name = generated_name(&queued[0]).to_owned();
+    let refused = client(
+        &kestrel,
+        &[
+            "session",
+            "enqueue",
+            "--workspace",
+            &workspace,
+            "--json",
+            SESSION,
+        ],
+    )
+    .await;
+    assert!(
+        !refused.status.success(),
+        "a queued session holds the workspace"
+    );
+
+    let posted = client(
+        &kestrel,
+        &[
+            "workspace",
+            "post",
+            &workspace,
+            "--as-participant",
+            "operator",
+            "start with the operator boundary",
+        ],
+    )
+    .await;
+    succeeded(&posted);
+    assert!(
+        posted.err.contains("queued as"),
+        "a post to a queued session becomes its Brief: {}",
+        posted.err
     );
 
     let completed = kestrel
         .claim_session()
         .await
-        .expect("the posted session should wait for the worker");
+        .expect("the queued session should wait for the worker");
     assert_eq!(completed.id.to_string(), session);
     kestrel.complete_session(&completed).await;
     let sealed = recorded(
@@ -972,14 +1001,36 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
                 "--continues",
                 &workspace,
                 "--json",
-                WORKSPACE,
+                OPENED,
             ],
         )
         .await,
     );
-    let continuing = continued[0]["id"].as_str().expect("a continuing workspace");
-    assert_ne!(generated_name(&continued[0]), workspace_name);
-    assert_eq!(continued[0]["continues"], workspace);
+    let continuing = continued[0]["workspace_id"]
+        .as_str()
+        .expect("a continuing workspace")
+        .to_owned();
+    assert_ne!(continued[0]["workspace"], workspace_name);
+    let continuing_shown = recorded(
+        &client(
+            &kestrel,
+            &["workspace", "show", &continuing, "--json", WORKSPACE],
+        )
+        .await,
+    );
+    assert_eq!(continuing_shown[0]["continues"], workspace);
+
+    let continuing_session = continued[0]["session_id"]
+        .as_str()
+        .expect("a session id")
+        .to_owned();
+    let completed = kestrel
+        .claim_session()
+        .await
+        .expect("the continuation's session should claim");
+    assert_eq!(completed.id.to_string(), continuing_session);
+    kestrel.complete_session(&completed).await;
+
     let enqueued = recorded(
         &client(
             &kestrel,
@@ -987,7 +1038,7 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
                 "session",
                 "enqueue",
                 "--workspace",
-                continuing,
+                &continuing,
                 "--model",
                 "claude-opus-5",
                 "--json",
@@ -999,22 +1050,25 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
     assert_ne!(generated_name(&enqueued[0]), first_session_name);
     assert_eq!(enqueued[0]["workspace"], continuing);
     assert_eq!(enqueued[0]["model"], "claude-opus-5");
-    assert_eq!(
-        recorded(
-            &client(
-                &kestrel,
-                &[
-                    "session",
-                    "list",
-                    "--workspace",
-                    continuing,
-                    "--json",
-                    SESSION
-                ]
-            )
-            .await
-        ),
-        enqueued
+    let listed_sessions = recorded(
+        &client(
+            &kestrel,
+            &[
+                "session",
+                "list",
+                "--workspace",
+                &continuing,
+                "--json",
+                SESSION,
+            ],
+        )
+        .await,
+    );
+    assert!(
+        listed_sessions
+            .iter()
+            .any(|session| session["id"] == enqueued[0]["id"]),
+        "{listed_sessions:?}"
     );
 
     kestrel.teardown().await;
@@ -1040,21 +1094,40 @@ async fn a_client_enqueues_a_session_naming_its_agent_and_shows_what_it_runs_on(
     kestrel
         .declare_agent(&organization, "reviewer", "claude", Some("claude-opus-5"))
         .await;
-    let workspace = kestrel
-        .open_workspace("acme", "kestrel", "builder")
-        .await
-        .id
-        .to_string();
+    let opened = recorded(
+        &client(
+            &kestrel,
+            &[
+                "workspace",
+                "open",
+                "--organization",
+                "acme",
+                "--project",
+                "kestrel",
+                "--agent",
+                "builder",
+                "--json",
+                OPENED,
+            ],
+        )
+        .await,
+    );
+    let workspace = opened[0]["workspace_id"]
+        .as_str()
+        .expect("a workspace id")
+        .to_owned();
     const RUNS_ON: &str = "id,agent,harness,model";
 
+    let first = opened[0]["session_id"].as_str().expect("a session id");
     let built = recorded(
         &client(
             &kestrel,
             &[
                 "session",
-                "enqueue",
-                "--workspace",
-                &workspace,
+                "show",
+                first,
+                "--organization",
+                "acme",
                 "--json",
                 RUNS_ON,
             ],
@@ -1062,7 +1135,7 @@ async fn a_client_enqueues_a_session_naming_its_agent_and_shows_what_it_runs_on(
         .await,
     );
     kestrel
-        .complete_session(&kestrel.sessions(workspace.parse().expect("an id")).await[0])
+        .complete_session(&kestrel.session(first.parse().expect("an id")).await)
         .await;
     let reviewed = recorded(
         &client(
@@ -1123,7 +1196,42 @@ async fn a_client_naming_an_agent_the_organization_never_declared_enqueues_nothi
     kestrel
         .declare_agent(&organization, "builder", "opencode", None)
         .await;
-    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let opened = recorded(
+        &client(
+            &kestrel,
+            &[
+                "workspace",
+                "open",
+                "--organization",
+                "acme",
+                "--project",
+                "kestrel",
+                "--agent",
+                "builder",
+                "--json",
+                OPENED,
+            ],
+        )
+        .await,
+    );
+    let workspace: WorkspaceId = opened[0]["workspace_id"]
+        .as_str()
+        .expect("a workspace id")
+        .parse()
+        .expect("a workspace identifier");
+    kestrel
+        .complete_session(
+            &kestrel
+                .session(
+                    opened[0]["session_id"]
+                        .as_str()
+                        .expect("a session id")
+                        .parse()
+                        .expect("a session identifier"),
+                )
+                .await,
+        )
+        .await;
 
     let refused = client(
         &kestrel,
@@ -1131,7 +1239,7 @@ async fn a_client_naming_an_agent_the_organization_never_declared_enqueues_nothi
             "session",
             "enqueue",
             "--workspace",
-            &workspace.id.to_string(),
+            &workspace.to_string(),
             "--agent",
             "reviewer",
         ],
@@ -1144,7 +1252,7 @@ async fn a_client_naming_an_agent_the_organization_never_declared_enqueues_nothi
         failed(&refused)
     );
     assert_eq!(refused.status.code(), Some(3));
-    assert!(kestrel.sessions(workspace.id).await.is_empty());
+    assert_eq!(kestrel.sessions(workspace).await.len(), 1);
 
     kestrel.teardown().await;
 }
@@ -1821,13 +1929,14 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
 
     let (status, _) = got(&kestrel, &workspaces).await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _) = declared(
+    let (status, refused) = declared(
         &kestrel,
         &workspaces,
         &json!({ "project": "nowhere", "agent": "builder" }),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(refused["field"], "project");
     let (status, opened) = declared(
         &kestrel,
         &workspaces,
@@ -1835,13 +1944,24 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
-    let workspace = opened["id"].as_str().expect("a workspace id");
+    let workspace = opened["workspace"]["id"].as_str().expect("a workspace id");
+    let session_id = opened["session"]["id"].as_str().expect("a session id");
+    let session_name = opened["session"]["name"]
+        .as_str()
+        .expect("a generated session name");
+    assert_eq!(opened["session"]["state"], "queued");
     let shown = workspace_at("acme", workspace);
     let messages = workspace_messages_at("acme", workspace);
     let sessions = sessions_of("acme", workspace);
 
     let (status, _) = got(&kestrel, &shown).await;
     assert_eq!(status, StatusCode::OK);
+    let (status, listed_sessions) = got(&kestrel, &sessions).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed_sessions.as_array().expect("sessions").len(), 1);
+    let (status, refused) = declared(&kestrel, &sessions, &json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+
     let (status, posted) = declared(
         &kestrel,
         &messages,
@@ -1849,14 +1969,8 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(posted["workspace"], workspace);
-    let (status, _) = got(&kestrel, &sessions).await;
-    assert_eq!(status, StatusCode::OK);
-    let (status, _) = declared(&kestrel, &sessions, &json!({})).await;
-    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(posted.is_null(), "{posted}");
 
-    let session_id = posted["id"].as_str().expect("a session id");
-    let session_name = posted["name"].as_str().expect("a generated session name");
     let (status, shown_session) = got(&kestrel, &session_at("acme", session_id)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(shown_session["workspace"], workspace);
@@ -1867,7 +1981,7 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     let session = kestrel
         .claim_session()
         .await
-        .expect("the posted session should wait for the worker");
+        .expect("the queued session should wait for the worker");
     kestrel.complete_session(&session).await;
     let seal = workspace_seal_at("acme", workspace);
     let (status, _) = declared(&kestrel, &seal, &json!({})).await;
@@ -1881,7 +1995,9 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
-    let workspace_name = opened["name"].as_str().expect("a generated workspace name");
+    let workspace_name = opened["workspace"]["name"]
+        .as_str()
+        .expect("a generated workspace name");
     let (status, _) = declared(
         &kestrel,
         &workspaces,
@@ -1893,6 +2009,493 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     let nowhere = workspace_at("acme", "01a0a2d8-baf8-7c02-99fa-7280f174c14a");
     let (status, _) = got(&kestrel, &nowhere).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+
+    kestrel.teardown().await;
+}
+
+/// An Organization with one Project, two Agents and a Profile: everything an operator's open can
+/// name.
+async fn ready_to_open(kestrel: &Kestrel) -> kestrel::domain::Organization {
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    kestrel
+        .declare_agent(&organization, "reviewer", "opencode", None)
+        .await;
+    kestrel
+        .declare_profile("acme", "jack", "Jack")
+        .await
+        .expect("the profile should declare");
+
+    organization
+}
+
+fn workspace_of(record: &Value) -> WorkspaceId {
+    record["id"]
+        .as_str()
+        .expect("a workspace id")
+        .parse()
+        .expect("a workspace identifier")
+}
+
+#[tokio::test]
+async fn an_open_carries_its_brief_and_its_author_and_answers_with_both_records() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+
+    let (status, opened) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({
+            "project": "kestrel",
+            "agent": "builder",
+            "model": "claude-opus-5",
+            "brief": "Fix the flaky test",
+            "participant": "alice",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    assert_eq!(opened["session"]["state"], "queued");
+    assert_eq!(opened["session"]["model"], "claude-opus-5");
+    assert_eq!(opened["workspace"]["started_by"], "alice");
+    let workspace = workspace_of(&opened["workspace"]);
+    let transcript = kestrel.transcript(workspace).await;
+    assert_eq!(
+        transcript[0].entry,
+        Entry::ParticipantJoined {
+            participant: "builder".to_owned(),
+        }
+    );
+    assert_eq!(
+        transcript[1].entry,
+        Entry::ParticipantJoined {
+            participant: "alice".to_owned(),
+        }
+    );
+    assert_eq!(
+        transcript[2].entry,
+        Entry::Brief {
+            trigger: None,
+            brief: "Fix the flaky test".to_owned(),
+        }
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_open_without_a_brief_queues_a_session_a_message_becomes_its_brief() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+
+    let (status, opened) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({ "project": "kestrel", "agent": "builder" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    assert_eq!(opened["session"]["state"], "queued");
+    assert!(opened["workspace"]["started_by"].is_null(), "{opened}");
+    let workspace = workspace_of(&opened["workspace"]);
+    let transcript = kestrel.transcript(workspace).await;
+    assert_eq!(transcript.len(), 1);
+    assert_eq!(
+        transcript[0].entry,
+        Entry::ParticipantJoined {
+            participant: "builder".to_owned(),
+        }
+    );
+
+    let (status, posted) = declared(
+        &kestrel,
+        &workspace_messages_at("acme", &workspace.to_string()),
+        &json!({ "participant": "alice", "message": "what I want" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(posted.is_null(), "{posted}");
+    let transcript = kestrel.transcript(workspace).await;
+    assert_eq!(
+        transcript[1].entry,
+        Entry::ParticipantJoined {
+            participant: "alice".to_owned(),
+        }
+    );
+    assert_eq!(
+        transcript[2].entry,
+        Entry::Said {
+            participant: "alice".to_owned(),
+            message: "what I want".to_owned(),
+            session_id: None,
+            completion: None,
+        }
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_brief_without_a_participant_records_the_operator_and_joins_no_one() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+
+    let (status, opened) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({
+            "project": "kestrel",
+            "agent": "builder",
+            "brief": "Do the work",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    assert!(opened["workspace"]["started_by"].is_null(), "{opened}");
+    let transcript = kestrel.transcript(workspace_of(&opened["workspace"])).await;
+    assert_eq!(
+        transcript
+            .iter()
+            .map(|entry| &entry.entry)
+            .collect::<Vec<_>>(),
+        [
+            &Entry::ParticipantJoined {
+                participant: "builder".to_owned(),
+            },
+            &Entry::Brief {
+                trigger: None,
+                brief: "Do the work".to_owned(),
+            },
+        ]
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_refused_open_names_its_field_and_leaves_the_organization_empty() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+
+    for (body, status, field) in [
+        (
+            json!({ "project": "nowhere", "agent": "builder" }),
+            StatusCode::NOT_FOUND,
+            "project",
+        ),
+        (
+            json!({ "project": "kestrel", "agent": "nowhere" }),
+            StatusCode::NOT_FOUND,
+            "agent",
+        ),
+        (
+            json!({ "project": "kestrel", "agent": "builder", "profile": "nowhere" }),
+            StatusCode::NOT_FOUND,
+            "profile",
+        ),
+        (
+            json!({ "project": "kestrel", "agent": "builder", "continues": "nowhere" }),
+            StatusCode::NOT_FOUND,
+            "continues",
+        ),
+        (
+            json!({ "project": "kestrel", "agent": "builder", "branch": "  " }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "branch",
+        ),
+        (
+            json!({ "project": "kestrel", "agent": "builder", "model": "" }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "model",
+        ),
+        (
+            json!({ "project": "kestrel", "agent": "builder", "brief": "  " }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "brief",
+        ),
+        (
+            json!({ "project": "kestrel", "agent": "builder", "participant": "alice" }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "participant",
+        ),
+    ] {
+        let (answered, refusal) = declared(&kestrel, &workspaces, &body).await;
+
+        assert_eq!(answered, status, "{body}: {refusal}");
+        assert_eq!(refusal["field"], field, "{body}: {refusal}");
+        assert!(
+            listed_nothing(&kestrel, &workspaces).await,
+            "{body} left a workspace behind"
+        );
+        assert_eq!(listed(&kestrel, &projects_of("acme")).await.len(), 1);
+        assert_eq!(listed(&kestrel, &agents_of("acme")).await.len(), 2);
+    }
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_brief_written_under_an_agents_name_is_refused_on_participant() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+
+    let (status, refusal) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({
+            "project": "kestrel",
+            "agent": "builder",
+            "brief": "Fix the flaky test",
+            "participant": "reviewer",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(refusal["field"], "participant", "{refusal}");
+    assert!(listed_nothing(&kestrel, &workspaces).await);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_continuation_that_is_open_or_names_a_branch_is_refused_and_leaves_nothing_behind() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+
+    let (status, opened) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({ "project": "kestrel", "agent": "builder" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let open = workspace_of(&opened["workspace"]);
+    let (status, refusal) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({
+            "project": "kestrel",
+            "agent": "builder",
+            "continues": open.to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(refusal["field"], "continues", "{refusal}");
+
+    let opened = kestrel
+        .claim_session()
+        .await
+        .expect("the open's session should claim");
+    assert_eq!(opened.workspace, open);
+    kestrel.complete_session(&opened).await;
+    let sealed = {
+        let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+        let session = kestrel.dispatch_session(workspace.id).await;
+        kestrel.complete_session(&session).await;
+        kestrel.seal_workspace(workspace.id).await
+    };
+    let held = listed(&kestrel, &workspaces).await.len();
+    let (status, refusal) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({
+            "project": "kestrel",
+            "agent": "builder",
+            "continues": sealed.id.to_string(),
+            "branch": "topic",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(refusal["field"], "branch", "{refusal}");
+    assert_eq!(listed(&kestrel, &workspaces).await.len(), held);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_start_and_an_operator_open_reach_the_same_transcript() {
+    let kestrel = Kestrel::boot().await;
+
+    let (status, started) = declared(
+        &kestrel,
+        operator::STARTS,
+        &a_start("acme", "opencode", "Fix the flaky test"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{started}");
+    let started = kestrel
+        .transcript(workspace_of(&started["workspace"]))
+        .await;
+
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+    let (status, opened) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({
+            "project": "kestrel",
+            "agent": "builder",
+            "brief": "Fix the flaky test",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let opened = kestrel.transcript(workspace_of(&opened["workspace"])).await;
+
+    assert_eq!(
+        started.iter().map(|entry| &entry.entry).collect::<Vec<_>>(),
+        opened.iter().map(|entry| &entry.entry).collect::<Vec<_>>(),
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_client_opens_a_workspace_with_a_brief_a_model_and_a_participant() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+
+    let opened = recorded(
+        &client::ran_by(
+            &kestrel,
+            &[
+                "workspace",
+                "open",
+                "--organization",
+                "acme",
+                "--project",
+                "kestrel",
+                "--agent",
+                "builder",
+                "--brief",
+                "@notes.md",
+                "--model",
+                "claude-opus-5",
+                "--as-participant",
+                "alice",
+                "--json",
+                OPENED,
+            ],
+            client::Invocation::default().file("notes.md", "Fix the flaky test"),
+        )
+        .await,
+    );
+    let workspace = workspace_of(&json!({ "id": opened[0]["workspace_id"] }));
+    let shown = recorded(
+        &client(
+            &kestrel,
+            &[
+                "workspace",
+                "show",
+                &workspace.to_string(),
+                "--json",
+                "id,started_by",
+            ],
+        )
+        .await,
+    );
+    assert_eq!(shown[0]["started_by"], "alice");
+    let transcript = kestrel.transcript(workspace).await;
+    assert_eq!(
+        transcript[2].entry,
+        Entry::Brief {
+            trigger: None,
+            brief: "Fix the flaky test".to_owned(),
+        }
+    );
+
+    let piped = recorded(
+        &client_given(
+            &kestrel,
+            &[
+                "workspace",
+                "open",
+                "--organization",
+                "acme",
+                "--project",
+                "kestrel",
+                "--agent",
+                "builder",
+                "--brief",
+                "-",
+                "--json",
+                OPENED,
+            ],
+            Some("From standard input"),
+        )
+        .await,
+    );
+    let piped = workspace_of(&json!({ "id": piped[0]["workspace_id"] }));
+    assert_eq!(
+        kestrel.transcript(piped).await[1].entry,
+        Entry::Brief {
+            trigger: None,
+            brief: "From standard input".to_owned(),
+        }
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_later_session_enqueue_refuses_a_workspace_that_never_had_a_session() {
+    let kestrel = Kestrel::boot().await;
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+
+    let refused = client(
+        &kestrel,
+        &[
+            "session",
+            "enqueue",
+            "--workspace",
+            &workspace.id.to_string(),
+        ],
+    )
+    .await;
+
+    assert!(
+        failed(&refused).contains("has never had a session"),
+        "{}",
+        failed(&refused)
+    );
+    assert_eq!(refused.status.code(), Some(4));
+    assert!(kestrel.sessions(workspace.id).await.is_empty());
 
     kestrel.teardown().await;
 }
@@ -2156,8 +2759,15 @@ async fn a_start_declares_its_setup_and_reaches_a_session_carrying_its_brief() {
         .expect("a workspace id")
         .parse()
         .expect("a workspace identifier");
+    let transcript = kestrel.transcript(workspace).await;
     assert_eq!(
-        kestrel.transcript(workspace).await[0].entry,
+        transcript[0].entry,
+        Entry::ParticipantJoined {
+            participant: "builder".to_owned(),
+        }
+    );
+    assert_eq!(
+        transcript[1].entry,
         Entry::Brief {
             trigger: None,
             brief: "Fix the flaky test".to_owned(),
@@ -4495,10 +5105,10 @@ fn requires(document: &Value, schema: &Value, body: &Value) {
         return;
     }
 
-    for field in schema["required"]
-        .as_array()
-        .expect("an array of required fields")
-    {
+    let Some(required) = schema["required"].as_array() else {
+        return;
+    };
+    for field in required {
         let field = field.as_str().expect("a named field");
         assert!(
             body.get(field).is_some(),

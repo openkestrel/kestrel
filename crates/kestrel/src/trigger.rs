@@ -10,8 +10,8 @@ pub mod apply;
 
 use crate::domain::{
     Agent, CorrelationMiss, DisableReason, Event, EventRecordId, Fires, Firing, FiringBudget,
-    Integration, Occurrence, OnOpenWorkspace, Organization, Schedule, SessionId, Templates,
-    Trigger, TriggerId, TriggerState, Workspace, WorkspaceId,
+    Integration, Occurrence, OnOpenWorkspace, Organization, Schedule, SessionId, StartedBy,
+    Templates, Trigger, TriggerId, TriggerState, Workspace, WorkspaceId,
 };
 use crate::fanout::{self, Change};
 use crate::integration::github::{self, EventData, Github};
@@ -863,7 +863,7 @@ async fn firing(
                 .or(rendered.branch.as_deref()),
             correlation: rendered.correlation.as_deref(),
             continues: continues.as_deref(),
-            started_by: Some(event),
+            started_by: Some(StartedBy::Event(event.record_id)),
         })
         .await?;
 

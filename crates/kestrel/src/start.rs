@@ -5,10 +5,9 @@ use crate::declaration::{self, sharing_a_directory};
 use crate::declined::Declined;
 use crate::domain::{Session, Workspace};
 use crate::fanout::{self, Change};
-use crate::log::Entry;
 use crate::provider;
-use crate::store::workspace::Opening;
 use crate::store::{Declared, Store};
+use crate::workspace;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -122,40 +121,18 @@ pub async fn start(store: &Store, plan: &Plan) -> Result<Started> {
         )
         .await?;
 
-    let workspace = tx
-        .workspaces()
-        .open(Opening {
-            organization: &organization.record,
-            project: &project.record,
-            agent: &agent.record,
-            profile: None,
-            branch: None,
-            correlation: None,
-            continues: None,
-            started_by: None,
-        })
-        .await?;
-    tx.log()
-        .append(
-            &workspace,
-            Entry::Brief {
-                trigger: None,
-                brief: plan.brief.clone(),
-            },
-        )
-        .await?;
-    tx.log()
-        .append(
-            &workspace,
-            Entry::ParticipantJoined {
-                participant: agent.record.name.clone(),
-            },
-        )
-        .await?;
-    let session = tx
-        .workspaces()
-        .enqueue_session(&workspace, Some(&agent.record), None)
-        .await?;
+    let resolved = workspace::Resolved {
+        project: project.record.clone(),
+        agent: agent.record.clone(),
+        profile: None,
+        continues: None,
+        branch: None,
+        model: None,
+        brief: Some(plan.brief.as_str()),
+        participant: None,
+    };
+    let (workspace, session) =
+        workspace::opened_in(&mut tx, &organization.record, &resolved).await?;
     tx.commit().await?;
     fanout::publish(Change::WorkspaceOpened(&workspace));
 
