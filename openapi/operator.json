@@ -1804,6 +1804,36 @@
                 "shared_state,narration,detail"
               ]
             }
+          },
+          {
+            "name": "summaries",
+            "in": "query",
+            "required": false,
+            "description": "Summarize omitted narration and detail, across every shared-state boundary even when shared state is not selected. With every kind selected there are no summaries.",
+            "schema": {
+              "type": "boolean",
+              "default": true
+            }
+          },
+          {
+            "name": "first_seq",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive first seq of an Activity expansion. Select every kind to read its entries.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "last_seq",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive last seq of an Activity expansion; must be at least first_seq. The finite range ends when caught up.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
           }
         ],
         "responses": {
@@ -3675,6 +3705,114 @@
           "data"
         ]
       },
+      "Activity": {
+        "description": "Read-time summary of omitted narration and detail between consecutive shared-state entries. first_seq identifies the whole Activity, including selected kinds, and stays stable across pages and reconnects. last_seq is the highest Activity seq examined; its SSE id advances the global cursor. A closed replacement precedes the closing shared-state entry even when no detail was added. No summary is stored.",
+        "type": "object",
+        "properties": {
+          "first_seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "last_seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "tool_calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failed_calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "thoughts": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "plans": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "tombstones": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "tool_calls",
+              "failed_calls",
+              "thoughts",
+              "plans",
+              "tombstones"
+            ]
+          },
+          "latest": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "kind": {
+                "$ref": "#/components/schemas/TranscriptKind"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "title",
+              "status"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Earliest start among omitted unexpired entries."
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Latest finish among omitted unexpired entries."
+          },
+          "anomaly": {
+            "type": "boolean",
+            "description": "An omitted call was interrupted or unresolved."
+          },
+          "closed": {
+            "type": "boolean",
+            "description": "The next shared-state boundary has been examined. Followers replace open summaries by first_seq and CLI followers print only this final replacement."
+          }
+        },
+        "required": [
+          "first_seq",
+          "last_seq",
+          "counts",
+          "latest",
+          "started_at",
+          "finished_at",
+          "anomaly",
+          "closed"
+        ]
+      },
       "Recorded": {
         "description": "One Transcript entry, and where it sits in the order.",
         "type": "object",
@@ -3709,6 +3847,25 @@
           "kind",
           "session_id"
         ]
+      },
+      "ExpiredEntry": {
+        "description": "Narration or detail expired in place after 30 days from append, including in sealed Workspaces. The enclosing record retains its original kind, seq and appended_at, with session_id null; all content, completion metadata and payload references are removed.",
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "expired"
+          },
+          "expired_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the sweep replaced the entry."
+          }
+        },
+        "required": [
+          "type",
+          "expired_at"
+        ],
+        "additionalProperties": false
       },
       "Entry": {
         "description": "One completed unit of the Workspace Transcript.",
@@ -3745,11 +3902,15 @@
           },
           {
             "$ref": "#/components/schemas/ToolCallEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ExpiredEntry"
           }
         ],
         "discriminator": {
           "propertyName": "type",
           "mapping": {
+            "expired": "#/components/schemas/ExpiredEntry",
             "participant_joined": "#/components/schemas/ParticipantJoined",
             "brief": "#/components/schemas/Brief",
             "session_started": "#/components/schemas/SessionStarted",
@@ -4002,9 +4163,42 @@
           "because"
         ]
       },
+      "TranscriptSessionState": {
+        "description": "Transient session_state SSE snapshot on every follow connect, including empty state, then changes. Never has an event id and never enters the Transcript. session_id is null when no unfinished Session exists.",
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningTool"
+            }
+          },
+          "message_buffering": {
+            "type": "boolean"
+          },
+          "thought_buffering": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session_id",
+          "tools",
+          "message_buffering",
+          "thought_buffering"
+        ]
+      },
       "Event": {
-        "description": "SSE names: entry (Recorded), cursor (CursorEvent), end (End), follower (FollowerEvent), or presence (Presence). Entry and cursor IDs advance the global Transcript cursor; follower and presence carry no id.",
+        "description": "SSE names: entry (Recorded), activity (Activity), session_state (TranscriptSessionState), cursor (CursorEvent), end (End), follower (FollowerEvent), or presence (Presence). Entry, Activity and cursor IDs advance the global Transcript cursor; session_state, follower and presence carry no id. Activity replacements retain first_seq, and their final closed replacement precedes the closing shared-state entry.",
         "oneOf": [
+          { "$ref": "#/components/schemas/Activity" },
+          { "$ref": "#/components/schemas/TranscriptSessionState" },
           {
             "$ref": "#/components/schemas/Recorded"
           },

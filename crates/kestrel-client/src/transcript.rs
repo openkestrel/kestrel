@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::Write as _;
 use std::time::{Duration, Instant};
 
@@ -32,28 +33,25 @@ impl From<reqwest::Error> for Cut {
     }
 }
 
-/// Reads until the control plane ends the stream on purpose, reconnecting from the last entry
-/// printed whenever it is cut off. Returns the cursor the read ended at.
+pub struct Selection<'a> {
+    pub follow: bool,
+    pub kinds: &'a str,
+    pub summaries: bool,
+    pub as_participant: Option<&'a str>,
+}
+
 pub async fn read(
     control_plane: &Url,
     organization: &str,
     workspace: &str,
     from: Option<String>,
-    follow: bool,
-    as_participant: Option<&str>,
-    kinds: &str,
+    selection: Selection<'_>,
     presentation: &Presentation,
 ) -> Result<Option<String>> {
     let client = Client::new();
-    let url = transcript(
-        control_plane,
-        organization,
-        workspace,
-        follow,
-        as_participant,
-        kinds,
-    )?;
+    let url = transcript(control_plane, organization, workspace, &selection)?;
     let followers = followers(control_plane, organization, workspace)?;
+    let mut activities = Activities::default();
     let mut cursor = from;
     let mut heard = Instant::now();
 
@@ -65,6 +63,8 @@ pub async fn read(
             &mut cursor,
             &mut heard,
             presentation,
+            &selection,
+            &mut activities,
         )
         .await
         {
@@ -92,6 +92,8 @@ async fn streamed(
     cursor: &mut Option<String>,
     heard: &mut Instant,
     presentation: &Presentation,
+    selection: &Selection<'_>,
+    activities: &mut Activities,
 ) -> Result<(), Cut> {
     let mut request = client
         .get(url.clone())
@@ -129,6 +131,19 @@ async fn streamed(
                     })?;
                 *cursor = event.id;
             }
+            Some("activity") => {
+                let activity: Value =
+                    serde_json::from_str(&event.data).map_err(|error| Cut::Failed(error.into()))?;
+                if let Some(line) = activities
+                    .observe(activity, presentation)
+                    .map_err(Cut::Failed)?
+                {
+                    writeln!(stdout, "{line}")
+                        .and_then(|()| stdout.flush())
+                        .map_err(|error| Cut::Failed(error.into()))?;
+                }
+                *cursor = event.id;
+            }
             Some("cursor") => *cursor = event.id,
             Some("follower") => {
                 let follower: Follower = serde_json::from_str(&event.data)
@@ -141,7 +156,17 @@ async fn streamed(
                     follower.lease_seconds,
                 ));
             }
-            Some("end") => return Ok(()),
+            Some("end") => {
+                if !selection.follow
+                    && let Some(open) = activities.open.take()
+                {
+                    let line = activity_line(&open, presentation).map_err(Cut::Failed)?;
+                    writeln!(stdout, "{line}")
+                        .and_then(|()| stdout.flush())
+                        .map_err(|error| Cut::Failed(error.into()))?;
+                }
+                return Ok(());
+            }
             _ => {}
         }
     }
@@ -204,17 +229,19 @@ fn transcript(
     control_plane: &Url,
     organization: &str,
     workspace: &str,
-    follow: bool,
-    as_participant: Option<&str>,
-    kinds: &str,
+    selection: &Selection<'_>,
 ) -> Result<Url> {
     let mut url = workspace_path(control_plane, organization, workspace, "transcript")?;
     {
         let mut query = url.query_pairs_mut();
         query
-            .append_pair("follow", if follow { "true" } else { "false" })
-            .append_pair("kinds", kinds);
-        if let Some(name) = as_participant {
+            .append_pair("follow", if selection.follow { "true" } else { "false" })
+            .append_pair("kinds", selection.kinds)
+            .append_pair(
+                "summaries",
+                if selection.summaries { "true" } else { "false" },
+            );
+        if let Some(name) = selection.as_participant {
             query.append_pair("as", name);
         }
     }
@@ -252,4 +279,47 @@ fn workspace_path(
         ]);
 
     Ok(url)
+}
+
+#[derive(Default)]
+struct Activities {
+    printed: HashSet<i64>,
+    open: Option<Value>,
+}
+impl Activities {
+    fn observe(&mut self, activity: Value, presentation: &Presentation) -> Result<Option<String>> {
+        let first = activity["first_seq"]
+            .as_i64()
+            .context("an Activity has no first seq")?;
+        if activity["closed"] == true {
+            self.open = None;
+            if self.printed.insert(first) {
+                return activity_line(&activity, presentation).map(Some);
+            }
+        } else if !self.printed.contains(&first) {
+            self.open = Some(activity);
+        }
+        Ok(None)
+    }
+}
+fn activity_line(activity: &Value, presentation: &Presentation) -> Result<String> {
+    if matches!(presentation, Presentation::Json(_)) {
+        return crate::output::line(presentation, &view::ENTRIES, activity);
+    }
+    let counts = &activity["counts"];
+    Ok(format!(
+        "activity  {}..{}  {} tools, {} failed, {} thoughts, {} plans, {} tombstones{}",
+        activity["first_seq"],
+        activity["last_seq"],
+        counts["tool_calls"],
+        counts["failed_calls"],
+        counts["thoughts"],
+        counts["plans"],
+        counts["tombstones"],
+        if activity["anomaly"] == true {
+            "  interrupted or unresolved"
+        } else {
+            ""
+        }
+    ))
 }

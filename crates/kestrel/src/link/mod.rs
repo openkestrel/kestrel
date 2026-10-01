@@ -122,6 +122,9 @@ struct Asking {
 
 #[derive(Deserialize)]
 struct Paging {
+    summaries: Option<bool>,
+    first_seq: Option<i64>,
+    last_seq: Option<i64>,
     kinds: Option<String>,
     cursor: Option<String>,
     window: Option<usize>,
@@ -140,6 +143,7 @@ struct Refreshed {
 
 #[derive(Serialize)]
 struct Entries {
+    activities: Vec<crate::log::Activity>,
     entries: Vec<Recorded>,
     cursor: Option<String>,
     more: bool,
@@ -431,7 +435,17 @@ async fn entries(
     let workspace = tx.workspaces().get(linked.workspace).await?;
     let page = tx
         .log()
-        .stored_page(&workspace, from, window, &kinds)
+        .transcript_page(
+            &workspace,
+            from,
+            window,
+            &kinds,
+            paging.summaries.unwrap_or(true),
+            crate::log::SeqRange {
+                first_seq: paging.first_seq,
+                last_seq: paging.last_seq,
+            },
+        )
         .await?;
 
     let mut entries = Vec::new();
@@ -448,6 +462,7 @@ async fn entries(
         });
     }
     Ok(Json(Entries {
+        activities: page.activities,
         entries,
         cursor: page.cursor.map(|cursor| cursor.to_string()),
         more: page.more,

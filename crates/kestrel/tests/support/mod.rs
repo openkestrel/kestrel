@@ -1332,19 +1332,48 @@ impl Kestrel {
             .expect("the message should reach the transcript");
     }
 
-    pub async fn expire_payload_entry(&self, workspace: WorkspaceId, seq: i64) {
+    pub async fn backdate_transcript(&self, workspace: WorkspaceId, at: Timestamp) {
         let pool = database(self.data_dir()).await;
-        let mut tx = pool.begin().await.expect("an expiry transaction");
-        sqlx::query("DELETE FROM transcript_payload WHERE workspace_id = ? AND seq = ?")
+        sqlx::query("UPDATE transcript_entry SET appended_at = ? WHERE workspace_id = ?")
+            .bind(at.to_string())
             .bind(workspace.to_string())
-            .bind(seq)
-            .execute(&mut *tx)
+            .execute(&pool)
             .await
-            .expect("payload removed");
-        sqlx::query("UPDATE transcript_entry SET body = json_object('type', 'expired') WHERE workspace_id = ? AND seq = ? AND kind != 'shared_state'")
-            .bind(workspace.to_string()).bind(seq).execute(&mut *tx).await.expect("a tombstone");
-        tx.commit().await.expect("expiry should commit");
+            .unwrap();
         pool.close().await;
+    }
+
+    pub async fn retain_transcript(&self) -> anyhow::Result<usize> {
+        kestrel::timer::expire_transcript(&self.store).await
+    }
+
+    pub async fn refuse_retention_updates(&self, refusing: bool) {
+        let pool = database(self.data_dir()).await;
+        let statement = if refusing {
+            "CREATE TRIGGER refuse_retention BEFORE UPDATE ON transcript_entry WHEN OLD.kind = 'narration' AND json_extract(NEW.body, '$.type') = 'expired' BEGIN SELECT RAISE(ABORT, 'retention write failed'); END"
+        } else {
+            "DROP TRIGGER refuse_retention"
+        };
+        sqlx::query(statement).execute(&pool).await.unwrap();
+        pool.close().await;
+    }
+
+    pub async fn expire_payload_entry(&self, workspace: WorkspaceId, seq: i64) {
+        let at = Timestamp::now();
+        let pool = database(self.data_dir()).await;
+        sqlx::query(
+            "UPDATE transcript_entry SET appended_at = ? WHERE workspace_id = ? AND seq = ?",
+        )
+        .bind((at - SignedDuration::from_hours(31 * 24)).to_string())
+        .bind(workspace.to_string())
+        .bind(seq)
+        .execute(&pool)
+        .await
+        .expect("the targeted entry backdated");
+        pool.close().await;
+        let mut tx = self.store.begin().await.expect("an expiry transaction");
+        tx.log().expire(at).await.expect("production expiry");
+        tx.commit().await.expect("expiry should commit");
     }
 
     pub async fn refuse_payload_writes(&self) {

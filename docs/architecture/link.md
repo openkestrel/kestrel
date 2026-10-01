@@ -210,3 +210,11 @@ with no branch on which harness it drives.
 - `checkout.rs` clones each repository side by side under `/workspace`, cuts the declared branch
   from the base when the remote lacks it, and leaves an existing checkout as an earlier Session
   left it.
+
+The answer boundary follows [#372](https://github.com/openkestrel/kestrel/issues/372), which
+explicitly excludes Trailing Sessions and activity after the answer. It intentionally differs
+from the accepted [ADR-0034](../adr/0034-completed-harness-updates-become-transcript-entries.md)
+and [ADR-0040](../adr/0040-a-session-trails-its-answer-while-its-work-runs.md): open tools close
+unresolved, late activity becomes diagnostics, and `answered` moves the Session to Waiting.
+The [architecture map](README.md#where-the-code-lags-the-adrs) records this implementation gap;
+[#370](https://github.com/openkestrel/kestrel/issues/370) scopes the Trailing behavior.

@@ -60,7 +60,7 @@ pub enum Report {
         tool_kind: String,
         status: String,
         input: serde_json::Value,
-        result: serde_json::Value,
+        result: Box<serde_json::Value>,
         closing_reason: Option<String>,
         completion: Completion,
     },

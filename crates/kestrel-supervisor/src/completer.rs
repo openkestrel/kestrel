@@ -215,7 +215,7 @@ impl Completer {
                 .to_owned(),
             status,
             input: call.raw_input.unwrap_or(serde_json::Value::Null),
-            result: serde_json::json!({"content":call.content,"output":call.raw_output}),
+            result: Box::new(serde_json::json!({"content":call.content,"output":call.raw_output})),
             closing_reason,
             completion: Completion {
                 started_at,

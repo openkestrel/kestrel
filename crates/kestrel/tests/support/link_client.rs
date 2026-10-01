@@ -186,6 +186,13 @@ impl Link {
 }
 
 impl Events {
+    pub fn over(response: Response) -> Self {
+        Self {
+            response,
+            buffered: String::new(),
+        }
+    }
+
     pub async fn next_within(&mut self, patience: Duration) -> Next {
         let deadline = tokio::time::Instant::now() + patience;
 

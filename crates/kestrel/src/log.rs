@@ -13,6 +13,9 @@ use crate::domain::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Entry {
+    Expired {
+        expired_at: Timestamp,
+    },
     ParticipantJoined {
         participant: String,
     },
@@ -49,7 +52,7 @@ pub enum Entry {
         tool_kind: String,
         status: String,
         input: serde_json::Value,
-        result: serde_json::Value,
+        result: Box<serde_json::Value>,
         closing_reason: Option<String>,
         completion: Completion,
     },
@@ -79,6 +82,7 @@ pub enum Entry {
 impl fmt::Display for Entry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Entry::Expired { expired_at } => write!(f, "expired  {expired_at}"),
             Entry::ParticipantJoined { participant } => {
                 write!(f, "participant joined  {participant}")
             }
@@ -164,6 +168,9 @@ impl<'a> Log<'a> {
     /// The state is read in the statement that appends rather than off the `Workspace` handed
     /// in, so one sealed after the caller read it refuses all the same.
     pub async fn append(&mut self, workspace: &Workspace, entry: Entry) -> Result<TranscriptEntry> {
+        let kind = entry
+            .kind()
+            .context("expiry replaces an entry in place, never appends one")?;
         let appended_at = Timestamp::now();
         let seq: i64 = sqlx::query_scalar(
             "SELECT COALESCE(MAX(seq), 0) + 1 FROM transcript_entry WHERE workspace_id = ?",
@@ -192,7 +199,7 @@ impl<'a> Log<'a> {
         .bind(seq)
         .bind(serde_json::to_string(&body)?)
         .bind(appended_at.to_string())
-        .bind(entry.kind().as_str())
+        .bind(kind.as_str())
         .bind(entry.session_id().map(|id| id.to_string()))
         .bind(workspace.id.to_string())
         .bind(WorkspaceState::Open.as_str())
@@ -216,7 +223,7 @@ impl<'a> Log<'a> {
         }
 
         Ok(TranscriptEntry {
-            kind: entry.kind(),
+            kind,
             session_id: entry.session_id(),
             seq: appended.get("seq"),
             appended_at,
@@ -481,7 +488,126 @@ impl<'a> Log<'a> {
         kinds: &Kinds,
     ) -> Result<StoredPage, Unreadable> {
         let from = self.position(workspace, from).await?;
-        Ok(self.after(workspace, from, window, kinds).await?)
+        Ok(self
+            .read_window(workspace, from, window, kinds, SeqRange::default())
+            .await?)
+    }
+
+    pub async fn transcript_page(
+        &mut self,
+        workspace: &Workspace,
+        from: Option<Cursor>,
+        window: Window,
+        kinds: &Kinds,
+        summaries: bool,
+        range: SeqRange,
+    ) -> Result<TranscriptPage, Unreadable> {
+        range.validate()?;
+        let from = self.position(workspace, from).await?;
+        let after = from
+            .map_or(0, |cursor| cursor.seq)
+            .max(range.first_seq.unwrap_or(1) - 1);
+        let StoredPage {
+            entries,
+            cursor,
+            more,
+        } = self
+            .read_window(workspace, from, window, kinds, range)
+            .await?;
+        let examined = cursor.map_or(after, |cursor| cursor.seq.max(after));
+        let mut activities = Vec::new();
+        if summaries
+            && (!kinds.contains(Kind::Narration) || !kinds.contains(Kind::Detail))
+            && examined > after
+        {
+            let boundary: i64 = sqlx::query_scalar(
+                "SELECT COALESCE(MAX(seq), 0) FROM transcript_entry WHERE workspace_id = ? AND kind = 'shared_state' AND seq <= ?",
+            ).bind(workspace.id.to_string()).bind(after).fetch_one(&mut *self.connection).await?;
+            // Metadata stays inline even when the body's text or content is a payload reference.
+            let metadata = sqlx::query(
+                "SELECT seq, kind, json_extract(body, '$.type') AS type,
+                        json_extract(body, '$.title') AS title, json_extract(body, '$.status') AS status,
+                        json_extract(body, '$.closing_reason') AS closing_reason,
+                        json_extract(body, '$.completion.started_at') AS started_at,
+                        json_extract(body, '$.completion.finished_at') AS finished_at
+                 FROM transcript_entry WHERE workspace_id = ? AND seq > ? AND seq <= ? ORDER BY seq",
+            ).bind(workspace.id.to_string()).bind(boundary).bind(examined)
+                .fetch_all(&mut *self.connection).await?;
+            let mut activity: Option<Activity> = None;
+            let mut omitted = false;
+            for row in metadata {
+                let seq: i64 = row.get("seq");
+                let kind: Kind = row.get::<String, _>("kind").parse()?;
+                if kind == Kind::SharedState {
+                    if let Some(mut closed) = activity.take()
+                        && omitted
+                    {
+                        closed.closed = true;
+                        activities.push(closed);
+                    }
+                    omitted = false;
+                    continue;
+                }
+                let summary = activity.get_or_insert_with(|| Activity::new(seq));
+                summary.last_seq = seq;
+                if kinds.contains(kind) {
+                    continue;
+                }
+                omitted = true;
+                let entry_type: String = row.get("type");
+                match entry_type.as_str() {
+                    "thought" => summary.counts.thoughts += 1,
+                    "plan" => summary.counts.plans += 1,
+                    "tool_call" => {
+                        summary.counts.tool_calls += 1;
+                        if row.get::<Option<String>, _>("status").as_deref() == Some("failed") {
+                            summary.counts.failed_calls += 1;
+                        }
+                        summary.anomaly |= matches!(
+                            row.get::<Option<String>, _>("closing_reason").as_deref(),
+                            Some("interrupted" | "unresolved")
+                        );
+                    }
+                    "expired" => summary.counts.tombstones += 1,
+                    _ => {}
+                }
+                summary.latest = Some(ActivityItem {
+                    kind,
+                    title: row.get::<Option<String>, _>("title").or_else(|| {
+                        match entry_type.as_str() {
+                            "thought" => Some("Thought".into()),
+                            "plan" => Some("Plan".into()),
+                            _ => None,
+                        }
+                    }),
+                    status: row.get("status"),
+                });
+                if let Some(started) = row.get::<Option<String>, _>("started_at") {
+                    let started: Timestamp = started.parse().map_err(anyhow::Error::from)?;
+                    summary.started_at =
+                        Some(summary.started_at.map_or(started, |old| old.min(started)));
+                }
+                if let Some(finished) = row.get::<Option<String>, _>("finished_at") {
+                    let finished: Timestamp = finished.parse().map_err(anyhow::Error::from)?;
+                    summary.finished_at = Some(
+                        summary
+                            .finished_at
+                            .map_or(finished, |old| old.max(finished)),
+                    );
+                }
+            }
+            if let Some(open) = activity
+                && omitted
+            {
+                activities.push(open);
+            }
+        }
+        Ok(TranscriptPage {
+            entries,
+            activities,
+            more,
+            cursor,
+        })
     }
 
     async fn hydrate(&mut self, workspace: WorkspaceId, seq: i64, body: &str) -> Result<Entry> {
@@ -515,6 +641,33 @@ impl<'a> Log<'a> {
             .expect("transcript entry")
             .remove("payload_fields");
         Ok(body)
+    }
+
+    pub async fn expire(&mut self, at: Timestamp) -> Result<usize> {
+        const RETENTION: jiff::SignedDuration = jiff::SignedDuration::from_hours(30 * 24);
+        const BATCH: i64 = 1_000;
+        let due = sqlx::query(
+            "SELECT workspace_id, seq FROM transcript_entry
+             WHERE kind IN ('narration', 'detail') AND json_extract(body, '$.type') != 'expired'
+               AND appended_at <= ? ORDER BY appended_at, workspace_id, seq LIMIT ?",
+        )
+        .bind((at - RETENTION).to_string())
+        .bind(BATCH)
+        .fetch_all(&mut *self.connection)
+        .await?;
+        let tombstone = serde_json::to_string(&Entry::Expired { expired_at: at })?;
+        for row in &due {
+            let workspace: String = row.get("workspace_id");
+            let seq: i64 = row.get("seq");
+            sqlx::query("DELETE FROM transcript_payload WHERE workspace_id = ? AND seq = ?")
+                .bind(&workspace)
+                .bind(seq)
+                .execute(&mut *self.connection)
+                .await?;
+            sqlx::query("UPDATE transcript_entry SET body = ?, session_id = NULL WHERE workspace_id = ? AND seq = ?")
+                .bind(&tombstone).bind(&workspace).bind(seq).execute(&mut *self.connection).await?;
+        }
+        Ok(due.len())
     }
 
     pub async fn payload(&mut self, workspace: &Workspace, id: &str) -> Result<PayloadRead> {
@@ -578,36 +731,44 @@ impl<'a> Log<'a> {
         }
     }
 
-    /// One entry beyond the window is read and dropped, which is what tells a reader whether
-    /// more are waiting without asking a second time.
-    async fn after(
+    async fn read_window(
         &mut self,
         workspace: &Workspace,
         from: Option<Cursor>,
         window: Window,
         kinds: &Kinds,
+        range: SeqRange,
     ) -> Result<StoredPage> {
+        let after = from
+            .map_or(0, |cursor| cursor.seq)
+            .max(range.first_seq.unwrap_or(1) - 1);
         let rows = sqlx::query(
             "SELECT seq, body, appended_at, kind, session_id
              FROM transcript_entry
-             WHERE workspace_id = ? AND seq > ?
+             WHERE workspace_id = ? AND seq > ? AND seq <= ?
              ORDER BY seq
              LIMIT ?",
         )
         .bind(workspace.id.to_string())
-        .bind(from.map_or(0, |cursor| cursor.seq))
+        .bind(after)
+        .bind(range.last_seq.unwrap_or(i64::MAX))
         .bind(i64::try_from(window.0 + 1)?)
         .fetch_all(&mut *self.connection)
         .await
         .with_context(|| format!("reading the transcript of workspace {}", workspace.id))?;
 
         let more = rows.len() > window.0;
-        let entries = rows
-            .iter()
-            .take(window.0)
-            .map(|row| {
-                Ok(StoredTranscriptEntry {
-                    kind: row.get::<String, _>("kind").parse()?,
+        let rows = &rows[..rows.len().min(window.0)];
+        let cursor = rows
+            .last()
+            .map(|row| Cursor::at(workspace.id, row.get("seq")))
+            .or(from);
+        let mut entries = Vec::new();
+        for row in rows {
+            let kind = row.get::<String, _>("kind").parse()?;
+            if kinds.contains(kind) {
+                entries.push(StoredTranscriptEntry {
+                    kind,
                     session_id: row
                         .get::<Option<String>, _>("session_id")
                         .map(|id| id.parse())
@@ -615,21 +776,9 @@ impl<'a> Log<'a> {
                     seq: row.get("seq"),
                     appended_at: row.get::<String, _>("appended_at").parse()?,
                     entry: serde_json::from_str(row.get("body"))?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let cursor = entries
-            .last()
-            .map(|entry| Cursor {
-                workspace: workspace.id,
-                seq: entry.seq,
-            })
-            .or(from);
-        let entries = entries
-            .into_iter()
-            .filter(|entry| kinds.contains(entry.kind))
-            .collect();
+                });
+            }
+        }
         Ok(StoredPage {
             cursor,
             entries,
@@ -779,11 +928,12 @@ impl Kinds {
     }
 }
 impl Entry {
-    pub const fn kind(&self) -> Kind {
+    pub const fn kind(&self) -> Option<Kind> {
         match self {
-            Self::Thought { .. } | Self::Plan { .. } => Kind::Narration,
-            Self::ToolCall { .. } => Kind::Detail,
-            _ => Kind::SharedState,
+            Self::Expired { .. } => None,
+            Self::Thought { .. } | Self::Plan { .. } => Some(Kind::Narration),
+            Self::ToolCall { .. } => Some(Kind::Detail),
+            _ => Some(Kind::SharedState),
         }
     }
     pub const fn session_id(&self) -> Option<SessionId> {
@@ -907,4 +1057,70 @@ pub enum PayloadRead {
     Available(Payload),
     Gone,
     Missing,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SeqRange {
+    pub first_seq: Option<i64>,
+    pub last_seq: Option<i64>,
+}
+impl SeqRange {
+    pub fn validate(self) -> Result<(), Unreadable> {
+        if self.first_seq.is_some_and(|seq| seq < 1)
+            || self.last_seq.is_some_and(|seq| seq < 1)
+            || matches!((self.first_seq, self.last_seq), (Some(first), Some(last)) if first > last)
+        {
+            return Err(Unreadable::Cursor(
+                "a seq range must be positive and ordered".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub struct TranscriptPage {
+    pub entries: Vec<StoredTranscriptEntry>,
+    pub activities: Vec<Activity>,
+    pub cursor: Option<Cursor>,
+    pub more: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Activity {
+    pub first_seq: i64,
+    pub last_seq: i64,
+    pub counts: ActivityCounts,
+    pub latest: Option<ActivityItem>,
+    pub started_at: Option<Timestamp>,
+    pub finished_at: Option<Timestamp>,
+    pub anomaly: bool,
+    pub closed: bool,
+}
+impl Activity {
+    fn new(seq: i64) -> Self {
+        Self {
+            first_seq: seq,
+            last_seq: seq,
+            counts: ActivityCounts::default(),
+            latest: None,
+            started_at: None,
+            finished_at: None,
+            anomaly: false,
+            closed: false,
+        }
+    }
+}
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ActivityCounts {
+    pub tool_calls: u64,
+    pub failed_calls: u64,
+    pub thoughts: u64,
+    pub plans: u64,
+    pub tombstones: u64,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct ActivityItem {
+    pub kind: Kind,
+    pub title: Option<String>,
+    pub status: Option<String>,
 }

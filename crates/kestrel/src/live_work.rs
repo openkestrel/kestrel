@@ -156,7 +156,7 @@ pub struct RunningTool {
     pub started_at: Timestamp,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionState {
     pub tools: Vec<RunningTool>,
     pub message_buffering: bool,
@@ -169,6 +169,22 @@ impl Summaries {
             live.sessions.insert(session.to_owned(), state);
         }
     }
+    pub fn current_session(&self, session: &crate::domain::Session) -> SessionState {
+        if crate::domain::SessionState::LIVE.contains(&session.state)
+            && session
+                .lease_expires_at
+                .is_some_and(|at| at > Timestamp::now())
+        {
+            session
+                .instance
+                .as_deref()
+                .map(|instance| self.session(instance, &session.id.to_string()))
+                .unwrap_or_default()
+        } else {
+            SessionState::default()
+        }
+    }
+
     pub fn session(&self, instance: &str, session: &str) -> SessionState {
         self.0
             .lock()
