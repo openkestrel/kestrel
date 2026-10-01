@@ -85,8 +85,9 @@ export function Composer({
 		setRefusal(null);
 		setPartial(null);
 		try {
-			await postTurn(operator, organization, workspace, name, draft.trim());
+			const posted = await postTurn(operator, organization, workspace, name, draft.trim());
 			setDraft("");
+			announce(posted.held_message ? "Message held for the next turn" : "Message sent");
 			await refresh();
 			return true;
 		} catch (error) {

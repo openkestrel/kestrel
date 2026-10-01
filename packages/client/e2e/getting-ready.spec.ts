@@ -181,7 +181,7 @@ test("an open with no Brief lands with the composer, and its first message becom
 	await message.fill("the first brief");
 	await page.getByRole("button", { name: "Send" }).click();
 
-	await expect(page.getByText("the first brief")).toBeVisible({ timeout: 20_000 });
+	await expect(page.getByRole("log").getByText("the first brief")).toBeVisible({ timeout: 20_000 });
 	await expect(message).toHaveValue("");
 });
 
@@ -281,7 +281,7 @@ test("a message sent before ready shows as held, then becomes the Brief", async 
 
 	await expect(page.locator("[data-held]")).toHaveCount(0);
 	await expect(page.locator("[data-preparing]")).toContainText("Ready: the harness is up");
-	await expect(page.getByText("the first brief")).toBeVisible({ timeout: 20_000 });
+	await expect(page.getByRole("log").getByText("the first brief")).toBeVisible({ timeout: 20_000 });
 });
 
 test("a failure while preparing shows as a failed Session", async ({ page, request }) => {
