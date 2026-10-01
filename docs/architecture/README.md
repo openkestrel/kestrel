@@ -143,7 +143,7 @@ The rest of `crates/kestrel/src`, grouped by the page that covers them:
 
 | Boundary | Who is on the other side | What protects it |
 | --- | --- | --- |
-| Operator (7718) | A Client | Nothing. Bind it to loopback; the control plane warns otherwise. |
+| Operator (7718) | A Client | A loopback bind, plus a loopback `Host` and same-origin `Origin` check ([ADR-0036](../adr/0036-the-browser-client-shares-the-loopback-operator-origin.md), [ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md)). |
 | Link (7717) | A supervisor | A per-Instance bearer credential, and a live lease for anything about a Session ([Link](link.md#authentication)). |
 | Webhooks (7717) | Any producer | The Integration's HMAC signing secret or shared secret. A refusal becomes no Event; the last one is kept on the Integration. |
 | Docker daemon | The control plane | socket-proxy's allowlist, on an internal network. |

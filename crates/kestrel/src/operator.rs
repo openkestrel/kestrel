@@ -237,7 +237,7 @@ fn addressed_from_here(request: &Request) -> Result<(), Refused> {
         .get(HOST)
         .and_then(|host| host.to_str().ok())
         .or_else(|| request.uri().authority().map(Authority::as_str))
-        .filter(|host| cannot_be_rebound(host))
+        .filter(|host| is_loopback_host(host))
         .ok_or_else(|| {
             Refused::Forbidden("the request names a host other than this control plane".to_owned())
         })?;
@@ -251,20 +251,23 @@ fn addressed_from_here(request: &Request) -> Result<(), Refused> {
     }
 }
 
-// Any port, because compose and a tunnel publish the boundary on one it was never bound to.
-fn cannot_be_rebound(host: &str) -> bool {
+// Any port, because compose and a tunnel publish the boundary on one it was never bound to. The
+// allowlist is explicit, so a name a browser resolves to loopback is still refused.
+fn is_loopback_host(host: &str) -> bool {
     let Ok(authority) = host.parse::<Authority>() else {
         return false;
     };
-    let name = authority.host();
+    if authority.as_str().contains('@') {
+        return false;
+    }
 
-    !authority.as_str().contains('@')
-        && (name.eq_ignore_ascii_case("localhost")
-            || name
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .parse::<IpAddr>()
-                .is_ok())
+    let name = authority.host();
+    name.eq_ignore_ascii_case("localhost")
+        || name
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 #[derive(Deserialize)]
