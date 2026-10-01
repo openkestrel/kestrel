@@ -327,14 +327,19 @@ fn declared(kestrel: &Booted) {
 }
 
 fn opened(kestrel: &Booted) -> String {
-    kestrel.run(&[
+    kestrel.record(&[
         "workspace",
         "open",
         "--project",
         support::repository::NAME,
         "--agent",
         "builder",
-    ])
+        "--json",
+        "workspace",
+    ])["workspace"]
+        .as_str()
+        .expect("the opened workspace's name")
+        .to_owned()
 }
 
 /// Each entry as `seq kind …`, without the moment it was appended, which is different every
@@ -562,12 +567,109 @@ fn a_workspace_post_without_a_participant_is_a_usage_error() {
 }
 
 #[test]
+fn a_held_message_is_printed_listed_edited_and_withdrawn() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Dawdles, "info");
+    declared(&booted);
+    let workspace = opened(&booted);
+    booted.run(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "operator",
+        "go",
+    ]);
+    booted.until(
+        &[
+            "session",
+            "list",
+            "--workspace",
+            &workspace,
+            "--json",
+            "state",
+        ],
+        |listed| listed.iter().any(|session| session["state"] == "working"),
+        "reach a working session",
+    );
+
+    let held = booted.run(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "alice",
+        "one more change",
+    ]);
+    let id: i64 = held.parse().expect("the post prints the held id");
+    let listed = booted.record(&["workspace", "show", &workspace, "--json", "held_messages"]);
+    assert_eq!(listed["held_messages"][0]["id"], id);
+    assert_eq!(listed["held_messages"][0]["participant"], "alice");
+    assert_eq!(listed["held_messages"][0]["message"], "one more change");
+
+    let edited = booted.record(&[
+        "workspace",
+        "message",
+        "edit",
+        &workspace,
+        &held,
+        "--as-participant",
+        "alice",
+        "the edited change",
+        "--json",
+        "id,message,edited_at",
+    ]);
+    assert_eq!(edited["id"], id);
+    assert_eq!(edited["message"], "the edited change");
+    assert!(!edited["edited_at"].is_null(), "{edited}");
+
+    let refused = booted.refused(&[
+        "workspace",
+        "message",
+        "edit",
+        &workspace,
+        &held,
+        "--as-participant",
+        "bob",
+        "mine now",
+    ]);
+    assert!(
+        refused.contains("only its author may change it"),
+        "{refused}"
+    );
+
+    booted.run(&[
+        "workspace",
+        "message",
+        "withdraw",
+        &workspace,
+        &held,
+        "--as-participant",
+        "alice",
+    ]);
+    assert_eq!(
+        booted.record(&["workspace", "show", &workspace, "--json", "held_messages"])["held_messages"],
+        serde_json::json!([])
+    );
+    let refused = booted.refused(&[
+        "workspace",
+        "message",
+        "withdraw",
+        &workspace,
+        &held,
+        "--as-participant",
+        "alice",
+    ]);
+    assert!(refused.contains("already withdrawn"), "{refused}");
+}
+
+#[test]
 fn a_session_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
     let kestrel = Kestrel::new();
     let booted = kestrel.boot();
     declared(&booted);
     let workspace = opened(&booted);
-    let session = booted.run(&[
+    booted.run(&[
         "workspace",
         "post",
         &workspace,
@@ -577,8 +679,11 @@ fn a_session_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
     ]);
 
     let listed = dispatched(&booted, &workspace);
+    let session = listed[0]["id"]
+        .as_str()
+        .expect("the session's id")
+        .to_owned();
 
-    assert_eq!(listed[0]["id"], session);
     assert_eq!(listed[0]["exit"]["status"], "succeeded");
     assert!(
         listed[0]["instance"]

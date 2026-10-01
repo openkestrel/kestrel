@@ -1446,9 +1446,52 @@
         ],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkspaceMessage" } } } },
         "responses": {
-          "200": { "description": "The Session the message started or continued, or null when it was queued behind an active turn.", "content": { "application/json": { "schema": { "anyOf": [{ "$ref": "#/components/schemas/Session" }, { "type": "null" }] } } } },
+          "200": { "description": "The Session the message started or woke, and the Held Message it left, if it was held rather than recorded at once.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Posted" } } } },
+          "403": { "$ref": "#/components/responses/Refused" },
           "400": { "$ref": "#/components/responses/Refused" },
           "404": { "$ref": "#/components/responses/Refused" },
+          "422": { "$ref": "#/components/responses/Refused" },
+          "503": { "$ref": "#/components/responses/Refused" }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/messages/{id}": {
+      "put": {
+        "operationId": "editWorkspaceMessage",
+        "summary": "Edit a Held Message.",
+        "description": "The message is named by the id a post answered with. Only its author's name is accepted. A message a Turn already took is refused 409, and one its author withdrew is refused 409.",
+        "parameters": [
+          { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "id", "in": "path", "required": true, "description": "The id a post answered with.", "schema": { "type": "integer" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkspaceMessage" } } } },
+        "responses": {
+          "200": { "description": "The edited Held Message.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HeldMessage" } } } },
+          "400": { "$ref": "#/components/responses/Refused" },
+          "403": { "$ref": "#/components/responses/Refused" },
+          "404": { "$ref": "#/components/responses/Refused" },
+          "409": { "$ref": "#/components/responses/Refused" },
+          "422": { "$ref": "#/components/responses/Refused" },
+          "503": { "$ref": "#/components/responses/Refused" }
+        }
+      },
+      "delete": {
+        "operationId": "withdrawWorkspaceMessage",
+        "summary": "Withdraw a Held Message.",
+        "description": "The message is named by the id a post answered with. Only its author's name is accepted. A message a Turn already took is refused 409, and one already withdrawn is refused 409.",
+        "parameters": [
+          { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "id", "in": "path", "required": true, "description": "The id a post answered with.", "schema": { "type": "integer" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkspaceMessageWithdrawal" } } } },
+        "responses": {
+          "204": { "description": "The message is withdrawn, and no Turn will see it." },
+          "400": { "$ref": "#/components/responses/Refused" },
+          "403": { "$ref": "#/components/responses/Refused" },
+          "404": { "$ref": "#/components/responses/Refused" },
+          "409": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
           "503": { "$ref": "#/components/responses/Refused" }
         }
@@ -1986,7 +2029,7 @@
   "components": {
     "responses": {
       "Refused": {
-        "description": "The control plane refused the request. 400 is a request it could not read; 404 is a name or reference that resolves to no record, or to more than one; 409 and 422 are an operation it declined; 503 is a control plane that could not answer; 504 is an Instance that did not answer a read within 10 s.",
+        "description": "The control plane refused the request. 400 is a request it could not read; 403 is a name that is not the one the change requires; 404 is a name or reference that resolves to no record, or to more than one; 409 and 422 are an operation it declined; 503 is a control plane that could not answer; 504 is an Instance that did not answer a read within 10 s.",
         "headers": {
           "Retry-After": {
             "description": "Seconds to wait before asking again. Present on a 503 only when the database was busy, which asking again can clear.",
@@ -3024,6 +3067,35 @@
         },
         "required": ["participant", "message"]
       },
+      "WorkspaceMessageWithdrawal": {
+        "type": "object",
+        "properties": {
+          "participant": {
+            "type": "string",
+            "description": "The person who wrote the message, by declared name. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization."
+          }
+        },
+        "required": ["participant"]
+      },
+      "HeldMessage": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "description": "The Workspace's own sequence. Stable and never reused: a taken or withdrawn message keeps it." },
+          "participant": { "type": "string" },
+          "message": { "type": "string" },
+          "posted_at": { "type": "string", "format": "date-time" },
+          "edited_at": { "type": ["string", "null"], "format": "date-time" }
+        },
+        "required": ["id", "participant", "message", "posted_at", "edited_at"]
+      },
+      "Posted": {
+        "type": "object",
+        "properties": {
+          "session": { "anyOf": [{ "$ref": "#/components/schemas/Session" }, { "type": "null" }], "description": "The Session the message started or woke, if it started or woke one." },
+          "held_message": { "anyOf": [{ "$ref": "#/components/schemas/HeldMessage" }, { "type": "null" }], "description": "The Held Message the post left, if a Turn could not take it at once." }
+        },
+        "required": ["session", "held_message"]
+      },
       "Workspace": {
         "type": "object",
         "properties": {
@@ -3036,6 +3108,7 @@
           "checkout": { "$ref": "#/components/schemas/Checkout" },
           "instance": { "type": ["string", "null"], "description": "The Instance its Sessions execute on, while one is kept." },
           "held": { "type": ["string", "null"], "description": "Why its Instance is held for work that exists nowhere else, if it is." },
+          "held_messages": { "type": "array", "description": "The messages the unfinished Session cannot take yet, in arrival order.", "items": { "$ref": "#/components/schemas/HeldMessage" } },
           "correlation": { "type": ["string", "null"] },
           "state": { "type": "string", "enum": ["open", "sealed"] },
           "opened_at": { "type": "string", "format": "date-time" },
@@ -3053,7 +3126,7 @@
             "description": "One per repository fixed on the Workspace, in the checkout's order."
           }
         },
-        "required": ["id", "name", "organization", "project", "opened_with", "profile", "checkout", "instance", "held", "correlation", "state", "opened_at", "last_active_at", "sealed_at", "continues", "started_by", "continued_by", "pull_requests"]
+        "required": ["id", "name", "organization", "project", "opened_with", "profile", "checkout", "instance", "held", "correlation", "state", "opened_at", "last_active_at", "sealed_at", "continues", "started_by", "continued_by", "held_messages", "pull_requests"]
       },
       "PullRequestAvailability": {
         "type": "object",

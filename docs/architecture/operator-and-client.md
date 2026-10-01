@@ -83,6 +83,19 @@ other JSON values remain inline even if they resemble a reference. A reference i
 Workspace, entry seq and field. Another Workspace's reference is `404`; a reference whose entry
 expired is `410` after its content is removed. Internal prompt and delivery reads resolve references.
 
+### Held messages
+
+A post into a Workspace whose unfinished Session cannot take it leaves a Held Message. The
+Workspace read carries `held_messages` — the `held` ones in arrival order, each with `id`,
+`participant`, `message`, `posted_at` and `edited_at` — and the post answers
+`{ session, held_message }`. `PUT …/workspaces/{workspace}/messages/{id}` takes
+`{ participant, message }` and answers the Held Message; `DELETE …/workspaces/{workspace}/messages/{id}`
+takes `{ participant }` and answers `204`. Both apply the participant name rule and refuse an id the
+Workspace never held `404`, a name other than the author's `403`, and one a Turn took or its author
+withdrew `409`. Neither writes a Transcript entry. `kestrel workspace show` lists Held Messages,
+`workspace post` prints the held id, and `workspace message edit` / `workspace message withdraw`
+change one.
+
 ### Change notices
 
 `GET …/changes` is SSE, per Organization. It opens with an `open` event, then a `change` event

@@ -618,6 +618,9 @@ enum WorkspaceCommand {
         /// What the participant says
         message: String,
     },
+    /// Change a Held Message before a Turn takes it
+    #[command(subcommand)]
+    Message(MessageCommand),
     /// Seal a Workspace: readable ever after, and never reopened
     Seal {
         /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
@@ -641,6 +644,34 @@ enum WorkspaceCommand {
         as_participant: Option<String>,
         #[arg(long, default_value = "shared_state")]
         kinds: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum MessageCommand {
+    /// Replace a Held Message's text; only its author's name is accepted
+    Edit {
+        /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
+        /// `latest`
+        workspace: String,
+        /// The id the post answered with
+        id: i64,
+        /// The participant that wrote the message, and only that one
+        #[arg(long)]
+        as_participant: String,
+        /// What the message now says
+        message: String,
+    },
+    /// Take a Held Message back, so no Turn sees it; only its author's name is accepted
+    Withdraw {
+        /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
+        /// `latest`
+        workspace: String,
+        /// The id the post answered with
+        id: i64,
+        /// The participant that wrote the message, and only that one
+        #[arg(long)]
+        as_participant: String,
     },
 }
 
@@ -886,8 +917,11 @@ async fn run() -> Result<()> {
         }
         Command::Credential(CredentialCommand::Forget { variable }) => {
             let organization = scoping.resolve().await?.organization;
-            api.delete(&["organizations", &organization, "credentials", &variable])
-                .await?;
+            api.delete(
+                &["organizations", &organization, "credentials", &variable],
+                &json!({}),
+            )
+            .await?;
         }
         Command::Profile(ProfileCommand::Declare { name, owner }) => {
             let organization = scoping.resolve().await?.organization;
@@ -921,7 +955,8 @@ async fn run() -> Result<()> {
         }
         Command::Profile(ProfileCommand::Forget { name, entry }) => {
             let organization = scoping.resolve().await?.organization;
-            api.delete(&entry.path(&organization, &name)).await?;
+            api.delete(&entry.path(&organization, &name), &json!({}))
+                .await?;
         }
         Command::Integration(IntegrationCommand::Register(register)) => {
             let organization = scoping.resolve().await?.organization;
@@ -969,13 +1004,16 @@ async fn run() -> Result<()> {
         }
         Command::Integration(IntegrationCommand::AcknowledgeRefusal { name }) => {
             let organization = scoping.resolve().await?.organization;
-            api.delete(&[
-                "organizations",
-                &organization,
-                "integrations",
-                &name,
-                "event-refusal",
-            ])
+            api.delete(
+                &[
+                    "organizations",
+                    &organization,
+                    "integrations",
+                    &name,
+                    "event-refusal",
+                ],
+                &json!({}),
+            )
             .await?;
         }
         Command::Event(EventCommand::List { limit }) => {
@@ -1351,10 +1389,56 @@ async fn run() -> Result<()> {
                     &json!({ "participant": as_participant, "message": message }),
                 )
                 .await?;
-            if answer.is_null() {
+            let held = &answer["held_message"];
+            let session = &answer["session"];
+            if !held.is_null() {
+                show(&presentation, &view::DECLARED, held)?;
+            } else if !session.is_null() {
+                show(&presentation, &view::DECLARED, session)?;
+            } else {
                 eprintln!("queued as the next turn of the session already in flight");
             }
-            show(&presentation, &view::DECLARED, &answer)?;
+        }
+        Command::Workspace(WorkspaceCommand::Message(MessageCommand::Edit {
+            workspace,
+            id,
+            as_participant,
+            message,
+        })) => {
+            let organization = scoping.resolve().await?.organization;
+            let answer = api
+                .put(
+                    &[
+                        "organizations",
+                        &organization,
+                        "workspaces",
+                        &workspace,
+                        "messages",
+                        &id.to_string(),
+                    ],
+                    &json!({ "participant": as_participant, "message": message }),
+                )
+                .await?;
+            show(&presentation, &view::HELD_MESSAGE, &answer)?;
+        }
+        Command::Workspace(WorkspaceCommand::Message(MessageCommand::Withdraw {
+            workspace,
+            id,
+            as_participant,
+        })) => {
+            let organization = scoping.resolve().await?.organization;
+            api.delete(
+                &[
+                    "organizations",
+                    &organization,
+                    "workspaces",
+                    &workspace,
+                    "messages",
+                    &id.to_string(),
+                ],
+                &json!({ "participant": as_participant }),
+            )
+            .await?;
         }
         Command::Workspace(WorkspaceCommand::Seal { workspace }) => {
             let organization = scoping.resolve().await?.organization;

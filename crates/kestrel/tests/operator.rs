@@ -286,6 +286,13 @@ fn workspace_messages_at(organization: &str, workspace: &str) -> String {
         .replace("{workspace}", workspace)
 }
 
+fn workspace_message_at(organization: &str, workspace: &str, message: i64) -> String {
+    operator::WORKSPACE_MESSAGE
+        .replace("{organization}", organization)
+        .replace("{workspace}", workspace)
+        .replace("{id}", &message.to_string())
+}
+
 fn workspace_seal_at(organization: &str, workspace: &str) -> String {
     operator::WORKSPACE_SEAL
         .replace("{organization}", organization)
@@ -1969,7 +1976,8 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(posted.is_null(), "{posted}");
+    assert!(posted["session"].is_null(), "{posted}");
+    assert!(posted["held_message"].is_null(), "{posted}");
 
     let (status, shown_session) = got(&kestrel, &session_at("acme", session_id)).await;
     assert_eq!(status, StatusCode::OK);
@@ -2129,7 +2137,8 @@ async fn an_open_without_a_brief_queues_a_session_a_message_becomes_its_brief() 
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(posted.is_null(), "{posted}");
+    assert!(posted["session"].is_null(), "{posted}");
+    assert!(posted["held_message"].is_null(), "{posted}");
     let transcript = kestrel.transcript(workspace).await;
     assert_eq!(
         transcript[1].entry,
@@ -2541,6 +2550,175 @@ async fn a_post_names_its_participant_and_refuses_an_agents_name() {
             "{body}: {refusal}"
         );
         assert_eq!(refusal["field"], "participant", "{body}: {refusal}");
+    }
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn held_messages_are_listed_edited_and_withdrawn_over_the_boundary() {
+    let kestrel = Kestrel::boot().await;
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let active = kestrel.dispatch_session(workspace.id).await;
+    let messages = workspace_messages_at("acme", &workspace.id.to_string());
+    let shown = workspace_at("acme", &workspace.id.to_string());
+
+    let (status, posted) = declared(
+        &kestrel,
+        &messages,
+        &json!({ "participant": "alice", "message": "one more change" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(posted["session"].is_null(), "{posted}");
+    let id = posted["held_message"]["id"]
+        .as_i64()
+        .unwrap_or_else(|| panic!("the post answers with the held id: {posted}"));
+    assert_eq!(posted["held_message"]["participant"], "alice");
+    assert_eq!(posted["held_message"]["message"], "one more change");
+    assert!(posted["held_message"]["edited_at"].is_null());
+    let at = workspace_message_at("acme", &workspace.id.to_string(), id);
+
+    let (status, shown_workspace) = got(&kestrel, &shown).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(shown_workspace["held_messages"][0]["id"], id);
+    assert_eq!(
+        shown_workspace["held_messages"][0]["message"],
+        "one more change"
+    );
+
+    let before = payload_entries(&kestrel, &workspace.id.to_string()).await;
+    let (status, edited) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &at,
+        Some(&json!({ "participant": "alice", "message": "the edited change" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["id"], id);
+    assert_eq!(edited["message"], "the edited change");
+    assert!(!edited["edited_at"].is_null(), "an edit is stamped");
+    assert_eq!(
+        payload_entries(&kestrel, &workspace.id.to_string()).await,
+        before,
+        "an edit writes no Transcript entry"
+    );
+
+    let (status, refusal) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &at,
+        Some(&json!({ "participant": "bob", "message": "mine now" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refusal}");
+    let (status, refusal) = requested(
+        &kestrel,
+        reqwest::Method::DELETE,
+        &at,
+        Some(&json!({ "participant": "bob" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refusal}");
+    let (status, refusal) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &at,
+        Some(&json!({ "participant": "builder", "message": "mine now" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(refusal["field"], "participant", "{refusal}");
+
+    let (status, withdrawal) = requested(
+        &kestrel,
+        reqwest::Method::DELETE,
+        &at,
+        Some(&json!({ "participant": "alice" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{withdrawal}");
+    assert!(withdrawal.is_null(), "{withdrawal}");
+    assert_eq!(
+        payload_entries(&kestrel, &workspace.id.to_string()).await,
+        before,
+        "a withdrawal writes no Transcript entry"
+    );
+
+    let (status, refusal) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &at,
+        Some(&json!({ "participant": "alice", "message": "changed my mind" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert!(
+        refusal["message"]
+            .as_str()
+            .is_some_and(|why| why.contains("already withdrawn")),
+        "{refusal}"
+    );
+
+    let (status, posted) = declared(
+        &kestrel,
+        &messages,
+        &json!({ "participant": "alice", "message": "a later thing" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let later = posted["held_message"]["id"]
+        .as_i64()
+        .expect("the later message's id");
+    assert_ne!(
+        later, id,
+        "a message posted after one drained gets a new id"
+    );
+    kestrel.complete_session(&active).await;
+    kestrel
+        .claim_session()
+        .await
+        .expect("the later message starts a Session");
+    let (status, refusal) = requested(
+        &kestrel,
+        reqwest::Method::DELETE,
+        &workspace_message_at("acme", &workspace.id.to_string(), later),
+        Some(&json!({ "participant": "alice" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert!(
+        refusal["message"]
+            .as_str()
+            .is_some_and(|why| why.contains("already sent to the agent")),
+        "{refusal}"
+    );
+
+    for id in ["424242", "not-a-number"] {
+        let (status, refusal) = requested(
+            &kestrel,
+            reqwest::Method::PUT,
+            &operator::WORKSPACE_MESSAGE
+                .replace("{organization}", "acme")
+                .replace("{workspace}", &workspace.id.to_string())
+                .replace("{id}", id),
+            Some(&json!({ "participant": "alice", "message": "nowhere" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{refusal}");
     }
 
     kestrel.teardown().await;
@@ -4921,6 +5099,8 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::WORKSPACE_FILES, "get"),
         (operator::WORKSPACE_FILE, "get"),
         (operator::WORKSPACE_MESSAGES, "post"),
+        (operator::WORKSPACE_MESSAGE, "put"),
+        (operator::WORKSPACE_MESSAGE, "delete"),
         (operator::WORKSPACE_SEAL, "post"),
         (operator::WORKSPACE_INSTANCE_RELEASE, "post"),
         (operator::SESSIONS, "get"),

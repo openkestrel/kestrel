@@ -606,6 +606,18 @@ pub struct Checkout {
     pub branch: String,
 }
 
+/// A message the Workspace's unfinished Session cannot take yet: everyone can read it, and its
+/// author can edit or withdraw it until a Turn takes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldMessage {
+    /// The Workspace's own sequence, never reused because a taken or withdrawn row is kept.
+    pub id: i64,
+    pub participant: String,
+    pub message: String,
+    pub posted_at: Timestamp,
+    pub edited_at: Option<Timestamp>,
+}
+
 /// What started a Workspace: the Event whose firing opened it, or the Brief's author an operator
 /// named.
 #[derive(Debug, Clone, PartialEq, Eq)]

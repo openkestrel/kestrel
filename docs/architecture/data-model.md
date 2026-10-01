@@ -69,7 +69,7 @@ erDiagram
 | `turn` | One prompt and answer | `from_seq` anchors which Transcript entries are this Turn's response. |
 | `supervisor` | An Instance's supervisor | One row per Instance: its name, version, when it last reached the link, and its link credential's digest. Replaced when another is started; deleted when the Instance is let go. |
 | `link_instruction` | Instructions sent down the link | `(instance, seq)`; `seq` is the SSE event id, and `session_id` the Session each is for. |
-| `pending_message`, `pending_session` | Input held for the unfinished Session | See [Sessions](sessions.md#the-unfinished-session). |
+| `pending_message`, `pending_session` | Input held for the unfinished Session | A Held Message carries `state` (`held`, `taken`, `withdrawn`) and `edited_at`, and its row is never deleted, so its id is never reused. See [Sessions](sessions.md#the-unfinished-session). |
 | `follow_up` | Which comment Events fed which Workspace | One per Event, so a comment is taken once. |
 | `pull_request` | A Workspace's current value per pull request | `(workspace_id, url)`, since the url names the base repository and the number alone does not; a value fresher at its source (`updated_at`) is never replaced by an older one, and a conflicting tie is replaced only by what the Integration's repository reads back. |
 | `pull_request_attachment` | Which pull request Events were considered | One per Event: `attached` with its Workspace, `unmatched`, `ambiguous` or `sealed`. |

@@ -6,14 +6,14 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 use crate::domain::{
-    Exit, Session, SessionCommand, SessionId, SessionOption, Turn, Usage, WorkspaceId,
+    Exit, HeldMessage, Session, SessionCommand, SessionId, SessionOption, Turn, Usage, WorkspaceId,
 };
 use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
 use crate::link;
 use crate::live_work::RunningTool;
 use crate::log::{Completion, Entry, Message, PlanEntry};
-use crate::store::workspace::{PendingMessage, Taken};
+use crate::store::workspace::Taken;
 use crate::store::{Store, Tx};
 use crate::workspace;
 
@@ -748,7 +748,13 @@ async fn continue_pending(tx: &mut Tx<'_>, workspace: WorkspaceId) -> Result<Opt
     if let Some(pending) = tx.workspaces().take_pending_session(&workspace).await? {
         return Ok(Some(workspace::briefed(tx, &workspace, pending).await?));
     }
-    let pending = tx.workspaces().take_pending_messages(&workspace).await?;
+    // The Session that just ended is the last one to have reached a harness, so its commands
+    // decide which message is one; the Session about to start has none yet.
+    let commands = tx.workspaces().latest_commands(workspace.id).await?;
+    let pending = tx
+        .workspaces()
+        .take_held_messages(&workspace, &commands)
+        .await?;
     if pending.is_empty() {
         return Ok(None);
     }
@@ -768,7 +774,10 @@ async fn continue_pending(tx: &mut Tx<'_>, workspace: WorkspaceId) -> Result<Opt
 
 async fn prompt_pending(tx: &mut Tx<'_>, session: &Session) -> Result<()> {
     let workspace = tx.workspaces().get(session.workspace).await?;
-    let pending = tx.workspaces().take_pending_messages(&workspace).await?;
+    let pending = tx
+        .workspaces()
+        .take_held_messages(&workspace, &session.commands)
+        .await?;
     if pending.is_empty() {
         return Ok(());
     }
@@ -796,12 +805,11 @@ pub(crate) fn follow_up(messages: &[Message]) -> String {
     }
 }
 
-fn messages(pending: Vec<PendingMessage>) -> Vec<Message> {
-    pending
-        .into_iter()
-        .map(|pending| Message {
-            participant: pending.participant,
-            message: pending.body,
+fn messages(held: Vec<HeldMessage>) -> Vec<Message> {
+    held.into_iter()
+        .map(|held| Message {
+            participant: held.participant,
+            message: held.message,
         })
         .collect()
 }

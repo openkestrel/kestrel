@@ -120,8 +120,11 @@ pub const WORKSPACE: View = View::Detail(&[
     "started_by",
     "continues",
     "continued_by",
+    "held_messages",
     "pull_requests",
 ]);
+pub const HELD_MESSAGE: View =
+    View::Detail(&["id", "participant", "message", "posted_at", "edited_at"]);
 pub const SESSIONS: View = View::Rows(&[
     "id",
     "name",

@@ -56,8 +56,9 @@ impl ControlPlane {
             .await
     }
 
-    pub async fn delete(&self, path: &[&str]) -> Result<()> {
-        self.sent(self.client.delete(self.url(path)?)).await?;
+    pub async fn delete(&self, path: &[&str], body: &impl Serialize) -> Result<()> {
+        self.sent(self.client.delete(self.url(path)?).json(body))
+            .await?;
         Ok(())
     }
 

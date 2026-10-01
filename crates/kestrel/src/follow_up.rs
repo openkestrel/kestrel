@@ -89,7 +89,7 @@ async fn receiving(store: &Store, event: &Event) -> Result<Received> {
         )
         .await
         {
-            Ok(session) => session,
+            Ok(posted) => posted.session,
             // A login the name rule refuses is not fed, rather than failing the whole poll; the
             // Event is still taken, so it is never retried forever.
             Err(error) if error.downcast_ref::<FieldRefusal>().is_some() => {

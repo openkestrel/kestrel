@@ -45,9 +45,10 @@ use jiff::{SignedDuration, Timestamp};
 use kestrel::agent;
 use kestrel::compute::{Docker, Driver, LocalExec};
 use kestrel::domain::{
-    Agent, Correlation, CorrelationMiss, Direction, Event, EventRecordId, Exit, Fires, Integration,
-    Occurrence, OnOpenWorkspace, Organization, Project, Schedule, Session, SessionId, SessionState,
-    SubscriptionProfile, Templates, Trigger, Turn, Workspace, WorkspaceId,
+    Agent, Correlation, CorrelationMiss, Direction, Event, EventRecordId, Exit, Fires, HeldMessage,
+    Integration, Occurrence, OnOpenWorkspace, Organization, Project, Schedule, Session,
+    SessionCommand, SessionId, SessionState, SubscriptionProfile, Templates, Trigger, Turn,
+    Workspace, WorkspaceId,
 };
 use kestrel::instance;
 use kestrel::integration::{self, Connecting, Registration};
@@ -1385,15 +1386,107 @@ impl Kestrel {
         participant: &str,
         message: &str,
     ) -> Option<Session> {
+        self.posted_while_busy(id, participant, message)
+            .await
+            .session
+    }
+
+    /// What the post became, held message and all.
+    pub async fn posted_while_busy(
+        &self,
+        id: WorkspaceId,
+        participant: &str,
+        message: &str,
+    ) -> workspace::Posted {
         workspace::post(&self.store, id, participant, message)
             .await
             .expect("the message should post")
     }
 
+    pub async fn held_messages(&self, id: WorkspaceId) -> Vec<HeldMessage> {
+        workspace::held_messages(&self.store, id)
+            .await
+            .expect("held messages should read")
+    }
+
+    pub async fn edit_message(
+        &self,
+        id: WorkspaceId,
+        message: i64,
+        participant: &str,
+        text: &str,
+    ) -> anyhow::Result<HeldMessage> {
+        workspace::edit_message(&self.store, id, message, participant, text).await
+    }
+
+    pub async fn withdraw_message(
+        &self,
+        id: WorkspaceId,
+        message: i64,
+        participant: &str,
+    ) -> anyhow::Result<()> {
+        workspace::withdraw_message(&self.store, id, message, participant).await
+    }
+
+    /// What a harness reported as its commands, so a drain can tell a command message from a
+    /// remark.
+    pub async fn record_commands(&self, session: &Session, commands: &[SessionCommand]) {
+        let mut tx = self.store.begin().await.expect("a transaction");
+        tx.workspaces()
+            .record_session_info(
+                session,
+                session.title.as_deref(),
+                &session.options,
+                commands,
+            )
+            .await
+            .expect("the commands should record");
+        tx.commit().await.expect("the commands should commit");
+    }
+
+    /// A Firing Session held behind the Workspace's unfinished one, as a `new-session` firing
+    /// holds one.
+    pub async fn hold_session(&self, id: WorkspaceId, brief: &str) {
+        let mut tx = self.store.begin().await.expect("a transaction");
+        let held = tx
+            .workspaces()
+            .get(id)
+            .await
+            .expect("the workspace should read");
+        tx.workspaces()
+            .add_pending_session(
+                &held,
+                &kestrel::store::workspace::PendingSession {
+                    agent: held.opened_with.clone(),
+                    trigger: "test".to_owned(),
+                    brief: brief.to_owned(),
+                },
+            )
+            .await
+            .expect("the session should be held");
+        tx.commit().await.expect("the session should commit");
+    }
+
+    /// What the control plane last sent down the link for this Session, as the supervisor would
+    /// have read it.
+    pub async fn instruction(&self, session: &Session) -> Instruction {
+        let pool = database(self.data_dir()).await;
+        let body: String = sqlx::query_scalar(
+            "SELECT body FROM link_instruction WHERE session_id = ? ORDER BY seq DESC LIMIT 1",
+        )
+        .bind(session.id.to_string())
+        .fetch_one(&pool)
+        .await
+        .expect("an instruction for the session");
+        pool.close().await;
+
+        serde_json::from_str(&body).expect("an instruction body")
+    }
+
     pub async fn has_pending_messages(&self, id: WorkspaceId) -> bool {
         let pool = database(self.data_dir()).await;
         let pending = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM pending_message WHERE workspace_id = ?)",
+            "SELECT EXISTS (SELECT 1 FROM pending_message WHERE workspace_id = ? AND state = 'held')",
         )
         .bind(id.to_string())
         .fetch_one(&pool)

@@ -27,7 +27,7 @@ use crate::declaration;
 use crate::declined::{Declined, FieldRefusal, Kind};
 use crate::domain::{
     self, Agent, Connection, Correlation, Direction, EventRecordId, EventRefusal, Fires, Firing,
-    Integration, Occurrence, Organization, Project, Schedule, Session, StartedBy,
+    HeldMessage, Integration, Occurrence, Organization, Project, Schedule, Session, StartedBy,
     SubscriptionProfile, Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::fanout;
@@ -41,6 +41,7 @@ use crate::provider::{self, Held};
 use crate::queue;
 use crate::role::serve;
 use crate::store::organization::NoSuchOrganization;
+use crate::store::workspace::HeldMessageRefusal;
 use crate::store::{self, Declared, Store};
 use crate::template::Template;
 use crate::trigger::{self, apply};
@@ -94,6 +95,8 @@ pub const WORKSPACE_FILE: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/file";
 pub const WORKSPACE_MESSAGES: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/messages";
+pub const WORKSPACE_MESSAGE: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/messages/{id}";
 pub const WORKSPACE_SEAL: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/seal";
 pub const WORKSPACE_INSTANCE_RELEASE: &str =
@@ -254,6 +257,10 @@ pub fn router(
         .route(WORKSPACE_COMMITS, get(workspace_commits))
         .route(WORKSPACE_STASHES, get(workspace_stashes))
         .route(WORKSPACE_MESSAGES, post(post_to_workspace))
+        .route(
+            WORKSPACE_MESSAGE,
+            put(edit_workspace_message).delete(withdraw_workspace_message),
+        )
         .route(WORKSPACE_SEAL, post(seal_workspace))
         .route(WORKSPACE_INSTANCE_RELEASE, post(release_instance))
         .route(SESSIONS, get(sessions).post(enqueue_session))
@@ -358,6 +365,11 @@ struct WorkspaceMessage {
 }
 
 #[derive(Deserialize)]
+struct WorkspaceMessageWithdrawal {
+    participant: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct SessionDeclaration {
     agent: Option<String>,
     model: Option<String>,
@@ -457,7 +469,16 @@ struct WorkspaceRecord {
     continues: Option<String>,
     started_by: Option<String>,
     continued_by: Vec<String>,
+    held_messages: Vec<HeldMessage>,
     pull_requests: Vec<PullRequestAvailabilityRecord>,
+}
+
+/// What a post became: the Session it started or woke, and the Held Message it left, if it was
+/// held rather than recorded at once.
+#[derive(Serialize)]
+struct PostedRecord {
+    session: Option<SessionRecord>,
+    held_message: Option<HeldMessage>,
 }
 
 #[derive(Serialize)]
@@ -636,6 +657,7 @@ impl WorkspaceRecord {
             .into_iter()
             .map(PullRequestAvailabilityRecord::from)
             .collect();
+        let held_messages = workspace::held_messages(store, workspace.id).await?;
 
         Ok(Self {
             id: workspace.id.to_string(),
@@ -658,6 +680,7 @@ impl WorkspaceRecord {
                 StartedBy::Participant(participant) => participant,
             }),
             continued_by,
+            held_messages,
             pull_requests,
         })
     }
@@ -2120,10 +2143,10 @@ async fn post_to_workspace(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
     message: Result<Json<WorkspaceMessage>, JsonRejection>,
-) -> Result<Json<Option<SessionRecord>>, Refused> {
+) -> Result<Json<PostedRecord>, Refused> {
     let Json(message) = message?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
-    let session = workspace::post(
+    let posted = workspace::post(
         &control_plane.store,
         workspace.id,
         message.participant.as_deref().unwrap_or_default(),
@@ -2131,9 +2154,59 @@ async fn post_to_workspace(
     )
     .await
     .map_err(workspace_refusal)?;
-    let session = session.map(SessionRecord::read);
 
-    Ok(Json(session))
+    Ok(Json(PostedRecord {
+        session: posted.session.map(SessionRecord::read),
+        held_message: posted.held_message,
+    }))
+}
+
+async fn edit_workspace_message(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, workspace, id)): Path<(String, String, String)>,
+    edit: Result<Json<WorkspaceMessage>, JsonRejection>,
+) -> Result<Json<HeldMessage>, Refused> {
+    let Json(edit) = edit?;
+    let workspace = resolved(&control_plane, &organization, &workspace).await?;
+    let edited = workspace::edit_message(
+        &control_plane.store,
+        workspace.id,
+        held_id(&id)?,
+        edit.participant.as_deref().unwrap_or_default(),
+        &edit.message,
+    )
+    .await
+    .map_err(workspace_refusal)?;
+
+    Ok(Json(edited))
+}
+
+async fn withdraw_workspace_message(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, workspace, id)): Path<(String, String, String)>,
+    withdrawal: Result<Json<WorkspaceMessageWithdrawal>, JsonRejection>,
+) -> Result<StatusCode, Refused> {
+    let Json(withdrawal) = withdrawal?;
+    let workspace = resolved(&control_plane, &organization, &workspace).await?;
+    workspace::withdraw_message(
+        &control_plane.store,
+        workspace.id,
+        held_id(&id)?,
+        withdrawal.participant.as_deref().unwrap_or_default(),
+    )
+    .await
+    .map_err(workspace_refusal)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// An id the Workspace never held answers `404` like one it did and no longer can change.
+fn held_id(id: &str) -> Result<i64, Refused> {
+    id.parse().map_err(|_| {
+        Refused::NotFound(format!(
+            "the workspace never held a message with the id {id}"
+        ))
+    })
 }
 
 async fn seal_workspace(
@@ -2262,7 +2335,9 @@ async fn resolved(
 }
 
 fn workspace_refusal(error: anyhow::Error) -> Refused {
-    if error.downcast_ref::<FieldRefusal>().is_some() {
+    if error.downcast_ref::<FieldRefusal>().is_some()
+        || error.downcast_ref::<HeldMessageRefusal>().is_some()
+    {
         return error.into();
     }
     let message = error.to_string();
@@ -2586,6 +2661,16 @@ impl From<anyhow::Error> for Refused {
         }
         if let Some(silent) = error.downcast_ref::<crate::live_read::NotAnswering>() {
             return Refused::NotAnswering(silent.to_string());
+        }
+        if let Some(refused) = error.downcast_ref::<HeldMessageRefusal>() {
+            let why = refused.to_string();
+            return match refused {
+                HeldMessageRefusal::NeverHeld(_) => Refused::NotFound(why),
+                HeldMessageRefusal::NotTheAuthor(_) => Refused::Forbidden(why),
+                HeldMessageRefusal::AlreadyTaken | HeldMessageRefusal::AlreadyWithdrawn => {
+                    Refused::Conflict(why)
+                }
+            };
         }
         match error.downcast::<Declined>() {
             Ok(Declined::Unacceptable(why)) => Refused::Unprocessable(why),

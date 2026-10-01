@@ -4,13 +4,17 @@ ALTER TABLE event ADD COLUMN message TEXT;
 
 ALTER TABLE session ADD COLUMN supervisor TEXT;
 
+-- A Held Message: what arrived while a Session could not take it. Rows are never deleted, so an
+-- id is stable and never reused, and a Turn marks the ones it takes rather than removing them.
 CREATE TABLE pending_message (
     workspace_id TEXT NOT NULL REFERENCES workspace (id),
     organization_id TEXT NOT NULL REFERENCES organization (id),
     seq INTEGER NOT NULL,
     participant TEXT NOT NULL,
     body TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('held', 'taken', 'withdrawn')),
     received_at TEXT NOT NULL,
+    edited_at TEXT,
     PRIMARY KEY (workspace_id, seq)
 ) STRICT;
 
