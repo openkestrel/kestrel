@@ -20,7 +20,7 @@ segment:
 | `POST` | `/reports` | One report. `202` when taken, including a replay. `connected` returns the Workspace checkout declaration. |
 | `GET` | `/credentials?session=` | Provider Credentials and Subscription Profile contents for a Session the Instance carries, decrypted for this request. |
 | `PATCH` | `/credentials?session=` | Hands back profile files the harness refreshed. |
-| `GET` | `/entries` | Pages the Workspace's Transcript. The supervisor does not currently call it. |
+| `GET` | `/entries` | Pages the Workspace's Transcript with payload content hydrated for supervisor context. The supervisor does not currently call it. |
 | `POST` | `/answers/{request}` | The streamed answer to a read. `204` once the operator has taken it; `410` when nobody waits on it. |
 
 ## Live work reports
