@@ -31,6 +31,11 @@ export type TranscriptSnapshot = {
 
 const LIMIT = 500;
 
+export function cursorSeq(cursor: string): number | undefined {
+	const seq = Number(cursor.slice(cursor.lastIndexOf(":") + 1));
+	return Number.isSafeInteger(seq) ? seq : undefined;
+}
+
 export class TranscriptMirror {
 	private entries: Delivered[] = [];
 	private activities: Activity[] = [];
@@ -141,8 +146,8 @@ export class TranscriptMirror {
 
 	private setCursor(cursor: string): void {
 		this.cursorValue = cursor;
-		const seq = Number(cursor.slice(cursor.lastIndexOf(":") + 1));
-		if (Number.isSafeInteger(seq)) this.highest = Math.max(this.highest, seq);
+		const seq = cursorSeq(cursor);
+		if (seq !== undefined) this.highest = Math.max(this.highest, seq);
 		this.persist(cursor);
 		this.changed();
 	}
@@ -174,8 +179,8 @@ export class TranscriptMirror {
 		try {
 			const cursor = sessionStorage.getItem(this.storageKey);
 			if (!cursor) return undefined;
-			const seq = Number(cursor.slice(cursor.lastIndexOf(":") + 1));
-			return Number.isSafeInteger(seq) && seq >= 0 ? { cursor, seq } : undefined;
+			const seq = cursorSeq(cursor);
+			return seq !== undefined && seq >= 0 ? { cursor, seq } : undefined;
 		} catch {
 			return undefined;
 		}
