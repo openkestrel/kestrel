@@ -628,6 +628,8 @@ enum WorkspaceCommand {
         follow: bool,
         #[arg(long, default_value = "shared_state")]
         kinds: String,
+        #[arg(long)]
+        no_summaries: bool,
     },
 }
 
@@ -1352,6 +1354,7 @@ async fn run() -> Result<()> {
             cursor,
             follow,
             kinds,
+            no_summaries,
         }) => {
             let organization = scoping.resolve().await?.organization;
             let read = transcript::read(
@@ -1359,8 +1362,11 @@ async fn run() -> Result<()> {
                 &organization,
                 &workspace,
                 cursor,
-                follow,
-                &kinds,
+                transcript::Selection {
+                    follow,
+                    kinds: &kinds,
+                    summaries: !no_summaries,
+                },
                 &presentation,
             )
             .await?;

@@ -156,7 +156,7 @@ pub struct RunningTool {
     pub started_at: Timestamp,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionState {
     pub tools: Vec<RunningTool>,
     pub message_buffering: bool,

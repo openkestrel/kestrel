@@ -484,6 +484,152 @@ impl<'a> Log<'a> {
         Ok(self.after(workspace, from, window, kinds).await?)
     }
 
+    pub async fn transcript_page(
+        &mut self,
+        workspace: &Workspace,
+        from: Option<Cursor>,
+        window: Window,
+        kinds: &Kinds,
+        summaries: bool,
+        range: SeqRange,
+    ) -> Result<TranscriptPage, Unreadable> {
+        range.validate()?;
+        let from = self.position(workspace, from).await?;
+        let after = from
+            .map_or(0, |cursor| cursor.seq)
+            .max(range.first_seq.unwrap_or(1) - 1);
+        let rows = sqlx::query(
+            "SELECT seq, body, appended_at, kind, session_id FROM transcript_entry
+             WHERE workspace_id = ? AND seq > ? AND seq <= ? ORDER BY seq LIMIT ?",
+        )
+        .bind(workspace.id.to_string())
+        .bind(after)
+        .bind(range.last_seq.unwrap_or(i64::MAX))
+        .bind((window.0 + 1) as i64)
+        .fetch_all(&mut *self.connection)
+        .await?;
+        let more = rows.len() > window.0;
+        let mut entries = Vec::new();
+        let mut examined = after;
+        for row in rows.iter().take(window.0) {
+            examined = row.get("seq");
+            let kind = row.get::<String, _>("kind").parse()?;
+            if kinds.contains(kind) {
+                entries.push(StoredTranscriptEntry {
+                    kind,
+                    session_id: row
+                        .get::<Option<String>, _>("session_id")
+                        .map(|id| id.parse())
+                        .transpose()
+                        .map_err(anyhow::Error::from)?,
+                    seq: examined,
+                    appended_at: row
+                        .get::<String, _>("appended_at")
+                        .parse()
+                        .map_err(anyhow::Error::from)?,
+                    entry: serde_json::from_str(row.get("body")).map_err(anyhow::Error::from)?,
+                });
+            }
+        }
+        let mut activities = Vec::new();
+        if summaries
+            && (!kinds.contains(Kind::Narration) || !kinds.contains(Kind::Detail))
+            && examined > after
+        {
+            let boundary: i64 = sqlx::query_scalar(
+                "SELECT COALESCE(MAX(seq), 0) FROM transcript_entry WHERE workspace_id = ? AND kind = 'shared_state' AND seq <= ?",
+            ).bind(workspace.id.to_string()).bind(after).fetch_one(&mut *self.connection).await?;
+            // Metadata stays inline even when the body's text or content is a payload reference.
+            let metadata = sqlx::query(
+                "SELECT seq, kind, json_extract(body, '$.type') AS type,
+                        json_extract(body, '$.title') AS title, json_extract(body, '$.status') AS status,
+                        json_extract(body, '$.closing_reason') AS closing_reason,
+                        json_extract(body, '$.completion.started_at') AS started_at,
+                        json_extract(body, '$.completion.finished_at') AS finished_at
+                 FROM transcript_entry WHERE workspace_id = ? AND seq > ? AND seq <= ? ORDER BY seq",
+            ).bind(workspace.id.to_string()).bind(boundary).bind(examined)
+                .fetch_all(&mut *self.connection).await?;
+            let mut activity: Option<Activity> = None;
+            let mut omitted = false;
+            for row in metadata {
+                let seq: i64 = row.get("seq");
+                let kind: Kind = row.get::<String, _>("kind").parse()?;
+                if kind == Kind::SharedState {
+                    if let Some(mut closed) = activity.take()
+                        && omitted
+                    {
+                        closed.closed = true;
+                        activities.push(closed);
+                    }
+                    omitted = false;
+                    continue;
+                }
+                let summary = activity.get_or_insert_with(|| Activity::new(seq));
+                summary.last_seq = seq;
+                if kinds.contains(kind) {
+                    continue;
+                }
+                omitted = true;
+                let entry_type: String = row.get("type");
+                match entry_type.as_str() {
+                    "thought" => summary.counts.thoughts += 1,
+                    "plan" => summary.counts.plans += 1,
+                    "tool_call" => {
+                        summary.counts.tool_calls += 1;
+                        if row.get::<Option<String>, _>("status").as_deref() == Some("failed") {
+                            summary.counts.failed_calls += 1;
+                        }
+                        summary.anomaly |= matches!(
+                            row.get::<Option<String>, _>("closing_reason").as_deref(),
+                            Some("interrupted" | "unresolved")
+                        );
+                    }
+                    "expired" => summary.counts.tombstones += 1,
+                    _ => {}
+                }
+                summary.latest = Some(ActivityItem {
+                    kind,
+                    title: row.get::<Option<String>, _>("title").or_else(|| {
+                        match entry_type.as_str() {
+                            "thought" => Some("Thought".into()),
+                            "plan" => Some("Plan".into()),
+                            _ => None,
+                        }
+                    }),
+                    status: row.get("status"),
+                });
+                if let Some(started) = row.get::<Option<String>, _>("started_at") {
+                    let started: Timestamp = started.parse().map_err(anyhow::Error::from)?;
+                    summary.started_at =
+                        Some(summary.started_at.map_or(started, |old| old.min(started)));
+                }
+                if let Some(finished) = row.get::<Option<String>, _>("finished_at") {
+                    let finished: Timestamp = finished.parse().map_err(anyhow::Error::from)?;
+                    summary.finished_at = Some(
+                        summary
+                            .finished_at
+                            .map_or(finished, |old| old.max(finished)),
+                    );
+                }
+            }
+            if let Some(open) = activity
+                && omitted
+            {
+                activities.push(open);
+            }
+        }
+        Ok(TranscriptPage {
+            entries,
+            activities,
+            more,
+            cursor: if examined > after {
+                Some(Cursor::at(workspace.id, examined))
+            } else {
+                from
+            },
+        })
+    }
+
     async fn hydrate(&mut self, workspace: WorkspaceId, seq: i64, body: &str) -> Result<Entry> {
         let mut body: serde_json::Value = serde_json::from_str(body)?;
         if body.get("payload_fields").is_none() {
@@ -893,4 +1039,70 @@ pub enum PayloadRead {
     Available(Payload),
     Gone,
     Missing,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SeqRange {
+    pub first_seq: Option<i64>,
+    pub last_seq: Option<i64>,
+}
+impl SeqRange {
+    pub fn validate(self) -> Result<(), Unreadable> {
+        if self.first_seq.is_some_and(|seq| seq < 1)
+            || self.last_seq.is_some_and(|seq| seq < 1)
+            || matches!((self.first_seq, self.last_seq), (Some(first), Some(last)) if first > last)
+        {
+            return Err(Unreadable::Cursor(
+                "a seq range must be positive and ordered".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub struct TranscriptPage {
+    pub entries: Vec<StoredTranscriptEntry>,
+    pub activities: Vec<Activity>,
+    pub cursor: Option<Cursor>,
+    pub more: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Activity {
+    pub first_seq: i64,
+    pub last_seq: i64,
+    pub counts: ActivityCounts,
+    pub latest: Option<ActivityItem>,
+    pub started_at: Option<Timestamp>,
+    pub finished_at: Option<Timestamp>,
+    pub anomaly: bool,
+    pub closed: bool,
+}
+impl Activity {
+    fn new(seq: i64) -> Self {
+        Self {
+            first_seq: seq,
+            last_seq: seq,
+            counts: ActivityCounts::default(),
+            latest: None,
+            started_at: None,
+            finished_at: None,
+            anomaly: false,
+            closed: false,
+        }
+    }
+}
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ActivityCounts {
+    pub tool_calls: u64,
+    pub failed_calls: u64,
+    pub thoughts: u64,
+    pub plans: u64,
+    pub tombstones: u64,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct ActivityItem {
+    pub kind: Kind,
+    pub title: Option<String>,
+    pub status: Option<String>,
 }
