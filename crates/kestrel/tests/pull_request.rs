@@ -1,17 +1,19 @@
-//! A signed `pull_request` delivery becomes shared Workspace state when its head repository and
-//! branch name exactly one open Workspace, without starting any work.
+//! A signed `pull_request` delivery keeps a Workspace current through the pull request's
+//! lifecycle: it attaches only when its head repository and branch name exactly one open
+//! Workspace, appends each distinct observation, and never starts a Firing or a Session.
 
 mod support;
 
 use std::time::Duration;
 
 use hmac::{Hmac, KeyInit as _, Mac as _};
-use kestrel::domain::{Integration, Workspace, WorkspaceId};
+use kestrel::domain::{Event, EventRecordId, Integration, Workspace, WorkspaceId};
 use kestrel::log::Entry;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use sha2::Sha256;
-use support::github_stub::GithubStub;
+use support::Consideration;
+use support::github_stub::{GithubStub, ScriptedResponse};
 use support::{Kestrel, client, templates};
 
 const PATIENCE: Duration = Duration::from_secs(30);
@@ -19,6 +21,12 @@ const SECRET: &str = "a-signing-secret";
 const BASE: &str = "jtmthf/kestrel";
 const TOOLS: &str = "jtmthf/tools";
 const FORK: &str = "someone/kestrel";
+const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
+const MOVED: &str = "89abcdef0123456789abcdef0123456789abcdef";
+const OPENED_AT: &str = "2026-09-30T12:00:00Z";
+const MOVED_AT: &str = "2026-09-30T12:01:00Z";
+const CLOSED_AT: &str = "2026-09-30T12:02:00Z";
+const REOPENED_AT: &str = "2026-09-30T12:03:00Z";
 
 fn url(repository: &str) -> String {
     format!("https://github.com/{repository}")
@@ -38,28 +46,55 @@ fn signature(body: &[u8]) -> String {
     )
 }
 
-struct Opened<'a> {
+#[derive(Clone)]
+struct Delivery<'a> {
+    action: &'a str,
+    state: &'a str,
+    merged: bool,
     base: &'a str,
     head: &'a str,
     branch: &'a str,
     number: i64,
+    revision: &'a str,
+    updated_at: &'a str,
 }
 
-impl Opened<'_> {
+impl<'a> Delivery<'a> {
+    fn new(
+        action: &'a str,
+        state: &'a str,
+        merged: bool,
+        number: i64,
+        revision: &'a str,
+        updated_at: &'a str,
+    ) -> Self {
+        Self {
+            action,
+            state,
+            merged,
+            base: BASE,
+            head: BASE,
+            branch: "feature",
+            number,
+            revision,
+            updated_at,
+        }
+    }
+
     fn payload(&self) -> Value {
         json!({
-            "action": "opened",
+            "action": self.action,
             "number": self.number,
             "pull_request": {
                 "number": self.number,
                 "html_url": format!("{}/pull/{}", url(self.base), self.number),
                 "title": format!("Pull request {}", self.number),
-                "state": "open",
-                "merged": false,
-                "updated_at": "2026-09-30T12:00:00Z",
+                "state": self.state,
+                "merged": self.merged,
+                "updated_at": self.updated_at,
                 "head": {
                     "ref": self.branch,
-                    "sha": "0123456789abcdef0123456789abcdef01234567",
+                    "sha": self.revision,
                     "repo": { "full_name": self.head, "html_url": url(self.head) }
                 },
                 "base": {
@@ -73,13 +108,37 @@ impl Opened<'_> {
     }
 }
 
+fn opened<'a>(number: i64, revision: &'a str, updated_at: &'a str) -> Delivery<'a> {
+    Delivery::new("opened", "open", false, number, revision, updated_at)
+}
+
+fn synchronize<'a>(number: i64, revision: &'a str, updated_at: &'a str) -> Delivery<'a> {
+    Delivery::new("synchronize", "open", false, number, revision, updated_at)
+}
+
+fn closed<'a>(number: i64, revision: &'a str, updated_at: &'a str) -> Delivery<'a> {
+    Delivery::new("closed", "closed", false, number, revision, updated_at)
+}
+
+fn merged<'a>(number: i64, revision: &'a str, updated_at: &'a str) -> Delivery<'a> {
+    Delivery::new("closed", "closed", true, number, revision, updated_at)
+}
+
+fn reopened<'a>(number: i64, revision: &'a str, updated_at: &'a str) -> Delivery<'a> {
+    Delivery::new("reopened", "open", false, number, revision, updated_at)
+}
+
+fn edited<'a>(number: i64, revision: &'a str, updated_at: &'a str) -> Delivery<'a> {
+    Delivery::new("edited", "open", false, number, revision, updated_at)
+}
+
 async fn deliver(
     kestrel: &Kestrel,
     integration: &Integration,
     delivery: &str,
-    opened: &Opened<'_>,
+    sent: &Delivery<'_>,
 ) {
-    let body = opened.payload().to_string().into_bytes();
+    let body = sent.payload().to_string().into_bytes();
     let answered = reqwest::Client::new()
         .post(format!("{}{}", kestrel.link(), integration.webhook_path()))
         .header("content-type", "application/json")
@@ -92,6 +151,27 @@ async fn deliver(
         .expect("the webhook answers");
 
     assert_eq!(answered.status(), StatusCode::ACCEPTED);
+}
+
+fn event_named<'a>(events: &'a [Event], delivery: &str) -> &'a Event {
+    events
+        .iter()
+        .find(|event| event.occurrence.id == delivery)
+        .unwrap_or_else(|| panic!("no event for the delivery {delivery}: {events:?}"))
+}
+
+async fn consideration(kestrel: &Kestrel, event: EventRecordId) -> Consideration {
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    loop {
+        if let Some(considered) = kestrel.consideration(event).await {
+            return considered;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the event {event} was never considered"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 async fn pull_request_entries(kestrel: &Kestrel, workspace: WorkspaceId) -> Vec<Entry> {
@@ -120,6 +200,22 @@ async fn attached(kestrel: &Kestrel, workspace: WorkspaceId, count: usize) -> Ve
     }
 }
 
+fn observations(entries: &[Entry]) -> Vec<(&str, &str)> {
+    entries
+        .iter()
+        .map(|entry| match entry {
+            Entry::PullRequest { action, state, .. } => (action.as_str(), state.as_str()),
+            other => panic!("{other:?} is not a pull request entry"),
+        })
+        .collect()
+}
+
+fn known(record: &Value) -> &Vec<Value> {
+    record["pull_requests"][0]["known"]
+        .as_array()
+        .expect("the repository is available with current values")
+}
+
 async fn shown(kestrel: &Kestrel, organization: &str, workspace: &Workspace) -> Value {
     let answered = reqwest::Client::new()
         .get(format!(
@@ -135,12 +231,32 @@ async fn shown(kestrel: &Kestrel, organization: &str, workspace: &Workspace) -> 
     answered.json().await.expect("a workspace")
 }
 
-async fn watching(kestrel: &Kestrel, organization: &str, repository: &str) -> Integration {
+async fn watching(
+    kestrel: &Kestrel,
+    organization: &str,
+    repository: &str,
+) -> (Integration, GithubStub) {
+    watching_as(
+        kestrel,
+        organization,
+        repository,
+        &repository.replace('/', "-"),
+    )
+    .await
+}
+
+async fn watching_as(
+    kestrel: &Kestrel,
+    organization: &str,
+    repository: &str,
+    name: &str,
+) -> (Integration, GithubStub) {
     let stub = GithubStub::start();
-    let name = repository.replace('/', "-");
-    kestrel
-        .register_signed_github(organization, &name, repository, &stub.base_url(), SECRET)
-        .await
+    let integration = kestrel
+        .register_signed_github(organization, name, repository, &stub.base_url(), SECRET)
+        .await;
+
+    (integration, stub)
 }
 
 async fn declared(kestrel: &Kestrel, organization: &str, repositories: &[&str]) {
@@ -165,19 +281,13 @@ async fn declared(kestrel: &Kestrel, organization: &str, repositories: &[&str]) 
 async fn an_opened_pull_request_on_the_declared_branch_becomes_workspace_state_once() {
     let kestrel = Kestrel::boot().await;
     declared(&kestrel, "acme", &[BASE]).await;
-    let github = watching(&kestrel, "acme", BASE).await;
+    let (github, _stub) = watching(&kestrel, "acme", BASE).await;
     let workspace = kestrel
         .open_workspace_on("acme", "kestrel", "builder", "feature")
         .await;
-    let opened = Opened {
-        base: BASE,
-        head: BASE,
-        branch: "feature",
-        number: 7,
-    };
 
-    deliver(&kestrel, &github, "d-1", &opened).await;
-    deliver(&kestrel, &github, "d-1", &opened).await;
+    deliver(&kestrel, &github, "d-1", &opened(7, REVISION, OPENED_AT)).await;
+    deliver(&kestrel, &github, "d-1", &opened(7, REVISION, OPENED_AT)).await;
     let entries = attached(&kestrel, workspace.id, 1).await;
 
     let events = kestrel.events("acme").await;
@@ -201,6 +311,9 @@ async fn an_opened_pull_request_on_the_declared_branch_becomes_workspace_state_o
     assert_eq!(pull_request_url, &format!("{}/pull/7", url(BASE)));
     assert_eq!(action, "opened");
     assert_eq!(state.as_str(), "open");
+    let considered = consideration(&kestrel, event.record_id).await;
+    assert_eq!(considered.outcome, "attached");
+    assert_eq!(considered.candidates, [(workspace.id, "open".to_owned())]);
 
     let record = shown(&kestrel, "acme", &workspace).await;
     assert_eq!(
@@ -215,8 +328,8 @@ async fn an_opened_pull_request_on_the_declared_branch_becomes_workspace_state_o
                 "title": "Pull request 7",
                 "state": "open",
                 "head_branch": "feature",
-                "head_revision": "0123456789abcdef0123456789abcdef01234567",
-                "updated_at": "2026-09-30T12:00:00Z",
+                "head_revision": REVISION,
+                "updated_at": OPENED_AT,
                 "event": event.record_id.to_string(),
             }]
         }])
@@ -253,9 +366,9 @@ async fn only_the_head_repository_and_branch_of_one_open_workspace_attach() {
     let kestrel = Kestrel::boot().await;
     declared(&kestrel, "acme", &[BASE, TOOLS]).await;
     declared(&kestrel, "beta", &[BASE]).await;
-    let github = watching(&kestrel, "acme", BASE).await;
-    let tooling = watching(&kestrel, "acme", TOOLS).await;
-    watching(&kestrel, "beta", BASE).await;
+    let (github, _github_stub) = watching(&kestrel, "acme", BASE).await;
+    let (tooling, _tooling_stub) = watching(&kestrel, "acme", TOOLS).await;
+    let (_beta, _beta_stub) = watching(&kestrel, "beta", BASE).await;
     let tools = kestrel
         .open_workspace_on("acme", "kestrel", "builder", "tooling")
         .await;
@@ -280,11 +393,11 @@ async fn only_the_head_repository_and_branch_of_one_open_workspace_attach() {
         &kestrel,
         &github,
         "d-fork",
-        &Opened {
-            base: BASE,
+        &Delivery {
             head: FORK,
             branch: "from-a-fork",
             number: 1,
+            ..opened(1, REVISION, OPENED_AT)
         },
     )
     .await;
@@ -293,11 +406,9 @@ async fn only_the_head_repository_and_branch_of_one_open_workspace_attach() {
         &kestrel,
         &github,
         "d-ambiguous",
-        &Opened {
-            base: BASE,
-            head: BASE,
+        &Delivery {
             branch: "shared",
-            number: 2,
+            ..opened(2, REVISION, MOVED_AT)
         },
     )
     .await;
@@ -306,11 +417,11 @@ async fn only_the_head_repository_and_branch_of_one_open_workspace_attach() {
         &kestrel,
         &tooling,
         "d-tools",
-        &Opened {
+        &Delivery {
             base: TOOLS,
             head: TOOLS,
             branch: "tooling",
-            number: 3,
+            ..opened(3, REVISION, CLOSED_AT)
         },
     )
     .await;
@@ -318,11 +429,9 @@ async fn only_the_head_repository_and_branch_of_one_open_workspace_attach() {
         &kestrel,
         &github,
         "d-wrong-repository",
-        &Opened {
-            base: BASE,
+        &Delivery {
             head: "jtmthf/elsewhere",
-            branch: "feature",
-            number: 4,
+            ..opened(4, REVISION, REOPENED_AT)
         },
     )
     .await;
@@ -330,12 +439,7 @@ async fn only_the_head_repository_and_branch_of_one_open_workspace_attach() {
         &kestrel,
         &github,
         "d-learned",
-        &Opened {
-            base: BASE,
-            head: BASE,
-            branch: "feature",
-            number: 5,
-        },
+        &opened(5, REVISION, MOVED_AT),
     )
     .await;
     let learned = attached(&kestrel, learning.id, 1).await;
@@ -358,8 +462,33 @@ async fn only_the_head_repository_and_branch_of_one_open_workspace_attach() {
             unattached.checkout.branch
         );
     }
-    assert_eq!(kestrel.events("acme").await.len(), 5);
+    let events = kestrel.events("acme").await;
+    assert_eq!(events.len(), 5);
     assert!(kestrel.events("beta").await.is_empty());
+
+    // What a verdict was made of is kept, candidates included: the two Workspaces the branch
+    // could not choose between, and none at all for a repository no Workspace fixed.
+    let ambiguous = consideration(&kestrel, event_named(&events, "d-ambiguous").record_id).await;
+    assert_eq!(ambiguous.outcome, "ambiguous");
+    let mut candidates = ambiguous.candidates;
+    candidates.sort_by_key(|(workspace, _)| workspace.to_string());
+    assert_eq!(
+        candidates,
+        [
+            (first.id, "open".to_owned()),
+            (second.id, "open".to_owned())
+        ]
+    );
+    let a_fork = consideration(&kestrel, event_named(&events, "d-fork").record_id).await;
+    assert_eq!(a_fork.outcome, "unmatched");
+    assert!(a_fork.candidates.is_empty());
+    let wrong = consideration(
+        &kestrel,
+        event_named(&events, "d-wrong-repository").record_id,
+    )
+    .await;
+    assert_eq!(wrong.outcome, "unmatched");
+    assert!(wrong.candidates.is_empty());
 
     let record = shown(&kestrel, "acme", &tools).await;
     assert_eq!(record["pull_requests"][0]["repository"], url(BASE));
@@ -375,7 +504,7 @@ async fn only_the_head_repository_and_branch_of_one_open_workspace_attach() {
 async fn a_repository_no_inbound_integration_watches_says_its_pull_requests_are_unavailable() {
     let kestrel = Kestrel::boot().await;
     declared(&kestrel, "acme", &[BASE, TOOLS]).await;
-    watching(&kestrel, "acme", BASE).await;
+    let (_github, _stub) = watching(&kestrel, "acme", BASE).await;
     let workspace = kestrel
         .open_workspace_on("acme", "kestrel", "builder", "feature")
         .await;
@@ -397,7 +526,7 @@ async fn a_repository_no_inbound_integration_watches_says_its_pull_requests_are_
 async fn a_fork_pull_request_delivered_through_the_watched_base_is_available_on_the_fork() {
     let kestrel = Kestrel::boot().await;
     declared(&kestrel, "acme", &[FORK]).await;
-    let github = watching(&kestrel, "acme", BASE).await;
+    let (github, _stub) = watching(&kestrel, "acme", BASE).await;
     let workspace = kestrel
         .open_workspace_on("acme", "kestrel", "builder", "feature")
         .await;
@@ -406,11 +535,10 @@ async fn a_fork_pull_request_delivered_through_the_watched_base_is_available_on_
         &kestrel,
         &github,
         "d-upstream",
-        &Opened {
-            base: BASE,
+        &Delivery {
             head: FORK,
-            branch: "feature",
             number: 9,
+            ..opened(9, REVISION, OPENED_AT)
         },
     )
     .await;
@@ -430,8 +558,8 @@ async fn a_fork_pull_request_delivered_through_the_watched_base_is_available_on_
 async fn pull_requests_sharing_a_head_and_number_against_different_bases_are_both_kept() {
     let kestrel = Kestrel::boot().await;
     declared(&kestrel, "acme", &[FORK]).await;
-    let upstream = watching(&kestrel, "acme", BASE).await;
-    let fork = watching(&kestrel, "acme", FORK).await;
+    let (upstream, _upstream_stub) = watching(&kestrel, "acme", BASE).await;
+    let (fork, _fork_stub) = watching(&kestrel, "acme", FORK).await;
     let workspace = kestrel
         .open_workspace_on("acme", "kestrel", "builder", "feature")
         .await;
@@ -442,11 +570,11 @@ async fn pull_requests_sharing_a_head_and_number_against_different_bases_are_bot
             &kestrel,
             integration,
             delivery,
-            &Opened {
+            &Delivery {
                 base,
                 head: FORK,
-                branch: "feature",
                 number: 9,
+                ..opened(9, REVISION, OPENED_AT)
             },
         )
         .await;
@@ -454,9 +582,7 @@ async fn pull_requests_sharing_a_head_and_number_against_different_bases_are_bot
     attached(&kestrel, workspace.id, 2).await;
 
     let record = shown(&kestrel, "acme", &workspace).await;
-    let mut known: Vec<_> = record["pull_requests"][0]["known"]
-        .as_array()
-        .expect("available")
+    let mut known: Vec<_> = known(&record)
         .iter()
         .map(|pull_request| pull_request["url"].as_str().expect("a url").to_owned())
         .collect();
@@ -473,10 +599,500 @@ async fn pull_requests_sharing_a_head_and_number_against_different_bases_are_bot
 }
 
 #[tokio::test]
+async fn a_pull_requests_lifecycle_appends_each_observation_and_reads_the_latest_value() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, "acme", &[BASE]).await;
+    let (github, _stub) = watching(&kestrel, "acme", BASE).await;
+    let workspace = kestrel
+        .open_workspace_on("acme", "kestrel", "builder", "feature")
+        .await;
+
+    deliver(
+        &kestrel,
+        &github,
+        "d-opened",
+        &opened(7, REVISION, OPENED_AT),
+    )
+    .await;
+    attached(&kestrel, workspace.id, 1).await;
+    deliver(
+        &kestrel,
+        &github,
+        "d-moved",
+        &synchronize(7, MOVED, MOVED_AT),
+    )
+    .await;
+    attached(&kestrel, workspace.id, 2).await;
+    assert_eq!(
+        known(&shown(&kestrel, "acme", &workspace).await)[0]["head_revision"],
+        MOVED
+    );
+    deliver(&kestrel, &github, "d-closed", &merged(7, MOVED, CLOSED_AT)).await;
+    attached(&kestrel, workspace.id, 3).await;
+    assert_eq!(
+        known(&shown(&kestrel, "acme", &workspace).await)[0]["state"],
+        "merged"
+    );
+    deliver(
+        &kestrel,
+        &github,
+        "d-reopened",
+        &reopened(7, MOVED, REOPENED_AT),
+    )
+    .await;
+    let entries = attached(&kestrel, workspace.id, 4).await;
+
+    assert_eq!(
+        observations(&entries),
+        [
+            ("opened", "open"),
+            ("synchronize", "open"),
+            ("closed", "merged"),
+            ("reopened", "open"),
+        ]
+    );
+
+    // The Transcript keeps every observation; the Workspace read holds only the latest.
+    let record = shown(&kestrel, "acme", &workspace).await;
+    let latest = &known(&record)[0];
+    assert_eq!(latest["state"], "open");
+    assert_eq!(latest["head_revision"], MOVED);
+    assert_eq!(latest["updated_at"], REOPENED_AT);
+
+    let events = kestrel.events("acme").await;
+    assert_eq!(events.len(), 4);
+    assert!(kestrel.sessions(workspace.id).await.is_empty());
+    for event in &events {
+        assert!(kestrel.firings(event.record_id).await.is_empty());
+    }
+
+    let cli = client::ran_by(
+        &kestrel,
+        &[
+            "--organization",
+            "acme",
+            "workspace",
+            "show",
+            &workspace.name,
+            "--json",
+            "pull_requests",
+        ],
+        client::Invocation::default(),
+    )
+    .await;
+    assert!(cli.status.success(), "the client failed: {}", cli.err);
+    let printed: Value = serde_json::from_str(&cli.out.join("\n")).expect("json");
+    assert_eq!(printed["pull_requests"], record["pull_requests"]);
+
+    let cli = client::ran_by(
+        &kestrel,
+        &[
+            "--organization",
+            "acme",
+            "workspace",
+            "transcript",
+            &workspace.name,
+            "--json",
+            "seq,entry",
+        ],
+        client::Invocation::default(),
+    )
+    .await;
+    assert!(cli.status.success(), "the client failed: {}", cli.err);
+    let actions: Vec<String> = cli
+        .out
+        .iter()
+        .filter_map(|line| {
+            let entry: Value = serde_json::from_str(line).expect("a transcript entry");
+            (entry["entry"]["type"] == "pull_request").then(|| {
+                entry["entry"]["action"]
+                    .as_str()
+                    .expect("an action")
+                    .to_owned()
+            })
+        })
+        .collect();
+    assert_eq!(actions, ["opened", "synchronize", "closed", "reopened"]);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn two_pull_requests_on_one_branch_keep_their_own_values() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, "acme", &[BASE]).await;
+    let (github, _stub) = watching(&kestrel, "acme", BASE).await;
+    let workspace = kestrel
+        .open_workspace_on("acme", "kestrel", "builder", "feature")
+        .await;
+
+    deliver(
+        &kestrel,
+        &github,
+        "d-seven",
+        &opened(7, REVISION, OPENED_AT),
+    )
+    .await;
+    deliver(&kestrel, &github, "d-nine", &opened(9, MOVED, MOVED_AT)).await;
+    deliver(
+        &kestrel,
+        &github,
+        "d-seven-closed",
+        &closed(7, REVISION, CLOSED_AT),
+    )
+    .await;
+    deliver(
+        &kestrel,
+        &github,
+        "d-nine-merged",
+        &merged(9, MOVED, REOPENED_AT),
+    )
+    .await;
+    attached(&kestrel, workspace.id, 4).await;
+
+    let record = shown(&kestrel, "acme", &workspace).await;
+    let known = known(&record);
+    assert_eq!(known.len(), 2);
+    assert_eq!(known[0]["number"], 7);
+    assert_eq!(known[0]["state"], "closed");
+    assert_eq!(known[1]["number"], 9);
+    assert_eq!(known[1]["state"], "merged");
+    assert_eq!(known[1]["head_revision"], MOVED);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_unsupported_pull_request_action_makes_no_workspace_entry() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, "acme", &[BASE]).await;
+    let (github, _stub) = watching(&kestrel, "acme", BASE).await;
+    let workspace = kestrel
+        .open_workspace_on("acme", "kestrel", "builder", "feature")
+        .await;
+
+    deliver(
+        &kestrel,
+        &github,
+        "d-edited",
+        &edited(7, REVISION, OPENED_AT),
+    )
+    .await;
+
+    let events = kestrel.events("acme").await;
+    assert_eq!(events.len(), 1, "the delivery stays an Organization Event");
+    assert_eq!(
+        events[0].occurrence.r#type,
+        "com.github.pull_request.edited"
+    );
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(
+        pull_request_entries(&kestrel, workspace.id)
+            .await
+            .is_empty()
+    );
+    assert!(kestrel.consideration(events[0].record_id).await.is_none());
+    let record = shown(&kestrel, "acme", &workspace).await;
+    assert!(known(&record).is_empty());
+    assert!(kestrel.sessions(workspace.id).await.is_empty());
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_duplicate_observation_appends_no_second_entry_however_it_arrives() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, "acme", &[BASE]).await;
+    let (one, _one_stub) = watching_as(&kestrel, "acme", BASE, "kestrel-one").await;
+    let (two, _two_stub) = watching_as(&kestrel, "acme", BASE, "kestrel-two").await;
+    let workspace = kestrel
+        .open_workspace_on("acme", "kestrel", "builder", "feature")
+        .await;
+
+    // A retry that arrives as a second Event, and a redelivery of that same Event.
+    deliver(&kestrel, &one, "d-one", &opened(7, REVISION, OPENED_AT)).await;
+    deliver(&kestrel, &two, "d-two", &opened(7, REVISION, OPENED_AT)).await;
+    deliver(&kestrel, &one, "d-one", &opened(7, REVISION, OPENED_AT)).await;
+    attached(&kestrel, workspace.id, 1).await;
+
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(
+        pull_request_entries(&kestrel, workspace.id).await.len(),
+        1,
+        "a repeated observation manufactured history"
+    );
+    let events = kestrel.events("acme").await;
+    assert_eq!(
+        events.len(),
+        2,
+        "each delivery is still an Event: {events:?}"
+    );
+    let record = shown(&kestrel, "acme", &workspace).await;
+    assert_eq!(known(&record).len(), 1);
+    assert_eq!(
+        consideration(&kestrel, event_named(&events, "d-two").record_id)
+            .await
+            .outcome,
+        "attached"
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_delayed_older_delivery_appears_in_history_without_regressing_the_value() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, "acme", &[BASE]).await;
+    let (github, _stub) = watching(&kestrel, "acme", BASE).await;
+    let workspace = kestrel
+        .open_workspace_on("acme", "kestrel", "builder", "feature")
+        .await;
+
+    // The head moved first; the older opening arrives after it.
+    deliver(
+        &kestrel,
+        &github,
+        "d-moved",
+        &synchronize(7, MOVED, MOVED_AT),
+    )
+    .await;
+    attached(&kestrel, workspace.id, 1).await;
+    deliver(
+        &kestrel,
+        &github,
+        "d-delayed",
+        &opened(7, REVISION, OPENED_AT),
+    )
+    .await;
+    let entries = attached(&kestrel, workspace.id, 2).await;
+    assert_eq!(
+        observations(&entries),
+        [("synchronize", "open"), ("opened", "open")],
+        "the delayed observation is kept in the order it was learned"
+    );
+
+    let record = shown(&kestrel, "acme", &workspace).await;
+    let latest = &known(&record)[0];
+    assert_eq!(latest["head_revision"], MOVED);
+    assert_eq!(latest["updated_at"], MOVED_AT);
+
+    // The delayed observation repeated changes nothing either.
+    deliver(
+        &kestrel,
+        &github,
+        "d-delayed-again",
+        &opened(7, REVISION, OPENED_AT),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(pull_request_entries(&kestrel, workspace.id).await.len(), 2);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn conflicting_ties_at_the_same_source_time_are_settled_by_the_repositorys_read() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, "acme", &[BASE]).await;
+    let (github, stub) = watching(&kestrel, "acme", BASE).await;
+    let workspace = kestrel
+        .open_workspace_on("acme", "kestrel", "builder", "feature")
+        .await;
+    stub.script_answer(
+        "GET",
+        "/repos/jtmthf/kestrel/pulls/7",
+        ScriptedResponse::ok(
+            json!({
+                "number": 7,
+                "html_url": format!("{}/pull/7", url(BASE)),
+                "title": "Pull request 7",
+                "state": "closed",
+                "merged": true,
+                "updated_at": OPENED_AT,
+                "head": {
+                    "ref": "feature",
+                    "sha": REVISION,
+                    "repo": { "full_name": BASE, "html_url": url(BASE) }
+                },
+                "base": { "ref": "main", "repo": { "full_name": BASE } }
+            })
+            .to_string(),
+        ),
+    );
+
+    deliver(
+        &kestrel,
+        &github,
+        "d-opened",
+        &opened(7, REVISION, OPENED_AT),
+    )
+    .await;
+    attached(&kestrel, workspace.id, 1).await;
+    // The same source moment, the opposite state: arrival order may not decide it.
+    deliver(
+        &kestrel,
+        &github,
+        "d-closed",
+        &closed(7, REVISION, OPENED_AT),
+    )
+    .await;
+    let entries = attached(&kestrel, workspace.id, 2).await;
+    assert_eq!(
+        observations(&entries),
+        [("opened", "open"), ("closed", "closed")]
+    );
+
+    let record = shown(&kestrel, "acme", &workspace).await;
+    let latest = &known(&record)[0];
+    assert_eq!(
+        latest["state"], "merged",
+        "the tied value is the repository's current answer"
+    );
+    assert_eq!(latest["updated_at"], OPENED_AT);
+    assert!(
+        stub.requests()
+            .iter()
+            .any(|request| request.url.contains("/pulls/7")),
+        "the tie was never read back"
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_tie_the_repository_cannot_settle_keeps_the_value_it_held() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, "acme", &[BASE]).await;
+    let (github, _stub) = watching(&kestrel, "acme", BASE).await;
+    let workspace = kestrel
+        .open_workspace_on("acme", "kestrel", "builder", "feature")
+        .await;
+
+    deliver(
+        &kestrel,
+        &github,
+        "d-opened",
+        &opened(7, REVISION, OPENED_AT),
+    )
+    .await;
+    attached(&kestrel, workspace.id, 1).await;
+    // The stub answers nothing for the read back, so the tie stays as it was.
+    deliver(
+        &kestrel,
+        &github,
+        "d-closed",
+        &closed(7, REVISION, OPENED_AT),
+    )
+    .await;
+    let entries = attached(&kestrel, workspace.id, 2).await;
+    assert_eq!(
+        observations(&entries),
+        [("opened", "open"), ("closed", "closed")]
+    );
+
+    let record = shown(&kestrel, "acme", &workspace).await;
+    assert_eq!(known(&record)[0]["state"], "open");
+    assert_eq!(known(&record)[0]["updated_at"], OPENED_AT);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_sealed_workspaces_transcript_and_values_stay_fixed_while_the_event_remains() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, "acme", &[BASE]).await;
+    let (github, _stub) = watching(&kestrel, "acme", BASE).await;
+    let workspace = kestrel
+        .open_workspace_on("acme", "kestrel", "builder", "feature")
+        .await;
+
+    deliver(
+        &kestrel,
+        &github,
+        "d-opened",
+        &opened(7, REVISION, OPENED_AT),
+    )
+    .await;
+    attached(&kestrel, workspace.id, 1).await;
+    kestrel.seal_workspace(workspace.id).await;
+
+    deliver(
+        &kestrel,
+        &github,
+        "d-moved",
+        &synchronize(7, MOVED, MOVED_AT),
+    )
+    .await;
+    deliver(&kestrel, &github, "d-closed", &merged(7, MOVED, CLOSED_AT)).await;
+
+    let events = kestrel.events("acme").await;
+    assert_eq!(
+        events.len(),
+        3,
+        "every Event remains in Organization history"
+    );
+    for delivery in ["d-moved", "d-closed"] {
+        let considered = consideration(&kestrel, event_named(&events, delivery).record_id).await;
+        assert_eq!(considered.outcome, "sealed");
+        assert_eq!(considered.candidates, [(workspace.id, "sealed".to_owned())]);
+    }
+    assert_eq!(pull_request_entries(&kestrel, workspace.id).await.len(), 1);
+    let record = shown(&kestrel, "acme", &workspace).await;
+    let latest = &known(&record)[0];
+    assert_eq!(latest["state"], "open");
+    assert_eq!(latest["head_revision"], REVISION);
+    assert_eq!(latest["updated_at"], OPENED_AT);
+    assert!(kestrel.sessions(workspace.id).await.is_empty());
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn learning_resumes_across_a_restart_without_a_second_entry() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, "acme", &[BASE]).await;
+    let (github, _stub) = watching(&kestrel, "acme", BASE).await;
+    let workspace = kestrel
+        .open_workspace_on("acme", "kestrel", "builder", "feature")
+        .await;
+
+    deliver(
+        &kestrel,
+        &github,
+        "d-opened",
+        &opened(7, REVISION, OPENED_AT),
+    )
+    .await;
+    attached(&kestrel, workspace.id, 1).await;
+
+    let kestrel = kestrel.kill_and_restart().await;
+    deliver(
+        &kestrel,
+        &github,
+        "d-moved",
+        &synchronize(7, MOVED, MOVED_AT),
+    )
+    .await;
+    let entries = attached(&kestrel, workspace.id, 2).await;
+
+    assert_eq!(
+        observations(&entries),
+        [("opened", "open"), ("synchronize", "open")],
+        "the restarted control plane learned the moved head, and the opening once"
+    );
+    let record = shown(&kestrel, "acme", &workspace).await;
+    assert_eq!(known(&record)[0]["head_revision"], MOVED);
+    assert_eq!(kestrel.events("acme").await.len(), 2);
+    assert!(kestrel.sessions(workspace.id).await.is_empty());
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_trigger_declared_for_the_event_fires_as_it_would_without_the_workspace_learning_it() {
     let kestrel = Kestrel::boot().await;
     declared(&kestrel, "acme", &[BASE]).await;
-    let github = watching(&kestrel, "acme", BASE).await;
+    let (github, _stub) = watching(&kestrel, "acme", BASE).await;
     kestrel
         .declare_trigger_rendering(
             "acme",
@@ -491,18 +1107,7 @@ async fn a_trigger_declared_for_the_event_fires_as_it_would_without_the_workspac
         .open_workspace_on("acme", "kestrel", "builder", "feature")
         .await;
 
-    deliver(
-        &kestrel,
-        &github,
-        "d-1",
-        &Opened {
-            base: BASE,
-            head: BASE,
-            branch: "feature",
-            number: 7,
-        },
-    )
-    .await;
+    deliver(&kestrel, &github, "d-1", &opened(7, REVISION, OPENED_AT)).await;
     attached(&kestrel, workspace.id, 1).await;
     let event = kestrel.events("acme").await.remove(0);
     let deadline = tokio::time::Instant::now() + PATIENCE;

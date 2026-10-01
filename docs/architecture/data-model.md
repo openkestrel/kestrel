@@ -38,6 +38,8 @@ erDiagram
     workspace ||--o{ follow_up : receives
     workspace ||--o{ pull_request : "has learned"
     event ||--o| pull_request_attachment : "considered as"
+    event ||--o{ pull_request_candidate : "matched"
+    workspace ||--o{ pull_request_observation : "observed"
     workspace ||--o{ instance_archive : "leaves"
 
     session }o--|| agent : runs
@@ -69,8 +71,10 @@ erDiagram
 | `link_instruction` | Instructions sent down the link | `(instance, seq)`; `seq` is the SSE event id, and `session_id` the Session each is for. |
 | `pending_message`, `pending_session` | Input held for the unfinished Session | See [Sessions](sessions.md#the-unfinished-session). |
 | `follow_up` | Which comment Events fed which Workspace | One per Event, so a comment is taken once. |
-| `pull_request` | A Workspace's current value per pull request | `(workspace_id, url)`, since the url names the base repository and the number alone does not; a value fresher at its source (`updated_at`) is never replaced by an older one. |
-| `pull_request_attachment` | Which pull request Events were considered | One per Event: `attached` with its Workspace, `unmatched` or `ambiguous`. |
+| `pull_request` | A Workspace's current value per pull request | `(workspace_id, url)`, since the url names the base repository and the number alone does not; a value fresher at its source (`updated_at`) is never replaced by an older one, and a conflicting tie is replaced only by what the Integration's repository reads back. |
+| `pull_request_attachment` | Which pull request Events were considered | One per Event: `attached` with its Workspace, `unmatched`, `ambiguous` or `sealed`. |
+| `pull_request_candidate` | Which Workspaces a pull request Event matched | One row per match with the state it was in (`open` or `sealed`), kept for the `0.4` Audit Record. |
+| `pull_request_observation` | Each distinct observation appended for a pull request | A repeat of one already held appends nothing, so a retried delivery manufactures no history. |
 | `delivery` | Comments to post back | `(session_id, turn)`; `turn = 0` is the Outcome. |
 | `session_dependency` | Session waits on blocker | Drives Unreachable. |
 | `instance_archive` | Instances waiting to be destroyed | Written when a Workspace seals or releases. |
