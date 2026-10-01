@@ -63,6 +63,16 @@ other JSON values remain inline even if they resemble a reference. A reference i
 Workspace, entry seq and field. Another Workspace's reference is `404`; a reference whose entry
 expired is `410` after its content is removed. Internal prompt and delivery reads resolve references.
 
+### Change notices
+
+`GET …/changes` is SSE, per Organization. It opens with an `open` event, then a `change` event
+naming each Workspace, Session or queue that changed, coalesced to at most one per resource per
+250 ms at the window's trailing edge. No event carries an id and `Last-Event-ID` is ignored: a
+notice is a hint to refetch, never a cursor, and a subscriber that falls behind the bounded
+buffer is sent `resync`. The store transaction collects what its writes touched and the hub
+publishes after commit, so a refused or rolled-back write raises nothing, and a Transcript append
+alone raises nothing. The CLI does not consume it ([ADR-0035](../adr/0035-organization-change-notices-and-workspace-presence.md)).
+
 ### Pull requests
 
 A Workspace read carries `pull_requests`: one item per fixed repository, in checkout order.

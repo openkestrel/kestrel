@@ -29,6 +29,7 @@ use crate::domain::{
     Integration, Occurrence, Organization, Project, Schedule, Session, SubscriptionProfile,
     Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
 };
+use crate::fanout;
 use crate::filter::Filter;
 use crate::integration::github::{self, Github};
 use crate::integration::{self, Connecting, Registration};
@@ -102,6 +103,9 @@ pub const TRANSCRIPT: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/transcript";
 pub const TRANSCRIPT_PAYLOAD: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/transcript/payloads/{payload}";
+/// The Organization's change notices: which Workspace, Session or queue changed, never a copy
+/// of its state.
+pub const CHANGES: &str = "/operator/organizations/{organization}/changes";
 /// One read of a Workspace's queue: the limits, their occupancy, and the queued Sessions in
 /// dispatch order.
 pub const QUEUE: &str = "/operator/organizations/{organization}/queue";
@@ -156,6 +160,29 @@ struct End {
 enum Because {
     CaughtUp,
     Sealed,
+}
+
+/// `open` and `resync` say the Client must refetch every view it subscribes to, and carry
+/// nothing else.
+#[derive(Serialize)]
+struct Refetch {}
+
+#[derive(Serialize)]
+#[serde(tag = "resource", rename_all = "snake_case")]
+enum Changed {
+    Workspace { id: WorkspaceId },
+    Session { id: crate::domain::SessionId },
+    Queue,
+}
+
+impl From<fanout::Resource> for Changed {
+    fn from(resource: fanout::Resource) -> Self {
+        match resource {
+            fanout::Resource::Workspace(id) => Self::Workspace { id },
+            fanout::Resource::Session(id) => Self::Session { id },
+            fanout::Resource::Queue => Self::Queue,
+        }
+    }
 }
 
 struct Read {
@@ -218,6 +245,7 @@ pub fn router(
         .route(SESSION_STOP, post(stop_session))
         .route(TRANSCRIPT, get(transcript))
         .route(TRANSCRIPT_PAYLOAD, get(transcript_payload))
+        .route(CHANGES, get(changes))
         .with_state(ControlPlane {
             store,
             shutdown,
@@ -2281,6 +2309,38 @@ async fn transcript(
             read = reading(&control_plane.store, workspace, read.page.cursor, &kinds)
                 .await
                 .map_err(Refused::into_error)?;
+        }
+    };
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(KEEP_ALIVE)))
+}
+
+/// Every subscriber is told to refetch everything on connect, and again if it fell behind the
+/// hub's buffer: a notice is a hint, so a missed one must never look like a quiet stream.
+async fn changes(
+    State(control_plane): State<ControlPlane>,
+    Path(organization): Path<String>,
+) -> Result<Sse<impl Stream<Item = Result<Event, BoxError>>>, Refused> {
+    let mut tx = control_plane.store.read().await?;
+    let organization = tx.organizations().named(&organization).await?;
+    let mut subscription = control_plane.store.notices().subscribe(organization.id);
+
+    let stream = async_stream::try_stream! {
+        yield Event::default().event("open").json_data(Refetch {})?;
+        loop {
+            let watch = tokio::select! {
+                () = control_plane.shutdown.cancelled() => break,
+                watch = subscription.recv() => watch,
+            };
+            match watch {
+                Some(fanout::Watch::Change(resource)) => {
+                    yield Event::default().event("change").json_data(Changed::from(resource))?;
+                }
+                Some(fanout::Watch::Resync) => {
+                    yield Event::default().event("resync").json_data(Refetch {})?;
+                }
+                None => break,
+            }
         }
     };
 

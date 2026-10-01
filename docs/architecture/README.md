@@ -122,7 +122,7 @@ real implementation exists ([ADR-0022](../adr/0022-store-repository-traits-and-e
 | --- | --- | --- |
 | `Store` | `store/` | SQLite via sqlx. One repository module per aggregate, reached through `Tx`. |
 | `Log` | `log.rs` | The Transcript. Same database and transaction as `Store` ([ADR-0004](../adr/0004-store-and-log-are-one-transactional-domain.md)). |
-| `Fanout` | `fanout.rs` | A named no-op. Everything that would subscribe polls `Store` instead. |
+| `Fanout` | `fanout.rs` | The in-process hub a committed transaction hands its touched resources to; only the Organization change stream subscribes. Everything else polls `Store`. |
 | `Timer` | `timer.rs` | In-process sweeps; every due time lives in `Store`, so a restart loses none. |
 | `Work` | `work.rs` | Enqueue, claim, lease, reports, ending a Session. |
 | `Compute` | `compute/` | `Driver` enum over `Docker` and `LocalExec`, chosen once by `KESTREL_COMPUTE`. |

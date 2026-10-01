@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use crate::declaration::{self, sharing_a_directory};
 use crate::declined::Declined;
 use crate::domain::{Session, Workspace};
-use crate::fanout::{self, Change};
 use crate::log::Entry;
 use crate::provider;
 use crate::store::workspace::Opening;
@@ -157,7 +156,6 @@ pub async fn start(store: &Store, plan: &Plan) -> Result<Started> {
         .enqueue_session(&workspace, Some(&agent.record), None)
         .await?;
     tx.commit().await?;
-    fanout::publish(Change::WorkspaceOpened(&workspace));
 
     Ok(Started {
         organization: Settled {

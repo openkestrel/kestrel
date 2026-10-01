@@ -4330,6 +4330,7 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::QUEUE, "get"),
         (operator::TRANSCRIPT, "get"),
         (operator::TRANSCRIPT_PAYLOAD, "get"),
+        (operator::CHANGES, "get"),
     ];
     assert_eq!(
         described,

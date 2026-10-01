@@ -1512,7 +1512,7 @@ impl Kestrel {
             .await
             .expect("the workspace should read");
         tx.workspaces()
-            .record_instance(workspace, Some(instance))
+            .record_instance(record.organization.id, workspace, Some(instance))
             .await
             .expect("the instance should be recorded");
         tx.workspaces()
@@ -1784,7 +1784,7 @@ impl Kestrel {
     pub async fn last_active(&self, workspace: &Workspace, at: Timestamp) {
         let mut tx = self.store.begin().await.expect("a transaction");
         tx.workspaces()
-            .record_active(workspace.id, at)
+            .record_active(workspace.organization.id, workspace.id, at)
             .await
             .expect("the workspace should record when it was last active");
         tx.commit().await.expect("the record should commit");
