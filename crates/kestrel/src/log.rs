@@ -488,7 +488,9 @@ impl<'a> Log<'a> {
         kinds: &Kinds,
     ) -> Result<StoredPage, Unreadable> {
         let from = self.position(workspace, from).await?;
-        Ok(self.after(workspace, from, window, kinds).await?)
+        Ok(self
+            .read_window(workspace, from, window, kinds, SeqRange::default())
+            .await?)
     }
 
     pub async fn transcript_page(
@@ -505,39 +507,14 @@ impl<'a> Log<'a> {
         let after = from
             .map_or(0, |cursor| cursor.seq)
             .max(range.first_seq.unwrap_or(1) - 1);
-        let rows = sqlx::query(
-            "SELECT seq, body, appended_at, kind, session_id FROM transcript_entry
-             WHERE workspace_id = ? AND seq > ? AND seq <= ? ORDER BY seq LIMIT ?",
-        )
-        .bind(workspace.id.to_string())
-        .bind(after)
-        .bind(range.last_seq.unwrap_or(i64::MAX))
-        .bind((window.0 + 1) as i64)
-        .fetch_all(&mut *self.connection)
-        .await?;
-        let more = rows.len() > window.0;
-        let mut entries = Vec::new();
-        let mut examined = after;
-        for row in rows.iter().take(window.0) {
-            examined = row.get("seq");
-            let kind = row.get::<String, _>("kind").parse()?;
-            if kinds.contains(kind) {
-                entries.push(StoredTranscriptEntry {
-                    kind,
-                    session_id: row
-                        .get::<Option<String>, _>("session_id")
-                        .map(|id| id.parse())
-                        .transpose()
-                        .map_err(anyhow::Error::from)?,
-                    seq: examined,
-                    appended_at: row
-                        .get::<String, _>("appended_at")
-                        .parse()
-                        .map_err(anyhow::Error::from)?,
-                    entry: serde_json::from_str(row.get("body")).map_err(anyhow::Error::from)?,
-                });
-            }
-        }
+        let StoredPage {
+            entries,
+            cursor,
+            more,
+        } = self
+            .read_window(workspace, from, window, kinds, range)
+            .await?;
+        let examined = cursor.map_or(after, |cursor| cursor.seq.max(after));
         let mut activities = Vec::new();
         if summaries
             && (!kinds.contains(Kind::Narration) || !kinds.contains(Kind::Detail))
@@ -629,11 +606,7 @@ impl<'a> Log<'a> {
             entries,
             activities,
             more,
-            cursor: if examined > after {
-                Some(Cursor::at(workspace.id, examined))
-            } else {
-                from
-            },
+            cursor,
         })
     }
 
@@ -758,36 +731,44 @@ impl<'a> Log<'a> {
         }
     }
 
-    /// One entry beyond the window is read and dropped, which is what tells a reader whether
-    /// more are waiting without asking a second time.
-    async fn after(
+    async fn read_window(
         &mut self,
         workspace: &Workspace,
         from: Option<Cursor>,
         window: Window,
         kinds: &Kinds,
+        range: SeqRange,
     ) -> Result<StoredPage> {
+        let after = from
+            .map_or(0, |cursor| cursor.seq)
+            .max(range.first_seq.unwrap_or(1) - 1);
         let rows = sqlx::query(
             "SELECT seq, body, appended_at, kind, session_id
              FROM transcript_entry
-             WHERE workspace_id = ? AND seq > ?
+             WHERE workspace_id = ? AND seq > ? AND seq <= ?
              ORDER BY seq
              LIMIT ?",
         )
         .bind(workspace.id.to_string())
-        .bind(from.map_or(0, |cursor| cursor.seq))
+        .bind(after)
+        .bind(range.last_seq.unwrap_or(i64::MAX))
         .bind(i64::try_from(window.0 + 1)?)
         .fetch_all(&mut *self.connection)
         .await
         .with_context(|| format!("reading the transcript of workspace {}", workspace.id))?;
 
         let more = rows.len() > window.0;
-        let entries = rows
-            .iter()
-            .take(window.0)
-            .map(|row| {
-                Ok(StoredTranscriptEntry {
-                    kind: row.get::<String, _>("kind").parse()?,
+        let rows = &rows[..rows.len().min(window.0)];
+        let cursor = rows
+            .last()
+            .map(|row| Cursor::at(workspace.id, row.get("seq")))
+            .or(from);
+        let mut entries = Vec::new();
+        for row in rows {
+            let kind = row.get::<String, _>("kind").parse()?;
+            if kinds.contains(kind) {
+                entries.push(StoredTranscriptEntry {
+                    kind,
                     session_id: row
                         .get::<Option<String>, _>("session_id")
                         .map(|id| id.parse())
@@ -795,21 +776,9 @@ impl<'a> Log<'a> {
                     seq: row.get("seq"),
                     appended_at: row.get::<String, _>("appended_at").parse()?,
                     entry: serde_json::from_str(row.get("body"))?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let cursor = entries
-            .last()
-            .map(|entry| Cursor {
-                workspace: workspace.id,
-                seq: entry.seq,
-            })
-            .or(from);
-        let entries = entries
-            .into_iter()
-            .filter(|entry| kinds.contains(entry.kind))
-            .collect();
+                });
+            }
+        }
         Ok(StoredPage {
             cursor,
             entries,

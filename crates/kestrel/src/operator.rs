@@ -637,19 +637,7 @@ impl SessionRecord {
     }
 
     fn live(session: Session, summaries: &crate::live_work::Summaries) -> Self {
-        let state = if domain::SessionState::LIVE.contains(&session.state)
-            && session
-                .lease_expires_at
-                .is_some_and(|at| at > Timestamp::now())
-        {
-            session
-                .instance
-                .as_deref()
-                .map(|instance| summaries.session(instance, &session.id.to_string()))
-                .unwrap_or_default()
-        } else {
-            Default::default()
-        };
+        let state = summaries.current_session(&session);
         let mut record = Self::read(session);
         record.tools = state.tools;
         record.message_buffering = state.message_buffering;
@@ -2349,19 +2337,8 @@ async fn reading(
     let session_state = TranscriptSessionState {
         session_id: session.as_ref().map(|session| session.id),
         state: session
-            .filter(|session| {
-                domain::SessionState::LIVE.contains(&session.state)
-                    && session
-                        .lease_expires_at
-                        .is_some_and(|at| at > Timestamp::now())
-            })
-            .and_then(|session| {
-                session.instance.as_deref().map(|instance| {
-                    control_plane
-                        .summaries
-                        .session(instance, &session.id.to_string())
-                })
-            })
+            .as_ref()
+            .map(|session| control_plane.summaries.current_session(session))
             .unwrap_or_default(),
     };
     Ok(Read {

@@ -157,9 +157,12 @@ supervisor ([ADR-0026](../adr/0026-kestrel-carries-named-credentials-never-a-run
 
 An accepted ADR is a decision, not a description. These are decided and not yet built:
 
-- **Transcript kinds** ([ADR-0020](../adr/0020-the-transcript-records-what-the-runtime-emits-in-kinds.md),
-  [ADR-0033](../adr/0033-expire-transcript-detail-in-place.md)): `log::Entry` holds shared state and narration.
-  Messages, thoughts, plans and tool calls are recorded as completed units; narration and detail expire in place after 30 days.
+- **Trailing Sessions** ([ADR-0034](../adr/0034-completed-harness-updates-become-transcript-entries.md),
+  [ADR-0040](../adr/0040-a-session-trails-its-answer-while-its-work-runs.md)): the
+  [#372 implementation contract](https://github.com/openkestrel/kestrel/issues/372) intentionally
+  closes open tools unresolved at the answer and treats late activity updates as diagnostics.
+  The Session moves to Waiting and releases its active-work slot at the answer; the accepted
+  Trailing behavior remains unbuilt, scoped separately by [#370](https://github.com/openkestrel/kestrel/issues/370).
 - **Integration identity** ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)): there
   is no GitHub App. The Integration and the agent's `gh` both use tokens an operator supplies.
 - **Pull request state** ([ADR-0032](../adr/0032-a-pull-request-event-updates-workspace-state-without-a-firing.md)):

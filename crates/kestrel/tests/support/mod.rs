@@ -1295,18 +1295,21 @@ impl Kestrel {
     }
 
     pub async fn expire_payload_entry(&self, workspace: WorkspaceId, seq: i64) {
+        let at = Timestamp::now();
         let pool = database(self.data_dir()).await;
-        let mut tx = pool.begin().await.expect("an expiry transaction");
-        sqlx::query("DELETE FROM transcript_payload WHERE workspace_id = ? AND seq = ?")
-            .bind(workspace.to_string())
-            .bind(seq)
-            .execute(&mut *tx)
-            .await
-            .expect("payload removed");
-        sqlx::query("UPDATE transcript_entry SET body = json_object('type', 'expired', 'expired_at', ?), session_id = NULL WHERE workspace_id = ? AND seq = ? AND kind != 'shared_state'")
-            .bind(Timestamp::now().to_string()).bind(workspace.to_string()).bind(seq).execute(&mut *tx).await.expect("a tombstone");
-        tx.commit().await.expect("expiry should commit");
+        sqlx::query(
+            "UPDATE transcript_entry SET appended_at = ? WHERE workspace_id = ? AND seq = ?",
+        )
+        .bind((at - SignedDuration::from_hours(31 * 24)).to_string())
+        .bind(workspace.to_string())
+        .bind(seq)
+        .execute(&pool)
+        .await
+        .expect("the targeted entry backdated");
         pool.close().await;
+        let mut tx = self.store.begin().await.expect("an expiry transaction");
+        tx.log().expire(at).await.expect("production expiry");
+        tx.commit().await.expect("expiry should commit");
     }
 
     pub async fn refuse_payload_writes(&self) {
