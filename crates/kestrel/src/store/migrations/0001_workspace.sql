@@ -79,6 +79,8 @@ CREATE TABLE transcript_payload (
     UNIQUE (workspace_id, seq, field)
 ) STRICT;
 
+CREATE INDEX transcript_entry_retention ON transcript_entry (appended_at, workspace_id, seq)
+    WHERE kind IN ('narration', 'detail') AND json_extract(body, '$.type') != 'expired';
 CREATE INDEX transcript_entry_kind ON transcript_entry (workspace_id, kind, seq);
 CREATE INDEX transcript_entry_participant_joined
     ON transcript_entry (workspace_id, json_extract(body, '$.participant'))

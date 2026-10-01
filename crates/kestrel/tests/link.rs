@@ -546,6 +546,9 @@ fn the_published_openapi_document_describes_every_transcript_entry_the_link_serv
         .expect("an object of entry kinds");
 
     let served = [
+        Entry::Expired {
+            expired_at: "2026-09-30T00:00:00Z".parse().unwrap(),
+        },
         Entry::ParticipantJoined {
             participant: "builder".to_owned(),
         },
