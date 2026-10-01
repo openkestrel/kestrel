@@ -3008,9 +3008,12 @@
           "lease_expires_at": { "type": ["string", "null"], "format": "date-time" },
           "connected_at": { "type": ["string", "null"], "format": "date-time" },
           "supervisor_version": { "type": ["string", "null"] },
-          "usage": { "anyOf": [{ "$ref": "#/components/schemas/Usage" }, { "type": "null" }] }
+          "usage": { "anyOf": [{ "$ref": "#/components/schemas/Usage" }, { "type": "null" }] },
+          "tools": { "type": "array", "items": { "$ref": "#/components/schemas/RunningTool" } },
+          "message_buffering": { "type": "boolean" },
+          "thought_buffering": { "type": "boolean" }
         },
-        "required": ["id", "name", "workspace", "state", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "worked_model", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage"]
+        "required": ["id", "name", "workspace", "state", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "worked_model", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "message_buffering", "thought_buffering"]
       },
       "Exit": {
         "oneOf": [
@@ -3552,6 +3555,9 @@
           },
           {
             "$ref": "#/components/schemas/PullRequestEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ToolCallEntry"
           }
         ],
         "discriminator": {
@@ -3566,7 +3572,8 @@
             "instance_released": "#/components/schemas/InstanceReleased",
             "thought": "#/components/schemas/ThoughtEntry",
             "plan": "#/components/schemas/PlanEntry",
-            "pull_request": "#/components/schemas/PullRequestEntry"
+            "pull_request": "#/components/schemas/PullRequestEntry",
+            "tool_call": "#/components/schemas/ToolCallEntry"
           }
         }
       },
@@ -4031,6 +4038,88 @@
       "CursorEvent": {
         "type": "string",
         "description": "A cursor event carries the highest examined workspace:seq as its SSE id and data, so a filtered read resumes beyond omitted entries."
+      },
+      "ToolCallEntry": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "tool_call"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tool_kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "input": {
+            "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+          },
+          "result": {
+            "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+          },
+          "closing_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
+          }
+        },
+        "required": [
+          "type",
+          "session_id",
+          "call_id",
+          "title",
+          "tool_kind",
+          "status",
+          "input",
+          "result",
+          "closing_reason",
+          "completion"
+        ]
+      },
+      "RunningTool": {
+        "type": "object",
+        "properties": {
+          "call_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "call_id",
+          "title",
+          "status",
+          "started_at"
+        ]
       }
     }
   }

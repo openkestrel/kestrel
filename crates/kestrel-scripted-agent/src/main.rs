@@ -336,6 +336,83 @@ async fn play(
         )?;
         return Ok(StopReason::EndTurn);
     }
+    if script == Script::OversizedTool {
+        update(
+            connection,
+            SessionUpdate::ToolCall(
+                ToolCall::new(TOOL_CALL, "large read")
+                    .raw_input(serde_json::json!({"path":"large.txt"})),
+            ),
+        )?;
+        update(
+            connection,
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                TOOL_CALL,
+                ToolCallUpdateFields::new()
+                    .status(ToolCallStatus::Completed)
+                    .raw_output(serde_json::json!({"text":"x".repeat(70 * 1024)})),
+            )),
+        )?;
+        return Ok(StopReason::EndTurn);
+    }
+    if script == Script::ReconnectingTools {
+        for id in ["settles-offline", "still-running"] {
+            update(
+                connection,
+                SessionUpdate::ToolCall(ToolCall::new(id, id).status(ToolCallStatus::InProgress)),
+            )?;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        update(
+            connection,
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                "settles-offline",
+                ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+            )),
+        )?;
+        tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+        update(
+            connection,
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                "still-running",
+                ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+            )),
+        )?;
+        return Ok(StopReason::EndTurn);
+    }
+    if matches!(
+        script,
+        Script::SlowTool
+            | Script::OpenToolAnswered
+            | Script::OpenToolCancelled
+            | Script::OpenToolFailed
+    ) {
+        update(
+            connection,
+            SessionUpdate::ToolCall(
+                ToolCall::new(TOOL_CALL, "slow read")
+                    .status(ToolCallStatus::InProgress)
+                    .raw_input(serde_json::json!({"path":"README.md"})),
+            ),
+        )?;
+        match script {
+            Script::OpenToolAnswered => return Ok(StopReason::EndTurn),
+            Script::OpenToolCancelled => return Ok(StopReason::Cancelled),
+            Script::OpenToolFailed => return Ok(StopReason::MaxTokens),
+            _ => {}
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        update(
+            connection,
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                TOOL_CALL,
+                ToolCallUpdateFields::new()
+                    .status(ToolCallStatus::Completed)
+                    .raw_output(serde_json::json!({"text":"read result"})),
+            )),
+        )?;
+        return Ok(StopReason::EndTurn);
+    }
     if script == Script::Works {
         update(
             connection,

@@ -4399,6 +4399,17 @@ fn the_published_operator_document_describes_every_transcript_entry() {
             action: "opened".to_owned(),
             state: kestrel::domain::PullRequestState::Open,
         },
+        Entry::ToolCall {
+            session_id: SessionId::generate(),
+            call_id: "call".to_owned(),
+            title: "read".to_owned(),
+            tool_kind: "read".to_owned(),
+            status: "completed".to_owned(),
+            input: serde_json::json!({}),
+            result: serde_json::json!([]),
+            closing_reason: None,
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
+        },
     ];
 
     let mut kinds: Vec<String> = Vec::new();

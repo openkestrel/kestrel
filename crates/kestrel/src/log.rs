@@ -42,6 +42,17 @@ pub enum Entry {
         entries: Vec<PlanEntry>,
         completion: Completion,
     },
+    ToolCall {
+        session_id: SessionId,
+        call_id: String,
+        title: String,
+        tool_kind: String,
+        status: String,
+        input: serde_json::Value,
+        result: serde_json::Value,
+        closing_reason: Option<String>,
+        completion: Completion,
+    },
     Messages {
         messages: Vec<Message>,
     },
@@ -97,6 +108,7 @@ impl fmt::Display for Entry {
                     .collect::<Vec<_>>()
                     .join("  ")
             ),
+            Entry::ToolCall { title, status, .. } => write!(f, "tool call  {title}  {status}"),
             Entry::Messages { messages } => write!(
                 f,
                 "messages  {}",
@@ -756,13 +768,16 @@ impl Entry {
     pub const fn kind(&self) -> Kind {
         match self {
             Self::Thought { .. } | Self::Plan { .. } => Kind::Narration,
+            Self::ToolCall { .. } => Kind::Detail,
             _ => Kind::SharedState,
         }
     }
     pub const fn session_id(&self) -> Option<SessionId> {
         match self {
             Self::Said { session_id, .. } => *session_id,
-            Self::Thought { session_id, .. } | Self::Plan { session_id, .. } => Some(*session_id),
+            Self::Thought { session_id, .. }
+            | Self::Plan { session_id, .. }
+            | Self::ToolCall { session_id, .. } => Some(*session_id),
             Self::SessionStarted { session, .. } | Self::SessionEnded { session, .. } => {
                 Some(*session)
             }

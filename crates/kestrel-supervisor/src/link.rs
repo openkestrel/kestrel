@@ -210,6 +210,21 @@ pub enum Report {
         entries: Vec<PlanEntry>,
         completion: Completion,
     },
+    ToolCall {
+        call_id: String,
+        title: String,
+        tool_kind: String,
+        status: String,
+        input: serde_json::Value,
+        result: serde_json::Value,
+        closing_reason: Option<String>,
+        completion: Completion,
+    },
+    SessionState {
+        tools: Vec<RunningTool>,
+        message_buffering: bool,
+        thought_buffering: bool,
+    },
     Used {
         usage: Usage,
     },
@@ -234,6 +249,8 @@ impl Report {
             Report::Said { .. } => "said",
             Report::Thought { .. } => "thought",
             Report::Plan { .. } => "plan",
+            Report::ToolCall { .. } => "tool_call",
+            Report::SessionState { .. } => "session_state",
             Report::Used { .. } => "used",
             Report::Answered => "answered",
             Report::Checkout { .. } => "checkout",
@@ -728,4 +745,12 @@ impl Completion {
             turn_outcome: None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RunningTool {
+    pub call_id: String,
+    pub title: String,
+    pub status: String,
+    pub started_at: jiff::Timestamp,
 }
