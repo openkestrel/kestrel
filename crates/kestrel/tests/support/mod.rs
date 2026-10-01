@@ -1268,6 +1268,32 @@ impl Kestrel {
             .expect("the message should reach the transcript");
     }
 
+    pub async fn backdate_transcript(&self, workspace: WorkspaceId, at: Timestamp) {
+        let pool = database(self.data_dir()).await;
+        sqlx::query("UPDATE transcript_entry SET appended_at = ? WHERE workspace_id = ?")
+            .bind(at.to_string())
+            .bind(workspace.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    pub async fn retain_transcript(&self) -> anyhow::Result<usize> {
+        kestrel::timer::expire_transcript(&self.store).await
+    }
+
+    pub async fn refuse_retention_updates(&self, refusing: bool) {
+        let pool = database(self.data_dir()).await;
+        let statement = if refusing {
+            "CREATE TRIGGER refuse_retention BEFORE UPDATE ON transcript_entry WHEN OLD.kind = 'narration' AND json_extract(NEW.body, '$.type') = 'expired' BEGIN SELECT RAISE(ABORT, 'retention write failed'); END"
+        } else {
+            "DROP TRIGGER refuse_retention"
+        };
+        sqlx::query(statement).execute(&pool).await.unwrap();
+        pool.close().await;
+    }
+
     pub async fn expire_payload_entry(&self, workspace: WorkspaceId, seq: i64) {
         let pool = database(self.data_dir()).await;
         let mut tx = pool.begin().await.expect("an expiry transaction");
@@ -1277,8 +1303,8 @@ impl Kestrel {
             .execute(&mut *tx)
             .await
             .expect("payload removed");
-        sqlx::query("UPDATE transcript_entry SET body = json_object('type', 'expired') WHERE workspace_id = ? AND seq = ? AND kind != 'shared_state'")
-            .bind(workspace.to_string()).bind(seq).execute(&mut *tx).await.expect("a tombstone");
+        sqlx::query("UPDATE transcript_entry SET body = json_object('type', 'expired', 'expired_at', ?), session_id = NULL WHERE workspace_id = ? AND seq = ? AND kind != 'shared_state'")
+            .bind(Timestamp::now().to_string()).bind(workspace.to_string()).bind(seq).execute(&mut *tx).await.expect("a tombstone");
         tx.commit().await.expect("expiry should commit");
         pool.close().await;
     }

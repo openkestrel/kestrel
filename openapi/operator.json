@@ -3661,6 +3661,25 @@
           "session_id"
         ]
       },
+      "ExpiredEntry": {
+        "description": "Narration or detail expired in place after 30 days from append, including in sealed Workspaces. The enclosing record retains its original kind, seq and appended_at, with session_id null; all content, completion metadata and payload references are removed.",
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "expired"
+          },
+          "expired_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the sweep replaced the entry."
+          }
+        },
+        "required": [
+          "type",
+          "expired_at"
+        ],
+        "additionalProperties": false
+      },
       "Entry": {
         "description": "One completed unit of the Workspace Transcript.",
         "oneOf": [
@@ -3696,11 +3715,15 @@
           },
           {
             "$ref": "#/components/schemas/ToolCallEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ExpiredEntry"
           }
         ],
         "discriminator": {
           "propertyName": "type",
           "mapping": {
+            "expired": "#/components/schemas/ExpiredEntry",
             "participant_joined": "#/components/schemas/ParticipantJoined",
             "brief": "#/components/schemas/Brief",
             "session_started": "#/components/schemas/SessionStarted",

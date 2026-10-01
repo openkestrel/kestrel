@@ -159,7 +159,7 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
 
 - **Transcript kinds** ([ADR-0020](../adr/0020-the-transcript-records-what-the-runtime-emits-in-kinds.md),
   [ADR-0033](../adr/0033-expire-transcript-detail-in-place.md)): `log::Entry` holds shared state and narration.
-  Messages, thoughts, plans and tool calls are recorded as completed units; retention remains unbuilt.
+  Messages, thoughts, plans and tool calls are recorded as completed units; narration and detail expire in place after 30 days.
 - **Integration identity** ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)): there
   is no GitHub App. The Integration and the agent's `gh` both use tokens an operator supplies.
 - **Pull request state** ([ADR-0032](../adr/0032-a-pull-request-event-updates-workspace-state-without-a-firing.md)):

@@ -13,6 +13,9 @@ use crate::domain::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Entry {
+    Expired {
+        expired_at: Timestamp,
+    },
     ParticipantJoined {
         participant: String,
     },
@@ -79,6 +82,7 @@ pub enum Entry {
 impl fmt::Display for Entry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Entry::Expired { expired_at } => write!(f, "expired  {expired_at}"),
             Entry::ParticipantJoined { participant } => {
                 write!(f, "participant joined  {participant}")
             }
@@ -164,6 +168,9 @@ impl<'a> Log<'a> {
     /// The state is read in the statement that appends rather than off the `Workspace` handed
     /// in, so one sealed after the caller read it refuses all the same.
     pub async fn append(&mut self, workspace: &Workspace, entry: Entry) -> Result<TranscriptEntry> {
+        let kind = entry
+            .kind()
+            .context("expiry replaces an entry in place, never appends one")?;
         let appended_at = Timestamp::now();
         let seq: i64 = sqlx::query_scalar(
             "SELECT COALESCE(MAX(seq), 0) + 1 FROM transcript_entry WHERE workspace_id = ?",
@@ -192,7 +199,7 @@ impl<'a> Log<'a> {
         .bind(seq)
         .bind(serde_json::to_string(&body)?)
         .bind(appended_at.to_string())
-        .bind(entry.kind().as_str())
+        .bind(kind.as_str())
         .bind(entry.session_id().map(|id| id.to_string()))
         .bind(workspace.id.to_string())
         .bind(WorkspaceState::Open.as_str())
@@ -216,7 +223,7 @@ impl<'a> Log<'a> {
         }
 
         Ok(TranscriptEntry {
-            kind: entry.kind(),
+            kind,
             session_id: entry.session_id(),
             seq: appended.get("seq"),
             appended_at,
@@ -649,6 +656,33 @@ impl<'a> Log<'a> {
         Ok(serde_json::from_value(body)?)
     }
 
+    pub async fn expire(&mut self, at: Timestamp) -> Result<usize> {
+        const RETENTION: jiff::SignedDuration = jiff::SignedDuration::from_hours(30 * 24);
+        const BATCH: i64 = 1_000;
+        let due = sqlx::query(
+            "SELECT workspace_id, seq FROM transcript_entry
+             WHERE kind IN ('narration', 'detail') AND json_extract(body, '$.type') != 'expired'
+               AND appended_at <= ? ORDER BY appended_at, workspace_id, seq LIMIT ?",
+        )
+        .bind((at - RETENTION).to_string())
+        .bind(BATCH)
+        .fetch_all(&mut *self.connection)
+        .await?;
+        let tombstone = serde_json::to_string(&Entry::Expired { expired_at: at })?;
+        for row in &due {
+            let workspace: String = row.get("workspace_id");
+            let seq: i64 = row.get("seq");
+            sqlx::query("DELETE FROM transcript_payload WHERE workspace_id = ? AND seq = ?")
+                .bind(&workspace)
+                .bind(seq)
+                .execute(&mut *self.connection)
+                .await?;
+            sqlx::query("UPDATE transcript_entry SET body = ?, session_id = NULL WHERE workspace_id = ? AND seq = ?")
+                .bind(&tombstone).bind(&workspace).bind(seq).execute(&mut *self.connection).await?;
+        }
+        Ok(due.len())
+    }
+
     pub async fn payload(&mut self, workspace: &Workspace, id: &str) -> Result<PayloadRead> {
         let mut parts = id.split(':');
         let position = match (parts.next(), parts.next(), parts.next(), parts.next()) {
@@ -911,11 +945,12 @@ impl Kinds {
     }
 }
 impl Entry {
-    pub const fn kind(&self) -> Kind {
+    pub const fn kind(&self) -> Option<Kind> {
         match self {
-            Self::Thought { .. } | Self::Plan { .. } => Kind::Narration,
-            Self::ToolCall { .. } => Kind::Detail,
-            _ => Kind::SharedState,
+            Self::Expired { .. } => None,
+            Self::Thought { .. } | Self::Plan { .. } => Some(Kind::Narration),
+            Self::ToolCall { .. } => Some(Kind::Detail),
+            _ => Some(Kind::SharedState),
         }
     }
     pub const fn session_id(&self) -> Option<SessionId> {
