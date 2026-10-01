@@ -172,8 +172,8 @@ export function Composer({
 			announce("This harness offers no mode to cycle");
 			return;
 		}
-		announce(`mode ${next.value}`);
 		if (name === null || !session) return;
+		announce(`mode ${next.value}`);
 		changeSessionOption(operator, organization, session.id, optionChange(option, next.value, name))
 			.then(() => refresh())
 			.catch((error: unknown) => {
@@ -318,14 +318,16 @@ export function Composer({
 						<Button disabled={busy || draft.trim().length === 0} type="submit">
 							{label}
 						</Button>
-						<Button
-							disabled={busy || draft.trim().length === 0}
-							onClick={() => void sendNow()}
-							type="button"
-							variant="outline"
-						>
-							Send now
-						</Button>
+						{mayInterrupt(session) && (
+							<Button
+								disabled={busy || draft.trim().length === 0}
+								onClick={() => void sendNow()}
+								type="button"
+								variant="outline"
+							>
+								Send now
+							</Button>
+						)}
 						<Button
 							disabled={busy || !mayInterrupt(session)}
 							onClick={() => void interrupt()}

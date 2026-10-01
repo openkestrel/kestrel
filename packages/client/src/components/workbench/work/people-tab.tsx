@@ -1,6 +1,6 @@
 import { useTranscript } from "#/operator/currency";
 import type { Currency } from "#/operator/currency";
-import { joinedParticipants, presenceOf } from "#/operator/work-view";
+import { joinedParticipants } from "#/operator/work-view";
 
 export function PeopleTab({
 	currency,
@@ -13,7 +13,7 @@ export function PeopleTab({
 }) {
 	const transcript = useTranscript(currency, organization, workspace);
 	const joined = joinedParticipants(transcript.entries);
-	const presence = presenceOf(transcript.presence);
+	const presence = transcript.presence;
 
 	return (
 		<div className="grid gap-4 p-4 text-sm">

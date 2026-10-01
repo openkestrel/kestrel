@@ -1,4 +1,4 @@
-import type { FileEntry, Presence, Session } from "./generated";
+import type { FileEntry, Session } from "./generated";
 import type { Delivered } from "./transcript";
 import { when } from "./workspace-list";
 
@@ -78,27 +78,6 @@ export function fileKindLabel(entry: FileEntry): string {
 	return "other";
 }
 
-export function sessionPhase(session: Session): string {
-	switch (session.state) {
-		case "queued":
-			return "Queued";
-		case "working":
-			return "Working";
-		case "waiting":
-			return "Waiting";
-		case "unbriefed":
-			return `Preparing (${session.preparing ?? "preparing"})`;
-		case "ended":
-			return "Ended";
-		case "unreachable":
-			return "Unreachable";
-		default: {
-			const unhandled: never = session.state;
-			throw new Error(`no such Session state: ${String(unhandled)}`);
-		}
-	}
-}
-
 export function sessionOutcome(session: Session): string | undefined {
 	if (session.state !== "ended" && session.state !== "unreachable") return undefined;
 	if (session.exit) {
@@ -148,10 +127,4 @@ export function joinedParticipants(entries: Delivered[]): string[] {
 		}
 	}
 	return joined;
-}
-
-export function presenceOf(
-	presence: Presence | undefined,
-): { named: string[]; anonymous: number } | undefined {
-	return presence;
 }

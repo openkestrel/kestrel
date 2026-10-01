@@ -10,12 +10,24 @@ export type Watching = { organization: string; at: number };
 export type Wish = { organization: string; workspace: string; at: number; visible: boolean };
 
 export type LinkMessage =
-	| { kind: "hello" | "alive"; tab: string; watching: Watching | null; wish: Wish | null }
+	| {
+			kind: "hello" | "alive";
+			tab: string;
+			watching: Watching | null;
+			wish: Wish | null;
+			/** The Organization whose notice stream the tab has actually opened, not merely wants. */
+			open: string | null;
+	  }
 	| { kind: "bye"; tab: string }
 	| { kind: "refetch"; tab: string; organization: string }
 	| { kind: "notice"; tab: string; organization: string; notice: LinkNotice };
 
-export type Peer = { watching: Watching | null; wish: Wish | null; seen: number };
+export type Peer = {
+	watching: Watching | null;
+	wish: Wish | null;
+	open: string | null;
+	seen: number;
+};
 
 export type LinkChannel = {
 	post: (message: LinkMessage) => void;

@@ -168,8 +168,8 @@ export function entryText(entry: Entry): string {
 		case "expired":
 			return "expired";
 		default: {
-			const unhandled: never = entry;
-			throw new Error(`no such Transcript entry: ${String(unhandled)}`);
+			const kind = (entry as { type?: unknown }).type;
+			return typeof kind === "string" ? kind : "entry";
 		}
 	}
 }

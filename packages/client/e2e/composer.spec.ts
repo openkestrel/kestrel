@@ -529,6 +529,7 @@ test("Send now reports the post that landed and the interrupt that did not", asy
 	scripted.session = sessionRead({ state: "waiting" });
 	await page.reload();
 	await expect(page.getByRole("button", { name: "Interrupt" })).toBeDisabled();
+	await expect(page.getByRole("button", { name: "Send now" })).toHaveCount(0);
 });
 
 test("an option change warns about the cache before it is confirmed", async ({ page, request }) => {

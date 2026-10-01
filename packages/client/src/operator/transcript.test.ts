@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { FollowSession, page, readRange, TranscriptMirror } from "./transcript";
+import { cursorSeq, FollowSession, page, readRange, TranscriptMirror } from "./transcript";
 import { transport, type StreamEvent } from "./transport";
 
 const encoder = new TextEncoder();
@@ -77,6 +77,12 @@ describe("a Transcript mirror", () => {
 		mirror.apply({ event: "cursor", id: "w:4", data: "w:4" });
 
 		expect(mirror.cursor).toBe("w:4");
+	});
+
+	it("parses the sequence from a cursor, and refuses one it cannot read", () => {
+		expect(cursorSeq("w:7")).toBe(7);
+		expect(cursorSeq("w:abc")).toBeUndefined();
+		expect(cursorSeq("w:99999999999999999999")).toBeUndefined();
 	});
 
 	it("deduplicates an entry replayed at a sequence already delivered", () => {
