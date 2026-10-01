@@ -309,6 +309,9 @@ async fn attend(
                 harness::ConversationEvent::Report(Report::Usage { usage }) => {
                     carrying.hold_usage(usage)
                 }
+                harness::ConversationEvent::Report(Report::SessionInfo(info)) => {
+                    carrying.hold(info)
+                }
                 harness::ConversationEvent::Report(report) => carrying.saying.push_back(report),
                 harness::ConversationEvent::Worked(worked) => {
                     carrying.working = false;
