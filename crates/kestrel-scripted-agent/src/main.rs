@@ -336,6 +336,25 @@ async fn play(
         )?;
         return Ok(StopReason::EndTurn);
     }
+    if script == Script::OversizedTool {
+        update(
+            connection,
+            SessionUpdate::ToolCall(
+                ToolCall::new(TOOL_CALL, "large read")
+                    .raw_input(serde_json::json!({"path":"large.txt"})),
+            ),
+        )?;
+        update(
+            connection,
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                TOOL_CALL,
+                ToolCallUpdateFields::new()
+                    .status(ToolCallStatus::Completed)
+                    .raw_output(serde_json::json!({"text":"x".repeat(70 * 1024)})),
+            )),
+        )?;
+        return Ok(StopReason::EndTurn);
+    }
     if script == Script::ReconnectingTools {
         for id in ["settles-offline", "still-running"] {
             update(

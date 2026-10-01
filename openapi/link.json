@@ -1436,10 +1436,24 @@
             "type": "string"
           },
           "brief": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
           },
           "type": {
             "const": "brief"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -1502,14 +1516,28 @@
         "type": "object",
         "properties": {
           "messages": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "$ref": "#/components/schemas/SpokenMessage"
-            }
+            "oneOf": [
+              {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/components/schemas/SpokenMessage"
+                }
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
           },
           "type": {
             "const": "messages"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -1525,7 +1553,21 @@
             "type": "string"
           },
           "message": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -1830,10 +1872,24 @@
             "$ref": "#/components/schemas/Completion"
           },
           "entries": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PlanEntry"
+                }
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
+          },
+          "payload_fields": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/PlanEntry"
-            }
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -1857,7 +1913,21 @@
             "$ref": "#/components/schemas/Completion"
           },
           "text": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -1950,8 +2020,12 @@
           "status": {
             "type": "string"
           },
-          "input": {},
-          "result": {},
+          "input": {
+            "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+          },
+          "result": {
+            "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+          },
           "closing_reason": {
             "type": [
               "string",
@@ -1960,6 +2034,13 @@
           },
           "completion": {
             "$ref": "#/components/schemas/Completion"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -2082,6 +2163,32 @@
           "message_buffering",
           "thought_buffering"
         ]
+      },
+      "PayloadReference": {
+        "type": "object",
+        "description": "A body field exceeding 65536 bytes, fetched under its owning Workspace; message, thought and brief text use raw UTF-8, while plans, batched messages and tool input/results use compact JSON.",
+        "properties": {
+          "payload_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f-]+:[1-9][0-9]*:[a-z_]+$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 65537
+          },
+          "media_type": {
+            "enum": [
+              "text/plain; charset=utf-8",
+              "application/json"
+            ]
+          }
+        },
+        "required": [
+          "payload_id",
+          "bytes",
+          "media_type"
+        ],
+        "additionalProperties": false
       }
     }
   }

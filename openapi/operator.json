@@ -4061,8 +4061,12 @@
           "status": {
             "type": "string"
           },
-          "input": {},
-          "result": {},
+          "input": {
+            "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+          },
+          "result": {
+            "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+          },
           "closing_reason": {
             "type": [
               "string",
@@ -4071,6 +4075,13 @@
           },
           "completion": {
             "$ref": "#/components/schemas/Completion"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [

@@ -881,3 +881,50 @@ async fn an_ended_session_never_shows_its_stale_running_tools() {
     );
     kestrel.teardown().await;
 }
+
+#[tokio::test]
+async fn an_oversized_scripted_tool_result_is_referenced_and_fetchable() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let supervisor = Supervisor::provision_playing(&kestrel.link(), &on, Script::OversizedTool);
+    kestrel.start(&session, supervisor.harness()).await;
+    kestrel.after_one_turn(session.id).await;
+    let detail = operator_entries(&kestrel, &workspace, Some("detail")).await;
+    assert_eq!(detail.len(), 1);
+    assert_eq!(
+        detail[0]["entry"]["input"],
+        serde_json::json!({"path":"large.txt"})
+    );
+    let result = &detail[0]["entry"]["result"];
+    assert!(result["bytes"].as_u64().unwrap() > 64 * 1024);
+    assert_eq!(result["media_type"], "application/json");
+    let linked: serde_json::Value = reqwest::Client::new()
+        .get(format!(
+            "{}/link/instances/{}/entries?kinds=detail",
+            kestrel.link(),
+            on.instance.replace('/', "%2F")
+        ))
+        .bearer_auth(on.credential.as_str())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(linked["entries"][0]["entry"]["result"], *result);
+    let payload = result["payload_id"].as_str().unwrap();
+    let response = reqwest::get(format!(
+        "{}/operator/organizations/acme/workspaces/{}/transcript/payloads/{payload}",
+        kestrel.operator(),
+        workspace.id
+    ))
+    .await
+    .unwrap();
+    assert!(response.status().is_success());
+    let fetched: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(fetched["output"]["text"], "x".repeat(70 * 1024));
+    assert_eq!(fetched["content"], serde_json::json!([]));
+    supervisor.destroy();
+    kestrel.teardown().await;
+}

@@ -29,6 +29,7 @@ pub enum Script {
     /// Plans, thinks, calls a tool it asks permission for, says two messages and ends the turn.
     Speaks,
     SlowTool,
+    OversizedTool,
     ReconnectingTools,
     OpenToolAnswered,
     OpenToolCancelled,
@@ -95,6 +96,7 @@ impl Script {
         match self {
             Script::Speaks => "speaks",
             Script::ReconnectingTools => "reconnecting-tools",
+            Script::OversizedTool => "oversized-tool",
             Script::SlowTool => "slow-tool",
             Script::OpenToolAnswered => "open-tool-answered",
             Script::OpenToolCancelled => "open-tool-cancelled",
