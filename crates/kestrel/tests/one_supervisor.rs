@@ -168,6 +168,7 @@ async fn archiving_an_instance_as_its_workspace_seals_stops_its_supervisor() {
     kestrel.teardown().await;
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn after_a_restart_the_supervisor_redials_and_the_next_session_starts_over_its_link() {
     let kestrel = dispatching().await;
@@ -175,9 +176,20 @@ async fn after_a_restart_the_supervisor_redials_and_the_next_session_starts_over
     let first = kestrel
         .post(workspace.id, "operator", "before the restart")
         .await;
-    let first = answered_and_stopped(&kestrel, &first).await;
+    let first = kestrel.answered(first.id, 1).await;
+    let running = Environment::named(supervisor_of(&first));
+    // Hold the supervisor so the ended Session's stop is still unread when it reconnects.
+    #[allow(unsafe_code)]
+    unsafe {
+        assert_eq!(libc::kill(running.pid(), libc::SIGSTOP), 0);
+    }
+    kestrel.stop_session(first.id).await;
 
     let kestrel = kestrel.kill_and_restart().await;
+    #[allow(unsafe_code)]
+    unsafe {
+        assert_eq!(libc::kill(running.pid(), libc::SIGCONT), 0);
+    }
     let second = a_session_after(&kestrel, &workspace, "after the restart").await;
     let second = answered_and_stopped(&kestrel, &second).await;
 

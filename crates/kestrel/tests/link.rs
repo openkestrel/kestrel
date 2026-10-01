@@ -1326,9 +1326,10 @@ async fn activity_metadata_counts_only_omitted_kinds_and_expiry_leaves_only_tomb
         .await
         .unwrap();
     assert_eq!(
-        expanded["entries"][0]["entry"]["payload_fields"],
-        json!(["result"])
+        expanded["entries"][0]["entry"]["result"],
+        "x".repeat(70 * 1024)
     );
+    assert!(expanded["entries"][0]["entry"]["payload_fields"].is_null());
     assert_eq!(expanded["entries"][0]["entry"]["title"], "read source");
     for seq in 3..=5 {
         kestrel.expire_payload_entry(session.workspace, seq).await;
