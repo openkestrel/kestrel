@@ -541,7 +541,7 @@ fn workspace_open_declares_the_mode_its_first_session_runs_in() {
     let kestrel = Kestrel::new();
     let booted = kestrel.boot();
     declared(&booted);
-    let opened = booted.run(&[
+    let workspace = booted.record(&[
         "workspace",
         "open",
         "--project",
@@ -554,11 +554,11 @@ fn workspace_open_declares_the_mode_its_first_session_runs_in() {
         "go",
         "--as-participant",
         "operator",
-    ]);
-    let workspace = opened
-        .split('\t')
-        .next()
-        .expect("the workspace's name")
+        "--json",
+        "workspace",
+    ])["workspace"]
+        .as_str()
+        .expect("the opened workspace's name")
         .to_owned();
 
     let listed = booted.until(
@@ -1048,14 +1048,19 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
     let killed = kestrel.booting(&listen, Script::Lingers, "info");
     declared(&killed);
     let workspace = opened(&killed);
-    let session = killed.run(&[
+    let session = killed.record(&[
         "workspace",
         "post",
         &workspace,
         "--as-participant",
         "operator",
         "go",
-    ]);
+        "--json",
+        "session.id",
+    ])["session"]["id"]
+        .as_str()
+        .expect("the session the post reached")
+        .to_owned();
     // The transcript says the Session started only once the supervisor holds the Start instruction,
     // which is the first moment a restart has anything to recover; an instance alone is not.
     killed.until(

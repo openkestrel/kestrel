@@ -1438,12 +1438,15 @@ async fn run() -> Result<()> {
                     &json!({ "participant": as_participant, "message": message }),
                 )
                 .await?;
-            let held = &answer["held_message"];
             let session = &answer["session"];
-            if !held.is_null() {
-                show(&presentation, &view::DECLARED, held)?;
+            let held = &answer["held_message"];
+            if client.json.is_some() {
+                // The answer is the whole `{session, held_message}`; `--json` names its fields.
+                show(&presentation, &view::DECLARED, &answer)?;
             } else if !session.is_null() {
                 show(&presentation, &view::DECLARED, session)?;
+            } else if !held.is_null() {
+                show(&presentation, &view::DECLARED, held)?;
             } else {
                 eprintln!("queued as the next turn of the session already in flight");
             }

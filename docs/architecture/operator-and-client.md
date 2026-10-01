@@ -116,8 +116,9 @@ Workspace read carries `held_messages` — the `held` ones in arrival order, eac
 `{ participant, message }` and answers the Held Message; `DELETE …/workspaces/{workspace}/messages/{id}`
 takes `{ participant }` and answers `204`. Both apply the participant name rule and refuse an id the
 Workspace never held `404`, a name other than the author's `403`, and one a Turn took or its author
-withdrew `409`. Neither writes a Transcript entry. `kestrel workspace show` lists Held Messages,
-`workspace post` prints the held id, and `workspace message edit` / `workspace message withdraw`
+withdrew `409`. Neither writes a Transcript entry. `kestrel workspace show` lists Held Messages, `workspace post` hands back the Session it reached
+(or the held id when it reached none, with `--json` projecting either from its
+`{ session, held_message }` answer), and `workspace message edit` / `workspace message withdraw`
 change one.
 
 ### Change notices
