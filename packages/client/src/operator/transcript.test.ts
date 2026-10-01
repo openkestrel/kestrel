@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { FollowSession, page, TranscriptMirror } from "./transcript";
+import { FollowSession, page, readRange, TranscriptMirror } from "./transcript";
 import { transport, type StreamEvent } from "./transport";
 
 const encoder = new TextEncoder();
@@ -11,6 +11,20 @@ function recorded(seq: number, message = `entry ${seq}`): string {
 		kind: "shared_state",
 		session_id: null,
 		entry: { type: "said", participant: "jack", message },
+	});
+}
+
+function summary(first: number, last: number, overrides: Record<string, unknown> = {}): string {
+	return JSON.stringify({
+		first_seq: first,
+		last_seq: last,
+		counts: { tool_calls: 0, failed_calls: 0, thoughts: 0, plans: 0, tombstones: 0 },
+		latest: null,
+		started_at: null,
+		finished_at: null,
+		anomaly: false,
+		closed: false,
+		...overrides,
 	});
 }
 
@@ -84,6 +98,85 @@ describe("a Transcript mirror", () => {
 		mirror.apply(delivered(6));
 
 		expect(mirror.snapshot().entries.map((entry) => entry.seq)).toEqual([6]);
+	});
+});
+
+describe("Activity summaries", () => {
+	it("replaces an open summary by its first seq, and never reopens a closed one", () => {
+		const mirror = new TranscriptMirror();
+
+		mirror.apply({ event: "activity", id: "w:5", data: summary(2, 5) });
+		mirror.apply({ event: "activity", id: "w:7", data: summary(2, 7) });
+
+		expect(mirror.snapshot().activities).toHaveLength(1);
+		expect(mirror.snapshot().activities[0]?.last_seq).toBe(7);
+		expect(mirror.cursor).toBe("w:7");
+
+		mirror.apply({ event: "activity", id: "w:9", data: summary(2, 9, { closed: true }) });
+		mirror.apply({ event: "activity", id: "w:7", data: summary(2, 7) });
+
+		expect(mirror.snapshot().activities[0]?.closed).toBe(true);
+		expect(mirror.snapshot().activities[0]?.last_seq).toBe(9);
+	});
+
+	it("does not deliver an entry the Activity already examined", () => {
+		const mirror = new TranscriptMirror();
+
+		mirror.apply({ event: "activity", id: "w:5", data: summary(2, 5) });
+		mirror.apply(delivered(3));
+		mirror.apply(delivered(6));
+
+		expect(mirror.snapshot().entries.map((entry) => entry.seq)).toEqual([6]);
+	});
+});
+
+describe("transient Session state", () => {
+	it("is kept without moving the cursor", () => {
+		const mirror = new TranscriptMirror();
+
+		mirror.apply({
+			event: "session_state",
+			id: undefined,
+			data: JSON.stringify({
+				session_id: "00000000-0000-0000-0000-000000000001",
+				tools: [
+					{
+						call_id: "call",
+						title: "cargo test",
+						status: "in_progress",
+						started_at: "2026-09-30T00:00:00Z",
+					},
+				],
+				message_buffering: true,
+				thought_buffering: false,
+			}),
+		});
+
+		expect(mirror.snapshot().sessionState?.message_buffering).toBe(true);
+		expect(mirror.snapshot().sessionState?.tools[0]?.title).toBe("cargo test");
+		expect(mirror.cursor).toBeUndefined();
+	});
+});
+
+describe("an Activity expansion", () => {
+	it("reads its seq range with every kind and collects the entries", async () => {
+		const seen: string[] = [];
+		const operator = transport(async (url) => {
+			seen.push(url);
+			return events(
+				eventOf(delivered(2)),
+				eventOf(delivered(3)),
+				eventOf({ event: "end", id: undefined, data: '{"because":"caught_up"}' }),
+			);
+		});
+
+		const entries = await readRange(operator, "acme", "brave-otter", { first: 2, last: 3 });
+
+		expect(seen[0]).toContain("first_seq=2");
+		expect(seen[0]).toContain("last_seq=3");
+		expect(seen[0]).toContain("kinds=shared_state%2Cnarration%2Cdetail");
+		expect(seen[0]).toContain("follow=false");
+		expect(entries.map((entry) => entry.seq)).toEqual([2, 3]);
 	});
 });
 

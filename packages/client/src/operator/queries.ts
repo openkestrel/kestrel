@@ -1,5 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import type { Organization, Queue, Session, Workspace } from "./generated";
+import { type Delivered, readRange, type Range } from "./transcript";
 import { operatorPath, transport } from "./transport";
 
 export const operator = transport();
@@ -49,6 +50,37 @@ export const queueQuery = (organization: string) =>
 		queryKey: queueKey(organization),
 		queryFn: ({ signal }) =>
 			operator.read<Queue>(operatorPath("organizations", organization, "queue"), { signal }),
+	});
+
+// Expansions and payloads are lazy reads of recorded entries, not current-state views: they sit
+// outside the Organization/Workspace prefix so a change notice never refetches them.
+export const transcriptKey = (organization: string, workspace: string) =>
+	["transcript", organization, workspace] as const;
+
+// One Activity's expansion: its own seq range, every kind, read on demand.
+export const transcriptRangeQuery = (organization: string, workspace: string, range: Range) =>
+	queryOptions({
+		queryKey: [...transcriptKey(organization, workspace), range.first, range.last],
+		queryFn: ({ signal }): Promise<Delivered[]> =>
+			readRange(operator, organization, workspace, range, signal),
+	});
+
+export const transcriptPayloadQuery = (organization: string, workspace: string, payload: string) =>
+	queryOptions({
+		queryKey: [...transcriptKey(organization, workspace), "payload", payload],
+		queryFn: ({ signal }) =>
+			operator.readText(
+				operatorPath(
+					"organizations",
+					organization,
+					"workspaces",
+					workspace,
+					"transcript",
+					"payloads",
+					payload,
+				),
+				{ signal },
+			),
 	});
 // The read a notice names. Every view of a changed resource matches one of these prefixes.
 export function noticedKey(

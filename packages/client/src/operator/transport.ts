@@ -55,6 +55,10 @@ export function transport(fetch: Fetch = (url, init) => globalThis.fetch(url, in
 			return decoded<T>(await answered(path, { method: "GET", signal }));
 		},
 
+		async readText(path: string, { signal }: { signal?: AbortSignal } = {}): Promise<string> {
+			return (await answered(path, { method: "GET", signal })).text();
+		},
+
 		async write<T>(
 			method: Write,
 			path: string,

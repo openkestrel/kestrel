@@ -1,4 +1,12 @@
-import type { Entry, FollowerEvent, Presence, Recorded, TranscriptKind } from "./generated";
+import type {
+	Activity,
+	Entry,
+	FollowerEvent,
+	Presence,
+	Recorded,
+	TranscriptKind,
+	TranscriptSessionState,
+} from "./generated";
 import { operatorPath, Refused, type StreamEvent, type Transport } from "./transport";
 
 // One delivered Transcript entry, in cursor order.
@@ -12,6 +20,8 @@ export type Delivered = {
 
 export type TranscriptSnapshot = {
 	entries: Delivered[];
+	activities: Activity[];
+	sessionState: TranscriptSessionState | undefined;
 	cursor: string | undefined;
 	presence: Presence | undefined;
 	sealed: boolean;
@@ -21,6 +31,8 @@ const LIMIT = 500;
 
 export class TranscriptMirror {
 	private entries: Delivered[] = [];
+	private activities: Activity[] = [];
+	private sessionStateValue: TranscriptSessionState | undefined;
 	private highest = 0;
 	private cursorValue: string | undefined;
 	private presenceValue: Presence | undefined;
@@ -57,6 +69,19 @@ export class TranscriptMirror {
 				if (recorded) this.entry(recorded, event.id);
 				break;
 			}
+			case "activity": {
+				const activity = parsed<Activity>(event.data);
+				if (activity) this.summary(activity, event.id);
+				break;
+			}
+			case "session_state": {
+				const state = parsed<TranscriptSessionState>(event.data);
+				if (state) {
+					this.sessionStateValue = state;
+					this.changed();
+				}
+				break;
+			}
 			case "cursor":
 				this.advance(event.id ?? event.data);
 				break;
@@ -79,14 +104,29 @@ export class TranscriptMirror {
 	private entry(recorded: Recorded, cursor: string | undefined): void {
 		if (recorded.seq <= this.highest) return;
 		this.highest = recorded.seq;
-		this.entries.push({
-			seq: recorded.seq,
-			kind: recorded.kind,
-			sessionId: recorded.session_id,
-			appendedAt: recorded.appended_at,
-			entry: recorded.entry,
-		});
+		this.entries.push(delivered(recorded));
 		if (this.entries.length > LIMIT) this.entries.splice(0, this.entries.length - LIMIT);
+		if (cursor) this.setCursor(cursor);
+		else this.changed();
+	}
+
+	// A summary identifies its whole Activity by first_seq, so a later replacement supersedes the
+	// earlier one; a closed summary is never reopened by a replay.
+	private summary(activity: Activity, cursor: string | undefined): void {
+		const known = this.activities.find((existing) => existing.first_seq === activity.first_seq);
+		if (known?.closed && !activity.closed) return;
+		if (known) {
+			this.activities = this.activities.map((existing) =>
+				existing.first_seq === activity.first_seq ? activity : existing,
+			);
+		} else {
+			this.activities = [...this.activities, activity].toSorted(
+				(one, other) => one.first_seq - other.first_seq,
+			);
+			if (this.activities.length > LIMIT) {
+				this.activities.splice(0, this.activities.length - LIMIT);
+			}
+		}
 		if (cursor) this.setCursor(cursor);
 		else this.changed();
 	}
@@ -116,6 +156,8 @@ export class TranscriptMirror {
 	private snapshotOf(): TranscriptSnapshot {
 		return {
 			entries: [...this.entries],
+			activities: [...this.activities],
+			sessionState: this.sessionStateValue,
 			cursor: this.cursorValue,
 			presence: this.presenceValue,
 			sealed: this.sealedValue,
@@ -268,14 +310,65 @@ export async function page(
 	}
 }
 
+export type Range = { first: number; last: number };
+
+// Expands one Activity: the entries its summary counted, read from the range with every kind.
+// These never enter the mirror, whose cursor already stands past them.
+export async function readRange(
+	operations: Transport,
+	organization: string,
+	workspace: string,
+	range: Range,
+	signal?: AbortSignal,
+): Promise<Delivered[]> {
+	const path = transcriptPath(organization, workspace, {
+		follow: false,
+		kinds: "shared_state,narration,detail",
+		first: range.first,
+		last: range.last,
+	});
+	const entries: Delivered[] = [];
+	for await (const event of operations.stream(path, { signal })) {
+		if (event.event === "entry") {
+			const recorded = parsed<Recorded>(event.data);
+			if (recorded) entries.push(delivered(recorded));
+		}
+		if (event.event === "end") break;
+	}
+	return entries;
+}
+
+export type TranscriptQuery = {
+	follow: boolean;
+	as?: string;
+	kinds?: string;
+	summaries?: boolean;
+	first?: number;
+	last?: number;
+};
+
 export function transcriptPath(
 	organization: string,
 	workspace: string,
-	query: { follow: boolean; as?: string },
+	query: TranscriptQuery,
 ): string {
 	const parameters = new URLSearchParams({ follow: String(query.follow) });
 	if (query.as) parameters.set("as", query.as);
+	if (query.kinds) parameters.set("kinds", query.kinds);
+	if (query.summaries !== undefined) parameters.set("summaries", String(query.summaries));
+	if (query.first !== undefined) parameters.set("first_seq", String(query.first));
+	if (query.last !== undefined) parameters.set("last_seq", String(query.last));
 	return `${operatorPath("organizations", organization, "workspaces", workspace, "transcript")}?${parameters}`;
+}
+
+export function delivered(recorded: Recorded): Delivered {
+	return {
+		seq: recorded.seq,
+		kind: recorded.kind,
+		sessionId: recorded.session_id,
+		appendedAt: recorded.appended_at,
+		entry: recorded.entry,
+	};
 }
 
 function sleep(milliseconds: number): Promise<void> {
