@@ -137,10 +137,13 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 			project: draft.project,
 			agent: draft.agent,
 			profile: draft.profile === "" ? null : draft.profile,
-			branch: draft.branch.trim() === "" ? null : draft.branch.trim(),
+			// A continuation runs on the branch of the Workspace it continues and names none of its own.
+			branch:
+				draft.continues !== "" ? null : draft.branch.trim() === "" ? null : draft.branch.trim(),
 			model: draft.model.trim() === "" ? null : draft.model.trim(),
 			brief: draft.brief.trim() === "" ? null : draft.brief,
 			participant: name.trim(),
+			continues: draft.continues === "" ? null : draft.continues,
 		});
 	};
 
@@ -284,6 +287,12 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 					<dd>{resolvedModel(draft.model, agent)}</dd>
 					<dt className="text-muted-foreground">Environment</dt>
 					<dd>{queue.data ? resolvedEnvironment(queue.data.work_role) : "Reading the queue…"}</dd>
+					{draft.continues !== "" && (
+						<>
+							<dt className="text-muted-foreground">Continues</dt>
+							<dd data-continues>{draft.continues}</dd>
+						</>
+					)}
 				</dl>
 
 				{queue.data ? (

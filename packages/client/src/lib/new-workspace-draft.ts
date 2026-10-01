@@ -8,6 +8,7 @@ export type NewWorkspaceDraft = {
 	model: string;
 	brief: string;
 	options: boolean;
+	continues: string;
 };
 
 export const AN_EMPTY_DRAFT: NewWorkspaceDraft = {
@@ -18,6 +19,7 @@ export const AN_EMPTY_DRAFT: NewWorkspaceDraft = {
 	model: "",
 	brief: "",
 	options: false,
+	continues: "",
 };
 
 const drafts = new Map<string, NewWorkspaceDraft>();
