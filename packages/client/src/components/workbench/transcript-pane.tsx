@@ -9,6 +9,7 @@ import { ToggleGroup, ToggleGroupItem } from "#/components/ui/toggle-group";
 import { useTranscript } from "#/operator/currency";
 import type { Currency } from "#/operator/currency";
 import type { Session, Workspace } from "#/operator/generated";
+import { sessionPhase } from "#/operator/session-state";
 import { entryText, flow } from "#/operator/transcript-view";
 import { BriefComposer } from "./brief-composer";
 import { Composer } from "./composer";
@@ -59,6 +60,17 @@ export function TranscriptPane({
 		const last = fresh.at(-1);
 		if (last) setAnnounced(entryText(last.entry));
 	}, [transcript.entries]);
+
+	// A phase change is what a listener needs; the mirror's tools and usage churn stay silent.
+	const phase = session ? sessionPhase(session) : undefined;
+	const phaseFloor = useRef<string | undefined>(undefined);
+	useEffect(() => {
+		if (phase === undefined) return;
+		if (phaseFloor.current === phase) return;
+		const first = phaseFloor.current === undefined;
+		phaseFloor.current = phase;
+		if (!first && session) setAnnounced(phaseLine(session));
+	}, [phase, session]);
 
 	const items = flow(transcript.entries, transcript.activities);
 	const emptyOfEverything = items.length === 0 && transcript.sessionState === undefined;
@@ -154,4 +166,11 @@ export function TranscriptPane({
 			)}
 		</>
 	);
+}
+
+function phaseLine(session: Session): string {
+	if (session.state === "ended" && session.exit?.status === "failed") {
+		return session.exit.because ? `Session failed: ${session.exit.because}` : "Session failed";
+	}
+	return `Session ${sessionPhase(session).toLowerCase()}`;
 }

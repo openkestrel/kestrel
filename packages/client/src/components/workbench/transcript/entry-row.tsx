@@ -147,8 +147,14 @@ function content(entry: Delivered, mode: Disclosure, row: Row): ReactNode {
 		case "tool_call":
 			return <ToolRow entry={value} mode={mode} {...row} />;
 		default: {
-			const unhandled: never = value;
-			throw new Error(`no such Transcript entry: ${String(unhandled)}`);
+			// Approvals, questions and reports arrive as new shared-state kinds; show them plainly
+			// rather than taking the pane down.
+			const kind = (value as { type?: unknown }).type;
+			return (
+				<p className="text-muted-foreground text-xs">
+					{typeof kind === "string" ? kind : "unknown entry"}
+				</p>
+			);
 		}
 	}
 }
