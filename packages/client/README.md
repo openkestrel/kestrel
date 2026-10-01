@@ -9,7 +9,7 @@ bun install
 bun run dev        # Vite on :3000, proxying /operator to a control plane on 127.0.0.1:7718
 bun run build      # dist/client, which images/kestrel-client serves
 bun run typecheck
-bun run test       # the transport
+bun run test       # the transport, the notice link and the Transcript follow
 bun run e2e        # builds, then drives it through images/kestrel-client/Caddyfile and `kestrel-control-plane serve`
 bun run check      # oxlint and oxfmt
 ```
