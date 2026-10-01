@@ -402,18 +402,21 @@ async fn entries(
         .stored_page(&workspace, from, window, &kinds)
         .await?;
 
+    let mut entries = Vec::new();
+    for entry in page.entries {
+        entries.push(Recorded {
+            kind: entry.kind,
+            session_id: entry.session_id,
+            seq: entry.seq,
+            appended_at: entry.appended_at.to_string(),
+            entry: tx
+                .log()
+                .hydrate_entry(workspace.id, entry.seq, entry.entry)
+                .await?,
+        });
+    }
     Ok(Json(Entries {
-        entries: page
-            .entries
-            .into_iter()
-            .map(|entry| Recorded {
-                kind: entry.kind,
-                session_id: entry.session_id,
-                seq: entry.seq,
-                appended_at: entry.appended_at.to_string(),
-                entry: entry.entry,
-            })
-            .collect(),
+        entries,
         cursor: page.cursor.map(|cursor| cursor.to_string()),
         more: page.more,
     }))
