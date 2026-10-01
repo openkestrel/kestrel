@@ -273,8 +273,18 @@ async fn attend(
                 harness::ConversationEvent::Ready => carrying.ready = true,
             }
         }
-        if let Some(state) = &carrying.state {
-            report_state(link, &carrying.session, state).await?;
+    }
+    if let Some(carrying) = supervising.carrying.as_ref()
+        && let Some(state) = &carrying.state
+    {
+        match report_state(link, &carrying.session, state).await {
+            Ok(()) => {}
+            Err(link::Error::Session(why)) => {
+                if let Some(carrying) = supervising.carrying.take() {
+                    carrying.let_go(&why, diagnostics).await;
+                }
+            }
+            Err(error) => return Err(error),
         }
         if carrying.prompt.is_none() && carrying.ready {
             link.report(&Report::Ready, Some(&carrying.session), None)
@@ -348,7 +358,15 @@ async fn attend(
                     match event {
                         harness::ConversationEvent::State(state) => {
                             carrying.state = Some(state);
-                            report_state(link, &carrying.session, carrying.state.as_ref().unwrap()).await?;
+                            match report_state(link, &carrying.session, carrying.state.as_ref().unwrap()).await {
+                                Ok(()) => {}
+                                Err(link::Error::Session(why)) => {
+                                    if let Some(carrying) = supervising.carrying.take() {
+                                        carrying.let_go(&why, diagnostics).await;
+                                    }
+                                }
+                                Err(error) => return Err(error),
+                            }
                         }
                         harness::ConversationEvent::Report(Report::SessionInfo(info)) => {
                             carrying.hold(info);

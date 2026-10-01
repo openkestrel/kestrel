@@ -122,7 +122,7 @@ async fn the_transcript_of_a_session_that_outlived_a_restart_has_no_gap_and_no_d
     let all = reqwest::Client::new()
         .get(format!("{}/operator/organizations/acme/workspaces/{}/transcript?follow=false&kinds=shared_state,narration,detail", kestrel.operator(), workspace.id))
         .send().await.unwrap().text().await.unwrap();
-    let sequences: Vec<i64> = all
+    let entries: Vec<serde_json::Value> = all
         .split("\n\n")
         .filter_map(|frame| {
             if !frame.contains("event: entry") {
@@ -132,11 +132,21 @@ async fn the_transcript_of_a_session_that_outlived_a_restart_has_no_gap_and_no_d
                 .lines()
                 .find_map(|line| line.strip_prefix("data: "))
                 .unwrap();
-            let entry: serde_json::Value = serde_json::from_str(data).unwrap();
-            entry["seq"].as_i64()
+            Some(serde_json::from_str(data).unwrap())
         })
         .collect();
-    assert_eq!(sequences, (1..=8).collect::<Vec<_>>());
+    let sequences: Vec<i64> = entries
+        .iter()
+        .map(|entry| entry["seq"].as_i64().unwrap())
+        .collect();
+    assert_eq!(sequences, (1..=9).collect::<Vec<_>>());
+    let tools: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry["entry"]["type"] == "tool_call")
+        .collect();
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["kind"], "detail");
+    assert_eq!(tools[0]["session_id"], session.id.to_string());
 
     supervisor.lets_go_of(session.id).await;
     kestrel.teardown().await;

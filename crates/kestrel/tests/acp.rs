@@ -912,7 +912,15 @@ async fn an_oversized_scripted_tool_result_is_referenced_and_fetchable() {
         .json()
         .await
         .unwrap();
-    assert_eq!(linked["entries"][0]["entry"]["result"], *result);
+    assert_eq!(
+        linked["entries"][0]["entry"]["result"]["output"]["text"],
+        "x".repeat(70 * 1024)
+    );
+    assert_eq!(
+        linked["entries"][0]["entry"]["result"]["content"],
+        serde_json::json!([])
+    );
+    assert!(linked["entries"][0]["entry"]["payload_fields"].is_null());
     let payload = result["payload_id"].as_str().unwrap();
     let response = reqwest::get(format!(
         "{}/operator/organizations/acme/workspaces/{}/transcript/payloads/{payload}",
