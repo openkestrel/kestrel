@@ -1592,16 +1592,31 @@ impl Kestrel {
     }
 
     /// What the control plane last sent down the link for this Session, as the supervisor would
-    /// have read it.
+    /// have read it. Waits for one: a Session's instruction can be written after the state the
+    /// caller was waiting on.
     pub async fn instruction(&self, session: &Session) -> Instruction {
         let pool = database(self.data_dir()).await;
-        let body: String = sqlx::query_scalar(
-            "SELECT body FROM link_instruction WHERE session_id = ? ORDER BY seq DESC LIMIT 1",
-        )
-        .bind(session.id.to_string())
-        .fetch_one(&pool)
-        .await
-        .expect("an instruction for the session");
+        let deadline = tokio::time::Instant::now() + PATIENCE;
+
+        let body = loop {
+            let body: Option<String> = sqlx::query_scalar(
+                "SELECT body FROM link_instruction WHERE session_id = ? ORDER BY seq DESC LIMIT 1",
+            )
+            .bind(session.id.to_string())
+            .fetch_optional(&pool)
+            .await
+            .expect("instructions should read");
+
+            if let Some(body) = body {
+                break body;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the session {} was never sent an instruction",
+                session.id
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        };
         pool.close().await;
 
         serde_json::from_str(&body).expect("an instruction body")
