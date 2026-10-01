@@ -16,6 +16,10 @@ test.beforeAll(async ({ request }) => {
 	});
 });
 
+test.afterEach(async ({ page }) => {
+	await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
 async function opened(request: APIRequestContext): Promise<{ id: string; name: string }> {
 	const response = await request.post(`/operator/organizations/${ORGANIZATION}/workspaces`, {
 		data: { project: "kestrel", agent: "builder", brief: "an opening brief" },
