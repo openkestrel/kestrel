@@ -638,9 +638,20 @@ impl<'a> Log<'a> {
     }
 
     async fn hydrate(&mut self, workspace: WorkspaceId, seq: i64, body: &str) -> Result<Entry> {
-        let mut body: serde_json::Value = serde_json::from_str(body)?;
+        let body = self
+            .hydrate_entry(workspace, seq, serde_json::from_str(body)?)
+            .await?;
+        Ok(serde_json::from_value(body)?)
+    }
+
+    pub async fn hydrate_entry(
+        &mut self,
+        workspace: WorkspaceId,
+        seq: i64,
+        mut body: serde_json::Value,
+    ) -> Result<serde_json::Value> {
         if body.get("payload_fields").is_none() {
-            return Ok(serde_json::from_value(body)?);
+            return Ok(body);
         }
         let payloads = sqlx::query("SELECT field, media_type, content FROM transcript_payload WHERE workspace_id = ? AND seq = ?")
             .bind(workspace.to_string()).bind(seq).fetch_all(&mut *self.connection).await?;
@@ -653,7 +664,10 @@ impl<'a> Log<'a> {
                 serde_json::Value::String(String::from_utf8(content)?)
             };
         }
-        Ok(serde_json::from_value(body)?)
+        body.as_object_mut()
+            .expect("transcript entry")
+            .remove("payload_fields");
+        Ok(body)
     }
 
     pub async fn expire(&mut self, at: Timestamp) -> Result<usize> {

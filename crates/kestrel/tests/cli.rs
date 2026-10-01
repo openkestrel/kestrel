@@ -341,7 +341,14 @@ fn opened(kestrel: &Booted) -> String {
 /// session.
 fn transcribed(kestrel: &Booted, workspace: &str) -> Vec<String> {
     kestrel
-        .records(&["workspace", "transcript", workspace, "--json", "seq,entry"])
+        .records(&[
+            "workspace",
+            "transcript",
+            workspace,
+            "--no-summaries",
+            "--json",
+            "seq,entry",
+        ])
         .iter()
         .map(|recorded| {
             let entry = &recorded["entry"];
@@ -480,7 +487,7 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
     );
     assert_eq!(
         transcribed(&booted, &workspace).last(),
-        Some(&format!("10 instance released operator {instance}")),
+        Some(&format!("11 instance released operator {instance}")),
         "the release is not on the record"
     );
     assert!(
@@ -692,9 +699,9 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
             "2 participant joined operator".to_owned(),
             "3 said operator go".to_owned(),
             format!("4 session started {session} builder"),
-            "7 said builder half of one message, and the other half".to_owned(),
-            "8 said builder a second message".to_owned(),
-            format!("9 session ended {session} succeeded"),
+            "8 said builder half of one message, and the other half".to_owned(),
+            "9 said builder a second message".to_owned(),
+            format!("10 session ended {session} succeeded"),
         ]
     );
 }
