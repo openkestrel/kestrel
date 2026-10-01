@@ -2,24 +2,24 @@
 //! over the wire rather than over a shim above it, with no network and no model spend.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthMethod, AuthMethodAgent, AuthMethodTerminal, AvailableCommand,
-    AvailableCommandInput, AvailableCommandsUpdate, ConfigOptionUpdate, ContentBlock, ContentChunk,
-    Cost, CurrentModeUpdate, InitializeRequest, InitializeResponse, LoadSessionRequest,
-    LoadSessionResponse, MessageId, NewSessionRequest, NewSessionResponse, PermissionOption,
-    PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, PromptCapabilities,
-    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
-    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelect,
-    SessionConfigSelectOption, SessionConfigValueId, SessionInfoUpdate, SessionMode,
-    SessionModeState, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionConfigOptionResponse, SetSessionModeRequest, SetSessionModeResponse, StopReason,
-    TextContent, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
-    UnstructuredCommandInput, UsageUpdate,
+    AvailableCommandInput, AvailableCommandsUpdate, CancelNotification, ConfigOptionUpdate,
+    ContentBlock, ContentChunk, Cost, CurrentModeUpdate, InitializeRequest, InitializeResponse,
+    LoadSessionRequest, LoadSessionResponse, MessageId, NewSessionRequest, NewSessionResponse,
+    PermissionOption, PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus,
+    PromptCapabilities, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
+    SessionConfigSelect, SessionConfigSelectOption, SessionConfigValueId, SessionInfoUpdate,
+    SessionMode, SessionModeState, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest,
+    SetSessionModeResponse, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
+    ToolCallUpdateFields, UnstructuredCommandInput, UsageUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Error, Result, Stdio};
 use clap::Parser;
@@ -58,6 +58,7 @@ struct Cli {
 async fn main() -> Result<()> {
     let script = Cli::parse().script;
     let prompted_so_far: Arc<Mutex<Vec<String>>> = Arc::default();
+    let cancelled: Arc<AtomicBool> = Arc::default();
     let opened_against: Arc<Mutex<Option<PathBuf>>> = Arc::default();
     let located = Arc::clone(&opened_against);
     let options: Arc<Mutex<Vec<SessionConfigOption>>> = Arc::default();
@@ -68,6 +69,18 @@ async fn main() -> Result<()> {
     Agent
         .builder()
         .name("kestrel-scripted-agent")
+        .on_receive_notification(
+            {
+                let cancelled = Arc::clone(&cancelled);
+                async move |cancel: CancelNotification, _connection| {
+                    if cancel.session_id.0.as_ref() == SESSION {
+                        cancelled.store(true, Ordering::SeqCst);
+                    }
+                    Ok(())
+                }
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
         .on_receive_request(
             async move |initialize: InitializeRequest, responder, _connection| {
                 if initialize.protocol_version != ProtocolVersion::V1 {
@@ -218,6 +231,10 @@ async fn main() -> Result<()> {
         .on_receive_request(
             async move |prompt: PromptRequest, responder, connection| {
                 let prompted_so_far = Arc::clone(&prompted_so_far);
+                let cancelled = Arc::clone(&cancelled);
+                // A cancel that arrived between turns belongs to the turn it was asked of, not
+                // this one.
+                cancelled.store(false, Ordering::SeqCst);
                 let located = located
                     .lock()
                     .expect("where the session was opened should not be poisoned")
@@ -241,7 +258,15 @@ async fn main() -> Result<()> {
                         so_far.push(prompted.clone());
                         earlier
                     };
-                    let stop = play(script, &prompted, &earlier, located, &connection).await?;
+                    let stop = play(
+                        script,
+                        &prompted,
+                        &earlier,
+                        located,
+                        &connection,
+                        &cancelled,
+                    )
+                    .await?;
                     responder.respond(PromptResponse::new(stop))
                 })
             },
@@ -259,8 +284,41 @@ async fn play(
     earlier: &[String],
     located: Option<PathBuf>,
     connection: &ConnectionTo<Client>,
+    cancelled: &AtomicBool,
 ) -> Result<StopReason> {
     TURN.store(earlier.len(), Ordering::Relaxed);
+    if script == Script::WorksUntilCancelled && earlier.is_empty() {
+        say(connection, "working", "working on it")?;
+        // A second message closes the first, so the control plane has it on the record before
+        // the cancel arrives.
+        say(connection, "working-still", "still on it")?;
+        update(
+            connection,
+            SessionUpdate::ToolCall(
+                ToolCall::new(format!("{TOOL_CALL}-{}", earlier.len() + 1), "a long read")
+                    .status(ToolCallStatus::InProgress),
+            ),
+        )?;
+        while !cancelled.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // The cancel is in flight, so a permission asked for now must come back `cancelled`.
+        permission_cancelled(connection).await?;
+
+        return Ok(StopReason::Cancelled);
+    }
+    if script == Script::IgnoresCancel {
+        say(connection, "ignoring", "ignoring the cancel")?;
+        say(connection, "ignoring-still", "still ignoring it")?;
+        update(
+            connection,
+            SessionUpdate::ToolCall(
+                ToolCall::new(format!("{TOOL_CALL}-ignored"), "a read nobody will answer")
+                    .status(ToolCallStatus::InProgress),
+            ),
+        )?;
+        return std::future::pending().await;
+    }
     if script == Script::ReportsThenWaits {
         say(connection, "first", "first message")?;
         update(
@@ -790,6 +848,27 @@ async fn permission_to_use_a_tool(connection: &ConnectionTo<Client>) -> Result<(
             "the scripted agent offered {ALLOW_ONCE} and was answered {}",
             selected.option_id.0
         )));
+    }
+
+    Ok(())
+}
+
+/// Asks for permission on a turn being cancelled, and refuses to go on unless the client answers
+/// `cancelled`, which is not a denial.
+async fn permission_cancelled(connection: &ConnectionTo<Client>) -> Result<()> {
+    let outcome = connection
+        .send_request(RequestPermissionRequest::new(
+            SESSION,
+            ToolCallUpdate::new(TOOL_CALL, ToolCallUpdateFields::new()),
+            vec![allow_once(), reject_once()],
+        ))
+        .block_task()
+        .await?
+        .outcome;
+
+    if !matches!(outcome, RequestPermissionOutcome::Cancelled) {
+        return Err(Error::internal_error()
+            .data("a permission request on an interrupted turn was not answered cancelled"));
     }
 
     Ok(())

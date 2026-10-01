@@ -165,6 +165,12 @@ pub const SESSION: View = View::Detail(&[
     "usage",
     "tools",
 ]);
+pub const INTERRUPTED: View = View::Detail(&[
+    "id",
+    "state",
+    "interrupting.participant",
+    "interrupting.requested_at",
+]);
 pub const STOPPED: View = View::Value("exit.status");
 pub const INSTANCES: View = View::Rows(&["workspace", "instance", "because"]);
 pub const QUEUE: View = View::Rows(&[

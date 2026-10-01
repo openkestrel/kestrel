@@ -646,6 +646,13 @@ pub struct Checkout {
     pub branch: String,
 }
 
+/// A person's request that a Session's working Turn stop, while the Turn is still in flight.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Interrupting {
+    pub participant: String,
+    pub requested_at: Timestamp,
+}
+
 /// A message the Workspace's unfinished Session cannot take yet: everyone can read it, and its
 /// author can edit or withdraw it until a Turn takes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -718,6 +725,8 @@ pub struct Session {
     pub options: Vec<SessionOption>,
     /// The commands the harness offers for this Session.
     pub commands: Vec<SessionCommand>,
+    /// Who asked the working Turn to stop, while the request is in flight.
+    pub interrupting: Option<Interrupting>,
     pub enqueued_at: Timestamp,
     pub started_at: Option<Timestamp>,
     pub ended_at: Option<Timestamp>,

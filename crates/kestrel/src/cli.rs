@@ -15,6 +15,7 @@ const SUPERVISOR: &str = "kestrel-supervisor";
 const IMAGE: &str = "kestrel-env:latest";
 const DEFAULT_MAX_ACTIVE_SESSIONS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 const DEFAULT_FOLLOW_LEASE: NonZeroU64 = NonZeroU64::new(60).unwrap();
+const DEFAULT_INTERRUPT_DEADLINE: NonZeroU64 = NonZeroU64::new(30).unwrap();
 
 const ROLES: &str = "\
 Roles:
@@ -164,6 +165,16 @@ pub struct Cli {
         default_value_t = DEFAULT_FOLLOW_LEASE
     )]
     follow_lease: NonZeroU64,
+
+    /// How long a supervisor gives an interrupted turn to answer its cancel, in seconds
+    #[arg(
+        long = "interrupt-deadline",
+        env = "KESTREL_INTERRUPT_DEADLINE",
+        global = true,
+        value_name = "SECONDS",
+        default_value_t = DEFAULT_INTERRUPT_DEADLINE
+    )]
+    interrupt_deadline: NonZeroU64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -224,6 +235,7 @@ impl Cli {
                 .filter(|harness| !harness.is_empty())
                 .cloned()
                 .collect(),
+            interrupt_deadline: Duration::from_secs(self.interrupt_deadline.get()),
         })
     }
 

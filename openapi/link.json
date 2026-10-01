@@ -612,6 +612,9 @@
           },
           {
             "$ref": "#/components/schemas/Stop"
+          },
+          {
+            "$ref": "#/components/schemas/Interrupt"
           }
         ],
         "discriminator": {
@@ -620,7 +623,8 @@
             "start": "#/components/schemas/Start",
             "unbriefed": "#/components/schemas/Unbriefed",
             "prompt": "#/components/schemas/Prompt",
-            "stop": "#/components/schemas/Stop"
+            "stop": "#/components/schemas/Stop",
+            "interrupt": "#/components/schemas/Interrupt"
           }
         },
         "properties": {
@@ -906,6 +910,18 @@
           "kind"
         ]
       },
+      "Interrupt": {
+        "description": "Cancel the Turn the Session is in without ending it: the conversation and the Instance stay, and a Turn held for it follows.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "interrupt"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
       "Report": {
         "description": "What a supervisor tells the control plane. `connected` and `heartbeat` are about the Instance; every other report names the Session it is about, and one that belongs to its ordered account of that Session carries a seq and is taken once.",
         "oneOf": [
@@ -943,6 +959,9 @@
             "$ref": "#/components/schemas/Answered"
           },
           {
+            "$ref": "#/components/schemas/Interrupted"
+          },
+          {
             "$ref": "#/components/schemas/CheckoutObserved"
           },
           {
@@ -975,6 +994,7 @@
             "usage": "#/components/schemas/UsageReport",
             "session_info": "#/components/schemas/SessionInfo",
             "answered": "#/components/schemas/Answered",
+            "interrupted": "#/components/schemas/Interrupted",
             "checkout": "#/components/schemas/CheckoutObserved",
             "finished": "#/components/schemas/Finished",
             "thought": "#/components/schemas/Thought",
@@ -1170,6 +1190,27 @@
           "kind",
           "session",
           "seq"
+        ]
+      },
+      "Interrupted": {
+        "description": "The working turn was cancelled at kestrel's request: its open units were closed and no answer follows. The conversation and the Instance stay.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "interrupted"
+          },
+          "seq": {
+            "$ref": "#/components/schemas/Seq"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "kind",
+          "seq",
+          "session"
         ]
       },
       "CheckoutObserved": {

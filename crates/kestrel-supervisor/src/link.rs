@@ -39,6 +39,8 @@ pub enum Instruction {
     Prompt {
         prompt: String,
     },
+    /// Cancels the Turn the Session is in without ending it.
+    Interrupt,
     Stop,
     /// A control plane kestrel upgraded under a live Environment (ADR-0002) may send an
     /// instruction this supervisor predates; letting it past keeps the cursor moving.
@@ -52,6 +54,7 @@ impl Instruction {
             Instruction::Start { .. } => "start",
             Instruction::Unbriefed { .. } => "unbriefed",
             Instruction::Prompt { .. } => "prompt",
+            Instruction::Interrupt => "interrupt",
             Instruction::Stop => "stop",
             Instruction::Unrecognized => "unrecognized",
         }
@@ -253,6 +256,8 @@ pub enum Report {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
     },
+    /// The Turn was interrupted: its open units were closed and no answer follows.
+    Interrupted,
     Checkout {
         repositories: Vec<Observed>,
     },
@@ -281,6 +286,7 @@ impl Report {
             Report::Usage { .. } => "usage",
             Report::SessionInfo { .. } => "session_info",
             Report::Answered { .. } => "answered",
+            Report::Interrupted => "interrupted",
             Report::Checkout { .. } => "checkout",
             Report::Finished { .. } => "finished",
         }

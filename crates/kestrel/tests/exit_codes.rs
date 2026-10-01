@@ -117,12 +117,12 @@ fn guessed_workspace_and_session_verbs_explain_the_domain_verbs_without_running_
         (
             &["session", "start"],
             "session enqueue",
-            "enqueue, list, show, stop",
+            "enqueue, list, show, interrupt, stop",
         ),
         (
             &["session", "enqueu"],
             "session enqueue",
-            "enqueue, list, show, stop",
+            "enqueue, list, show, interrupt, stop",
         ),
         (
             &["workspace", "opne"],

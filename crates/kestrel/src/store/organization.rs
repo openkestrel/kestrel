@@ -97,6 +97,16 @@ impl<'a> Organizations<'a> {
             .transpose()
     }
 
+    pub async fn by_id(&mut self, id: OrganizationId) -> Result<Organization> {
+        let row = sqlx::query("SELECT id, name, max_live_instances FROM organization WHERE id = ?")
+            .bind(id.to_string())
+            .fetch_one(&mut *self.connection)
+            .await
+            .with_context(|| format!("reading the organization {id}"))?;
+
+        organization(&row)
+    }
+
     pub async fn hold_provider_credential(
         &mut self,
         organization: OrganizationId,

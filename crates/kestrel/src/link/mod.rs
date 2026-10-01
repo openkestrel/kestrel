@@ -62,6 +62,9 @@ pub enum Instruction {
     Prompt {
         prompt: String,
     },
+    /// Cancels the Turn the Session is in without ending it; the conversation and the Instance
+    /// stay.
+    Interrupt,
     /// Ends the Session's harness; the supervisor stays on the link.
     Stop,
 }
@@ -72,6 +75,7 @@ impl Instruction {
             Instruction::Start { .. } => "start",
             Instruction::Unbriefed { .. } => "unbriefed",
             Instruction::Prompt { .. } => "prompt",
+            Instruction::Interrupt => "interrupt",
             Instruction::Stop => "stop",
         }
     }

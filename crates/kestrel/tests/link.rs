@@ -377,6 +377,7 @@ async fn the_link_takes_every_report_the_published_openapi_document_describes() 
             ],
         },
         "answered": {"kind": "answered", "seq": 1, "usage": {"context_used": 1_200, "context_size": 200_000, "cost": {"amount": 0.42, "currency": "USD"}}},
+        "interrupted": {"kind": "interrupted", "seq": 1},
         "checkout": {
             "kind": "checkout",
             "seq": 1,

@@ -730,6 +730,93 @@ fn a_held_message_is_printed_listed_edited_and_withdrawn() {
 }
 
 #[test]
+fn a_session_interrupt_names_who_asked_and_a_waiting_one_is_refused() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.booting("127.0.0.1:0", Script::WorksUntilCancelled, "info");
+    declared(&booted);
+    // Opened with a Brief, so the session's first turn is its instruction and nothing races it.
+    let workspace = booted.record(&[
+        "workspace",
+        "open",
+        "--project",
+        support::repository::NAME,
+        "--agent",
+        "builder",
+        "--brief",
+        "go",
+        "--json",
+        "workspace",
+    ])["workspace"]
+        .as_str()
+        .expect("the opened workspace's name")
+        .to_owned();
+    let listed = booted.until(
+        &[
+            "session",
+            "list",
+            "--workspace",
+            &workspace,
+            "--json",
+            "id,state",
+        ],
+        |listed| listed.iter().any(|session| session["state"] == "working"),
+        "reach a working session",
+    );
+    let session = listed[0]["id"]
+        .as_str()
+        .expect("the working session's id")
+        .to_owned();
+
+    let interrupted = booted.record(&[
+        "session",
+        "interrupt",
+        &session,
+        "--as-participant",
+        "alice",
+        "--json",
+        "id,state,interrupting.participant",
+    ]);
+    assert_eq!(interrupted["id"], session);
+    assert_eq!(interrupted["state"], "working");
+    assert_eq!(interrupted["interrupting"]["participant"], "alice");
+
+    let waiting = booted.until(
+        &["session", "show", &session, "--json", "state"],
+        |shown| shown.iter().any(|session| session["state"] == "waiting"),
+        "settle waiting",
+    );
+    assert_eq!(waiting[0]["state"], "waiting");
+    assert!(
+        booted
+            .refused(&[
+                "session",
+                "interrupt",
+                &session,
+                "--as-participant",
+                "alice"
+            ])
+            .contains("waiting"),
+    );
+
+    let entries = booted.records(&[
+        "workspace",
+        "transcript",
+        &workspace,
+        "--kinds",
+        "shared_state,narration,detail",
+        "--json",
+        "entry",
+    ]);
+    assert!(
+        entries.iter().any(|recorded| {
+            recorded["entry"]["type"] == "turn_interrupted"
+                && recorded["entry"]["participant"] == "alice"
+        }),
+        "{entries:?}"
+    );
+}
+
+#[test]
 fn a_session_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
     let kestrel = Kestrel::new();
     let booted = kestrel.boot();

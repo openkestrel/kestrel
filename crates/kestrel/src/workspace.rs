@@ -816,6 +816,7 @@ mod tests {
             title: None,
             options: Vec::new(),
             commands: Vec::new(),
+            interrupting: None,
             enqueued_at: Timestamp::now(),
             started_at: None,
             ended_at: None,

@@ -124,6 +124,11 @@ pub enum Script {
     LegacyModesKept,
     /// Reports what it has spent several times in one burst, then answers the turn.
     BurstsUsage,
+    /// Says a message and works at a tool call until the client cancels the turn, then answers
+    /// `cancelled` with the tool call still open.
+    WorksUntilCancelled,
+    /// Works at a turn that never ends and never answers a cancel.
+    IgnoresCancel,
 }
 
 impl Script {
@@ -169,6 +174,8 @@ impl Script {
             Script::LegacyModes => "legacy-modes",
             Script::LegacyModesKept => "legacy-modes-kept",
             Script::BurstsUsage => "bursts-usage",
+            Script::WorksUntilCancelled => "works-until-cancelled",
+            Script::IgnoresCancel => "ignores-cancel",
         }
     }
 }

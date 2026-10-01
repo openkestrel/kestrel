@@ -5452,6 +5452,7 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::SESSIONS, "post"),
         (operator::SESSION, "get"),
         (operator::SESSION_STOP, "post"),
+        (operator::SESSION_INTERRUPT, "post"),
         (operator::TRIGGERS, "get"),
         (operator::TRIGGERS, "post"),
         (operator::TRIGGER, "get"),
@@ -5514,6 +5515,10 @@ fn the_published_operator_document_describes_every_transcript_entry() {
         Entry::SessionEnded {
             session: SessionId::generate(),
             exit: Exit::Succeeded,
+        },
+        Entry::TurnInterrupted {
+            session: SessionId::generate(),
+            participant: "operator".to_owned(),
         },
         Entry::InstanceReleased {
             participant: "operator".to_owned(),

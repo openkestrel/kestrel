@@ -55,6 +55,15 @@ the live figure for the Turn in flight, and otherwise what the last Turn's answe
 end recorded. The read carries a strong `ETag` over its body and answers `304` to a matching
 `If-None-Match`, because a reconnecting Client refetches every view it subscribes to.
 
+### Interrupting a Turn
+
+`POST …/sessions/{session}/interrupt` takes `{participant}` and answers `202` with the Session,
+whose `interrupting {participant, requested_at}` stands while the request is in flight. Only a
+working Turn is interruptible: every other phase is refused `409`, naming it, and a second request
+while one is pending answers `202` and sends nothing more. The Turn is cancelled over the link
+([Link](link.md#instructions)) without ending the Session, and `kestrel session interrupt <session>
+--as-participant NAME` asks for one.
+
 ### Streaming the Transcript
 
 `GET …/workspaces/{workspace}/transcript` is SSE. Each entry is an event whose id is a cursor; the

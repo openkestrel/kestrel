@@ -107,6 +107,13 @@ Each names the Session it is for.
   Waiting to Working in the same transaction. An unbriefed Session's first `prompt` is its Brief:
   it moves the Session from Unbriefed to Working, and the supervisor reports `started` as its
   first Turn begins.
+- `interrupt`: cancel the Turn the Session is in without ending it. The supervisor sends ACP
+  `session/cancel`, answers permission requests that arrive while the cancel is in flight
+  `cancelled`, and waits for the prompt to return; a `cancelled` prompt closes its open units
+  `interrupted` and is reported as `interrupted` instead of `answered`. A prompt that returns any
+  other way ends the Turn as it would have. The supervisor counts `KESTREL_INTERRUPT_DEADLINE`
+  (30 s) from the instruction: an agent that does not answer by then has its harness ended, its open
+  units closed `unresolved`, and its Session reported finished failed, lost ACP continuity.
 - `stop`: sent whenever a Session ends, however it ends, so the next Session's `start` always follows
   the last one's `stop`. It ends the harness; the supervisor stays.
 
@@ -138,7 +145,8 @@ effects (ADR-0004).
 | `usage {usage}` | no | Held in serve-role memory beside the running tools: at most one a second, at the window's trailing edge, and never recorded (ADR-0041). |
 | `session_info {title, options, commands}` | no | Records the harness's whole bookkeeping state on the Session (ADR-0041). Sent when it changes, at most once a second, and again after a reconnect. |
 | `checkout {repositories}` | yes | Replaces the Workspace's observed git state (decides Unpublished Work). |
-| `answered {usage?}` | yes | Closes the open Turn, moves the Session to Waiting, records a delivery, and records the usage it carries. |
+| `answered {usage?}` | yes | Closes the open Turn, moves the Session to Waiting, clears any pending interrupt, records a delivery, and records the usage it carries. |
+| `interrupted` | yes | Closes the interrupted Turn, moves the Session to Waiting, and appends shared-state `TurnInterrupted` naming who asked; held messages become the next Turn at once, so the Session stays Working when there are any. Writes no delivery. |
 | `finished {exit, usage?}` | yes | Ends the Session, recording the usage it carries. |
 
 **Numbered reports are exactly-once.** The supervisor numbers each Session's reports from 1 and
