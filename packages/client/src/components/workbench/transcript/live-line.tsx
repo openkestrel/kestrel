@@ -9,7 +9,7 @@ export function LiveLine({ state }: { state: TranscriptSessionState | undefined 
 	if (quiet) return null;
 
 	return (
-		<output
+		<div
 			data-live
 			className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground text-xs"
 		>
@@ -21,6 +21,6 @@ export function LiveLine({ state }: { state: TranscriptSessionState | undefined 
 			))}
 			{state.thought_buffering && <span>thinking…</span>}
 			{state.message_buffering && <span>receiving a message…</span>}
-		</output>
+		</div>
 	);
 }

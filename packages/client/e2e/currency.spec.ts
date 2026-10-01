@@ -218,17 +218,21 @@ test("a hidden tab holds no follow, and resumes from its cursor when visible aga
 	await expect(page.getByRole("heading", { name })).toBeVisible();
 
 	await posting(request, name, "before");
-	await expect(page.getByText(`${ACTOR}: before`)).toBeVisible({ timeout: 20_000 });
+	await expect(page.getByRole("log").getByText(`${ACTOR}: before`)).toBeVisible({
+		timeout: 20_000,
+	});
 
 	await page.evaluate(() => window.kestrelHidden(true));
 	await page.waitForTimeout(500);
 
 	await posting(request, name, "while hidden");
-	await expect(page.getByText(`${ACTOR}: while hidden`)).toHaveCount(0);
+	await expect(page.getByRole("log").getByText(`${ACTOR}: while hidden`)).toHaveCount(0);
 
 	await page.evaluate(() => window.kestrelHidden(false));
 
-	await expect(page.getByText(`${ACTOR}: while hidden`)).toBeVisible({ timeout: 20_000 });
+	await expect(page.getByRole("log").getByText(`${ACTOR}: while hidden`)).toBeVisible({
+		timeout: 20_000,
+	});
 });
 
 test("more than four visible views keep at most four SSE connections", async ({
@@ -308,7 +312,7 @@ test("a follow reconnect resumes from its cursor without a gap or duplicate", as
 
 	await page.goto(`/organizations/acme/workspaces/${name}`);
 	await expect(page.getByRole("heading", { name })).toBeVisible();
-	await expect(page.getByText(`${ACTOR}: one`)).toBeVisible({ timeout: 20_000 });
+	await expect(page.getByRole("log").getByText(`${ACTOR}: one`)).toBeVisible({ timeout: 20_000 });
 
 	const resumed = page.waitForRequest(
 		(candidate) =>
@@ -319,8 +323,8 @@ test("a follow reconnect resumes from its cursor without a gap or duplicate", as
 	await posting(request, name, "two");
 	cut.resolve();
 
-	await expect(page.getByText(`${ACTOR}: two`)).toBeVisible({ timeout: 20_000 });
+	await expect(page.getByRole("log").getByText(`${ACTOR}: two`)).toBeVisible({ timeout: 20_000 });
 	await resumed;
-	await expect(page.getByText(`${ACTOR}: one`)).toHaveCount(1);
-	await expect(page.getByText(`${ACTOR}: two`)).toHaveCount(1);
+	await expect(page.getByRole("log").getByText(`${ACTOR}: one`)).toHaveCount(1);
+	await expect(page.getByRole("log").getByText(`${ACTOR}: two`)).toHaveCount(1);
 });

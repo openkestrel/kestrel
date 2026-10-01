@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
 	Conversation,
 	ConversationContent,
@@ -9,7 +9,7 @@ import { ToggleGroup, ToggleGroupItem } from "#/components/ui/toggle-group";
 import { useTranscript } from "#/operator/currency";
 import type { Currency } from "#/operator/currency";
 import type { Session, Workspace } from "#/operator/generated";
-import { flow } from "#/operator/transcript-view";
+import { entryText, flow } from "#/operator/transcript-view";
 import { BriefComposer } from "./brief-composer";
 import { Composer } from "./composer";
 import { SessionHeader } from "./session-header";
@@ -41,6 +41,24 @@ export function TranscriptPane({
 	const transcript = useTranscript(currency, organization, workspace);
 	const [mode, setMode] = useState<Disclosure>("line");
 	const [overrides, setOverrides] = useState<ReadonlyMap<number, boolean>>(new Map());
+	const [announced, setAnnounced] = useState("");
+	const floor = useRef<number | undefined>(undefined);
+
+	// Only new shared-state entries are announced: an Activity's tool and narration detail is not,
+	// and neither is the history a fresh mount replays.
+	useEffect(() => {
+		const shared = transcript.entries.filter((entry) => entry.kind === "shared_state");
+		const highest = shared.at(-1)?.seq;
+		if (highest === undefined) return;
+		if (floor.current === undefined) {
+			floor.current = highest;
+			return;
+		}
+		const fresh = shared.filter((entry) => entry.seq > (floor.current ?? 0));
+		floor.current = highest;
+		const last = fresh.at(-1);
+		if (last) setAnnounced(entryText(last.entry));
+	}, [transcript.entries]);
 
 	const items = flow(transcript.entries, transcript.activities);
 	const emptyOfEverything = items.length === 0 && transcript.sessionState === undefined;
@@ -78,7 +96,7 @@ export function TranscriptPane({
 					))}
 				</ToggleGroup>
 			</div>
-			<Conversation>
+			<Conversation aria-live="off">
 				<ConversationContent className="gap-2">
 					{emptyOfEverything ? (
 						<ConversationEmptyState
@@ -116,6 +134,9 @@ export function TranscriptPane({
 				</ConversationContent>
 				<ConversationScrollButton />
 			</Conversation>
+			<p aria-live="polite" className="sr-only" data-transcript-announcement>
+				{announced}
+			</p>
 			{read.state === "open" && (
 				<>
 					<div hidden={!briefing}>
