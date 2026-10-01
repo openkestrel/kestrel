@@ -82,6 +82,15 @@ What arrives while one exists is held, never interleaved:
 Session wins over pending messages. Several held messages reach the agent as one attributed prompt
 (`work::follow_up`); a lone one reaches it verbatim so a leading skill invocation still works.
 
+A Held Message is read by everyone, and its author may edit it (`edited_at` is stamped) or withdraw
+it, until a Turn takes it: a Turn marks the ones it takes `taken` in the same transaction as the
+`Messages` entry rather than deleting them, so ids are stable and never reused, and a sealed or
+drained Workspace can still be asked what it held. Neither an edit nor a withdrawal reaches the
+Transcript. A message whose text starts with `/` followed by a name in the Session's current
+`commands` (ADR-0041) is a command message, decided as it drains: the messages before the first one
+drain as one Turn as they always did, a command message at the front drains alone as its own Turn
+prompted with its whole text, and a `/` the harness offers no command for is an ordinary message.
+
 ## Execution
 
 `role/work.rs::dispatching` loops every 100 ms:

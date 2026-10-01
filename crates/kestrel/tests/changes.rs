@@ -152,7 +152,8 @@ async fn post(kestrel: &Kestrel, workspace: kestrel::domain::WorkspaceId, messag
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    response.json().await.expect("the started session as JSON")
+    let posted: Value = response.json().await.expect("the post's answer as JSON");
+    posted["session"].clone()
 }
 
 #[tokio::test]

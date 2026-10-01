@@ -921,7 +921,7 @@ async fn fed(
 ) -> Result<Fired> {
     let workspace = tx.workspaces().get(holding).await?;
     // A Trigger's name is not a person's, so it is not held to the participant name rule.
-    let session = workspace::post_as(&mut tx, &workspace, &trigger.name, &rendered.brief).await?;
+    let posted = workspace::post_as(&mut tx, &workspace, &trigger.name, &rendered.brief).await?;
     tx.triggers()
         .record_fed_firing(trigger, event, &workspace)
         .await?;
@@ -930,7 +930,7 @@ async fn fed(
     Ok(Fired::Fed {
         event: event.record_id,
         workspace: workspace.id,
-        session: session.map(|session| session.id),
+        session: posted.session.map(|session| session.id),
     })
 }
 

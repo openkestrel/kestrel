@@ -1,11 +1,11 @@
 use anyhow::{Context as _, Result};
 use jiff::Timestamp;
 use sqlx::sqlite::SqliteRow;
-use sqlx::{Row, SqliteConnection};
+use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 
 use crate::domain::{
-    Agent, Checkout, Connected, Cost, Declared, Exit, Organization, OrganizationId, Preparing,
-    Project,
+    Agent, Checkout, Connected, Cost, Declared, Exit, HeldMessage, Organization, OrganizationId,
+    Preparing, Project,
     Session, SessionCommand, SessionId, SessionOption, SessionState, StartedBy,
     SubscriptionProfile, Turn, Usage, Workspace, WorkspaceId, WorkspaceState,
 };
@@ -64,7 +64,7 @@ macro_rules! held_input {
         concat!(
             "SELECT s.id, MIN(p.received_at) AS since
              FROM session AS s
-             JOIN pending_message AS p ON p.workspace_id = s.workspace_id
+             JOIN pending_message AS p ON p.workspace_id = s.workspace_id AND p.state = 'held'
              WHERE s.state = ? AND ",
             $condition,
             "
@@ -96,10 +96,35 @@ pub struct Kept {
     pub observed: Option<Vec<Observed>>,
 }
 
-pub struct PendingMessage {
-    pub participant: String,
-    pub body: String,
+/// Why an edit or a withdrawal was refused. The id was never held, the name is not the author's,
+/// or the message already left the Workspace's hands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HeldMessageRefusal {
+    NeverHeld(i64),
+    NotTheAuthor(String),
+    AlreadyTaken,
+    AlreadyWithdrawn,
 }
+
+impl std::fmt::Display for HeldMessageRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HeldMessageRefusal::NeverHeld(id) => {
+                write!(f, "the workspace never held a message with the id {id}")
+            }
+            HeldMessageRefusal::NotTheAuthor(author) => write!(
+                f,
+                "the message was written by {author}, and only its author may change it"
+            ),
+            HeldMessageRefusal::AlreadyTaken => {
+                write!(f, "the message was already sent to the agent")
+            }
+            HeldMessageRefusal::AlreadyWithdrawn => write!(f, "the message was already withdrawn"),
+        }
+    }
+}
+
+impl std::error::Error for HeldMessageRefusal {}
 
 pub struct PendingSession {
     pub agent: Agent,
@@ -505,7 +530,8 @@ impl<'a> Workspaces<'a> {
     ) -> Result<Option<Unfinished>> {
         let holding = sqlx::query(sessions_where!(
             ",
-                    EXISTS (SELECT 1 FROM pending_message p WHERE p.workspace_id = session.workspace_id)
+                    EXISTS (SELECT 1 FROM pending_message p
+                            WHERE p.workspace_id = session.workspace_id AND p.state = 'held')
                     OR EXISTS (SELECT 1 FROM pending_session p WHERE p.workspace_id = session.workspace_id)
                         AS held_input",
             "workspace_id = ?
@@ -650,19 +676,22 @@ impl<'a> Workspaces<'a> {
         Ok(session)
     }
 
+    /// Ids are the Workspace's own sequence, taken over every row it ever held, so a message
+    /// posted after earlier ones drained gets one none of them had.
     pub async fn add_pending_message(
         &mut self,
         workspace: &Workspace,
         participant: &str,
         body: &str,
-    ) -> Result<()> {
-        sqlx::query(
+    ) -> Result<HeldMessage> {
+        let row = sqlx::query(
             "INSERT INTO pending_message (
-                 workspace_id, organization_id, seq, participant, body, received_at
+                 workspace_id, organization_id, seq, participant, body, state, received_at
              )
-             SELECT ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?
+             SELECT ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, 'held', ?
              FROM pending_message
-             WHERE workspace_id = ?",
+             WHERE workspace_id = ?
+             RETURNING seq, participant, body, received_at, edited_at",
         )
         .bind(workspace.id.to_string())
         .bind(workspace.organization.id.to_string())
@@ -670,7 +699,7 @@ impl<'a> Workspaces<'a> {
         .bind(body)
         .bind(due(Timestamp::now()))
         .bind(workspace.id.to_string())
-        .execute(&mut *self.connection)
+        .fetch_one(&mut *self.connection)
         .await
         .with_context(|| {
             format!(
@@ -681,23 +710,42 @@ impl<'a> Workspaces<'a> {
 
         self.touched.workspace(workspace);
 
-        Ok(())
+        held(&row)
     }
 
-    /// Leaves any that arrived after a pending Session, to drain after it.
-    pub async fn take_pending_messages(
+    pub async fn held_messages(&mut self, workspace: WorkspaceId) -> Result<Vec<HeldMessage>> {
+        let rows = sqlx::query(
+            "SELECT seq, participant, body, received_at, edited_at
+             FROM pending_message
+             WHERE workspace_id = ? AND state = 'held'
+             ORDER BY seq",
+        )
+        .bind(workspace.to_string())
+        .fetch_all(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading what the workspace {workspace} holds"))?;
+
+        rows.iter().map(held).collect()
+    }
+
+    /// Marks taken the messages one Turn takes, in the caller's transaction, so the `Messages`
+    /// entry and the state move together. A command message at the front is its own Turn; before
+    /// the first one, every message is.
+    pub async fn take_held_messages(
         &mut self,
         workspace: &Workspace,
-    ) -> Result<Vec<PendingMessage>> {
+        commands: &[SessionCommand],
+    ) -> Result<Vec<HeldMessage>> {
         let rows = sqlx::query(
-            "DELETE FROM pending_message
-             WHERE workspace_id = ?
+            "SELECT seq, participant, body, received_at, edited_at
+             FROM pending_message
+             WHERE workspace_id = ? AND state = 'held'
                AND NOT EXISTS (
                    SELECT 1 FROM pending_session s
                    WHERE s.workspace_id = pending_message.workspace_id
                      AND s.received_at <= pending_message.received_at
                )
-             RETURNING participant, body, seq",
+             ORDER BY seq",
         )
         .bind(workspace.id.to_string())
         .fetch_all(&mut *self.connection)
@@ -709,25 +757,143 @@ impl<'a> Workspaces<'a> {
             )
         })?;
 
-        let mut messages = rows
-            .iter()
-            .map(|row| {
-                (
-                    row.get::<i64, _>("seq"),
-                    PendingMessage {
-                        participant: row.get("participant"),
-                        body: row.get("body"),
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        messages.sort_by_key(|(seq, _)| *seq);
-
-        if !messages.is_empty() {
-            self.touched.workspace(workspace);
+        let eligible = rows.iter().map(held).collect::<Result<Vec<_>>>()?;
+        let taken = one_turn(eligible, commands);
+        if taken.is_empty() {
+            return Ok(taken);
         }
 
-        Ok(messages.into_iter().map(|(_, message)| message).collect())
+        let mut update = QueryBuilder::<Sqlite>::new(
+            "UPDATE pending_message SET state = 'taken' WHERE workspace_id = ",
+        );
+        update.push_bind(workspace.id.to_string());
+        update.push(" AND seq IN (");
+        let mut ids = update.separated(", ");
+        for message in &taken {
+            ids.push_bind(message.id);
+        }
+        ids.push_unseparated(")");
+        update
+            .build()
+            .execute(&mut *self.connection)
+            .await
+            .with_context(|| {
+                format!(
+                    "marking held messages of the workspace {} taken",
+                    workspace.id
+                )
+            })?;
+
+        self.touched.workspace(workspace);
+
+        Ok(taken)
+    }
+
+    /// The commands the Workspace's latest Session last reported: what a Held Message is judged
+    /// against as it drains, since the Session about to start has yet to reach a harness.
+    pub async fn latest_commands(&mut self, workspace: WorkspaceId) -> Result<Vec<SessionCommand>> {
+        let row = sqlx::query(
+            "SELECT commands FROM session
+             WHERE workspace_id = ?
+             ORDER BY enqueued_at DESC, id DESC
+             LIMIT 1",
+        )
+        .bind(workspace.to_string())
+        .fetch_optional(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading what commands the workspace {workspace} offers"))?;
+
+        match row {
+            Some(row) => read_json(&row, "commands"),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// The state is checked before the write so a refusal says which one stands.
+    pub async fn edit_held_message(
+        &mut self,
+        workspace: &Workspace,
+        id: i64,
+        participant: &str,
+        body: &str,
+    ) -> Result<HeldMessage> {
+        self.held_message(workspace, id, participant).await?;
+
+        let row = sqlx::query(
+            "UPDATE pending_message SET body = ?, edited_at = ?
+             WHERE workspace_id = ? AND seq = ?
+             RETURNING seq, participant, body, received_at, edited_at",
+        )
+        .bind(body)
+        .bind(Timestamp::now().to_string())
+        .bind(workspace.id.to_string())
+        .bind(id)
+        .fetch_one(&mut *self.connection)
+        .await
+        .with_context(|| format!("editing a held message of the workspace {}", workspace.id))?;
+
+        self.touched.workspace(workspace);
+
+        held(&row)
+    }
+
+    pub async fn withdraw_held_message(
+        &mut self,
+        workspace: &Workspace,
+        id: i64,
+        participant: &str,
+    ) -> Result<()> {
+        self.held_message(workspace, id, participant).await?;
+
+        sqlx::query(
+            "UPDATE pending_message SET state = 'withdrawn' WHERE workspace_id = ? AND seq = ?",
+        )
+        .bind(workspace.id.to_string())
+        .bind(id)
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| {
+            format!(
+                "withdrawing a held message of the workspace {}",
+                workspace.id
+            )
+        })?;
+
+        self.touched.workspace(workspace);
+
+        Ok(())
+    }
+
+    /// A message this Workspace still holds, by its author's name, or the reason it cannot be
+    /// changed.
+    async fn held_message(
+        &mut self,
+        workspace: &Workspace,
+        id: i64,
+        participant: &str,
+    ) -> Result<()> {
+        let row = sqlx::query(
+            "SELECT state, participant FROM pending_message WHERE workspace_id = ? AND seq = ?",
+        )
+        .bind(workspace.id.to_string())
+        .bind(id)
+        .fetch_optional(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading a held message of the workspace {}", workspace.id))?;
+
+        let Some(row) = row else {
+            return Err(HeldMessageRefusal::NeverHeld(id).into());
+        };
+        let author: String = row.get("participant");
+        if author != participant {
+            return Err(HeldMessageRefusal::NotTheAuthor(author).into());
+        }
+
+        match row.get::<String, _>("state").as_str() {
+            "taken" => Err(HeldMessageRefusal::AlreadyTaken.into()),
+            "withdrawn" => Err(HeldMessageRefusal::AlreadyWithdrawn.into()),
+            _ => Ok(()),
+        }
     }
 
     pub async fn add_pending_session(
@@ -780,7 +946,8 @@ impl<'a> Workspaces<'a> {
                AND seq = (SELECT MIN(seq) FROM pending_session WHERE workspace_id = ?1)
                AND NOT EXISTS (
                    SELECT 1 FROM pending_message m
-                   WHERE m.workspace_id = ?1 AND m.received_at < pending_session.received_at
+                   WHERE m.workspace_id = ?1 AND m.state = 'held'
+                     AND m.received_at < pending_session.received_at
                )
              RETURNING agent_id, model, mode, thought_level, trigger, brief",
         )
@@ -1994,6 +2161,39 @@ fn session(row: &SqliteRow) -> Result<Session> {
         },
         usage: usage(row),
     })
+}
+
+fn held(row: &SqliteRow) -> Result<HeldMessage> {
+    Ok(HeldMessage {
+        id: row.get("seq"),
+        participant: row.get("participant"),
+        message: row.get("body"),
+        posted_at: row.get::<String, _>("received_at").parse()?,
+        edited_at: timestamp(row, "edited_at")?,
+    })
+}
+
+/// One Turn's worth of held messages: the ones before the first command message, or the command
+/// alone when it is already at the front. A leading `/` the Session offers no command for is an
+/// ordinary message.
+fn one_turn(held: Vec<HeldMessage>, commands: &[SessionCommand]) -> Vec<HeldMessage> {
+    match held
+        .iter()
+        .position(|message| is_command(&message.message, commands))
+    {
+        Some(0) => held.into_iter().take(1).collect(),
+        Some(at) => held.into_iter().take(at).collect(),
+        None => held,
+    }
+}
+
+fn is_command(message: &str, commands: &[SessionCommand]) -> bool {
+    let Some(rest) = message.strip_prefix('/') else {
+        return false;
+    };
+    let name = rest.split_whitespace().next().unwrap_or_default();
+
+    commands.iter().any(|command| command.name == name)
 }
 
 fn generated_name() -> String {

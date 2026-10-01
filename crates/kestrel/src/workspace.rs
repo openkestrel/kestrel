@@ -3,7 +3,8 @@ use jiff::{SignedDuration, Timestamp};
 
 use crate::declined::{Declined, FieldRefusal, Kind};
 use crate::domain::{
-    Agent, Declared, Exit, Organization, Project, Session, SessionId, SessionState, StartedBy,
+    Agent, Declared, Exit, HeldMessage, Organization, Project, Session, SessionId, SessionState,
+    StartedBy,
     SubscriptionProfile, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::instance;
@@ -422,18 +423,26 @@ pub async fn continuations(store: &Store, id: WorkspaceId) -> Result<Vec<Workspa
     store.begin().await?.workspaces().continuations(id).await
 }
 
+/// What a post became: the Session it started or woke, and the Held Message it left, if it was
+/// held rather than recorded at once.
+#[derive(Debug)]
+pub struct Posted {
+    pub session: Option<Session>,
+    pub held_message: Option<HeldMessage>,
+}
+
 pub async fn post(
     store: &Store,
     id: WorkspaceId,
     participant: &str,
     message: &str,
-) -> Result<Option<Session>> {
+) -> Result<Posted> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(id).await?;
-    let session = post_in(&mut tx, &workspace, participant, message).await?;
+    let posted = post_in(&mut tx, &workspace, participant, message).await?;
     tx.commit().await?;
 
-    Ok(session)
+    Ok(posted)
 }
 
 pub(crate) async fn post_in(
@@ -441,7 +450,7 @@ pub(crate) async fn post_in(
     workspace: &Workspace,
     participant: &str,
     message: &str,
-) -> Result<Option<Session>> {
+) -> Result<Posted> {
     let participant = participant::accepted(tx, &workspace.organization, participant).await?;
 
     post_as(tx, workspace, &participant, message).await
@@ -452,38 +461,95 @@ pub(crate) async fn post_as(
     workspace: &Workspace,
     participant: &str,
     message: &str,
-) -> Result<Option<Session>> {
+) -> Result<Posted> {
     workspace.accepts("message")?;
     let unfinished = unfinished_session(tx, workspace).await?;
     match unfinished.post_destination() {
         PostDestination::Start => {
             ensure_joined(tx, workspace, participant).await?;
             said(tx, workspace, participant, message).await?;
-            Ok(Some(
-                tx.workspaces()
-                    .enqueue_session(workspace, None, Declared::default())
-                    .await?,
-            ))
+            let session = tx
+                .workspaces()
+                .enqueue_session(workspace, None, Declared::default())
+                .await?;
+            Ok(Posted {
+                session: Some(session),
+                held_message: None,
+            })
         }
         PostDestination::Brief => {
             ensure_joined(tx, workspace, participant).await?;
             said(tx, workspace, participant, message).await?;
-            Ok(None)
+            Ok(Posted {
+                session: None,
+                held_message: None,
+            })
         }
         PostDestination::Held => {
-            tx.workspaces()
+            let held_message = tx
+                .workspaces()
                 .add_pending_message(workspace, participant, message)
                 .await?;
-            Ok(None)
+            Ok(Posted {
+                session: None,
+                held_message: Some(held_message),
+            })
         }
         // Held even for a waiting Session: its next turn waits for an active-work slot.
         PostDestination::Wake(waiting) => {
-            tx.workspaces()
+            let held_message = tx
+                .workspaces()
                 .add_pending_message(workspace, participant, message)
                 .await?;
-            Ok(Some(waiting.clone()))
+            Ok(Posted {
+                session: Some(waiting.clone()),
+                held_message: Some(held_message),
+            })
         }
     }
+}
+
+/// An author replaces a Held Message's text, in place rather than on the record.
+pub async fn edit_message(
+    store: &Store,
+    workspace: WorkspaceId,
+    id: i64,
+    participant: &str,
+    message: &str,
+) -> Result<HeldMessage> {
+    let mut tx = store.begin().await?;
+    let workspace = tx.workspaces().get(workspace).await?;
+    let participant = participant::accepted(&mut tx, &workspace.organization, participant).await?;
+    let edited = tx
+        .workspaces()
+        .edit_held_message(&workspace, id, &participant, message)
+        .await?;
+    tx.commit().await?;
+
+    Ok(edited)
+}
+
+/// An author takes a Held Message back, so no Turn sees it. Withdrawing records nothing.
+pub async fn withdraw_message(
+    store: &Store,
+    workspace: WorkspaceId,
+    id: i64,
+    participant: &str,
+) -> Result<()> {
+    let mut tx = store.begin().await?;
+    let workspace = tx.workspaces().get(workspace).await?;
+    let participant = participant::accepted(&mut tx, &workspace.organization, participant).await?;
+    tx.workspaces()
+        .withdraw_held_message(&workspace, id, &participant)
+        .await?;
+    tx.commit().await?;
+
+    Ok(())
+}
+
+/// What the unfinished Session cannot take yet, in arrival order.
+pub async fn held_messages(store: &Store, id: WorkspaceId) -> Result<Vec<HeldMessage>> {
+    store.begin().await?.workspaces().held_messages(id).await
 }
 
 async fn ensure_joined(tx: &mut Tx<'_>, workspace: &Workspace, participant: &str) -> Result<()> {
