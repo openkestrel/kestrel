@@ -3,6 +3,7 @@ use jiff::Timestamp;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
+use crate::declined::Declined;
 use crate::domain::{Organization, Project, ProjectId};
 use crate::store::Declared;
 
@@ -93,11 +94,12 @@ impl<'a> Projects<'a> {
     }
 
     pub async fn named(&mut self, organization: &Organization, name: &str) -> Result<Project> {
-        self.find(organization, name).await?.with_context(|| {
-            format!(
+        self.find(organization, name).await?.ok_or_else(|| {
+            Declined::Missing(format!(
                 "no project named {name} in the organization {}",
                 organization.name
-            )
+            ))
+            .into()
         })
     }
 

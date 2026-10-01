@@ -14,12 +14,8 @@ const LONGEST: usize = 64;
 /// characters, and never the name of an Agent in the Organization.
 pub async fn accepted(tx: &mut Tx<'_>, organization: &Organization, name: &str) -> Result<String> {
     let name = name.trim();
-    let refuse = |message: String| -> Result<String> {
-        bail!(FieldRefusal {
-            field: FIELD,
-            message,
-        })
-    };
+    let refuse =
+        |message: String| -> Result<String> { bail!(FieldRefusal::unacceptable(FIELD, message)) };
 
     if name.is_empty() {
         return refuse("a message names its participant".to_owned());

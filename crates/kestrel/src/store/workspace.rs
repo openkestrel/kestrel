@@ -4,8 +4,8 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
 use crate::domain::{
-    Agent, Checkout, Connected, Cost, Event, Exit, Organization, OrganizationId, Project, Session,
-    SessionId, SessionState, SubscriptionProfile, Turn, Usage, Workspace, WorkspaceId,
+    Agent, Checkout, Connected, Cost, Exit, Organization, OrganizationId, Project, Session,
+    SessionId, SessionState, StartedBy, SubscriptionProfile, Turn, Usage, Workspace, WorkspaceId,
     WorkspaceState,
 };
 use crate::fanout::Touched;
@@ -114,7 +114,7 @@ pub struct Opening<'a> {
     pub branch: Option<&'a str>,
     pub correlation: Option<&'a str>,
     pub continues: Option<&'a Workspace>,
-    pub started_by: Option<&'a Event>,
+    pub started_by: Option<StartedBy>,
 }
 
 pub struct Workspaces<'a> {
@@ -154,15 +154,15 @@ impl<'a> Workspaces<'a> {
                 last_active_at: opened_at,
                 sealed_at: None,
                 continues: opening.continues.map(|sealed| sealed.id),
-                started_by: opening.started_by.map(|event| event.record_id),
+                started_by: opening.started_by.clone(),
             };
 
             let inserted = sqlx::query(
                 "INSERT INTO workspace
                      (id, name, organization_id, project_id, agent_id, subscription_profile_id,
                       base, branch, correlation, state, opened_at, last_active_at, continues,
-                      event_record_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      event_record_id, started_by_participant)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT (organization_id, name) DO NOTHING",
             )
             .bind(workspace.id.to_string())
@@ -183,7 +183,14 @@ impl<'a> Workspaces<'a> {
             .bind(workspace.opened_at.to_string())
             .bind(due(workspace.last_active_at))
             .bind(workspace.continues.map(|sealed| sealed.to_string()))
-            .bind(workspace.started_by.map(|event| event.to_string()))
+            .bind(match &workspace.started_by {
+                Some(StartedBy::Event(event)) => Some(event.to_string()),
+                _ => None,
+            })
+            .bind(match &workspace.started_by {
+                Some(StartedBy::Participant(participant)) => Some(participant.clone()),
+                _ => None,
+            })
             .execute(&mut *self.connection)
             .await
             .context("opening a workspace")?;
@@ -475,6 +482,16 @@ impl<'a> Workspaces<'a> {
             .iter()
             .map(|row| Ok(row.get::<String, _>("id").parse()?))
             .collect()
+    }
+
+    pub(crate) async fn has_had_session(&mut self, workspace: WorkspaceId) -> Result<bool> {
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM session WHERE workspace_id = ?)")
+            .bind(workspace.to_string())
+            .fetch_one(&mut *self.connection)
+            .await
+            .with_context(|| {
+                format!("reading whether the workspace {workspace} ever had a session")
+            })
     }
 
     /// Held from the moment work is enqueued rather than dispatched: two Sessions queued in one
@@ -1728,7 +1745,8 @@ pub(crate) async fn read(connection: &mut SqliteConnection, id: WorkspaceId) -> 
 async fn find(connection: &mut SqliteConnection, id: WorkspaceId) -> Result<Option<Workspace>> {
     let Some(row) = sqlx::query(
         "SELECT name, organization_id, project_id, agent_id, subscription_profile_id, base, branch,
-                correlation, state, opened_at, last_active_at, sealed_at, continues, event_record_id
+                correlation, state, opened_at, last_active_at, sealed_at, continues, event_record_id,
+                started_by_participant
          FROM workspace
          WHERE id = ?",
     )
@@ -1788,10 +1806,14 @@ async fn find(connection: &mut SqliteConnection, id: WorkspaceId) -> Result<Opti
             .get::<Option<String>, _>("continues")
             .map(|sealed| sealed.parse())
             .transpose()?,
-        started_by: row
-            .get::<Option<String>, _>("event_record_id")
-            .map(|event| event.parse())
-            .transpose()?,
+        started_by: match (
+            row.get::<Option<String>, _>("event_record_id"),
+            row.get::<Option<String>, _>("started_by_participant"),
+        ) {
+            (Some(event), _) => Some(StartedBy::Event(event.parse()?)),
+            (None, Some(participant)) => Some(StartedBy::Participant(participant)),
+            (None, None) => None,
+        },
     }))
 }
 

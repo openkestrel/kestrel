@@ -1124,7 +1124,7 @@
         }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkspaceDeclaration" } } } },
         "responses": {
-          "201": { "description": "The opened Workspace.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Workspace" } } } },
+          "201": { "description": "The opened Workspace and its first Session.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Opened" } } } },
           "400": { "$ref": "#/components/responses/Refused" },
           "404": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
@@ -2517,6 +2517,15 @@
         },
         "required": ["organization", "project", "agent", "workspace", "session"]
       },
+      "Opened": {
+        "type": "object",
+        "description": "A Workspace and the first Session its open enqueued, in one transaction.",
+        "properties": {
+          "workspace": { "$ref": "#/components/schemas/Workspace" },
+          "session": { "$ref": "#/components/schemas/Session" }
+        },
+        "required": ["workspace", "session"]
+      },
       "DeclarationDocument": {
         "type": "object",
         "additionalProperties": false,
@@ -2925,10 +2934,25 @@
           "project": { "type": "string", "minLength": 1 },
           "agent": { "type": "string", "minLength": 1 },
           "profile": { "type": ["string", "null"] },
-          "branch": { "type": ["string", "null"] },
+          "branch": {
+            "type": ["string", "null"],
+            "description": "Omitted, a branch of the Workspace's own. A continuation runs on the branch of the Workspace it continues."
+          },
           "continues": {
             "type": ["string", "null"],
             "description": "The sealed Workspace this one carries on from, by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`."
+          },
+          "model": {
+            "type": ["string", "null"],
+            "description": "The model the first Session runs on. Omitted, the Agent's, then the Harness's default."
+          },
+          "brief": {
+            "type": ["string", "null"],
+            "description": "The Brief the Workspace starts with, handed to the agent exactly as given. Omitted, the first Session waits for its first message to become the Brief."
+          },
+          "participant": {
+            "type": ["string", "null"],
+            "description": "The name the Brief is written under. Omitted, its source is the operator and no one joins."
           }
         },
         "required": ["project", "agent"]
@@ -2962,7 +2986,10 @@
           "last_active_at": { "type": "string", "format": "date-time" },
           "sealed_at": { "type": ["string", "null"], "format": "date-time" },
           "continues": { "type": ["string", "null"], "format": "uuid" },
-          "started_by": { "type": ["string", "null"], "format": "uuid" },
+          "started_by": {
+            "type": ["string", "null"],
+            "description": "The Event a firing opened it for, or the Brief's author an operator opened it with. Null when neither names anyone."
+          },
           "continued_by": { "type": "array", "items": { "type": "string", "format": "uuid" } },
           "pull_requests": {
             "type": "array",

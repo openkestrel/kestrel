@@ -23,11 +23,11 @@ use tracing::warn;
 use crate::agent;
 use crate::cron::Cron;
 use crate::declaration;
-use crate::declined::{Declined, FieldRefusal};
+use crate::declined::{Declined, FieldRefusal, Kind};
 use crate::domain::{
     self, Agent, Connection, Correlation, Direction, EventRecordId, EventRefusal, Fires, Firing,
-    Integration, Occurrence, Organization, Project, Schedule, Session, SubscriptionProfile,
-    Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
+    Integration, Occurrence, Organization, Project, Schedule, Session, StartedBy,
+    SubscriptionProfile, Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::fanout;
 use crate::filter::Filter;
@@ -328,6 +328,9 @@ struct WorkspaceDeclaration {
     profile: Option<String>,
     branch: Option<String>,
     continues: Option<String>,
+    model: Option<String>,
+    brief: Option<String>,
+    participant: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -621,7 +624,10 @@ impl WorkspaceRecord {
             last_active_at: workspace.last_active_at,
             sealed_at: workspace.sealed_at,
             continues: workspace.continues.map(|workspace| workspace.to_string()),
-            started_by: workspace.started_by.map(|event| event.to_string()),
+            started_by: workspace.started_by.map(|started| match started {
+                StartedBy::Event(event) => event.to_string(),
+                StartedBy::Participant(participant) => participant,
+            }),
             continued_by,
             pull_requests,
         })
@@ -745,6 +751,12 @@ struct StartedRecord {
     organization: start::Settled,
     project: start::Settled,
     agent: start::Settled,
+    workspace: WorkspaceRecord,
+    session: SessionRecord,
+}
+
+#[derive(Serialize)]
+struct OpenedRecord {
     workspace: WorkspaceRecord,
     session: SessionRecord,
 }
@@ -1910,23 +1922,31 @@ async fn open_workspace(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
     declaration: Result<Json<WorkspaceDeclaration>, JsonRejection>,
-) -> Result<(StatusCode, Json<WorkspaceRecord>), Refused> {
+) -> Result<(StatusCode, Json<OpenedRecord>), Refused> {
     let Json(declaration) = declaration?;
-    let workspace = workspace::open(
+    let (workspace, session) = workspace::open(
         &control_plane.store,
         &organization,
-        &declaration.project,
-        &declaration.agent,
-        declaration.profile.as_deref(),
-        declaration.branch.as_deref(),
-        declaration.continues.as_deref(),
+        workspace::Open {
+            project: &declaration.project,
+            agent: &declaration.agent,
+            profile: declaration.profile.as_deref(),
+            branch: declaration.branch.as_deref(),
+            continues: declaration.continues.as_deref(),
+            model: declaration.model.as_deref(),
+            brief: declaration.brief.as_deref(),
+            participant: declaration.participant.as_deref(),
+        },
     )
     .await
     .map_err(workspace_refusal)?;
 
     Ok((
         StatusCode::CREATED,
-        Json(WorkspaceRecord::read(&control_plane.store, workspace).await?),
+        Json(OpenedRecord {
+            workspace: WorkspaceRecord::read(&control_plane.store, workspace).await?,
+            session: SessionRecord::read(session),
+        }),
     ))
 }
 
@@ -2115,6 +2135,13 @@ async fn enqueue_session(
 ) -> Result<(StatusCode, Json<SessionRecord>), Refused> {
     let Json(declaration) = declaration?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
+    if !work::has_had_session(&control_plane.store, workspace.id).await? {
+        return Err(Refused::Conflict(format!(
+            "the workspace {} has never had a session, and a workspace's first session starts \
+             with its open",
+            workspace.id
+        )));
+    }
     let session = work::enqueue(
         &control_plane.store,
         workspace.id,
@@ -2163,6 +2190,9 @@ async fn resolved(
 }
 
 fn workspace_refusal(error: anyhow::Error) -> Refused {
+    if error.downcast_ref::<FieldRefusal>().is_some() {
+        return error.into();
+    }
     let message = error.to_string();
     if message.starts_with("no workspace ")
         || message.starts_with("no project named ")
@@ -2392,8 +2422,10 @@ enum Refused {
     Gone(String),
     Conflict(String),
     Unprocessable(String),
-    /// A value a person named, refused: the request field it came in travels with the reason.
+    /// A value a person named, refused: the request field it came in travels with the reason, and
+    /// the status is the one the unnamed refusal would carry.
     Named {
+        status: StatusCode,
         field: &'static str,
         why: String,
     },
@@ -2424,6 +2456,11 @@ impl From<anyhow::Error> for Refused {
         }
         if let Some(named) = error.downcast_ref::<FieldRefusal>() {
             return Refused::Named {
+                status: match named.kind {
+                    Kind::Unacceptable => StatusCode::UNPROCESSABLE_ENTITY,
+                    Kind::Missing | Kind::Ambiguous => StatusCode::NOT_FOUND,
+                    Kind::Taken => StatusCode::CONFLICT,
+                },
                 field: named.field,
                 why: named.message.clone(),
             };
@@ -2465,7 +2502,7 @@ impl IntoResponse for Refused {
             Refused::Gone(why) => (StatusCode::GONE, why, None),
             Refused::Conflict(why) => (StatusCode::CONFLICT, why, None),
             Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why, None),
-            Refused::Named { field, why } => (StatusCode::UNPROCESSABLE_ENTITY, why, Some(field)),
+            Refused::Named { status, field, why } => (status, why, Some(field)),
             Refused::NotAnswering(why) => (StatusCode::GATEWAY_TIMEOUT, why, None),
             Refused::Unavailable(error) => {
                 warn!(%error, busy, "the operator boundary could not answer");

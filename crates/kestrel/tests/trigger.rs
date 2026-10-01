@@ -5,7 +5,7 @@ use std::time::Duration;
 use jiff::SignedDuration;
 use kestrel::cron::Cron;
 use kestrel::domain::{
-    CorrelationMiss, Direction, Event, Schedule, SessionState, TriggerState, Workspace,
+    CorrelationMiss, Direction, Event, Schedule, SessionState, StartedBy, TriggerState, Workspace,
 };
 use kestrel::log::{Entry, Message};
 use kestrel::trigger::Rendered;
@@ -693,7 +693,10 @@ async fn the_workspace_records_the_event_that_started_it() {
     let workspace = opened(&kestrel, 1).await.remove(0);
     let events = kestrel.events("acme").await;
 
-    assert_eq!(workspace.started_by, Some(events[0].record_id));
+    assert_eq!(
+        workspace.started_by,
+        Some(StartedBy::Event(events[0].record_id))
+    );
 
     kestrel.teardown().await;
 }
@@ -1355,7 +1358,10 @@ async fn a_schedule_elapsing_opens_a_workspace_the_way_a_matched_event_does() {
         event.occurrence.time,
         trigger.declared_at + SignedDuration::from_hours(1)
     );
-    assert_eq!(workspace.started_by, Some(event.record_id));
+    assert_eq!(
+        workspace.started_by,
+        Some(StartedBy::Event(event.record_id))
+    );
     assert_eq!(
         kestrel.sessions(workspace.id).await[0].agent.name,
         "builder"
@@ -1528,7 +1534,10 @@ async fn a_webhook_naming_a_schedule_does_not_elapse_it() {
             .await
             .matches
     );
-    assert_ne!(workspace.started_by, Some(forged.record_id));
+    assert_ne!(
+        workspace.started_by,
+        Some(StartedBy::Event(forged.record_id))
+    );
     assert_eq!(kestrel.workspaces("acme").await.len(), 1);
 
     kestrel.teardown().await;
@@ -1580,7 +1589,10 @@ async fn a_cron_schedule_elapsing_opens_a_workspace_the_way_an_interval_does() {
     assert_eq!(event.occurrence.time, due);
     assert_eq!(event.occurrence.data["cron"], "0 9 * * 1-5");
     assert_eq!(event.occurrence.data["zone"], "America/New_York");
-    assert_eq!(workspace.started_by, Some(event.record_id));
+    assert_eq!(
+        workspace.started_by,
+        Some(StartedBy::Event(event.record_id))
+    );
     assert_eq!(
         first_entry(&kestrel, &workspace).await,
         Entry::Brief {

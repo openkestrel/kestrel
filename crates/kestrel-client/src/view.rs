@@ -194,5 +194,7 @@ pub const EXIT_CODES: View = View::Detail(&["code", "name", "meaning", "branch"]
 pub const STARTED: View =
     View::Detail(&["organization", "project", "agent", "workspace", "session"]);
 
+pub const OPENED: View = View::Detail(&["workspace", "workspace_id", "session", "session_id"]);
+
 /// What a creation answers back is the identifier the next command is given.
 pub const DECLARED: View = View::Value("id");

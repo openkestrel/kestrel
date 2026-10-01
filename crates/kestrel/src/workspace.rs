@@ -1,8 +1,10 @@
 use anyhow::{Result, bail};
 use jiff::{SignedDuration, Timestamp};
 
+use crate::declined::{Declined, FieldRefusal, Kind};
 use crate::domain::{
-    Exit, Organization, Session, SessionId, SessionState, Workspace, WorkspaceId, WorkspaceState,
+    Agent, Exit, Organization, Project, Session, SessionId, SessionState, StartedBy,
+    SubscriptionProfile, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::instance;
 use crate::log::{Cursor, Entry, Message, Page, Unreadable, Window};
@@ -15,7 +17,49 @@ use crate::work;
 /// standing in for presence.
 const IDLE: SignedDuration = SignedDuration::from_hours(24);
 
+/// Everything one operator's open asks for, by name or by value.
+pub struct Open<'a> {
+    pub project: &'a str,
+    pub agent: &'a str,
+    pub profile: Option<&'a str>,
+    pub branch: Option<&'a str>,
+    pub continues: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub brief: Option<&'a str>,
+    pub participant: Option<&'a str>,
+}
+
+/// Every name an open resolved and every value it checked, ready to be written.
+pub(crate) struct Resolved<'a> {
+    pub project: Project,
+    pub agent: Agent,
+    pub profile: Option<SubscriptionProfile>,
+    pub continues: Option<Workspace>,
+    pub branch: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub brief: Option<&'a str>,
+    pub participant: Option<String>,
+}
+
+/// The one open: every name resolved, the Workspace opened and its first Session enqueued in one
+/// write, or nothing left behind (ADR-0038).
 pub async fn open(
+    store: &Store,
+    organization: &str,
+    open: Open<'_>,
+) -> Result<(Workspace, Session)> {
+    let mut tx = store.begin().await?;
+    let organization = tx.organizations().named(organization).await?;
+    let resolved = resolved(&mut tx, &organization, open).await?;
+    let (workspace, session) = opened_in(&mut tx, &organization, &resolved).await?;
+    tx.commit().await?;
+
+    Ok((workspace, session))
+}
+
+/// A Workspace with no Session, which no operator path opens. Fixtures that need the state
+/// `session enqueue` refuses, and the tests of what else refuses it, call this.
+pub async fn open_without_a_session(
     store: &Store,
     organization: &str,
     project: &str,
@@ -25,44 +69,186 @@ pub async fn open(
     continues: Option<&str>,
 ) -> Result<Workspace> {
     let mut tx = store.begin().await?;
-
     let organization = tx.organizations().named(organization).await?;
-    let project = tx.projects().named(&organization, project).await?;
-    let agent = tx.agents().named(&organization, agent).await?;
-    let profile = match profile {
-        Some(profile) => Some(tx.profiles().named(&organization, profile).await?),
-        None => None,
-    };
-    let continues = match continues {
-        Some(reference) => Some(continued(&mut tx, &organization, reference).await?),
-        None => None,
-    };
-
+    let resolved = resolved(
+        &mut tx,
+        &organization,
+        Open {
+            project,
+            agent,
+            profile,
+            branch,
+            continues,
+            model: None,
+            brief: None,
+            participant: None,
+        },
+    )
+    .await?;
     let workspace = tx
         .workspaces()
         .open(Opening {
             organization: &organization,
-            project: &project,
-            agent: &agent,
-            profile: profile.as_ref(),
-            branch,
+            project: &resolved.project,
+            agent: &resolved.agent,
+            profile: resolved.profile.as_ref(),
+            branch: resolved.branch,
             correlation: None,
-            continues: continues.as_ref(),
+            continues: resolved.continues.as_ref(),
             started_by: None,
         })
         .await?;
-    tx.log()
-        .append(
-            &workspace,
-            Entry::ParticipantJoined {
-                participant: workspace.opened_with.name.clone(),
-            },
-        )
-        .await?;
-
+    ensure_joined(&mut tx, &workspace, &resolved.agent.name).await?;
     tx.commit().await?;
 
     Ok(workspace)
+}
+
+/// The write an open and a start share, in the caller's transaction, so the same inputs give the
+/// same Transcript.
+pub(crate) async fn opened_in(
+    tx: &mut Tx<'_>,
+    organization: &Organization,
+    resolved: &Resolved<'_>,
+) -> Result<(Workspace, Session)> {
+    let workspace = tx
+        .workspaces()
+        .open(Opening {
+            organization,
+            project: &resolved.project,
+            agent: &resolved.agent,
+            profile: resolved.profile.as_ref(),
+            branch: resolved.branch,
+            correlation: None,
+            continues: resolved.continues.as_ref(),
+            started_by: resolved
+                .participant
+                .as_ref()
+                .map(|participant| StartedBy::Participant(participant.clone())),
+        })
+        .await?;
+    ensure_joined(tx, &workspace, &resolved.agent.name).await?;
+    if let Some(participant) = &resolved.participant {
+        ensure_joined(tx, &workspace, participant).await?;
+    }
+    if let Some(brief) = resolved.brief {
+        tx.log()
+            .append(
+                &workspace,
+                Entry::Brief {
+                    trigger: None,
+                    brief: brief.to_owned(),
+                },
+            )
+            .await?;
+    }
+    let session = tx
+        .workspaces()
+        .enqueue_session(&workspace, Some(&resolved.agent), resolved.model)
+        .await?;
+
+    Ok((workspace, session))
+}
+
+async fn resolved<'a>(
+    tx: &mut Tx<'_>,
+    organization: &Organization,
+    open: Open<'a>,
+) -> Result<Resolved<'a>> {
+    let project = named(
+        "project",
+        tx.projects().named(organization, open.project).await,
+    )?;
+    let agent = named("agent", tx.agents().named(organization, open.agent).await)?;
+    let profile = match open.profile {
+        Some(profile) => Some(named(
+            "profile",
+            tx.profiles().named(organization, profile).await,
+        )?),
+        None => None,
+    };
+    let continues = match open.continues {
+        Some(reference) => Some(named(
+            "continues",
+            continued(tx, organization, reference).await,
+        )?),
+        None => None,
+    };
+
+    if open.branch.is_some_and(|branch| branch.trim().is_empty()) {
+        return Err(FieldRefusal::unacceptable(
+            "branch",
+            "a branch cannot be empty; omit it for the branch the workspace declares",
+        )
+        .into());
+    }
+    if open.branch.is_some() && continues.is_some() {
+        return Err(FieldRefusal::unacceptable(
+            "branch",
+            "a continuation runs on the branch of the workspace it continues, and names none of its own",
+        )
+        .into());
+    }
+    if open.model.is_some_and(|model| model.trim().is_empty()) {
+        return Err(FieldRefusal::unacceptable(
+            "model",
+            "a model cannot be empty; omit it for the Agent's",
+        )
+        .into());
+    }
+    if open.brief.is_some_and(|brief| brief.trim().is_empty()) {
+        return Err(FieldRefusal::unacceptable(
+            "brief",
+            "a brief cannot be empty; omit it to open without one",
+        )
+        .into());
+    }
+    let participant = match (open.participant, open.brief) {
+        (Some(participant), Some(_)) => {
+            Some(participant::accepted(tx, organization, participant).await?)
+        }
+        (Some(_), None) => {
+            return Err(FieldRefusal::unacceptable(
+                "participant",
+                "a participant names the author of a brief, and this open carries none",
+            )
+            .into());
+        }
+        (None, _) => None,
+    };
+
+    Ok(Resolved {
+        project,
+        agent,
+        profile,
+        continues,
+        branch: open.branch,
+        model: open.model,
+        brief: open.brief,
+        participant,
+    })
+}
+
+/// The request field a name came in travels with its refusal, and the `Declined` behind it decides
+/// the status a boundary answers. Anything that is not a refusal travels untouched.
+fn named<T>(field: &'static str, named: Result<T>) -> Result<T> {
+    named.map_err(|error| match error.downcast::<Declined>() {
+        Ok(declined) => {
+            let kind = match &declined {
+                Declined::Unacceptable(_) => Kind::Unacceptable,
+                Declined::Missing(_) => Kind::Missing,
+                Declined::Ambiguous(_) => Kind::Ambiguous,
+                Declined::Taken(_) => Kind::Taken,
+            };
+            FieldRefusal {
+                field,
+                message: declined.to_string(),
+                kind,
+            }
+            .into()
+        }
+        Err(error) => error,
+    })
 }
 
 pub async fn seal(store: &Store, id: WorkspaceId) -> Result<Workspace> {
@@ -398,10 +584,10 @@ async fn continued(
     let sealed = tx.workspaces().resolved(organization, reference).await?;
 
     if sealed.state != WorkspaceState::Sealed {
-        bail!(
+        bail!(Declined::Unacceptable(format!(
             "the workspace {} is open, and work continues in it rather than after it",
             sealed.id
-        );
+        )));
     }
 
     Ok(sealed)

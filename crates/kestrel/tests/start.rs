@@ -125,6 +125,12 @@ async fn one_command_takes_a_fresh_clone_and_an_empty_control_plane_to_a_session
     let transcript = kestrel.transcript(workspace).await;
     assert_eq!(
         transcript[0].entry,
+        Entry::ParticipantJoined {
+            participant: "opencode".to_owned(),
+        }
+    );
+    assert_eq!(
+        transcript[1].entry,
         Entry::Brief {
             trigger: None,
             brief: BRIEF.to_owned(),

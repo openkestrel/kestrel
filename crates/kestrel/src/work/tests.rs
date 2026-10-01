@@ -41,9 +41,11 @@ impl Fixture {
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        let workspace = workspace::open(&store, "acme", "kestrel", "builder", None, None, None)
-            .await
-            .unwrap();
+        let workspace = workspace::open_without_a_session(
+            &store, "acme", "kestrel", "builder", None, None, None,
+        )
+        .await
+        .unwrap();
         enqueue(&store, workspace.id, None, None).await.unwrap();
         let session = claim(&store, &[]).await.unwrap().unwrap();
         executes_on(&store, &session, INSTANCE).await.unwrap();
@@ -123,7 +125,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         .unwrap();
     tx.commit().await.unwrap();
 
-    let first = workspace::open(
+    let first = workspace::open_without_a_session(
         &store,
         "acme",
         "kestrel",
@@ -134,7 +136,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     )
     .await
     .unwrap();
-    let second = workspace::open(
+    let second = workspace::open_without_a_session(
         &store,
         "acme",
         "kestrel",
@@ -203,7 +205,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    let alex = workspace::open(
+    let alex = workspace::open_without_a_session(
         &store,
         "acme",
         "kestrel",
