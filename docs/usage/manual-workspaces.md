@@ -43,9 +43,10 @@ The workspace identifier, any unique prefix of it, its generated name, or `lates
 ```sh
 kestrel session list --workspace latest
 kestrel workspace transcript latest --follow
+kestrel workspace transcript latest --follow --as-participant Ada
 ```
 
-A transcript without `--follow` ends with a cursor on stderr. Pass it to `--cursor` to get only later entries. With `--follow`, the CLI reconnects and resumes after the last printed entry if the control plane drops. Harness stderr goes to `docker compose logs -f kestrel`, labeled by session, and stays out of the transcript.
+A transcript without `--follow` ends with a cursor on stderr. Pass it to `--cursor` to get only later entries. With `--follow`, the CLI reconnects and resumes after the last printed entry if the control plane drops. `--as-participant NAME` joins the workspace's presence under that name while following, and renews its one-minute lease every 20 seconds; presence is never printed. Harness stderr goes to `docker compose logs -f kestrel`, labeled by session, and stays out of the transcript.
 
 The CLI renders readable columns at a terminal and tab-delimited records when piped. `--json id,state` selects fields for scripts; use exit codes rather than parsing diagnostic text. `kestrel exit-codes` lists them.
 

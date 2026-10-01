@@ -626,6 +626,9 @@ enum WorkspaceCommand {
         /// Keep reading as entries are appended, until the Workspace is sealed
         #[arg(long)]
         follow: bool,
+        /// Join the Workspace's presence as this person while following
+        #[arg(long, requires = "follow")]
+        as_participant: Option<String>,
         #[arg(long, default_value = "shared_state")]
         kinds: String,
     },
@@ -1351,6 +1354,7 @@ async fn run() -> Result<()> {
             workspace,
             cursor,
             follow,
+            as_participant,
             kinds,
         }) => {
             let organization = scoping.resolve().await?.organization;
@@ -1360,6 +1364,7 @@ async fn run() -> Result<()> {
                 &workspace,
                 cursor,
                 follow,
+                as_participant.as_deref(),
                 &kinds,
                 &presentation,
             )

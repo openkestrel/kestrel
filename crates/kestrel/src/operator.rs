@@ -34,6 +34,7 @@ use crate::filter::Filter;
 use crate::integration::github::{self, Github};
 use crate::integration::{self, Connecting, Registration};
 use crate::log::{self, Cursor, Unreadable, Window};
+use crate::participant;
 use crate::profile::{self, Entry};
 use crate::provider::{self, Held};
 use crate::queue;
@@ -103,6 +104,9 @@ pub const TRANSCRIPT: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/transcript";
 pub const TRANSCRIPT_PAYLOAD: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/transcript/payloads/{payload}";
+/// Where a Workspace follow renews its presence lease.
+pub const FOLLOWER_LEASE: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/followers/{id}/lease";
 /// The Organization's change notices: which Workspace, Session or queue changed, never a copy
 /// of its state.
 pub const CHANGES: &str = "/operator/organizations/{organization}/changes";
@@ -121,6 +125,7 @@ struct ControlPlane {
     shutdown: CancellationToken,
     summaries: crate::live_work::Summaries,
     reads: crate::live_read::Reads,
+    followers: crate::presence::Followers,
 }
 
 #[derive(Deserialize)]
@@ -139,6 +144,8 @@ struct Reading {
 struct Following {
     follow: Option<bool>,
     kinds: Option<String>,
+    #[serde(rename = "as")]
+    as_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -160,6 +167,13 @@ struct End {
 enum Because {
     CaughtUp,
     Sealed,
+}
+
+/// The id and lease a registered follow is handed so it can renew.
+#[derive(Serialize)]
+struct FollowerEvent {
+    id: crate::presence::FollowerId,
+    lease_seconds: u64,
 }
 
 /// `open` and `resync` say the Client must refetch every view it subscribes to, and carry
@@ -195,6 +209,7 @@ pub fn router(
     shutdown: CancellationToken,
     summaries: crate::live_work::Summaries,
     reads: crate::live_read::Reads,
+    followers: crate::presence::Followers,
 ) -> Router {
     Router::new()
         .route(ORGANIZATIONS, get(organizations).post(declare_organization))
@@ -245,12 +260,14 @@ pub fn router(
         .route(SESSION_STOP, post(stop_session))
         .route(TRANSCRIPT, get(transcript))
         .route(TRANSCRIPT_PAYLOAD, get(transcript_payload))
+        .route(FOLLOWER_LEASE, post(renew_follower))
         .route(CHANGES, get(changes))
         .with_state(ControlPlane {
             store,
             shutdown,
             summaries,
             reads,
+            followers,
         })
         .layer(middleware::from_fn(addressed_here))
 }
@@ -2249,7 +2266,8 @@ async fn transcript_payload(
 }
 
 /// A stream that closes without an `end` event was cut off, and the reader resumes it from
-/// the last id it was handed.
+/// the last id it was handed. A read that stays open past caught-up registers its follower and
+/// carries who is following, transiently (ADR-0035).
 async fn transcript(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
@@ -2257,6 +2275,13 @@ async fn transcript(
     headers: HeaderMap,
 ) -> Result<Sse<impl Stream<Item = Result<Event, BoxError>>>, Refused> {
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
+    let name = match following.as_name.as_deref() {
+        Some(name) => {
+            let mut tx = control_plane.store.read().await?;
+            Some(participant::accepted(&mut tx, &workspace.organization, name).await?)
+        }
+        None => None,
+    };
     let workspace = workspace.id;
     let follow = following.follow.unwrap_or(true);
     let kinds = following
@@ -2270,6 +2295,7 @@ async fn transcript(
     let mut read = reading(&control_plane.store, workspace, from, &kinds).await?;
 
     let stream = async_stream::try_stream! {
+        let mut joined: Option<crate::presence::Joined> = None;
         let mut delivered = from;
         loop {
             for entry in read.page.entries {
@@ -2300,6 +2326,24 @@ async fn transcript(
                     break;
                 }
 
+                if joined.is_none() {
+                    let mut follower = control_plane.followers.join(workspace, name.clone());
+                    yield Event::default().event("follower").json_data(FollowerEvent {
+                        id: follower.id,
+                        lease_seconds: follower.lease.as_secs(),
+                    })?;
+                    yield Event::default().event("presence").json_data(follower.snapshot())?;
+                    joined = Some(follower);
+                }
+
+                let follower = joined.as_mut().expect("registered just above");
+                if *follower.expiration.borrow() {
+                    break;
+                }
+                if follower.presence.has_changed().unwrap_or(false) {
+                    yield Event::default().event("presence").json_data(follower.snapshot())?;
+                }
+
                 tokio::select! {
                     () = tokio::time::sleep(POLL) => {}
                     () = control_plane.shutdown.cancelled() => break,
@@ -2313,6 +2357,26 @@ async fn transcript(
     };
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(KEEP_ALIVE)))
+}
+
+/// Extends a registered follow's lease, so presence outlives a browser or CLI that keeps
+/// reading. An unknown or expired follower is a 404, never a fresh registration.
+async fn renew_follower(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, workspace, id)): Path<(String, String, String)>,
+) -> Result<StatusCode, Refused> {
+    let workspace = resolved(&control_plane, &organization, &workspace).await?;
+    let id = id
+        .parse::<crate::presence::FollowerId>()
+        .map_err(|_| Refused::NotFound("no such follower".to_owned()))?;
+
+    if control_plane.followers.renew(workspace.id, id) {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(Refused::NotFound(
+            "no such follower, or its lease has passed".to_owned(),
+        ))
+    }
 }
 
 /// Every subscriber is told to refetch everything on connect, and again if it fell behind the

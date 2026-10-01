@@ -39,6 +39,7 @@ use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::Path;
+use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use kestrel::agent;
@@ -138,6 +139,7 @@ pub struct Kestrel {
     environment: Option<Provisions>,
     shutdown: CancellationToken,
     roles: JoinHandle<anyhow::Result<()>>,
+    follow_lease: Duration,
 }
 
 struct Cleanup {
@@ -223,6 +225,7 @@ pub struct Stopped {
     data_dir: TempDir,
     bound: Listen,
     environment: Option<Provisions>,
+    follow_lease: Duration,
 }
 
 impl Kestrel {
@@ -230,6 +233,11 @@ impl Kestrel {
     /// nothing and a test is the only thing dispatching the Sessions it opens.
     pub async fn boot() -> Self {
         Self::booted(None).await
+    }
+
+    /// Boots with a follow lease short enough for a test to watch it pass.
+    pub async fn boot_with_follow_lease(follow_lease: Duration) -> Self {
+        Self::booted_with(None, follow_lease).await
     }
 
     /// Bound on every interface rather than on loopback, because what dials this one is a
@@ -243,6 +251,7 @@ impl Kestrel {
                 operator: LOOPBACK,
             },
             None,
+            kestrel::presence::LEASE,
         )
         .await
     }
@@ -256,6 +265,7 @@ impl Kestrel {
                 operator: "0.0.0.0:0".parse().expect("every interface"),
             },
             None,
+            kestrel::presence::LEASE,
         )
         .await
     }
@@ -311,11 +321,16 @@ impl Kestrel {
                 harnesses: spawning(harnesses),
                 max_active_sessions: NonZeroUsize::new(2).unwrap(),
             }),
+            kestrel::presence::LEASE,
         )
         .await
     }
 
     async fn booted(environment: Option<Provisions>) -> Self {
+        Self::booted_with(environment, kestrel::presence::LEASE).await
+    }
+
+    async fn booted_with(environment: Option<Provisions>, follow_lease: Duration) -> Self {
         let data_dir = TempDir::new().expect("a temporary data directory");
         Self::boot_against(
             data_dir,
@@ -324,6 +339,7 @@ impl Kestrel {
                 operator: LOOPBACK,
             },
             environment,
+            follow_lease,
         )
         .await
     }
@@ -332,12 +348,13 @@ impl Kestrel {
         data_dir: TempDir,
         listen: Listen,
         environment: Option<Provisions>,
+        follow_lease: Duration,
     ) -> Self {
         let store = Store::open(data_dir.path())
             .await
             .expect("the control plane should boot against a fresh data directory");
         let shutdown = CancellationToken::new();
-        let all_in_one = kestrel::role::bind(store.clone(), listen)
+        let all_in_one = kestrel::role::bind(store.clone(), listen, follow_lease)
             .await
             .expect("the control plane should bind its link");
         let bound = all_in_one.bound();
@@ -355,7 +372,15 @@ impl Kestrel {
         });
         let roles = tokio::spawn(all_in_one.run(dispatch, shutdown.clone()));
 
-        Self::running(data_dir, store, bound, environment, shutdown, roles)
+        Self::running(
+            data_dir,
+            store,
+            bound,
+            environment,
+            shutdown,
+            roles,
+            follow_lease,
+        )
     }
 
     /// Serves the link with no work role behind it, so nothing sweeps a lease a test has let
@@ -373,13 +398,22 @@ impl Kestrel {
                 operator: LOOPBACK,
             },
             Wake::default(),
+            kestrel::presence::LEASE,
         )
         .await
         .expect("the control plane should bind its link");
         let bound = listening.bound();
         let roles = tokio::spawn(serve::run(listening, shutdown.clone()));
 
-        Self::running(data_dir, store, bound, None, shutdown, roles)
+        Self::running(
+            data_dir,
+            store,
+            bound,
+            None,
+            shutdown,
+            roles,
+            kestrel::presence::LEASE,
+        )
     }
 
     fn running(
@@ -389,6 +423,7 @@ impl Kestrel {
         environment: Option<Provisions>,
         shutdown: CancellationToken,
         roles: JoinHandle<anyhow::Result<()>>,
+        follow_lease: Duration,
     ) -> Self {
         let cleanup = Cleanup {
             data_dir: data_dir.path().to_path_buf(),
@@ -406,6 +441,7 @@ impl Kestrel {
             environment,
             shutdown,
             roles,
+            follow_lease,
         }
     }
 
@@ -1813,6 +1849,7 @@ impl Kestrel {
             data_dir: self.data_dir,
             bound: self.bound,
             environment: self.environment,
+            follow_lease: self.follow_lease,
         }
     }
 
@@ -1840,6 +1877,7 @@ impl Kestrel {
             data_dir: self.data_dir,
             bound: self.bound,
             environment: self.environment,
+            follow_lease: self.follow_lease,
         }
     }
 }
@@ -1903,7 +1941,13 @@ pub(crate) fn destroy_instances_on_drop(data_dir: std::path::PathBuf, driver: Op
 impl Stopped {
     pub async fn restart(mut self) -> Kestrel {
         self.cleanup.armed = false;
-        Kestrel::boot_against(self.data_dir, self.bound, self.environment).await
+        Kestrel::boot_against(
+            self.data_dir,
+            self.bound,
+            self.environment,
+            self.follow_lease,
+        )
+        .await
     }
 
     /// Restarted with a dispatch configuration the flags carry, which replaces whatever the
@@ -1927,6 +1971,7 @@ impl Stopped {
                 max_active_sessions: NonZeroUsize::new(maximum)
                     .expect("at least one active session"),
             }),
+            self.follow_lease,
         )
         .await
     }

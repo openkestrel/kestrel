@@ -57,6 +57,17 @@ id it received (`kestrel-client/src/transcript.rs`) and gives up after 30 s unre
 across omitted entries: the page returns the highest examined seq, and the stream sends a `cursor`
 event when omitted entries advance it beyond the last delivered entry. The cursor remains global.
 
+A follow that stays open past caught-up registers a follower. It is handed one `follower` event
+(`id`, `lease_seconds`) and then a `presence` event carrying the whole current set
+(`{named, anonymous}`), and another `presence` event whenever the set changes; neither carries an
+id, so presence never moves the cursor. `?as=NAME` joins under a name the participant rule
+accepts, and names an Agent only to be refused. `POST …/followers/{id}/lease` extends a live
+follower's lease and answers `404` for one unknown or lapsed; a dropped stream removes its
+follower at once, and a lease that passes removes it and closes its stream. Followers live only in
+the serve role's memory ([ADR-0035](../adr/0035-organization-change-notices-and-workspace-presence.md)).
+`workspace transcript --follow --as-participant NAME` renews a third of the way through the lease
+and prints no presence.
+
 `GET …/workspaces/{workspace}/transcript/payloads/{payload}` fetches an oversized body field as
 its original bytes and media type. The entry's `payload_fields` lists fields holding references;
 other JSON values remain inline even if they resemble a reference. A reference identifies its
