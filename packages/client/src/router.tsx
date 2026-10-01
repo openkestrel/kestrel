@@ -1,5 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRouter } from "@tanstack/react-router";
+import { Currency } from "#/operator/currency";
+import { operator } from "#/operator/queries";
 import { Refused } from "#/operator/transport";
 import { routeTree } from "./routeTree.gen";
 
@@ -12,10 +14,11 @@ export function getRouter() {
 			},
 		},
 	});
+	const currency = new Currency({ queryClient, operations: operator });
 
 	return createRouter({
 		routeTree,
-		context: { queryClient },
+		context: { queryClient, currency },
 		scrollRestoration: true,
 		defaultPreload: "intent",
 		Wrap: ({ children }) => (
