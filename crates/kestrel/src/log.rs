@@ -20,7 +20,7 @@ pub enum Entry {
         participant: String,
     },
     Brief {
-        trigger: Option<String>,
+        source: BriefSource,
         brief: String,
     },
     SessionStarted {
@@ -99,6 +99,13 @@ pub enum Entry {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BriefSource {
+    Trigger { trigger: String },
+    Operator { participant: Option<String> },
+}
+
 impl fmt::Display for Entry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -107,11 +114,18 @@ impl fmt::Display for Entry {
                 write!(f, "participant joined  {participant}")
             }
             Entry::Brief {
-                trigger: Some(trigger),
+                source: BriefSource::Trigger { trigger: by },
                 brief,
-            } => write!(f, "brief  {trigger}  {brief}"),
+            }
+            | Entry::Brief {
+                source:
+                    BriefSource::Operator {
+                        participant: Some(by),
+                    },
+                brief,
+            } => write!(f, "brief  {by}  {brief}"),
             Entry::Brief {
-                trigger: None,
+                source: BriefSource::Operator { participant: None },
                 brief,
             } => write!(f, "brief  {brief}"),
             Entry::SessionStarted { session, agent } => {

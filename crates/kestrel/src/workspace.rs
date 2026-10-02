@@ -7,7 +7,7 @@ use crate::domain::{
     SessionState, StartedBy, SubscriptionProfile, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::instance;
-use crate::log::{Cursor, Entry, Message, Page, Unreadable, Window};
+use crate::log::{BriefSource, Cursor, Entry, Message, Page, Unreadable, Window};
 use crate::participant;
 use crate::store::workspace::{Opening, PendingSession, Unfinished};
 use crate::store::{Store, Tx};
@@ -136,7 +136,9 @@ pub(crate) async fn opened_in(
             .append(
                 &workspace,
                 Entry::Brief {
-                    trigger: None,
+                    source: BriefSource::Operator {
+                        participant: resolved.participant.clone(),
+                    },
                     brief: brief.to_owned(),
                 },
             )
@@ -616,7 +618,9 @@ async fn brief(
         .append(
             workspace,
             Entry::Brief {
-                trigger: None,
+                source: BriefSource::Operator {
+                    participant: Some(participant.to_owned()),
+                },
                 brief: message.to_owned(),
             },
         )
@@ -647,7 +651,9 @@ pub(crate) async fn first_held_becomes_the_brief(
         .append(
             workspace,
             Entry::Brief {
-                trigger: None,
+                source: BriefSource::Operator {
+                    participant: Some(pending.participant),
+                },
                 brief: pending.message,
             },
         )
@@ -717,7 +723,9 @@ pub(crate) async fn briefed(
         .append(
             workspace,
             Entry::Brief {
-                trigger: Some(pending.trigger),
+                source: BriefSource::Trigger {
+                    trigger: pending.trigger,
+                },
                 brief: pending.brief,
             },
         )

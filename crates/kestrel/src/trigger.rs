@@ -14,7 +14,7 @@ use crate::domain::{
     StartedBy, Templates, Trigger, TriggerId, TriggerState, Workspace, WorkspaceId,
 };
 use crate::integration::github::{self, EventData, Github};
-use crate::log::Entry;
+use crate::log::{BriefSource, Entry};
 use crate::readiness::{Decision, Readiness, Request};
 use crate::store::integration::Recorded;
 use crate::store::workspace::{Opening, PendingSession};
@@ -877,7 +877,9 @@ async fn firing(
         .append(
             &workspace,
             Entry::Brief {
-                trigger: Some(trigger.name.clone()),
+                source: BriefSource::Trigger {
+                    trigger: trigger.name.clone(),
+                },
                 brief: rendered.brief,
             },
         )

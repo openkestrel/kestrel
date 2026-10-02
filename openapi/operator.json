@@ -4188,12 +4188,8 @@
         "description": "The instruction a Workspace started with, rendered by the Trigger that fired or supplied by an operator.",
         "type": "object",
         "properties": {
-          "trigger": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The Trigger that rendered it, or null for a Brief an operator supplied."
+          "source": {
+            "$ref": "#/components/schemas/BriefSource"
           },
           "brief": {
             "oneOf": [
@@ -4218,8 +4214,47 @@
         },
         "required": [
           "type",
-          "trigger",
+          "source",
           "brief"
+        ]
+      },
+      "BriefSource": {
+        "description": "Who supplied a Brief: the Trigger whose firing rendered it, or an operator, under the participant name they declared if they declared one.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "trigger"
+              },
+              "trigger": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "trigger"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "operator"
+              },
+              "participant": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The participant who joined directly before the Brief, or null when the operator declared no name and no one joined."
+              }
+            },
+            "required": [
+              "kind",
+              "participant"
+            ]
+          }
         ]
       },
       "SessionStarted": {

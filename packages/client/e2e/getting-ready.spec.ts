@@ -270,7 +270,11 @@ test("a message sent before ready shows as held, then becomes the Brief", async 
 				session_id: null,
 				seq: 2,
 				appended_at: "2026-09-30T10:00:02Z",
-				entry: { type: "brief", trigger: null, brief: "the first brief" },
+				entry: {
+					type: "brief",
+					source: { kind: "operator", participant: "jack" },
+					brief: "the first brief",
+				},
 			},
 		},
 		{ name: "end", data: { because: "sealed" } },

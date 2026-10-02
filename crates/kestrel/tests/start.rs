@@ -1,7 +1,7 @@
 mod support;
 
 use kestrel::domain::{Exit, SessionId, WorkspaceId};
-use kestrel::log::Entry;
+use kestrel::log::{BriefSource, Entry};
 use serde_json::Value;
 use support::client::{Finished, Invocation, Shown, ran_by, ran_on_a_terminal_by};
 use support::scripted_agent::{self, Script};
@@ -132,7 +132,7 @@ async fn one_command_takes_a_fresh_clone_and_an_empty_control_plane_to_a_session
     assert_eq!(
         transcript[1].entry,
         Entry::Brief {
-            trigger: None,
+            source: BriefSource::Operator { participant: None },
             brief: BRIEF.to_owned(),
         }
     );

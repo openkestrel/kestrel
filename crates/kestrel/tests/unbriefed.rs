@@ -10,7 +10,7 @@ use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{
     Exit, Preparing, Session, SessionId, SessionState, Workspace, WorkspaceState,
 };
-use kestrel::log::Entry;
+use kestrel::log::{BriefSource, Entry};
 use kestrel::queue::Reason;
 use kestrel::work::Occupied;
 use support::repository;
@@ -360,7 +360,7 @@ async fn a_post_to_a_ready_unbriefed_session_becomes_its_brief_and_the_agent_ech
     let written = transcript
         .iter()
         .position(|recorded| {
-            matches!(&recorded.entry, Entry::Brief { trigger: None, brief: held } if held == brief)
+            matches!(&recorded.entry, Entry::Brief { source: BriefSource::Operator { participant: Some(by) }, brief: held } if by == "alice" && held == brief)
         })
         .expect("the post should record the Brief at once");
     assert!(written > 0);
@@ -434,7 +434,7 @@ async fn a_message_posted_before_the_harness_is_ready_becomes_the_brief_at_ready
     let written = transcript
         .iter()
         .position(|recorded| {
-            matches!(&recorded.entry, Entry::Brief { trigger: None, brief } if brief == "what I want")
+            matches!(&recorded.entry, Entry::Brief { source: BriefSource::Operator { participant: Some(by) }, brief } if by == "alice" && brief == "what I want")
         })
         .expect("the held message should become the Brief at ready");
     assert!(written > 0);

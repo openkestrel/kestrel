@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use kestrel::domain::{Exit, Session, SessionId};
 use kestrel::link::{self, Instruction};
-use kestrel::log::{Entry, Message, ToolStatus};
+use kestrel::log::{BriefSource, Entry, Message, ToolStatus};
 use kestrel::work::{Report, Reported};
 use reqwest::{StatusCode, Version, header};
 use serde_json::json;
@@ -618,7 +618,9 @@ fn the_published_openapi_document_describes_every_transcript_entry_the_link_serv
             participant: "builder".to_owned(),
         },
         Entry::Brief {
-            trigger: Some("ready".to_owned()),
+            source: BriefSource::Trigger {
+                trigger: "ready".to_owned(),
+            },
             brief: "/implement https://github.com/jtmthf/kestrel/issues/174".to_owned(),
         },
         Entry::SessionStarted {

@@ -7,7 +7,7 @@ use std::time::Duration;
 use kestrel::domain::{EventRecordId, Exit, Preparing, SessionId, SessionState, WorkspaceId};
 use kestrel::instance::{Git, Observed};
 use kestrel::link;
-use kestrel::log::{Entry, Message, ToolStatus};
+use kestrel::log::{BriefSource, Entry, Message, ToolStatus};
 use kestrel::operator;
 use kestrel::work;
 use reqwest::StatusCode;
@@ -2095,7 +2095,9 @@ async fn an_open_carries_its_brief_and_its_author_and_answers_with_both_records(
     assert_eq!(
         transcript[2].entry,
         Entry::Brief {
-            trigger: None,
+            source: BriefSource::Operator {
+                participant: Some("alice".to_owned()),
+            },
             brief: "Fix the flaky test".to_owned(),
         }
     );
@@ -2149,7 +2151,9 @@ async fn an_open_without_a_brief_queues_a_session_a_message_becomes_its_brief() 
     assert_eq!(
         transcript[2].entry,
         Entry::Brief {
-            trigger: None,
+            source: BriefSource::Operator {
+                participant: Some("alice".to_owned()),
+            },
             brief: "what I want".to_owned(),
         }
     );
@@ -2187,7 +2191,7 @@ async fn a_brief_without_a_participant_records_the_operator_and_joins_no_one() {
                 participant: "builder".to_owned(),
             },
             &Entry::Brief {
-                trigger: None,
+                source: BriefSource::Operator { participant: None },
                 brief: "Do the work".to_owned(),
             },
         ]
@@ -2430,7 +2434,9 @@ async fn a_client_opens_a_workspace_with_a_brief_a_model_and_a_participant() {
     assert_eq!(
         transcript[2].entry,
         Entry::Brief {
-            trigger: None,
+            source: BriefSource::Operator {
+                participant: Some("alice".to_owned()),
+            },
             brief: "Fix the flaky test".to_owned(),
         }
     );
@@ -2460,7 +2466,7 @@ async fn a_client_opens_a_workspace_with_a_brief_a_model_and_a_participant() {
     assert_eq!(
         kestrel.transcript(piped).await[1].entry,
         Entry::Brief {
-            trigger: None,
+            source: BriefSource::Operator { participant: None },
             brief: "From standard input".to_owned(),
         }
     );
@@ -3076,7 +3082,7 @@ async fn a_start_declares_its_setup_and_reaches_a_session_carrying_its_brief() {
     assert_eq!(
         transcript[1].entry,
         Entry::Brief {
-            trigger: None,
+            source: BriefSource::Operator { participant: None },
             brief: "Fix the flaky test".to_owned(),
         }
     );
@@ -5494,7 +5500,9 @@ fn the_published_operator_document_describes_every_transcript_entry() {
             participant: "builder".to_owned(),
         },
         Entry::Brief {
-            trigger: Some("sweep".to_owned()),
+            source: BriefSource::Trigger {
+                trigger: "sweep".to_owned(),
+            },
             brief: "Sweep the backlog".to_owned(),
         },
         Entry::SessionStarted {

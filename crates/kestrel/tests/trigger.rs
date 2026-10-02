@@ -8,7 +8,7 @@ use kestrel::domain::{
     CorrelationMiss, Declared, Direction, Event, Schedule, SessionState, StartedBy, TriggerState,
     Workspace,
 };
-use kestrel::log::{Entry, Message};
+use kestrel::log::{BriefSource, Entry, Message};
 use kestrel::trigger::Rendered;
 use kestrel::trigger::apply::Action;
 use kestrel_scripted_agent::{STARTING_MODE, SWITCHED_MODE};
@@ -198,7 +198,9 @@ async fn the_rendered_brief_is_the_workspaces_first_transcript_entry() {
             .collect::<Vec<_>>(),
         [
             Entry::Brief {
-                trigger: Some("ready".to_owned()),
+                source: BriefSource::Trigger {
+                    trigger: "ready".to_owned(),
+                },
                 brief: "Work https://github.com/jtmthf/kestrel/issues/43: an issue numbered 43"
                     .to_owned(),
             },
@@ -280,7 +282,9 @@ async fn the_agent_is_first_prompted_with_exactly_the_brief_its_workspace_preser
     assert_eq!(
         first_entry(&kestrel, &workspace).await,
         Entry::Brief {
-            trigger: Some("ready".to_owned()),
+            source: BriefSource::Trigger {
+                trigger: "ready".to_owned(),
+            },
             brief: SKILLED.to_owned(),
         }
     );
@@ -386,10 +390,15 @@ async fn a_brief_that_cannot_render_fails_the_firing_and_starts_nothing() {
         1,
         "only the trigger that renders opens work"
     );
-    let Entry::Brief { trigger, .. } = first_entry(&kestrel, &workspaces[0]).await else {
+    let Entry::Brief { source, .. } = first_entry(&kestrel, &workspaces[0]).await else {
         panic!("a triggered workspace opens on its brief");
     };
-    assert_eq!(trigger.as_deref(), Some("ready"));
+    assert_eq!(
+        source,
+        BriefSource::Trigger {
+            trigger: "ready".to_owned()
+        }
+    );
 
     kestrel.teardown().await;
 }
@@ -755,7 +764,7 @@ async fn an_event_matching_several_triggers_fires_every_one_of_them() {
     let mut fired = Vec::new();
     for workspace in kestrel.workspaces("acme").await {
         if let Entry::Brief {
-            trigger: Some(trigger),
+            source: BriefSource::Trigger { trigger },
             ..
         } = first_entry(&kestrel, &workspace).await
         {
@@ -1372,7 +1381,9 @@ async fn a_schedule_elapsing_opens_a_workspace_the_way_a_matched_event_does() {
     assert_eq!(
         first_entry(&kestrel, &workspace).await,
         Entry::Brief {
-            trigger: Some("sweep".to_owned()),
+            source: BriefSource::Trigger {
+                trigger: "sweep".to_owned(),
+            },
             brief: "Sweep the backlog for sweep".to_owned(),
         }
     );
@@ -1599,7 +1610,9 @@ async fn a_cron_schedule_elapsing_opens_a_workspace_the_way_an_interval_does() {
     assert_eq!(
         first_entry(&kestrel, &workspace).await,
         Entry::Brief {
-            trigger: Some("triage".to_owned()),
+            source: BriefSource::Trigger {
+                trigger: "triage".to_owned(),
+            },
             brief: "Triage for triage".to_owned(),
         }
     );
