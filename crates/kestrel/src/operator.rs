@@ -186,21 +186,38 @@ struct FollowerEvent {
 #[derive(Serialize)]
 struct Refetch {}
 
+// The Workspace's name, because a Client addresses every read by it.
 #[derive(Serialize)]
 #[serde(tag = "resource", rename_all = "snake_case")]
 enum Changed {
-    Workspace { id: WorkspaceId },
-    Session { id: crate::domain::SessionId },
+    Workspace {
+        id: WorkspaceId,
+        workspace: String,
+    },
+    Session {
+        id: crate::domain::SessionId,
+        workspace: String,
+    },
     Queue,
 }
 
-impl From<fanout::Resource> for Changed {
-    fn from(resource: fanout::Resource) -> Self {
-        match resource {
-            fanout::Resource::Workspace(id) => Self::Workspace { id },
-            fanout::Resource::Session(id) => Self::Session { id },
+impl Changed {
+    async fn named(store: &Store, resource: fanout::Resource) -> anyhow::Result<Self> {
+        let mut tx = store.read().await?;
+        Ok(match resource {
+            fanout::Resource::Workspace(id) => Self::Workspace {
+                id,
+                workspace: tx.workspaces().get(id).await?.name,
+            },
+            fanout::Resource::Session(id) => {
+                let session = tx.workspaces().session(id).await?;
+                Self::Session {
+                    id,
+                    workspace: tx.workspaces().get(session.workspace).await?.name,
+                }
+            }
             fanout::Resource::Queue => Self::Queue,
-        }
+        })
     }
 }
 
@@ -2810,6 +2827,7 @@ async fn changes(
     let mut tx = control_plane.store.read().await?;
     let organization = tx.organizations().named(&organization).await?;
     let mut subscription = control_plane.store.notices().subscribe(organization.id);
+    drop(tx);
 
     let stream = async_stream::try_stream! {
         yield Event::default().event("open").json_data(Refetch {})?;
@@ -2820,7 +2838,10 @@ async fn changes(
             };
             match watch {
                 Some(fanout::Watch::Change(resource)) => {
-                    yield Event::default().event("change").json_data(Changed::from(resource))?;
+                    match Changed::named(&control_plane.store, resource).await {
+                        Ok(changed) => yield Event::default().event("change").json_data(changed)?,
+                        Err(_) => yield Event::default().event("resync").json_data(Refetch {})?,
+                    }
                 }
                 Some(fanout::Watch::Resync) => {
                     yield Event::default().event("resync").json_data(Refetch {})?;

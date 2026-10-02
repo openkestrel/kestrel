@@ -74,14 +74,8 @@ export function useTranscript(organization: string, workspace: string): Transcri
 function changeOf(data: string): Change | undefined {
 	try {
 		// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- change bodies are the generated OpenAPI type; the transport does not validate them.
-		const change = JSON.parse(data) as Partial<Change> & { id?: unknown };
-		if (change.resource === "queue") return { resource: "queue" };
-		if (
-			(change.resource === "workspace" || change.resource === "session") &&
-			typeof change.id === "string"
-		) {
-			return { resource: change.resource, id: change.id };
-		}
-	} catch {}
-	return undefined;
+		return JSON.parse(data) as Change;
+	} catch {
+		return undefined;
+	}
 }

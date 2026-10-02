@@ -4898,7 +4898,7 @@
         ]
       },
       "Change": {
-        "description": "One resource that changed: a Workspace or Session by id, or the Organization's queue, which carries no id. Never a copy of its state.",
+        "description": "One resource that changed: a Workspace or Session by id, with the name of the Workspace it belongs to, or the Organization's queue, which carries neither. Never a copy of its state.",
         "oneOf": [
           {
             "type": "object",
@@ -4909,11 +4909,16 @@
               "id": {
                 "type": "string",
                 "format": "uuid"
+              },
+              "workspace": {
+                "type": "string",
+                "description": "The name of the Workspace."
               }
             },
             "required": [
               "resource",
-              "id"
+              "id",
+              "workspace"
             ]
           },
           {
@@ -4925,11 +4930,16 @@
               "id": {
                 "type": "string",
                 "format": "uuid"
+              },
+              "workspace": {
+                "type": "string",
+                "description": "The name of the Workspace that holds the Session."
               }
             },
             "required": [
               "resource",
-              "id"
+              "id",
+              "workspace"
             ]
           },
           {

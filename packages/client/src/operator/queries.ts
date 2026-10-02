@@ -109,56 +109,27 @@ export function refetchOrganization(client: QueryClient, organization: string): 
 	});
 }
 
-// Notices name a Workspace by id but read keys carry its name, so the cache maps between them.
-export function refetchNoticed(
+export async function refetchNoticed(
 	client: QueryClient,
 	organization: string,
-	notice: Change,
+	change: Change,
 ): Promise<void> {
-	if (notice.resource === "workspace") {
-		const named = workspaceNames(client, organization, notice.id);
-		return client.invalidateQueries({
-			queryKey: workspacesQuery(organization).queryKey,
-			predicate: ({ queryKey }) => queryKey.length === 3 || named.has(queryKey[3]),
-		});
+	switch (change.resource) {
+		case "workspace":
+			await Promise.all([
+				client.invalidateQueries({ queryKey: workspacesQuery(organization).queryKey, exact: true }),
+				client.invalidateQueries({ queryKey: workspaceKey(organization, change.workspace) }),
+			]);
+			return;
+		case "session":
+			await Promise.all([
+				client.invalidateQueries({ queryKey: [...sessionsKey(organization), change.id] }),
+				client.invalidateQueries({
+					queryKey: workspaceSessionsQuery(organization, change.workspace).queryKey,
+				}),
+			]);
+			return;
+		case "queue":
+			await client.invalidateQueries({ queryKey: queueKey(organization) });
 	}
-	if (notice.resource === "session") {
-		const holding = sessionHolders(client, organization, notice.id);
-		return client.invalidateQueries({
-			queryKey: sessionsKey(organization),
-			predicate: ({ queryKey }) =>
-				queryKey[3] === notice.id ||
-				(queryKey[3] === "workspace" && (holding.size === 0 || holding.has(queryKey[4]))),
-		});
-	}
-	return client.invalidateQueries({ queryKey: queueKey(organization) });
-}
-
-function workspaceNames(client: QueryClient, organization: string, id: string): Set<unknown> {
-	const known = [...(client.getQueryData(workspacesQuery(organization).queryKey) ?? [])];
-	for (const query of client
-		.getQueryCache()
-		.findAll({ queryKey: workspacesQuery(organization).queryKey })) {
-		const name = query.queryKey[3];
-		if (query.queryKey.length !== 4 || typeof name !== "string") continue;
-		const read = client.getQueryData(workspaceQuery(organization, name).queryKey);
-		if (read) known.push(read);
-	}
-	return new Set(
-		known.filter((workspace) => workspace.id === id).map((workspace) => workspace.name),
-	);
-}
-
-// Empty for a Session new to this tab, which then refetches every Workspace's Session list.
-function sessionHolders(client: QueryClient, organization: string, id: string): Set<unknown> {
-	const holding = new Set<unknown>();
-	for (const query of client
-		.getQueryCache()
-		.findAll({ queryKey: [...sessionsKey(organization), "workspace"] })) {
-		const name = query.queryKey[4];
-		if (typeof name !== "string") continue;
-		const sessions = client.getQueryData(workspaceSessionsQuery(organization, name).queryKey);
-		if (sessions?.some((session) => session.id === id)) holding.add(name);
-	}
-	return holding;
 }

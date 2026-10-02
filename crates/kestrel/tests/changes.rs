@@ -122,6 +122,15 @@ fn names(frames: &[Frame]) -> Vec<String> {
         .collect()
 }
 
+fn names_workspace(frames: &[Frame], resource: &str, id: &str, workspace: &str) -> bool {
+    frames.iter().any(|frame| {
+        frame.name == "change"
+            && frame.data["resource"] == resource
+            && frame.data["id"] == id
+            && frame.data["workspace"] == workspace
+    })
+}
+
 fn names_changed(frames: &[Frame], resource: &str, id: Option<&str>) -> bool {
     frames.iter().any(|frame| {
         frame.name == "change"
@@ -192,8 +201,13 @@ async fn opening_a_workspace_posting_a_message_and_ending_the_session_raise_thei
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let opened = notices_until_quiet(&mut changes).await;
     assert!(
-        names_changed(&opened, "workspace", Some(&workspace.id.to_string())),
-        "opening the workspace raised no workspace notice: {opened:?}",
+        names_workspace(
+            &opened,
+            "workspace",
+            &workspace.id.to_string(),
+            &workspace.name
+        ),
+        "opening the workspace raised no workspace notice naming it: {opened:?}",
         opened = names(&opened)
     );
 
@@ -201,8 +215,8 @@ async fn opening_a_workspace_posting_a_message_and_ending_the_session_raise_thei
     let session_id = session["id"].as_str().expect("the session id").to_owned();
     let started = notices_until_quiet(&mut changes).await;
     assert!(
-        names_changed(&started, "session", Some(&session_id)),
-        "starting a session raised no session notice: {started:?}",
+        names_workspace(&started, "session", &session_id, &workspace.name),
+        "starting a session raised no session notice naming its workspace: {started:?}",
         started = names(&started)
     );
     assert!(

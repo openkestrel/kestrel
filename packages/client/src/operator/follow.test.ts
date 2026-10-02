@@ -1,7 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { followChanges } from "./follow";
-import { queueKey } from "./queries";
+import { queueKey, sessionsKey, workspaceSessionsQuery } from "./queries";
 import { transport } from "./transport";
 
 const encoder = new TextEncoder();
@@ -19,24 +19,34 @@ function events(...chunks: string[]) {
 }
 
 describe("an Organization's change notices", () => {
-	it("refetch the Organization on every open, and only what changed on a notice", async () => {
+	it("refetch the Organization on every open, and only the named Workspace's reads on a notice", async () => {
 		const client = new QueryClient();
 		const invalidated = vi.spyOn(client, "invalidateQueries");
 		let streams = 0;
 		const operations = transport(async () => {
 			streams += 1;
 			return streams === 1
-				? events("event: open\ndata: {}\n\n", 'event: change\ndata: {"resource":"queue"}\n\n')
+				? events(
+						"event: open\ndata: {}\n\n",
+						'event: change\ndata: {"resource":"queue"}\n\n',
+						'event: change\ndata: {"resource":"session","id":"s1","workspace":"brave-otter"}\n\n',
+					)
 				: events("event: open\ndata: {}\n\n");
 		});
 		const controller = new AbortController();
 
 		void followChanges(operations, client, "acme", controller.signal);
 		await vi.waitFor(() => expect(streams).toBe(2));
-		await vi.waitFor(() => expect(invalidated).toHaveBeenCalledTimes(3));
+		await vi.waitFor(() => expect(invalidated).toHaveBeenCalledTimes(5));
 		controller.abort();
 
 		const keys = invalidated.mock.calls.map(([filters]) => filters?.queryKey);
-		expect(keys).toEqual([["organizations"], queueKey("acme"), ["organizations"]]);
+		expect(keys).toEqual([
+			["organizations"],
+			queueKey("acme"),
+			[...sessionsKey("acme"), "s1"],
+			workspaceSessionsQuery("acme", "brave-otter").queryKey,
+			["organizations"],
+		]);
 	});
 });
