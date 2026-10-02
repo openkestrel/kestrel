@@ -391,7 +391,7 @@ test("changed work and a learned pull request update on a Workspace notice", asy
 		],
 	]);
 
-	notice.change({ resource: "workspace", id: id(21) });
+	notice.change({ resource: "workspace", id: id(21), workspace: "row-21" });
 
 	await expect(row).toContainText("#7 merged");
 	await expect(row).toContainText("+0 −0");
