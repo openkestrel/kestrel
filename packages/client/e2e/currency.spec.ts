@@ -30,8 +30,7 @@ test.beforeAll(async ({ request }) => {
 });
 
 async function opened(request: APIRequestContext): Promise<string> {
-	// Opened with a Brief so a later message is recorded as a Said entry: the first message to an
-	// unbriefed Workspace becomes its Brief instead (0.3/17).
+	// Without a Brief, the first message would become the Brief rather than a Said entry.
 	const response = await request.post("/operator/organizations/acme/workspaces", {
 		data: { project: "kestrel", agent: "builder", brief: "an opening brief" },
 	});
@@ -57,7 +56,6 @@ function isStream(url: string): boolean {
 	return url.includes("/changes") || url.includes("/transcript");
 }
 
-// The SSE connections each page has open now, and every one it ever opened.
 class Streams {
 	private readonly pages: Page[] = [];
 	private readonly seen = new Map<Page, Request[]>();
@@ -291,8 +289,7 @@ test("a follow reconnect resumes from its cursor without a gap or duplicate", as
 		.findLast((block) => block.includes("event: entry"));
 	expect(delivered).toContain("data:");
 
-	// The reconnect can already be in flight by the time the entry is visible, so the resumed
-	// request is captured in the route (registered before navigation) rather than waited for after.
+	// The reconnect can be in flight before the entry is visible, so the route captures it.
 	const cut = Promise.withResolvers<void>();
 	const resumed = Promise.withResolvers<void>();
 	let first = true;

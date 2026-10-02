@@ -8,8 +8,6 @@ export type SessionRow = {
 	position: number | null;
 };
 
-// A row needs a person: its Instance is held for work that exists nowhere else (GLOSSARY), its
-// Session lost its supervisor, or its Session failed.
 export function needsAttention(row: SessionRow): boolean {
 	if (row.workspace.held !== null) return true;
 	if (row.session?.state === "unreachable") return true;
@@ -87,8 +85,6 @@ export function sessionPhase(session: Session): string {
 	}
 }
 
-// The line a person scans to see what is happening now: a running tool, the preparing step of an
-// unbriefed Session, or what it is writing.
 export function currentUnit(session: Session | undefined): string | undefined {
 	if (!session) return undefined;
 	const running =

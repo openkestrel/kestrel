@@ -56,8 +56,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 	const [name, setName] = useState(() => participant.name() ?? "");
 	const [missing, setMissing] = useState<Record<string, string>>({});
 
-	// Deriving the preselection keeps it out of an effect: once the person changes anything it is
-	// held in the store instead, so their choice outlives a navigation.
+	// Derived rather than set in an effect, so only what the person changes is held in the store.
 	const preselected: NewWorkspaceDraft | undefined =
 		projects.data && agents.data
 			? {
@@ -85,7 +84,6 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 				params: { organization, workspace: opened.workspace.name },
 			});
 		},
-		// A refusal inside Options must not hide behind the disclosure.
 		onError: (error) => {
 			if (error instanceof Refused && OPTION_FIELDS.has(error.field ?? "")) {
 				hold({ options: true });

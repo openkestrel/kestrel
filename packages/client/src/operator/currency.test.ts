@@ -28,8 +28,6 @@ function channelOf(bus: Bus): LinkChannel {
 	};
 }
 
-// A stand-in operator: every GET opens an SSE stream the test pushes events into unless its URL
-// contains `refuse`, a paged read ends at once, and every POST answers no content.
 class Wire {
 	readonly seen: { url: string; method: string; after: string | null }[] = [];
 	readonly operations: Transport;

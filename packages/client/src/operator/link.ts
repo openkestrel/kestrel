@@ -3,10 +3,8 @@ export type LinkNotice =
 	| { resource: "session"; id: string }
 	| { resource: "queue" };
 
-// When a tab began wanting an Organization's notices, so the oldest want leads.
 export type Watching = { organization: string; at: number };
 
-// What a tab wants to follow, and whether it is visible while it wants it.
 export type Wish = { organization: string; workspace: string; at: number; visible: boolean };
 
 export type LinkMessage =
@@ -15,7 +13,6 @@ export type LinkMessage =
 			tab: string;
 			watching: Watching | null;
 			wish: Wish | null;
-			/** The Organization whose notice stream the tab has actually opened, not merely wants. */
 			open: string | null;
 	  }
 	| { kind: "bye"; tab: string }

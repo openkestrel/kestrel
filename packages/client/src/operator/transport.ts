@@ -59,7 +59,6 @@ export function transport(fetch: Fetch = (url, init) => globalThis.fetch(url, in
 			return (await answered(path, { method: "GET", signal })).text();
 		},
 
-		// For answers that may be bytes rather than JSON, such as a Workspace file read.
 		async bytes(
 			path: string,
 			{ signal }: { signal?: AbortSignal } = {},

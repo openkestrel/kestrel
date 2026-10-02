@@ -9,8 +9,7 @@ import type {
 import { operator, workspaceKey } from "./queries";
 import { operatorPath, type Transport } from "./transport";
 
-// Every live read of one Workspace's Instance, under the Workspace prefix so a Workspace change
-// notice refetches what the Work pane shows.
+// Under the Workspace prefix so a Workspace change notice refetches the Work pane.
 export const instanceKey = (organization: string, workspace: string) =>
 	[...workspaceKey(organization, workspace), "instance"] as const;
 
@@ -93,8 +92,6 @@ export async function readFile(
 	return { kind: "bytes", bytes: body.byteLength };
 }
 
-// Raw bytes are shown only when they decode as text without control characters; anything else is
-// reported by size so binary content never reaches the DOM.
 function textual(body: ArrayBuffer): string | undefined {
 	try {
 		const text = new TextDecoder("utf-8", { fatal: true }).decode(body);

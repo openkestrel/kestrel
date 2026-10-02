@@ -112,7 +112,6 @@ function wire(...events: WireEvent[]): string {
 		.join("");
 }
 
-// Serves the Workspace read, its Sessions and its Transcript with one Workspace's answers.
 class Reads {
 	workspace: Record<string, unknown> | undefined;
 	sessions: unknown[] | undefined;
@@ -243,7 +242,6 @@ test("a message sent before ready shows as held, then becomes the Brief", async 
 	await expect(page.locator("[data-held-message]")).toContainText("jack: the first brief");
 	await expect(page.locator("[data-preparing]")).toContainText("provisioning the Instance");
 
-	// The harness comes up: the held message is written down as the Brief.
 	reads.workspace = workspaceRecord(workspace, {
 		held_messages: [],
 		unfinished_session: {
@@ -283,8 +281,7 @@ test("a message sent before ready shows as held, then becomes the Brief", async 
 		},
 		{ name: "end", data: { because: "sealed" } },
 	);
-	// The control plane can drive this transition only with a supervisor, so the page is read
-	// fresh against the ready fixtures.
+	// Only a supervisor can drive this transition live, so the page reloads against the fixtures.
 	await page.reload();
 
 	await expect(page.locator("[data-held]")).toHaveCount(0);

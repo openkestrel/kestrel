@@ -5,8 +5,6 @@ export type FlowItem =
 	| { kind: "entry"; entry: Delivered }
 	| { kind: "activity"; activity: Activity };
 
-// Activities and shared-state entries in one order: an Activity's summary sits where its first
-// omitted seq does, ahead of the entry that closed it.
 export function flow(entries: Delivered[], activities: Activity[]): FlowItem[] {
 	const items: FlowItem[] = [
 		...entries.map((entry): FlowItem => ({ kind: "entry", entry })),
@@ -111,8 +109,7 @@ export function payloadReference(value: unknown): PayloadReference | undefined {
 
 export type PlanStep = { content: string; priority: string; status: string };
 
-// The plan entry schema in openapi/operator.json refers to itself, so a step is read here rather
-// than typed from the generated Entry.
+// The plan schema in openapi/operator.json refers to itself, so the generated Entry cannot type a step.
 export function planStep(value: unknown): PlanStep | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
 	if (!("content" in value) || typeof value.content !== "string") return undefined;

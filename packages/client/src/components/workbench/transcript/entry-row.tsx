@@ -147,8 +147,7 @@ function content(entry: Delivered, mode: Disclosure, row: Row): ReactNode {
 		case "tool_call":
 			return <ToolRow entry={value} mode={mode} {...row} />;
 		default: {
-			// Approvals, questions and reports arrive as new shared-state kinds; show them plainly
-			// rather than taking the pane down.
+			// Unknown shared-state kinds are shown plainly rather than taking the pane down.
 			const kind = (value as { type?: unknown }).type;
 			return (
 				<p className="text-muted-foreground text-xs">

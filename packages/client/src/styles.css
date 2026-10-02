@@ -6,7 +6,6 @@
 @custom-variant dark (@media (prefers-color-scheme: dark));
 
 @theme inline {
-    /* The three-column workbench needs 900 px; below it the panes become tabs. */
     --breakpoint-workbench: 900px;
     --font-heading: var(--font-mono);
     --font-mono: 'JetBrains Mono Variable', monospace;

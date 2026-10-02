@@ -150,7 +150,6 @@ test("two browsers follow under their declared names, including one declared aft
 	await jill.close();
 });
 
-// Serves the Work pane's live reads with one Workspace's answers.
 class Reads {
 	workspace: Record<string, unknown> | undefined;
 	work: Record<string, unknown> | undefined;

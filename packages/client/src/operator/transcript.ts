@@ -9,7 +9,6 @@ import type {
 } from "./generated";
 import { operatorPath, Refused, type StreamEvent, type Transport } from "./transport";
 
-// One delivered Transcript entry, in cursor order.
 export type Delivered = {
 	seq: number;
 	kind: TranscriptKind;
@@ -108,8 +107,7 @@ export class TranscriptMirror {
 		else this.changed();
 	}
 
-	// A summary identifies its whole Activity by first_seq, so a later replacement supersedes the
-	// earlier one; a closed summary is never reopened by a replay.
+	// A replay must never reopen a closed summary.
 	private summary(activity: Activity, cursor: string | undefined): void {
 		const known = this.activities.find((existing) => existing.first_seq === activity.first_seq);
 		if (known?.closed && !activity.closed) return;
@@ -184,9 +182,6 @@ export type FollowOptions = {
 	onRefused: (error: Refused) => void;
 };
 
-// A visible tab's follow: it stays open past caught-up, renews its lease, and reconnects from
-// the mirror's cursor whenever it is cut off. A refusal a retry cannot mend is handed back so
-// the view polls instead.
 export class FollowSession {
 	private controller: AbortController | null = null;
 	private renewal: ReturnType<typeof setTimeout> | undefined;
@@ -275,8 +270,6 @@ export class FollowSession {
 	}
 }
 
-// One paged read of everything after the mirror's cursor, ending at caught-up. It never
-// follows and so registers nobody.
 export async function page(
 	operations: Transport,
 	organization: string,
@@ -293,8 +286,7 @@ export async function page(
 
 export type Range = { first: number; last: number };
 
-// Expands one Activity: the entries its summary counted, read from the range with every kind.
-// These never enter the mirror, whose cursor already stands past them.
+// These entries never enter the mirror, whose cursor already stands past them.
 export async function readRange(
 	operations: Transport,
 	organization: string,

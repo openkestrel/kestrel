@@ -18,7 +18,6 @@ export function preparingStep(preparing: Session["preparing"] | undefined): stri
 	}
 }
 
-// What the Session is doing while a person writes its first message, or why it stopped.
 export function sessionStatusLine(session: Session | undefined): string | undefined {
 	if (!session) return undefined;
 	switch (session.state) {
@@ -37,7 +36,6 @@ export function sessionStatusLine(session: Session | undefined): string | undefi
 	}
 }
 
-// What the New Workspace form is handed when a person carries a sealed Workspace on.
 export function continueDraft(record: Workspace): Partial<NewWorkspaceDraft> {
 	return {
 		project: record.project,

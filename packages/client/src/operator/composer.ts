@@ -23,7 +23,6 @@ export function postLabel(state: Session["state"] | undefined): string {
 	return state === "working" ? "Add to next turn" : "Post";
 }
 
-// A working Turn is the harness's; an option write is refused, so the UI offers none.
 export function mayWriteOptions(state: Session["state"] | undefined): boolean {
 	return state !== "working";
 }
@@ -90,7 +89,7 @@ export function cacheWarning(
 		: `Changing this makes the next turn re-read the context without the prompt cache: ${tokens.toLocaleString()} tokens`;
 }
 
-// Send now is two writes. Only one of them landing is said plainly, never as an atomic success.
+// Send now is two writes, so one landing alone must not read as success.
 export function partialReport(posted: boolean, interrupted: boolean): string | undefined {
 	if (posted && !interrupted) {
 		return "The message was posted, but the Turn was not interrupted";

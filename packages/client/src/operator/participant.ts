@@ -17,8 +17,7 @@ export function nameRefusal(name: string): string | null {
 
 type Storage = Pick<globalThis.Storage, "getItem" | "setItem" | "removeItem">;
 
-// The name a person declares for their own writes, remembered per browser. It is never
-// authentication: the operator boundary's participant rule refuses what this cannot.
+// Never authentication: the operator boundary's participant rule refuses what this cannot.
 export class Participant {
 	private readonly storage: Storage | null;
 	private readonly listeners = new Set<() => void>();

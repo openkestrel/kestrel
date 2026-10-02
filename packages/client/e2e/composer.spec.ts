@@ -71,8 +71,6 @@ async function visiting(page: Page, workspace: string): Promise<void> {
 	await expect(page.locator("[data-composer]")).toBeVisible();
 }
 
-// The client binary as a second, named follower: it holds a follow lease the browser can see in
-// the presence event, and prints each entry it is handed as JSON.
 function following(workspace: string, participant: string): { lines: string[]; errors: string[] } {
 	const child = spawn(
 		CLI,
@@ -219,9 +217,8 @@ function modeOption(warns_cache: boolean) {
 
 type Answer = { status: number; body: unknown };
 
-// The control plane cannot force a held message, a working Turn or a harness refusal without a
-// supervisor, so this spec scripts the Session and Workspace reads and the writes that answer
-// them; the Transcript, presence and the name rule stay the real control plane's.
+// Held messages, working Turns and harness refusals need a supervisor, so the Session and
+// Workspace reads and writes are scripted while the Transcript, presence and name rule stay real.
 class Scripted {
 	readonly name: string;
 	workspace: Record<string, unknown>;

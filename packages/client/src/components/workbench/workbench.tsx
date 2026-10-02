@@ -9,8 +9,6 @@ const PANES = [
 
 type Pane = (typeof PANES)[number]["value"];
 
-// Below the workbench breakpoint (900px) the panes become tabs; above it every pane shows and
-// the tab list is hidden.
 export function Workbench(panes: Record<Pane, ReactNode> & { initial?: Pane }) {
 	const [shown, setShown] = useState<Pane>(panes.initial ?? "transcript");
 

@@ -44,7 +44,7 @@ export const sessionQuery = (organization: string, session: string) =>
 			}),
 	});
 
-// A Workspace's Sessions, oldest first; its latest Session is the one a row shows.
+// Oldest first, so the Session a row shows is the last.
 export const workspaceSessionsQuery = (organization: string, workspace: string) =>
 	queryOptions({
 		queryKey: [...sessionsKey(organization), "workspace", workspace],
@@ -74,12 +74,10 @@ export const queueQuery = (organization: string) =>
 			operator.read<Queue>(operatorPath("organizations", organization, "queue"), { signal }),
 	});
 
-// Expansions and payloads are lazy reads of recorded entries, not current-state views: they sit
-// outside the Organization/Workspace prefix so a change notice never refetches them.
+// Outside the Organization/Workspace prefix so a change notice never refetches recorded entries.
 export const transcriptKey = (organization: string, workspace: string) =>
 	["transcript", organization, workspace] as const;
 
-// One Activity's expansion: its own seq range, every kind, read on demand.
 export const transcriptRangeQuery = (organization: string, workspace: string, range: Range) =>
 	queryOptions({
 		queryKey: [...transcriptKey(organization, workspace), range.first, range.last],
@@ -105,7 +103,6 @@ export const transcriptPayloadQuery = (organization: string, workspace: string, 
 			),
 	});
 
-// Every current-state read of an Organization, and the Organization list; never a transcript cache.
 export function refetchOrganization(client: QueryClient, organization: string): Promise<void> {
 	return client.invalidateQueries({
 		queryKey: organizationsQuery.queryKey,
@@ -113,8 +110,7 @@ export function refetchOrganization(client: QueryClient, organization: string): 
 	});
 }
 
-// A notice names its resource by id while read keys carry Workspace names, so the cached reads
-// translate one to the other.
+// Notices name a Workspace by id but read keys carry its name, so the cache maps between them.
 export function refetchNoticed(
 	client: QueryClient,
 	organization: string,
@@ -154,7 +150,7 @@ function workspaceNames(client: QueryClient, organization: string, id: string): 
 	);
 }
 
-// The Workspaces whose cached Session lists hold the Session; none when it is new to this tab.
+// Empty for a Session new to this tab, which then refetches every Workspace's Session list.
 function sessionHolders(client: QueryClient, organization: string, id: string): Set<unknown> {
 	const holding = new Set<unknown>();
 	for (const query of client

@@ -1,7 +1,5 @@
 import type { Queue, QueueReason } from "./generated";
 
-// What a Session about to open would do, in one line and never a start time. A Briefless one is
-// dispatched without an Active-Work Slot; a briefed one waits for a slot or starts.
 export function openingQueueLine(queue: Queue | undefined, briefed: boolean): string {
 	if (!queue?.work_role) {
 		return "No work role is dispatching, so the Session would wait.";
@@ -21,8 +19,6 @@ export function openingQueueLine(queue: Queue | undefined, briefed: boolean): st
 	return `The Session would wait: all ${limit} Active-Work Slots are occupied.`;
 }
 
-// Where a Workspace's Session stands in the queue, when it is in it: its FIFO place, or the reason
-// it has none.
 export function sessionQueueLine(queue: Queue, workspace: string): string | undefined {
 	const queued = queue.queued.find((row) => row.workspace === workspace);
 	if (queued) {

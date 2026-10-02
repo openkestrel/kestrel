@@ -104,7 +104,6 @@ function tool(workspace: Workspace, seq: number, overrides: Record<string, unkno
 	};
 }
 
-// Serves the Transcript over SSE: a scripted follow, an on-demand seq range and payloads.
 class Scripted {
 	readonly requests: Request[] = [];
 	readonly ranges: { first: number; last: number; kinds: string | null }[] = [];

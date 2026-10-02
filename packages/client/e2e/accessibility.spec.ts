@@ -86,7 +86,6 @@ test("the Transcript announces shared-state entries and restrains tool chatter",
 	await page.goto(`/organizations/acme/workspaces/${body.workspace.name}`);
 	await expect(page.getByRole("heading", { name: body.workspace.name })).toBeVisible();
 
-	// The visible log is not itself a live region; a separate polite line carries announcements.
 	await expect(page.getByRole("log")).toHaveAttribute("aria-live", "off");
 	const announcer = page.locator("[data-transcript-announcement]");
 	await expect(announcer).toHaveAttribute("aria-live", "polite");

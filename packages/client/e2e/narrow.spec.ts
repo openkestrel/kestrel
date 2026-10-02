@@ -90,7 +90,6 @@ test("selection and focus survive a change of area", async ({ page, request }) =
 	const workspace = await opened(request);
 	await page.goto(`/organizations/acme/workspaces/${workspace.name}`);
 
-	// Choose a Diff scope, then leave and come back by keyboard.
 	const panes = page.getByRole("tablist", { name: "Panes" });
 	await panes.getByRole("tab", { name: "Work", exact: true }).click();
 	const work = page.getByRole("region", { name: "Work", exact: true });

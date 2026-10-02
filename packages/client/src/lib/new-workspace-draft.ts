@@ -1,5 +1,4 @@
-// The New Workspace form's contents for the life of the page: in memory, keyed by Organization,
-// and never written anywhere a reload could find them.
+// Deliberately in memory only: a reload starts the form empty.
 export type NewWorkspaceDraft = {
 	project: string;
 	agent: string;

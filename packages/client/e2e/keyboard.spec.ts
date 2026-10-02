@@ -30,7 +30,6 @@ async function opened(request: APIRequestContext): Promise<{ id: string; name: s
 	return body.workspace;
 }
 
-// The keyboard-only path: focus reaches a target by Tab alone.
 async function tabTo(page: Page, target: Locator, what: string, tries = 80): Promise<void> {
 	for (let index = 0; index < tries; index += 1) {
 		// oxlint-disable-next-line no-await-in-loop -- a keyboard-only path steps one Tab at a time.
@@ -172,7 +171,6 @@ test("a keyboard-only pass finds a running Session, follows it, opens a diff and
 	await tabTo(page, post, "the Post button");
 	await page.keyboard.press("Enter");
 
-	// The first write asks for a name; the name gate is reachable and takes Enter.
 	const name = page.getByLabel("Your name");
 	await expect(name).toBeVisible();
 	await tabTo(page, name, "the name gate");

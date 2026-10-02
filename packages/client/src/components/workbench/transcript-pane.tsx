@@ -51,8 +51,7 @@ export function TranscriptPane({
 	const [announced, setAnnounced] = useState("");
 	const floor = useRef<number | undefined>(undefined);
 
-	// Only new shared-state entries are announced: an Activity's tool and narration detail is not,
-	// and neither is the history a fresh mount replays.
+	// The first pass only sets the floor, so the history a fresh mount replays is not announced.
 	useEffect(() => {
 		const shared = transcript.entries.filter((entry) => entry.kind === "shared_state");
 		const highest = shared.at(-1)?.seq;
@@ -67,7 +66,6 @@ export function TranscriptPane({
 		if (last) setAnnounced(entryText(last.entry));
 	}, [transcript.entries]);
 
-	// A phase change is what a listener needs; the mirror's tools and usage churn stay silent.
 	const phase = session ? sessionPhase(session) : undefined;
 	const phaseFloor = useRef<string | undefined>(undefined);
 	useEffect(() => {

@@ -14,9 +14,7 @@ import { refetchNoticed, refetchOrganization, workspaceKey } from "./queries";
 import { FollowSession, page, TranscriptMirror, type TranscriptSnapshot } from "./transcript";
 import { operatorPath, Refused, type Transport } from "./transport";
 
-// Four SSE connections per origin at most, leaving two of the six HTTP/1.1 connections for
-// ordinary reads and writes. Each watched Organization's notice stream takes one first; visible
-// views follow in what is left.
+// Leaves two of the browser's six HTTP/1.1 connections per origin for ordinary reads and writes.
 const STREAMS = 4;
 const HEARTBEAT = 2_000;
 const LIVENESS = 5_000;
@@ -41,8 +39,6 @@ export type CurrencyOptions = {
 	poll?: number;
 };
 
-// Everything this tab shares with the other tabs on its origin: which one holds the
-// Organization's notice stream, and which visible views hold a follow slot.
 export class Currency {
 	readonly queryClient: QueryClient;
 	readonly operations: Transport;
@@ -91,8 +87,6 @@ export class Currency {
 		this.unnamed = this.named?.subscribe(() => this.renamed()) ?? null;
 	}
 
-	// The Organization this tab reads. Callers are route loads; the oldest want leads, so a
-	// tab that has been here longest keeps the notice stream.
 	watch(organization: string | null): void {
 		if (this.watching?.organization === organization) return;
 		this.watching = organization === null ? null : { organization, at: this.now() };
@@ -100,7 +94,6 @@ export class Currency {
 		this.announce(true);
 	}
 
-	// Route loads await this before reading, so the shared stream is open first.
 	ready(organization: string): Promise<void> {
 		if (this.readyToRead(organization)) return Promise.resolve();
 		this.settle();
@@ -128,7 +121,6 @@ export class Currency {
 		return controller;
 	}
 
-	// Mount a visible view of a Workspace. Hidden or beyond the slot budget, the view polls.
 	watchFollow(organization: string, workspace: string): void {
 		const controller = this.controllerFor(organization, workspace);
 		controller.retain();
@@ -297,8 +289,7 @@ export class Currency {
 		return false;
 	}
 
-	// A route load waiting to read is released once the election has run, so a refused or
-	// unreachable control plane never hangs the view.
+	// Released even with no stream open, so an unreachable control plane never hangs a route load.
 	private resolveReadies(attempted: boolean): void {
 		for (const [organization, waiting] of this.readies) {
 			if (!attempted && !this.readyToRead(organization)) continue;
@@ -334,7 +325,6 @@ export class Currency {
 		return candidates[0]?.tab;
 	}
 
-	// The Organizations whose notice streams fit the budget, oldest want first.
 	private streamed(): string[] {
 		const oldest = new Map<string, { tab: string; at: number }>();
 		for (const [tab, peer] of this.peers) {
@@ -462,8 +452,6 @@ export type FollowOptions = {
 	poll?: number;
 };
 
-// One viewed Workspace: the mirror of its Transcript, held while the view is visible and a
-// follow slot is held, and paged by polling when it is not.
 export class FollowController {
 	readonly mirror: TranscriptMirror;
 	readonly organization: string;
@@ -574,7 +562,6 @@ export class FollowController {
 				this.pollingController?.signal,
 			);
 		} catch (error) {
-			// A refusal a retry cannot mend ends the polling; anything else is tried on the next tick.
 			if (error instanceof Refused && error.status < 500) this.stopPolling();
 		} finally {
 			this.inFlight = false;

@@ -9,8 +9,6 @@ import { postMessage } from "#/operator/getting-ready";
 import { participant } from "#/operator/participant";
 import { workspaceKey } from "#/operator/queries";
 
-// The least a person needs to send the Brief. The composer ticket owns turns, held-message edits,
-// interruption and options; this only writes a message and shows what is held.
 export function BriefComposer({
 	organization,
 	record,
@@ -18,8 +16,7 @@ export function BriefComposer({
 }: {
 	organization: string;
 	record: Workspace | undefined;
-	// Once the Brief is written the turn composer takes over; this keeps its message field only so
-	// the element a person was typing into is not torn out from under them mid-handoff.
+	// Still rendered once briefed so the field a person is typing into is not torn out mid-handoff.
 	briefed: boolean;
 }) {
 	const queryClient = useQueryClient();
