@@ -44,6 +44,9 @@ const PROMPT_SEPARATOR: char = '\u{1e}';
 const VANISHING: Duration = Duration::from_millis(100);
 /// How long `BurstsUsage` lets the Session's start settle before it reports.
 const BURST_SETTLED: Duration = Duration::from_millis(1_000);
+/// Between `BurstsUsage`'s updates: the burst still fits one usage window, but is long enough that
+/// a heartbeat landing inside it would carry a value the window has not reported.
+const BURST_SPACING: Duration = Duration::from_millis(200);
 /// How long `BurstsUsage` stays in its turn after reporting, so a follower sees the live value.
 const BURST_PATIENCE: Duration = Duration::from_millis(2_500);
 
@@ -358,6 +361,7 @@ async fn play(
                 connection,
                 SessionUpdate::UsageUpdate(UsageUpdate::new(used, BURSTED_SIZE)),
             )?;
+            tokio::time::sleep(BURST_SPACING).await;
         }
         // Long enough for the trailing-edge usage report to go up, and to watch for notices.
         tokio::time::sleep(BURST_PATIENCE).await;

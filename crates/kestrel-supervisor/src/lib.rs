@@ -91,6 +91,9 @@ struct Carrying {
     /// the bookkeeping report.
     usage: Option<link::Usage>,
     usage_due: Option<tokio::time::Instant>,
+    /// What the last usage report said, which a snapshot carries so that a value still inside its
+    /// window never reaches a follower ahead of the trailing edge.
+    usage_reported: Option<link::Usage>,
 }
 
 impl Carrying {
@@ -181,8 +184,8 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
     status
 }
 
-/// Sends the Session's whole transient state, with what the harness has spent folded in: a
-/// snapshot that missed the usage report still carries the latest value.
+/// Sends the Session's whole transient state, with what was last reported spent folded in, since
+/// the snapshot replaces the usage the control plane holds.
 async fn report_state(link: &Link, carrying: &Carrying) -> Result<(), link::Error> {
     let Some(Report::SessionState {
         tools,
@@ -197,7 +200,7 @@ async fn report_state(link: &Link, carrying: &Carrying) -> Result<(), link::Erro
         tools: tools.clone(),
         message_buffering: *message_buffering,
         thought_buffering: *thought_buffering,
-        usage: carrying.usage.clone(),
+        usage: carrying.usage_reported.clone(),
     };
 
     match tokio::time::timeout(
@@ -595,8 +598,15 @@ async fn say_usage(
     {
         return Ok(());
     }
-    link.report(&Report::Usage { usage }, Some(&carrying.session), None)
-        .await?;
+    link.report(
+        &Report::Usage {
+            usage: usage.clone(),
+        },
+        Some(&carrying.session),
+        None,
+    )
+    .await?;
+    carrying.usage_reported = Some(usage);
     carrying.usage_due = None;
     diagnostics.info(&format!("reported usage for {}", carrying.session));
 
@@ -822,6 +832,7 @@ async fn start_carrying(
         info_due: None,
         usage: None,
         usage_due: None,
+        usage_reported: None,
     };
     match checkout::check_out(&carrying.checkout).await {
         Ok(()) => {
