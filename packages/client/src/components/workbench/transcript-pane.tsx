@@ -77,9 +77,7 @@ export function TranscriptPane({
 	const hasBrief = transcript.entries.some(({ entry }) => entry.type === "brief");
 	const settling =
 		session === undefined || session.state === "queued" || session.state === "unbriefed";
-	// A mirror resumed from a stored cursor means this browser has followed the Workspace before,
-	// so the turn composer owns it and the Brief composer stays out of the way.
-	const briefing = read.state === "open" && !hasBrief && settling && !transcript.resumed;
+	const briefing = read.state === "open" && !hasBrief && settling;
 
 	return (
 		<>

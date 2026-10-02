@@ -115,7 +115,7 @@ export class Currency {
 				workspace,
 				operations: this.operations,
 				participant: this.participant,
-				mirror: new TranscriptMirror(`kestrel:transcript:${organization}:${workspace}`),
+				mirror: new TranscriptMirror(),
 				refetch: () => this.refetchWorkspace(organization, workspace),
 				poll: this.pollMillis,
 			});

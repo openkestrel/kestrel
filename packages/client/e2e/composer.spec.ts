@@ -311,6 +311,9 @@ test("the first write asks for a name and remembers it in this browser", async (
 
 	await page.reload();
 	await expect(page.getByText("writing as jack")).toBeVisible();
+	await expect(
+		page.locator("[data-seq]").filter({ hasText: "jack: hello from the browser" }),
+	).toBeVisible({ timeout: 20_000 });
 
 	await page.getByRole("button", { name: "change" }).click();
 	await page.getByLabel("Your name").fill("jill");

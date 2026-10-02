@@ -25,8 +25,6 @@ export type TranscriptSnapshot = {
 	cursor: string | undefined;
 	presence: Presence | undefined;
 	sealed: boolean;
-	/** The mirror was created from a cursor this browser had already stored. */
-	resumed: boolean;
 };
 
 const LIMIT = 500;
@@ -45,16 +43,7 @@ export class TranscriptMirror {
 	private presenceValue: Presence | undefined;
 	private sealedValue = false;
 	private readonly listeners = new Set<() => void>();
-	private resumedValue = false;
-	private cached: TranscriptSnapshot;
-
-	constructor(private readonly storageKey?: string) {
-		const restored = this.restore();
-		this.cursorValue = restored?.cursor;
-		this.highest = restored?.seq ?? 0;
-		this.resumedValue = restored !== undefined;
-		this.cached = this.snapshotOf();
-	}
+	private cached: TranscriptSnapshot = this.snapshotOf();
 
 	get cursor(): string | undefined {
 		return this.cursorValue;
@@ -148,7 +137,6 @@ export class TranscriptMirror {
 		this.cursorValue = cursor;
 		const seq = cursorSeq(cursor);
 		if (seq !== undefined) this.highest = Math.max(this.highest, seq);
-		this.persist(cursor);
 		this.changed();
 	}
 
@@ -170,27 +158,7 @@ export class TranscriptMirror {
 			cursor: this.cursorValue,
 			presence: this.presenceValue,
 			sealed: this.sealedValue,
-			resumed: this.resumedValue,
 		};
-	}
-
-	private restore(): { cursor: string; seq: number } | undefined {
-		if (!this.storageKey || typeof sessionStorage === "undefined") return undefined;
-		try {
-			const cursor = sessionStorage.getItem(this.storageKey);
-			if (!cursor) return undefined;
-			const seq = cursorSeq(cursor);
-			return seq !== undefined && seq >= 0 ? { cursor, seq } : undefined;
-		} catch {
-			return undefined;
-		}
-	}
-
-	private persist(cursor: string): void {
-		if (!this.storageKey || typeof sessionStorage === "undefined") return;
-		try {
-			sessionStorage.setItem(this.storageKey, cursor);
-		} catch {}
 	}
 }
 
