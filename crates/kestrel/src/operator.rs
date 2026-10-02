@@ -669,9 +669,10 @@ struct SessionOptionRecord {
     warns_cache: bool,
 }
 
-/// ADR-0041: a Model, ThoughtLevel or ModelConfig option warns that the next Turn re-reads the
-/// context uncached; Mode never does, and a category the harness keeps the cache for does not
-/// either. At 0.3 the table holds only Claude's per-message effort.
+/// ADR-0041: no adapter reports which option categories keep the prompt cache, so kestrel lists
+/// them per harness.
+const CACHE_KEPT_ACROSS: &[(&str, &str)] = &[("claude", domain::SessionOption::THOUGHT_LEVEL)];
+
 fn warns_cache(harness: &str, category: Option<&str>) -> bool {
     let Some(category) = category else {
         return false;
@@ -685,7 +686,7 @@ fn warns_cache(harness: &str, category: Option<&str>) -> bool {
         return false;
     }
 
-    !(harness == "claude" && category == domain::SessionOption::THOUGHT_LEVEL)
+    !CACHE_KEPT_ACROSS.contains(&(harness, category))
 }
 
 #[derive(Serialize)]
