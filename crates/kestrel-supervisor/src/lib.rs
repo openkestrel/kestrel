@@ -341,8 +341,18 @@ async fn attend(
         && carrying.prompt.is_none()
         && carrying.ready
     {
-        link.report(&Report::Ready, Some(&carrying.session), None)
-            .await?;
+        match link
+            .report(&Report::Ready, Some(&carrying.session), None)
+            .await
+        {
+            Ok(()) => {}
+            Err(link::Error::Session(why)) => {
+                if let Some(carrying) = supervising.carrying.take() {
+                    carrying.let_go(&why, diagnostics).await;
+                }
+            }
+            Err(error) => return Err(error),
+        }
     }
     report_work(link, supervising, true).await?;
     // Whatever the Session held while the link was down goes up again now it is not: the
@@ -453,7 +463,15 @@ async fn attend(
             }
             _ = checking.tick() => {
                 if let Some(carrying) = &supervising.carrying {
-                    report_state(link, carrying).await?;
+                    match report_state(link, carrying).await {
+                        Ok(()) => {}
+                        Err(link::Error::Session(why)) => {
+                            if let Some(carrying) = supervising.carrying.take() {
+                                carrying.let_go(&why, diagnostics).await;
+                            }
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
                 if supervising.carrying.as_ref().is_some_and(|carrying| carrying.working) {
                     report_work(link, supervising, false).await?;
