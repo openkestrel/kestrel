@@ -16,6 +16,8 @@ FROM caddy@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb
 
 COPY images/kestrel-client/Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /src/packages/client/dist/client /srv
+# Caddy's local CA lives here; compose keeps it on a volume so the operator trusts it once.
+RUN mkdir -p /data/caddy && chown -R nobody /data
 
 ENV KESTREL_CONTROL_PLANE=http://kestrel:7718
 EXPOSE 8080

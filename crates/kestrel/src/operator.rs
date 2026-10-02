@@ -311,7 +311,14 @@ fn addressed_from_here(request: &Request) -> Result<(), Refused> {
 
     match request.headers().get(ORIGIN).map(|origin| origin.to_str()) {
         None => Ok(()),
-        Some(Ok(origin)) if origin.eq_ignore_ascii_case(&format!("http://{host}")) => Ok(()),
+        // Either scheme, because the web server in front terminates TLS and forwards plain HTTP.
+        Some(Ok(origin))
+            if ["http", "https"]
+                .iter()
+                .any(|scheme| origin.eq_ignore_ascii_case(&format!("{scheme}://{host}"))) =>
+        {
+            Ok(())
+        }
         Some(_) => Err(Refused::Forbidden(
             "the request comes from an origin other than this control plane".to_owned(),
         )),

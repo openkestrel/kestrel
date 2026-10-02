@@ -1,23 +1,20 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { createRootRouteWithContext, HeadContent, Link, Scripts } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import type { Currency } from "#/operator/currency";
 import appCss from "../styles.css?url";
 
-export const Route = createRootRouteWithContext<{ queryClient: QueryClient; currency: Currency }>()(
-	{
-		head: () => ({
-			meta: [
-				{ charSet: "utf-8" },
-				{ name: "viewport", content: "width=device-width, initial-scale=1" },
-				{ title: "kestrel" },
-			],
-			links: [{ rel: "stylesheet", href: appCss }],
-		}),
-		shellComponent: Document,
-		notFoundComponent: NotFound,
-	},
-);
+export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
+	head: () => ({
+		meta: [
+			{ charSet: "utf-8" },
+			{ name: "viewport", content: "width=device-width, initial-scale=1" },
+			{ title: "kestrel" },
+		],
+		links: [{ rel: "stylesheet", href: appCss }],
+	}),
+	shellComponent: Document,
+	notFoundComponent: NotFound,
+});
 
 function Document({ children }: { children: ReactNode }) {
 	return (

@@ -57,7 +57,8 @@ services:
       start_period: 30s
 
   # The browser Client, on the operator boundary's origin: its assets, and `/operator` forwarded
-  # to the control plane. It adds no trust, so it is published on the host's loopback too.
+  # to the control plane, over HTTPS from Caddy's local CA. It adds no trust, so it is published
+  # on the host's loopback too.
   client:
     image: ${KESTREL_CLIENT_IMAGE:-kestrel-client}
     build:
@@ -67,6 +68,8 @@ services:
       kestrel:
         condition: service_healthy
     networks: [operator]
+    volumes:
+      - kestrel-client:/data
     ports:
       - 127.0.0.1:${KESTREL_CLIENT_PORT-7719}:8080
     restart: unless-stopped
@@ -96,3 +99,5 @@ networks:
 volumes:
   kestrel:
     name: ${KESTREL_VOLUME:-kestrel}
+  # The CA the operator's browser trusts; a new one each start would mean trusting it again.
+  kestrel-client:

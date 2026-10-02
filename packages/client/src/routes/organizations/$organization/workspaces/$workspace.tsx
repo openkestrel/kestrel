@@ -8,6 +8,7 @@ import { TranscriptPane } from "#/components/workbench/transcript-pane";
 import { WorkPane } from "#/components/workbench/work-pane";
 import { PaneHeading, Workbench } from "#/components/workbench/workbench";
 import { WorkspacesPane } from "#/components/workbench/workspaces-pane";
+import { useTranscript } from "#/operator/follow";
 import {
 	sessionQuery,
 	workspaceQuery,
@@ -17,15 +18,11 @@ import {
 
 export const Route = createFileRoute("/organizations/$organization/workspaces/$workspace")({
 	component: WorkspaceView,
-	beforeLoad: async ({ context, params, preload }) => {
-		context.currency.watch(params.organization);
-		if (!preload) await context.currency.ready(params.organization);
-	},
 });
 
 function WorkspaceView() {
 	const { organization, workspace } = Route.useParams();
-	const { currency } = Route.useRouteContext();
+	const transcript = useTranscript(organization, workspace);
 	const shown = useQuery(workspaceQuery(organization, workspace));
 	const sessions = useQuery(workspaceSessionsQuery(organization, workspace));
 	const known = useQuery(workspacesQuery(organization));
@@ -52,7 +49,7 @@ function WorkspaceView() {
 							<SessionQueueLine organization={organization} workspace={shown.data.id} />
 							<SessionStatus organization={organization} record={shown.data} />
 							<TranscriptPane
-								currency={currency}
+								transcript={transcript}
 								organization={organization}
 								read={shown.data}
 								session={session.data}
@@ -65,7 +62,7 @@ function WorkspaceView() {
 			}
 			work={
 				<WorkPane
-					currency={currency}
+					transcript={transcript}
 					organization={organization}
 					workspace={workspace}
 					record={shown.data}

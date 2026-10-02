@@ -207,7 +207,9 @@ headings. Each command's `--json` returns the operator response.
 `packages/client` ([README](../../packages/client/README.md)) is a static SPA. The control plane
 does not serve it: a web server in front does, on the operator interface's origin
 ([ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md)). In compose that is
-`images/kestrel-client`, Caddy on the host's loopback at 7719, whose Caddyfile answers:
+`images/kestrel-client`, Caddy on the host's loopback at 7719, over HTTPS from its own local CA so
+the browser speaks HTTP/2 and every tab opens its own event streams
+([ADR-0044](../adr/0044-the-browser-client-is-served-over-https.md)). Its Caddyfile answers:
 
 | Path | Answer |
 | --- | --- |
@@ -218,3 +220,5 @@ does not serve it: a web server in front does, on the operator interface's origi
 The Client's types come from
 `openapi/operator.json`; its transport (`src/operator/transport.ts`) parses a refusal's `message`
 and, when present, `field` and `phase`, and reads SSE with `Last-Event-ID` as the cursor.
+`src/operator/follow.ts` holds the two live reads: an Organization route's change notices, which
+invalidate TanStack Query keys, and a Workspace route's Transcript follow.

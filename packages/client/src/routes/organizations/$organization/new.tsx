@@ -5,10 +5,6 @@ import { WorkspacesPane } from "#/components/workbench/workspaces-pane";
 
 export const Route = createFileRoute("/organizations/$organization/new")({
 	component: NewWorkspace,
-	beforeLoad: async ({ context, params, preload }) => {
-		context.currency.watch(params.organization);
-		if (!preload) await context.currency.ready(params.organization);
-	},
 });
 
 function NewWorkspace() {

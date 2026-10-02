@@ -154,11 +154,13 @@ async fn a_page_served_from_the_boundary_itself_is_answered() {
 
     for host in ["127.0.0.1", "127.0.0.2", "localhost", "[::1]"] {
         let host = format!("{host}:{port}");
-        assert_eq!(
-            got(&kestrel, Some(&host), Some(&format!("http://{host}"))).await,
-            StatusCode::OK,
-            "{host}"
-        );
+        for scheme in ["http", "https"] {
+            assert_eq!(
+                got(&kestrel, Some(&host), Some(&format!("{scheme}://{host}"))).await,
+                StatusCode::OK,
+                "{scheme}://{host}"
+            );
+        }
     }
 }
 
@@ -171,7 +173,7 @@ async fn another_page_on_this_machine_is_elsewhere() {
     for origin in [
         "http://127.0.0.1:1",
         "http://localhost:3000",
-        &format!("https://{host}"),
+        "https://127.0.0.1:1",
         "null",
     ] {
         assert_eq!(

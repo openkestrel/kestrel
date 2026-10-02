@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
-import type { Currency } from "#/operator/currency";
 import type { Workspace } from "#/operator/generated";
+import type { TranscriptSnapshot } from "#/operator/transcript";
 import { DiffTab } from "./work/diff-tab";
 import { FilesTab } from "./work/files-tab";
 import { PeopleTab } from "./work/people-tab";
@@ -20,12 +20,12 @@ const VIEWS = [
 type View = (typeof VIEWS)[number]["value"];
 
 export function WorkPane({
-	currency,
+	transcript,
 	organization,
 	workspace,
 	record,
 }: {
-	currency: Currency;
+	transcript: TranscriptSnapshot;
 	organization: string;
 	workspace: string;
 	record: Workspace | undefined;
@@ -60,7 +60,7 @@ export function WorkPane({
 					<SessionsTab organization={organization} workspace={workspace} />
 				</TabsContent>
 				<TabsContent value="people" keepMounted className="min-h-0 flex-1 overflow-y-auto">
-					<PeopleTab currency={currency} organization={organization} workspace={workspace} />
+					<PeopleTab transcript={transcript} />
 				</TabsContent>
 			</Tabs>
 		</>

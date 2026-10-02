@@ -8,8 +8,6 @@
 //! without bringing its stack down can be swept by the next suite that runs.
 
 use std::fs::{File, OpenOptions};
-use std::io::{Read as _, Write as _};
-use std::net::TcpStream;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::process::Command;
@@ -150,32 +148,38 @@ impl Stack {
         format!("http://{published}")
     }
 
-    /// What the browser Client's port answers `path` with, as a browser on this host asks it.
+    /// What the browser Client's port answers `path` with, as a browser on this host asks it:
+    /// over HTTP/2, trusting Caddy's local CA as the operator has.
     pub fn what_the_client_serves(&self, path: &str) -> (u16, String) {
         let address = completed(
             &["port", CLIENT, "8080"],
             "finding the published Client port",
         );
-        let mut client =
-            TcpStream::connect(&address).expect("the published Client port should accept");
-        write!(
-            client,
-            "GET {path} HTTP/1.0\r\nHost: {address}\r\nOrigin: http://{address}\r\n\r\n"
-        )
-        .expect("the published Client port should take a request");
+        let asked = Command::new("curl")
+            .args([
+                "--silent",
+                "--insecure",
+                "--http2",
+                "--write-out",
+                "\n%{http_version} %{http_code}",
+            ])
+            .args(["--header", &format!("Origin: https://{address}")])
+            .arg(format!("https://{address}{path}"))
+            .output()
+            .expect("curl should run");
+        assert!(asked.status.success(), "curl failed: {asked:?}");
 
-        let mut answered = String::new();
-        client
-            .read_to_string(&mut answered)
-            .expect("the Client should answer");
-        let (head, body) = answered
-            .split_once("\r\n\r\n")
-            .unwrap_or_else(|| panic!("{path} was answered with no body: {answered}"));
-        let status = head
-            .split_whitespace()
-            .nth(1)
-            .and_then(|status| status.parse().ok())
-            .unwrap_or_else(|| panic!("{path} was answered with no status: {head}"));
+        let answered = String::from_utf8_lossy(&asked.stdout);
+        let (body, written) = answered
+            .rsplit_once('\n')
+            .unwrap_or_else(|| panic!("{path} was answered with nothing: {answered}"));
+        let (version, status) = written
+            .split_once(' ')
+            .unwrap_or_else(|| panic!("{path} was answered with no status: {written}"));
+        assert_eq!(version, "2", "{path} was answered over HTTP/{version}");
+        let status = status
+            .parse()
+            .unwrap_or_else(|_| panic!("{path} was answered with no status: {written}"));
 
         (status, body.to_owned())
     }

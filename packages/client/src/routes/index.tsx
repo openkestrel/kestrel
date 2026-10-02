@@ -6,7 +6,6 @@ import { organizationsQuery } from "#/operator/queries";
 
 export const Route = createFileRoute("/")({
 	component: Organizations,
-	beforeLoad: ({ context }) => context.currency.watch(null),
 });
 
 function Organizations() {

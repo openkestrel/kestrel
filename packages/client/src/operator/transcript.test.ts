@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { cursorSeq, FollowSession, page, readRange, TranscriptMirror } from "./transcript";
+import { cursorSeq, FollowSession, readRange, TranscriptMirror } from "./transcript";
 import { transport, type StreamEvent } from "./transport";
 
 const encoder = new TextEncoder();
@@ -201,14 +201,12 @@ describe("a follow", () => {
 			);
 		});
 		const mirror = new TranscriptMirror();
-		const refusals: unknown[] = [];
 		const session = new FollowSession({
 			operations: operator,
 			organization: "acme",
 			workspace: "brave-otter",
 			participant: "operator",
 			mirror,
-			onRefused: (error) => refusals.push(error),
 		});
 
 		session.start();
@@ -220,33 +218,26 @@ describe("a follow", () => {
 		expect(transcripts).toBe(2);
 		expect(new Headers(seen[0]?.headers).get("last-event-id")).toBeNull();
 		expect(new Headers(seen[1]?.headers).get("last-event-id")).toBe("w:2");
-		expect(refusals).toEqual([]);
 	});
 
-	it("hands back a refusal instead of retrying it", async () => {
+	it("stops at a refusal instead of retrying it", async () => {
 		let requests = 0;
 		const operator = transport(async () => {
 			requests += 1;
 			return json(404, { message: "no Workspace is named brave-otter" });
 		});
-		const refusals: { status?: number }[] = [];
 		const session = new FollowSession({
 			operations: operator,
 			organization: "acme",
 			workspace: "brave-otter",
 			participant: "operator",
 			mirror: new TranscriptMirror(),
-			onRefused: (error) => refusals.push(error),
 		});
 
 		session.start();
-		await vi.waitFor(() => {
-			expect(refusals).toHaveLength(1);
-		});
 		await new Promise((resolve) => setTimeout(resolve, 400));
 
 		expect(requests).toBe(1);
-		expect(refusals[0]?.status).toBe(404);
 	});
 
 	it("renews its lease, and registers again once the lease has lapsed", async () => {
@@ -287,7 +278,6 @@ describe("a follow", () => {
 			workspace: "brave-otter",
 			participant: "operator",
 			mirror,
-			onRefused: () => {},
 		});
 
 		session.start();
@@ -308,40 +298,5 @@ describe("a follow", () => {
 		expect(leases[0]).toBe(
 			"/operator/organizations/acme/workspaces/brave-otter/followers/6b1a1f2c-0000-0000-0000-000000000000/lease",
 		);
-	});
-});
-
-describe("a paged read", () => {
-	it("reads without following and stops at caught up", async () => {
-		const seen: string[] = [];
-		const operator = transport(async (url) => {
-			seen.push(url);
-			return events(
-				eventOf(delivered(1)),
-				eventOf({ event: "end", id: undefined, data: '{"because":"caught_up"}' }),
-			);
-		});
-		const mirror = new TranscriptMirror();
-
-		await page(operator, "acme", "brave-otter", mirror);
-
-		expect(seen[0]).toContain("follow=false");
-		expect(mirror.snapshot().entries.map((entry) => entry.seq)).toEqual([1]);
-	});
-
-	it("resumes a page from the cursor", async () => {
-		const headers: Headers[] = [];
-		const operator = transport(async (_url, init = {}) => {
-			headers.push(new Headers(init.headers));
-			return events(eventOf({ event: "end", id: undefined, data: '{"because":"caught_up"}' }));
-		});
-		const mirror = new TranscriptMirror();
-		mirror.apply(delivered(7));
-
-		await page(operator, "acme", "brave-otter", mirror);
-		await page(operator, "acme", "brave-otter", mirror);
-
-		expect(headers[0]?.get("last-event-id")).toBe("w:7");
-		expect(headers[1]?.get("last-event-id")).toBe("w:7");
 	});
 });

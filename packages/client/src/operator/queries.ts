@@ -1,6 +1,5 @@
 import { type QueryClient, queryOptions } from "@tanstack/react-query";
-import type { Organization, Queue, Session, Workspace, WorkspaceWork } from "./generated";
-import type { LinkNotice } from "./link";
+import type { Change, Organization, Queue, Session, Workspace, WorkspaceWork } from "./generated";
 import { type Delivered, readRange, type Range } from "./transcript";
 import { operatorPath, transport } from "./transport";
 
@@ -114,7 +113,7 @@ export function refetchOrganization(client: QueryClient, organization: string): 
 export function refetchNoticed(
 	client: QueryClient,
 	organization: string,
-	notice: LinkNotice,
+	notice: Change,
 ): Promise<void> {
 	if (notice.resource === "workspace") {
 		const named = workspaceNames(client, organization, notice.id);

@@ -18,6 +18,16 @@ kestrel status
 
 Compose starts the control plane and a filtered Docker socket proxy. It also builds the environment image from which Kestrel creates a container when a workspace needs one. The database lives on a named volume, so `docker compose down` preserves workspaces and their transcripts. `docker compose down --volumes` deletes that volume and its data.
 
+The browser Client is at <https://localhost:7719>. Caddy issues its certificate from a local CA it creates on first start, so trust that CA once:
+
+```sh
+docker compose cp client:/data/caddy/pki/authorities/local/root.crt kestrel-ca.crt
+# macOS; on Linux, copy it into your distribution's CA directory and update the store
+security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db kestrel-ca.crt
+```
+
+The CA lives on the `client` service's volume, so it survives `docker compose down`; `--volumes` deletes it, and the next start makes a new one to trust.
+
 The CLI connects to the operator API at `127.0.0.1:7718` by default. That API does not authenticate callers; Compose binds it to loopback. Use a tunnel if the control plane runs on another machine, and set `--control-plane` or `KESTREL_CONTROL_PLANE` to its URL. `docker compose logs -f kestrel` shows control plane and session diagnostics.
 
 ## Start work in a repository

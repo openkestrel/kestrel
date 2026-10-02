@@ -179,7 +179,6 @@ export type FollowOptions = {
 	workspace: string;
 	participant: string | null;
 	mirror: TranscriptMirror;
-	onRefused: (error: Refused) => void;
 };
 
 export class FollowSession {
@@ -209,11 +208,7 @@ export class FollowSession {
 				await this.consume(controller.signal);
 			} catch (error) {
 				if (this.stopped) return;
-				if (error instanceof Refused && error.status < 500) {
-					this.stopped = true;
-					this.options.onRefused(error);
-					return;
-				}
+				if (error instanceof Refused && error.status < 500) return;
 			}
 			if (this.stopped || this.options.mirror.sealed) return;
 			// oxlint-disable-next-line no-await-in-loop -- the backoff must grow between attempts.
@@ -267,20 +262,6 @@ export class FollowSession {
 			return;
 		}
 		this.schedule(follower);
-	}
-}
-
-export async function page(
-	operations: Transport,
-	organization: string,
-	workspace: string,
-	mirror: TranscriptMirror,
-	signal?: AbortSignal,
-): Promise<void> {
-	const path = transcriptPath(organization, workspace, { follow: false });
-	for await (const event of operations.stream(path, { after: mirror.cursor, signal })) {
-		mirror.apply(event);
-		if (event.event === "end") return;
 	}
 }
 

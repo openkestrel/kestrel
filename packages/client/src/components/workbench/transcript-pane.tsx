@@ -6,10 +6,9 @@ import {
 	ConversationScrollButton,
 } from "#/components/ai-elements/conversation";
 import { ToggleGroup, ToggleGroupItem } from "#/components/ui/toggle-group";
-import { useTranscript } from "#/operator/currency";
-import type { Currency } from "#/operator/currency";
 import type { Session, Workspace } from "#/operator/generated";
 import { sessionPhase } from "#/operator/session-state";
+import type { TranscriptSnapshot } from "#/operator/transcript";
 import { entryText, flow } from "#/operator/transcript-view";
 import { BriefComposer } from "./brief-composer";
 import { Composer } from "./composer";
@@ -26,21 +25,20 @@ const MODES: { value: Disclosure; label: string }[] = [
 ];
 
 export function TranscriptPane({
-	currency,
+	transcript,
 	organization,
 	workspace,
 	read,
 	session,
 	workspaces,
 }: {
-	currency: Currency;
+	transcript: TranscriptSnapshot;
 	organization: string;
 	workspace: string;
 	read: Workspace;
 	session: Session | undefined;
 	workspaces: Workspace[] | undefined;
 }) {
-	const transcript = useTranscript(currency, organization, workspace);
 	const optionWrite = useOptionWrite(
 		organization,
 		session,

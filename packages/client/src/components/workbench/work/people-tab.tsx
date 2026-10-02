@@ -1,17 +1,7 @@
-import { useTranscript } from "#/operator/currency";
-import type { Currency } from "#/operator/currency";
+import type { TranscriptSnapshot } from "#/operator/transcript";
 import { joinedParticipants } from "#/operator/work-view";
 
-export function PeopleTab({
-	currency,
-	organization,
-	workspace,
-}: {
-	currency: Currency;
-	organization: string;
-	workspace: string;
-}) {
-	const transcript = useTranscript(currency, organization, workspace);
+export function PeopleTab({ transcript }: { transcript: TranscriptSnapshot }) {
 	const joined = joinedParticipants(transcript.entries);
 	const presence = transcript.presence;
 
