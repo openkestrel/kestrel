@@ -85,6 +85,89 @@ function polls(wires: Wire[]): number {
 	return wires.reduce((count, wire) => count + wire.requests("follow=false"), 0);
 }
 
+function held(wires: Wire[], needle: string): number {
+	return wires.reduce((count, wire) => count + wire.held(needle), 0);
+}
+
+describe("the four-stream budget", () => {
+	it("counts each Organization's notice stream against the follow slots", async () => {
+		const bus = new Bus();
+		const wires: Wire[] = [];
+		const tabs: Currency[] = [];
+		let clock = 100;
+		for (let index = 0; index < 5; index += 1) {
+			const wire = new Wire();
+			const tab = new Currency({
+				queryClient: new QueryClient(),
+				operations: wire.operations,
+				channel: channelOf(bus),
+				settle: 5,
+				heartbeat: 1_000,
+				liveness: 1_000,
+				poll: 5,
+				now: () => clock++,
+				visible: () => true,
+			});
+			const organization = index < 4 ? "acme" : "globex";
+			tab.watch(organization);
+			tab.watchFollow(organization, `workspace-${index}`);
+			wires.push(wire);
+			tabs.push(tab);
+		}
+
+		await vi.waitFor(
+			() => {
+				expect(held(wires, "/changes")).toBe(2);
+				expect(polls(wires)).toBeGreaterThan(0);
+			},
+			{ timeout: 2_000 },
+		);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(held(wires, "/changes") + held(wires, "follow=true")).toBe(4);
+		expect(follows(wires)).toBe(2);
+
+		for (const tab of tabs) tab.close();
+	});
+
+	it("polls an Organization beyond four notice streams instead of opening a fifth", async () => {
+		const bus = new Bus();
+		const wires: Wire[] = [];
+		const tabs: Currency[] = [];
+		const clients: QueryClient[] = [];
+		let clock = 100;
+		for (let index = 0; index < 5; index += 1) {
+			const wire = new Wire();
+			const client = new QueryClient();
+			const tab = new Currency({
+				queryClient: client,
+				operations: wire.operations,
+				channel: channelOf(bus),
+				settle: 5,
+				heartbeat: 1_000,
+				liveness: 1_000,
+				poll: 5,
+				now: () => clock++,
+			});
+			tab.watch(`organization-${index}`);
+			wires.push(wire);
+			tabs.push(tab);
+			clients.push(client);
+		}
+
+		await vi.waitFor(() => expect(held(wires, "/changes")).toBe(4), { timeout: 2_000 });
+		const last = clients[4] ?? new QueryClient();
+		last.setQueryData(["organizations", "organization-4", "queue"], {});
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(held(wires, "/changes")).toBe(4);
+		expect(wires[4]?.requests("/changes")).toBe(0);
+		expect(last.getQueryState(["organizations", "organization-4", "queue"])?.isInvalidated).toBe(
+			true,
+		);
+
+		for (const tab of tabs) tab.close();
+	});
+});
+
 describe("Organization notices", () => {
 	it("shares one notice stream, relays its changes, and hands over when the leader closes", async () => {
 		const bus = new Bus();
@@ -259,6 +342,7 @@ describe("follow slots", () => {
 			});
 			wires.push(wire);
 			tabs.push(tab);
+			tab.watch("acme");
 			tab.watchFollow("acme", `workspace-${index}`);
 		}
 

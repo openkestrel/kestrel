@@ -14,9 +14,10 @@ import { noticedKey, workspaceKey } from "./queries";
 import { FollowSession, page, TranscriptMirror, type TranscriptSnapshot } from "./transcript";
 import { operatorPath, Refused, type Transport } from "./transport";
 
-// One shared notice stream, and three follow slots beside it: four SSE connections per origin
-// at most, leaving two of the six HTTP/1.1 connections for ordinary reads and writes.
-const FOLLOW_SLOTS = 3;
+// Four SSE connections per origin at most, leaving two of the six HTTP/1.1 connections for
+// ordinary reads and writes. Each watched Organization's notice stream takes one first; visible
+// views follow in what is left.
+const STREAMS = 4;
 const HEARTBEAT = 2_000;
 const LIVENESS = 5_000;
 const SETTLE = 150;
@@ -66,6 +67,7 @@ export class Currency {
 	private settling: ReturnType<typeof setTimeout> | undefined;
 	private noticeController: AbortController | null = null;
 	private noticeOrganization: string | null = null;
+	private polledOrganization: string | null = null;
 	private readonly undo: (() => void)[] = [];
 	private unlistened: (() => void) | null = null;
 	private readonly named: Named | null;
@@ -179,6 +181,7 @@ export class Currency {
 			this.timers.push(setInterval(() => this.announce(), this.heartbeatMillis));
 			this.timers.push(setInterval(() => this.reap(), this.heartbeatMillis));
 		}
+		this.timers.push(setInterval(() => this.pollOrganization(), this.pollMillis));
 		if (typeof window !== "undefined") {
 			const leaving = () => this.broadcast({ kind: "bye", tab: this.tab });
 			window.addEventListener("pagehide", leaving);
@@ -265,13 +268,18 @@ export class Currency {
 	}
 
 	private evaluate(): void {
-		if (this.watching && this.leader(this.watching.organization) === this.tab) {
-			this.openNotices(this.watching.organization);
+		const streamed = this.streamed();
+		const organization = this.watching?.organization ?? null;
+		const covered = organization !== null && streamed.includes(organization);
+		if (covered && this.leader(organization) === this.tab) {
+			this.openNotices(organization);
 		} else {
 			this.closeNotices();
 		}
+		this.polledOrganization = covered ? null : organization;
+		const slots = STREAMS - streamed.length;
 		for (const [key, controller] of this.controllers) {
-			controller.setMode(this.modeOf(key));
+			controller.setMode(this.modeOf(key, slots));
 		}
 		this.resolveReadies(true);
 	}
@@ -300,7 +308,7 @@ export class Currency {
 		}
 	}
 
-	private modeOf(key: string): Mode {
+	private modeOf(key: string, slots: number): Mode {
 		const controller = this.controllers.get(key);
 		const wish = this.wish;
 		if (
@@ -312,7 +320,7 @@ export class Currency {
 		) {
 			return "idle";
 		}
-		if (this.rank() >= FOLLOW_SLOTS) return "poll";
+		if (this.rank() >= slots) return "poll";
 		return controller.refused ? "poll" : "follow";
 	}
 
@@ -325,6 +333,27 @@ export class Currency {
 		}
 		candidates.sort((one, other) => one.at - other.at || comparison(one.tab, other.tab));
 		return candidates[0]?.tab;
+	}
+
+	// The Organizations whose notice streams fit the budget, oldest want first.
+	private streamed(): string[] {
+		const oldest = new Map<string, { tab: string; at: number }>();
+		for (const [tab, peer] of this.peers) {
+			if (!peer.watching) continue;
+			const known = oldest.get(peer.watching.organization);
+			const candidate = { tab, at: peer.watching.at };
+			if (!known || earlier(candidate, known)) oldest.set(peer.watching.organization, candidate);
+		}
+		return [...oldest]
+			.toSorted(([, one], [, other]) => (earlier(one, other) ? -1 : 1))
+			.slice(0, STREAMS)
+			.map(([organization]) => organization);
+	}
+
+	private pollOrganization(): void {
+		if (this.polledOrganization !== null) {
+			void refetchOrganization(this.queryClient, this.polledOrganization);
+		}
 	}
 
 	private rank(): number {
@@ -603,6 +632,10 @@ function sameWish(one: Wish | null, other: Wish | null): boolean {
 		one?.at === other?.at &&
 		one?.visible === other?.visible
 	);
+}
+
+function earlier(one: { tab: string; at: number }, other: { tab: string; at: number }): boolean {
+	return (one.at - other.at || comparison(one.tab, other.tab)) < 0;
 }
 
 function comparison(one: string, other: string): number {
