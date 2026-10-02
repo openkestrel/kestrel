@@ -402,12 +402,8 @@ export class Currency {
 						this.refetchAll();
 					}
 				}
-			} catch (error) {
+			} catch {
 				if (controller.signal.aborted) return;
-				if (error instanceof Refused && error.status < 500) {
-					if (this.noticeController === controller) this.closeNotices();
-					return;
-				}
 			}
 			if (controller.signal.aborted) return;
 			// oxlint-disable-next-line no-await-in-loop -- the backoff must grow between attempts.

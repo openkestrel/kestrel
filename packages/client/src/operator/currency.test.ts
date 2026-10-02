@@ -28,8 +28,8 @@ function channelOf(bus: Bus): LinkChannel {
 	};
 }
 
-// A stand-in operator: every GET opens an SSE stream the test pushes events into, and every
-// POST answers no content.
+// A stand-in operator: every GET opens an SSE stream the test pushes events into unless its URL
+// contains `refuse`, and every POST answers no content.
 class Wire {
 	readonly seen: { url: string; method: string; after: string | null }[] = [];
 	readonly operations: Transport;
@@ -37,12 +37,18 @@ class Wire {
 	private readonly open: ReadableStreamDefaultController<Uint8Array>[] = [];
 	private readonly live = new Set<{ url: string }>();
 
-	constructor(private readonly greets = true) {
+	constructor(
+		private readonly greets = true,
+		private readonly refuse: string | null = null,
+	) {
 		this.operations = transport(async (url, init = {}) => {
 			const method = init.method ?? "GET";
 			const record = { url, method, after: new Headers(init.headers).get("last-event-id") };
 			this.seen.push(record);
 			if (method !== "GET") return new Response(null, { status: 204 });
+			if (this.refuse !== null && url.includes(this.refuse)) {
+				return new Response(null, { status: 403 });
+			}
 			this.live.add(record);
 			init.signal?.addEventListener("abort", () => this.live.delete(record));
 			const body = new ReadableStream<Uint8Array>({
@@ -161,6 +167,25 @@ describe("Organization notices", () => {
 		await vi.waitFor(() =>
 			expect(invalidated).toHaveBeenCalledWith({ queryKey: ["organizations", "acme", "queue"] }),
 		);
+
+		tab.close();
+	});
+
+	it("backs off a refused notice stream instead of reopening it every heartbeat", async () => {
+		const wire = new Wire(true, "/changes");
+		const tab = new Currency({
+			queryClient: new QueryClient(),
+			operations: wire.operations,
+			channel: channelOf(new Bus()),
+			settle: 1,
+			heartbeat: 10,
+			now: () => 1,
+		});
+		tab.watch("acme");
+
+		await vi.waitFor(() => expect(wire.requests("/changes")).toBeGreaterThan(0));
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		expect(wire.requests("/changes")).toBeLessThanOrEqual(2);
 
 		tab.close();
 	});
