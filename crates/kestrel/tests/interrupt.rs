@@ -698,3 +698,54 @@ async fn an_interrupt_while_the_supervisor_is_off_the_link_is_delivered_on_recon
 
     kestrel.teardown().await;
 }
+
+#[tokio::test]
+async fn a_cancelled_turn_kestrel_did_not_ask_for_still_ends_the_session() {
+    let kestrel = Kestrel::dispatching_to(
+        supervisor::binary(),
+        &scripted_agent::playing(Script::OpenToolCancelled),
+    )
+    .await;
+    let workspace = a_workspace(&kestrel).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+
+    let ended = until_session(&kestrel, session.id, "ended", |session| {
+        session.state == SessionState::Ended
+    })
+    .await;
+    assert!(
+        matches!(ended.exit, Some(kestrel::domain::Exit::Failed { .. })),
+        "a cancel kestrel did not send ends the Session: {:?}",
+        ended.exit
+    );
+    assert!(ended.interrupting.is_none());
+
+    let entries = until_entries(&kestrel, workspace.id, "the Session ended", |entries| {
+        entries.iter().any(
+            |entry| matches!(entry, Entry::SessionEnded { session: ended, .. } if *ended == session.id),
+        )
+    })
+    .await;
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| matches!(entry, Entry::TurnInterrupted { .. })),
+        "nobody interrupted this turn: {entries:?}"
+    );
+    assert!(
+        entries.iter().any(|entry| matches!(
+            entry,
+            Entry::ToolCall {
+                closing_reason: Some(ClosingReason::Interrupted),
+                completion: kestrel::log::Completion {
+                    turn_outcome: Some(kestrel::log::TurnOutcome::Cancelled),
+                    ..
+                },
+                ..
+            }
+        )),
+        "the open tool call closed with the cancelled turn: {entries:?}"
+    );
+
+    kestrel.teardown().await;
+}
