@@ -9,10 +9,7 @@ import { Textarea } from "#/components/ui/textarea";
 import {
 	amendable,
 	heldAge,
-	mayWriteOptions,
-	modeOption,
-	nextMode,
-	optionChange,
+	modeStep,
 	partialReport,
 	postLabel,
 	wasAmended,
@@ -21,24 +18,21 @@ import type { HeldMessage, Session, Workspace } from "#/operator/generated";
 import { participant, useParticipant } from "#/operator/participant";
 import { operator, sessionsKey, workspaceKey } from "#/operator/queries";
 import { mayInterrupt } from "#/operator/session-view";
-import {
-	changeSessionOption,
-	editHeldMessage,
-	interruptTurn,
-	postTurn,
-	withdrawHeldMessage,
-} from "#/operator/turns";
+import { editHeldMessage, interruptTurn, postTurn, withdrawHeldMessage } from "#/operator/turns";
+import type { OptionWrite } from "./option-write";
 
 export function Composer({
 	organization,
 	workspace,
 	read,
 	session,
+	optionWrite,
 }: {
 	organization: string;
 	workspace: string;
 	read: Workspace;
 	session: Session | undefined;
+	optionWrite: OptionWrite;
 }) {
 	const name = useParticipant();
 	const queryClient = useQueryClient();
@@ -158,27 +152,17 @@ export function Composer({
 	}
 
 	function cycleMode() {
-		const option = session ? modeOption(session.options) : undefined;
-		if (!option) {
-			announce("This harness offers no mode to cycle");
+		if (optionWrite.inFlight()) return;
+		const step = modeStep(session?.options ?? [], session?.state, name);
+		if ("say" in step) {
+			announce(step.say);
 			return;
 		}
-		if (!mayWriteOptions(session?.state)) {
-			announce("The mode cannot change during a working turn");
-			return;
-		}
-		const next = nextMode(option, String(option.current));
-		if (!next) {
-			announce("This harness offers no mode to cycle");
-			return;
-		}
-		if (name === null || !session) return;
-		announce(`mode ${next.value}`);
-		changeSessionOption(operator, organization, session.id, optionChange(option, next.value, name))
-			.then(() => refresh())
-			.catch((error: unknown) => {
-				setRefusal(error);
-			});
+		const warning = optionWrite.choose({
+			...step,
+			applied: () => announce(`mode ${step.value}`),
+		});
+		if (warning) announce(warning);
 	}
 
 	function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {

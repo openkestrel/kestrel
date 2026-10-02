@@ -62,6 +62,23 @@ export function nextMode(option: SessionOption, current: string): SessionOptionV
 	return values[(at + 1 + values.length) % values.length];
 }
 
+export const nameToChangeOptions = "Declare your name in the composer to change options";
+
+export type ModeStep = { option: SessionOption; value: string } | { say: string };
+
+export function modeStep(
+	options: SessionOption[],
+	state: Session["state"] | undefined,
+	participant: string | null,
+): ModeStep {
+	const option = modeOption(options);
+	const next = option && nextMode(option, String(option.current));
+	if (!option || !next) return { say: "This harness offers no mode to cycle" };
+	if (!mayWriteOptions(state)) return { say: "The mode cannot change during a working turn" };
+	if (participant === null) return { say: nameToChangeOptions };
+	return { option, value: next.value };
+}
+
 export function cacheWarning(
 	option: SessionOption,
 	usage: Usage | null | undefined,

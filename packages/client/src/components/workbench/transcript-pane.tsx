@@ -13,6 +13,7 @@ import { sessionPhase } from "#/operator/session-state";
 import { entryText, flow } from "#/operator/transcript-view";
 import { BriefComposer } from "./brief-composer";
 import { Composer } from "./composer";
+import { useOptionWrite } from "./option-write";
 import { SessionHeader } from "./session-header";
 import { ActivityRow } from "./transcript/activity-row";
 import { EntryRow, type Disclosure } from "./transcript/entry-row";
@@ -40,6 +41,11 @@ export function TranscriptPane({
 	workspaces: Workspace[] | undefined;
 }) {
 	const transcript = useTranscript(currency, organization, workspace);
+	const optionWrite = useOptionWrite(
+		organization,
+		session,
+		transcript.sessionState?.usage ?? session?.usage,
+	);
 	const [mode, setMode] = useState<Disclosure>("line");
 	const [overrides, setOverrides] = useState<ReadonlyMap<number, boolean>>(new Map());
 	const [announced, setAnnounced] = useState("");
@@ -83,7 +89,7 @@ export function TranscriptPane({
 		<>
 			<SessionHeader
 				live={transcript.sessionState}
-				organization={organization}
+				optionWrite={optionWrite}
 				presence={transcript.presence}
 				read={read}
 				session={session}
@@ -154,6 +160,7 @@ export function TranscriptPane({
 					</div>
 					{!briefing && (
 						<Composer
+							optionWrite={optionWrite}
 							organization={organization}
 							read={read}
 							session={session}

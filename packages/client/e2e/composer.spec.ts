@@ -203,6 +203,20 @@ function option(overrides: Record<string, unknown> = {}) {
 	};
 }
 
+function modeOption(warns_cache: boolean) {
+	return option({
+		id: "mode",
+		name: "Mode",
+		category: "mode",
+		current: "build",
+		values: [
+			{ value: "build", name: "Build", description: null },
+			{ value: "plan", name: "Plan", description: null },
+		],
+		warns_cache,
+	});
+}
+
 type Answer = { status: number; body: unknown };
 
 // The control plane cannot force a held message, a working Turn or a harness refusal without a
@@ -218,6 +232,7 @@ class Scripted {
 	withdraw: Answer = { status: 204, body: null };
 	interrupt: Answer = { status: 202, body: null };
 	option: Answer = { status: 202, body: null };
+	optionGate: Promise<void> | null = null;
 
 	constructor(name: string) {
 		this.name = name;
@@ -250,7 +265,7 @@ class Scripted {
 		);
 		await page.route(
 			(url) => url.pathname === `${session}/options`,
-			(route) => this.answer(route, this.option),
+			(route) => this.answer(route, this.option, this.optionGate),
 		);
 	}
 
@@ -269,13 +284,14 @@ class Scripted {
 		});
 	}
 
-	private async answer(route: Route, answer: Answer): Promise<void> {
+	private async answer(route: Route, answer: Answer, gate?: Promise<void> | null): Promise<void> {
 		const request = route.request();
 		this.requests.push({
 			method: request.method(),
 			path: new URL(request.url()).pathname,
 			body: request.postDataJSON(),
 		});
+		await gate;
 		if (answer.status === 204) {
 			await route.fulfill({ status: 204, body: "" });
 			return;
@@ -674,4 +690,48 @@ test("Shift+Tab cycles the mode and Escape leaves the composer, both announced",
 	await input.press("Escape");
 	await expect(page.locator("[data-announcement]")).toHaveText("Left the composer");
 	await expect(input).not.toBeFocused();
+});
+
+test("Shift+Tab warns before a mode that drops the cache, and announces it only once applied", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request);
+	const scripted = new Scripted(workspace);
+	scripted.workspace = workspaceRead(workspace, {
+		unfinished_session: { id: SESSION_ID, name: "calm-river", state: "waiting", preparing: null },
+	});
+	scripted.session = sessionRead({ options: [modeOption(true)] });
+	scripted.option = { status: 202, body: sessionRead({}) };
+	await scripted.install(page);
+	await identified(page.context(), "jack");
+	await visiting(page, workspace);
+	const writes = () => scripted.requests.filter((sent) => sent.path.endsWith("/options"));
+
+	const input = page.getByLabel("Post");
+	await input.focus();
+	await input.press("Shift+Tab");
+
+	const announcement = page.locator("[data-announcement]");
+	await expect(announcement).toContainText("1,200 tokens");
+	const confirm = page.locator("[data-option-confirm]");
+	await expect(confirm).toContainText("Change Mode to plan?");
+	expect(writes()).toHaveLength(0);
+	await confirm.getByRole("button", { name: "Change" }).click();
+	await expect(announcement).toHaveText("mode plan");
+	expect(writes()).toHaveLength(1);
+
+	scripted.session = sessionRead({ options: [modeOption(false)] });
+	scripted.requests = [];
+	await page.reload();
+	const gate = Promise.withResolvers<void>();
+	scripted.optionGate = gate.promise;
+	await input.focus();
+	await input.press("Shift+Tab");
+	await expect.poll(() => writes().length).toBe(1);
+	await input.press("Shift+Tab");
+	await expect(announcement).not.toHaveText("mode plan");
+	gate.resolve();
+	await expect(announcement).toHaveText("mode plan");
+	expect(writes()).toHaveLength(1);
 });

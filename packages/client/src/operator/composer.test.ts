@@ -5,6 +5,8 @@ import {
 	heldAge,
 	mayWriteOptions,
 	modeOption,
+	modeStep,
+	nameToChangeOptions,
 	nextMode,
 	optionChange,
 	optionValues,
@@ -125,6 +127,27 @@ describe("an option", () => {
 			participant: "jack",
 			option: "verbose",
 			value: "true",
+		});
+	});
+});
+
+describe("Shift+Tab", () => {
+	const mode = option({ id: "mode", category: "mode", current: "mini" });
+
+	it("changes the mode to the next value for a named person between Turns", () => {
+		expect(modeStep([mode], "waiting", "jack")).toEqual({ option: mode, value: "max" });
+	});
+
+	it("asks for a name, as the header does, before changing anything", () => {
+		expect(modeStep([mode], "waiting", null)).toEqual({ say: nameToChangeOptions });
+	});
+
+	it("changes nothing during a working Turn or without a mode to cycle", () => {
+		expect(modeStep([mode], "working", "jack")).toEqual({
+			say: "The mode cannot change during a working turn",
+		});
+		expect(modeStep([option()], "waiting", "jack")).toEqual({
+			say: "This harness offers no mode to cycle",
 		});
 	});
 });

@@ -1,18 +1,9 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 import { Refusal } from "#/components/refusal";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
-import { cacheWarning, mayWriteOptions, optionChange, optionValues } from "#/operator/composer";
-import type {
-	Presence,
-	Session,
-	SessionOption,
-	TranscriptSessionState,
-	Workspace,
-} from "#/operator/generated";
+import { mayWriteOptions, nameToChangeOptions, optionValues } from "#/operator/composer";
+import type { Presence, Session, TranscriptSessionState, Workspace } from "#/operator/generated";
 import { useParticipant } from "#/operator/participant";
-import { operator, sessionsKey } from "#/operator/queries";
 import {
 	commandLine,
 	continuityLine,
@@ -25,31 +16,24 @@ import {
 	stateLabel,
 	usageLine,
 } from "#/operator/session-view";
-import { changeSessionOption } from "#/operator/turns";
+import type { OptionWrite } from "./option-write";
 
 export function SessionHeader({
-	organization,
 	read,
 	session,
 	live,
 	presence,
 	workspaces,
+	optionWrite,
 }: {
-	organization: string;
 	read: Workspace;
 	session: Session | undefined;
 	live: TranscriptSessionState | undefined;
 	presence: Presence | undefined;
 	workspaces: Workspace[] | undefined;
+	optionWrite: OptionWrite;
 }) {
 	const name = useParticipant();
-	const queryClient = useQueryClient();
-	const [refusal, setRefusal] = useState<unknown>(null);
-	const [confirming, setConfirming] = useState<{ option: SessionOption; value: string } | null>(
-		null,
-	);
-	const [writing, setWriting] = useState(false);
-
 	const usage = live?.usage ?? session?.usage ?? undefined;
 	const usageText = usageLine(usage);
 	const followers = followersLine(presence);
@@ -57,34 +41,6 @@ export function SessionHeader({
 	const interrupting = interruptingLabel(session);
 	const options = session?.options ?? [];
 	const canWrite = mayWriteOptions(session?.state) && name !== null;
-
-	async function write(option: SessionOption, value: string) {
-		if (!session || !name) return;
-		setWriting(true);
-		setRefusal(null);
-		try {
-			await changeSessionOption(
-				operator,
-				organization,
-				session.id,
-				optionChange(option, value, name),
-			);
-			setConfirming(null);
-			await queryClient.invalidateQueries({ queryKey: sessionsKey(organization) });
-		} catch (error) {
-			setRefusal(error);
-		} finally {
-			setWriting(false);
-		}
-	}
-
-	function choose(option: SessionOption, value: string) {
-		if (cacheWarning(option, usage)) {
-			setConfirming({ option, value });
-			return;
-		}
-		void write(option, value);
-	}
 
 	return (
 		<header className="shrink-0 border-b px-4 py-2" data-session-header>
@@ -147,8 +103,8 @@ export function SessionHeader({
 									<Button
 										key={value.value}
 										data-option-value={value.value}
-										disabled={!canWrite || writing}
-										onClick={() => choose(option, value.value)}
+										disabled={!canWrite || optionWrite.writing}
+										onClick={() => optionWrite.choose({ option, value: value.value })}
 										size="xs"
 										type="button"
 										variant="outline"
@@ -159,8 +115,10 @@ export function SessionHeader({
 							{option.kind === "boolean" && (
 								<Button
 									data-option-toggle
-									disabled={!canWrite || writing}
-									onClick={() => choose(option, option.current ? "false" : "true")}
+									disabled={!canWrite || optionWrite.writing}
+									onClick={() =>
+										optionWrite.choose({ option, value: option.current ? "false" : "true" })
+									}
 									size="xs"
 									type="button"
 									variant="outline"
@@ -181,35 +139,35 @@ export function SessionHeader({
 					))}
 					{!name && (
 						<p className="text-muted-foreground text-xs" data-option-note>
-							Declare your name in the composer to change options
+							{nameToChangeOptions}
 						</p>
 					)}
 				</div>
 			)}
-			{confirming && (
+			{optionWrite.confirming && (
 				<div className="mt-2 border border-border p-2 text-xs" data-option-confirm>
-					<p>{cacheWarning(confirming.option, usage)}</p>
+					<p>{optionWrite.warning}</p>
 					<p className="text-muted-foreground">
-						Change {confirming.option.name} to {confirming.value}?
+						Change {optionWrite.confirming.option.name} to {optionWrite.confirming.value}?
 					</p>
 					<div className="mt-1 flex gap-1">
 						<Button
-							disabled={writing}
-							onClick={() => void write(confirming.option, confirming.value)}
+							disabled={optionWrite.writing}
+							onClick={optionWrite.confirm}
 							size="xs"
 							type="button"
 						>
 							Change
 						</Button>
-						<Button onClick={() => setConfirming(null)} size="xs" type="button" variant="ghost">
+						<Button onClick={optionWrite.cancel} size="xs" type="button" variant="ghost">
 							Cancel
 						</Button>
 					</div>
 				</div>
 			)}
-			{refusal !== null && (
+			{optionWrite.refusal !== null && (
 				<div className="mt-2">
-					<Refusal error={refusal} />
+					<Refusal error={optionWrite.refusal} />
 				</div>
 			)}
 		</header>
