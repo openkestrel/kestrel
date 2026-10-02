@@ -534,6 +534,7 @@ fn the_client_recognises_every_instruction_the_published_document_declares() {
             "start" => serde_json::json!({
                 "kind": kind,
                 "checkout": {"repositories": [], "base": "main", "branch": "main"},
+                "turn": 1,
                 "prompt": "do the work",
                 "harness": {"command": "opencode acp"},
             }),
@@ -542,7 +543,8 @@ fn the_client_recognises_every_instruction_the_published_document_declares() {
                 "checkout": {"repositories": [], "base": "main", "branch": "main"},
                 "harness": {"command": "opencode acp"},
             }),
-            "prompt" => serde_json::json!({"kind": kind, "prompt": "and the tests"}),
+            "prompt" => serde_json::json!({"kind": kind, "turn": 2, "prompt": "and the tests"}),
+            "interrupt" => serde_json::json!({"kind": kind, "turn": 2}),
             "set_option" => serde_json::json!({
                 "kind": kind,
                 "option": "model",

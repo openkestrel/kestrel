@@ -652,6 +652,12 @@
           "checkout": {
             "$ref": "#/components/schemas/Checkout"
           },
+          "turn": {
+            "description": "The seq of the Turn this prompt begins, which an interrupt names.",
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
           "prompt": {
             "description": "The agent's whole prompt, sent exactly as given: the Workspace's unfollowed Brief, or the message or messages that started this Session with earlier Transcript entries as labeled context ahead of them.",
             "type": "string"
@@ -663,6 +669,7 @@
         "required": [
           "kind",
           "checkout",
+          "turn",
           "prompt",
           "harness"
         ]
@@ -694,6 +701,12 @@
           "kind": {
             "const": "prompt"
           },
+          "turn": {
+            "description": "The seq of the Turn this prompt begins, which an interrupt names.",
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
           "prompt": {
             "description": "The agent's whole prompt, sent exactly as given.",
             "type": "string"
@@ -701,6 +714,7 @@
         },
         "required": [
           "kind",
+          "turn",
           "prompt"
         ]
       },
@@ -942,15 +956,22 @@
         ]
       },
       "Interrupt": {
-        "description": "Cancel the Turn the Session is in without ending it: the conversation and the Instance stay, and a Turn held for it follows.",
+        "description": "Cancel the Turn the Session is in without ending it: the conversation and the Instance stay, and a Turn held for it follows. A supervisor whose Turn in flight is not the one named does nothing, so a cancel that arrives after its Turn answered never reaches the next one.",
         "type": "object",
         "properties": {
           "kind": {
             "const": "interrupt"
+          },
+          "turn": {
+            "description": "The seq of the Turn to cancel.",
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
           }
         },
         "required": [
-          "kind"
+          "kind",
+          "turn"
         ]
       },
       "Report": {

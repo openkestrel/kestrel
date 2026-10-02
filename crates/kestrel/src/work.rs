@@ -1048,8 +1048,13 @@ pub async fn interrupt(store: &Store, id: SessionId, participant: &str) -> Resul
         .request_interrupt(&session, &participant)
         .await?
     {
+        let turn = tx
+            .workspaces()
+            .unanswered_turn(&session)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("the working session {id} has no unanswered turn"))?;
         tx.workspaces()
-            .send_instruction(&session, link::Instruction::Interrupt)
+            .send_instruction(&session, link::Instruction::Interrupt { turn })
             .await?;
     }
     let interrupting = tx.workspaces().session(id).await?;

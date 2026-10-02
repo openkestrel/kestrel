@@ -2118,6 +2118,19 @@ impl<'a> Workspaces<'a> {
         Ok(prompted.get("seq"))
     }
 
+    pub async fn unanswered_turn(&mut self, session: &Session) -> Result<Option<i64>> {
+        let turn = sqlx::query(
+            "SELECT seq FROM turn WHERE session_id = ? AND answered_at IS NULL
+             ORDER BY seq DESC LIMIT 1",
+        )
+        .bind(session.id.to_string())
+        .fetch_optional(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading the open turn of the session {}", session.id))?;
+
+        Ok(turn.map(|row| row.get("seq")))
+    }
+
     /// The seq of the Turn waiting on an answer and the Transcript position its prompt followed,
     /// or `None` when no Turn was waiting, so an answer replayed after a reconnect closes
     /// nothing twice.

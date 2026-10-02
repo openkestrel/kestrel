@@ -26,6 +26,7 @@ const SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
 pub enum Instruction {
     Start {
         checkout: Checkout,
+        turn: i64,
         prompt: String,
         harness: Harness,
     },
@@ -37,10 +38,13 @@ pub enum Instruction {
     },
     /// The next turn, in the conversation the Session's first one opened.
     Prompt {
+        turn: i64,
         prompt: String,
     },
-    /// Cancels the Turn the Session is in without ending it.
-    Interrupt,
+    /// Cancels the Turn it names, if that is still the one in flight, without ending the Session.
+    Interrupt {
+        turn: i64,
+    },
     /// Changes one of the Session's harness options before its next prompt (ADR-0041).
     SetOption {
         option: String,
@@ -60,7 +64,7 @@ impl Instruction {
             Instruction::Start { .. } => "start",
             Instruction::Unbriefed { .. } => "unbriefed",
             Instruction::Prompt { .. } => "prompt",
-            Instruction::Interrupt => "interrupt",
+            Instruction::Interrupt { .. } => "interrupt",
             Instruction::SetOption { .. } => "set_option",
             Instruction::Stop => "stop",
             Instruction::Unrecognized => "unrecognized",

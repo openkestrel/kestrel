@@ -294,7 +294,12 @@ async fn play(
     cancelled: &AtomicBool,
 ) -> Result<StopReason> {
     TURN.store(earlier.len(), Ordering::Relaxed);
-    if script == Script::WorksUntilCancelled && earlier.is_empty() {
+    let works_until_cancelled = match script {
+        Script::WorksUntilCancelled => earlier.is_empty(),
+        Script::AnswersThenWorksUntilCancelled => earlier.len() == 1,
+        _ => false,
+    };
+    if works_until_cancelled {
         say(connection, "working", "working on it")?;
         // A second message closes the first, so the control plane has it on the record before
         // the cancel arrives.

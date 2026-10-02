@@ -70,7 +70,7 @@ sequenceDiagram
         S->>L: GET instructions (Last-Event-ID)
         S->>L: POST connected
     end
-    L-->>S: start {session, checkout, prompt, harness}
+    L-->>S: start {session, checkout, turn, prompt, harness}
     S->>S: git clone / checkout the declared branch
     S->>L: POST started (session, seq 1)
     S->>L: GET credentials?session=
@@ -82,7 +82,7 @@ sequenceDiagram
     S->>L: POST model, said/thought/plan as units complete, used as it arrives
     S->>L: POST checkout, answered
     Note over L: Session is Waiting
-    L-->>S: prompt {session, prompt}
+    L-->>S: prompt {session, turn, prompt}
     S->>H: ACP prompt, same conversation
     S->>L: POST said/thought/plan as units complete
     S->>L: POST checkout, answered
@@ -95,7 +95,8 @@ sequenceDiagram
 `link::Instruction`, stored in `link_instruction` with a per-Instance `seq` that is the SSE event id.
 Each names the Session it is for.
 
-- `start {checkout, prompt, harness}`: take up the Session. `harness` is the command, model and ACP
+- `start {checkout, turn, prompt, harness}`: take up the Session. `turn` is the seq of the Turn the
+  prompt begins, as on `prompt`. `harness` is the command, model and ACP
   auth method to spawn, since each Session may choose its Agent. A `start` for the Session already
   carried is ignored.
 - `unbriefed {checkout, harness}`: take up the Session with no Brief. It checks out, opens the ACP
@@ -103,11 +104,13 @@ Each names the Session it is for.
   message later arrives as an ordinary `prompt` ([ADR-0038](../adr/0038-a-session-may-start-before-its-brief.md)).
   A checkout or spawn that fails is reported as the Session finished failed, exactly as a `start`'s
   would be.
-- `prompt {prompt}`: the next Turn in the same ACP conversation. Sending it moves the Session from
+- `prompt {turn, prompt}`: the next Turn, `turn` its seq, in the same ACP conversation. Sending it moves the Session from
   Waiting to Working in the same transaction. An unbriefed Session's first `prompt` is its Brief:
   it moves the Session from Unbriefed to Working, and the supervisor reports `started` as its
   first Turn begins.
-- `interrupt`: cancel the Turn the Session is in without ending it. The supervisor sends ACP
+- `interrupt {turn}`: cancel the Turn the Session is in without ending it. A supervisor whose Turn
+  in flight is not `turn` ignores it, so a cancel that lands after its Turn answered never cancels
+  the next one. Otherwise the supervisor sends ACP
   `session/cancel`, answers permission requests that arrive while the cancel is in flight
   `cancelled`, and waits for the prompt to return; a `cancelled` prompt closes its open units
   `interrupted` and is reported as `interrupted` instead of `answered`. A prompt that returns any

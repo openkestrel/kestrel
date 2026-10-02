@@ -114,19 +114,25 @@ const CLOSING: Duration = Duration::from_millis(500);
 /// The channels one conversation's task listens on: the next prompt, a request to cancel the
 /// Turn in flight, and a change to apply between Turns.
 struct Channels {
-    prompts: mpsc::UnboundedReceiver<String>,
-    interrupts: mpsc::UnboundedReceiver<()>,
+    prompts: mpsc::UnboundedReceiver<Turn>,
+    interrupts: mpsc::UnboundedReceiver<i64>,
     commands: mpsc::UnboundedReceiver<Command>,
 }
 
 /// One ACP conversation for the whole Session, held apart from the link so that losing the link
 /// loses nothing of it (ADR-0024). Dropping it kills the agent.
 pub struct Conversation {
-    prompts: mpsc::UnboundedSender<String>,
-    interrupts: mpsc::UnboundedSender<()>,
+    prompts: mpsc::UnboundedSender<Turn>,
+    interrupts: mpsc::UnboundedSender<i64>,
     commands: mpsc::UnboundedSender<Command>,
     turns: mpsc::UnboundedReceiver<ConversationEvent>,
     task: JoinHandle<()>,
+}
+
+#[derive(Clone)]
+pub struct Turn {
+    pub seq: i64,
+    pub prompt: String,
 }
 
 /// What the control plane asks of a conversation between Turns.
@@ -173,7 +179,7 @@ impl Conversation {
     pub fn open(
         harness: &Harness,
         provider: BTreeMap<String, String>,
-        first: Option<String>,
+        first: Option<Turn>,
         root: PathBuf,
     ) -> Self {
         let (prompts, prompted) = mpsc::unbounded_channel();
@@ -206,14 +212,14 @@ impl Conversation {
         }
     }
 
-    pub fn prompt(&self, prompt: String) {
+    pub fn prompt(&self, prompt: Turn) {
         // A conversation that is over says so as its last turn, which is where that is heard.
         let _ = self.prompts.send(prompt);
     }
 
-    /// Asks the agent to cancel the Turn in flight; the conversation goes on.
-    pub fn interrupt(&self) {
-        let _ = self.interrupts.send(());
+    /// Asks the agent to cancel the Turn `seq` if it is the one in flight; the conversation goes on.
+    pub fn interrupt(&self, seq: i64) {
+        let _ = self.interrupts.send(seq);
     }
 
     /// Applies one option change between Turns, answering with what the harness left or why it
@@ -299,7 +305,7 @@ impl Recovery {
 struct Continuity {
     conversed: Option<SessionId>,
     recovery: Option<Recovery>,
-    in_flight: Option<String>,
+    in_flight: Option<Turn>,
     /// Cleared by an answered turn, so an agent that dies as soon as it is brought back is not
     /// brought back forever.
     recovered: bool,
@@ -539,6 +545,7 @@ async fn living(
                         },
                     };
                     continuity.in_flight = Some(prompt.clone());
+                    let turn = prompt.seq;
                     heard
                         .lock()
                         .expect("the observation lock")
@@ -548,7 +555,7 @@ async fn living(
                         connection
                             .send_request(PromptRequest::new(
                                 conversed.clone(),
-                                vec![ContentBlock::Text(TextContent::new(prompt))],
+                                vec![ContentBlock::Text(TextContent::new(prompt.prompt))],
                             ))
                             .block_task(),
                     );
@@ -557,7 +564,10 @@ async fn living(
                     let answered = loop {
                         tokio::select! {
                             answered = prompting.as_mut() => break answered,
-                            Some(()) = channels.interrupts.recv(), if !cancelled => {
+                            Some(seq) = channels.interrupts.recv(), if !cancelled => {
+                                if seq != turn {
+                                    continue;
+                                }
                                 connection
                                     .send_notification(CancelNotification::new(conversed.clone()))?;
                                 heard.lock().expect("the observation lock").interrupting = true;
@@ -585,8 +595,6 @@ async fn living(
                             }
                         }
                     };
-                    // The Turn is over: nothing queued after it belongs to it.
-                    while channels.interrupts.try_recv().is_ok() {}
                     heard.lock().expect("the observation lock").interrupting = false;
                     let answered = match answered {
                         Ok(answered) => answered,

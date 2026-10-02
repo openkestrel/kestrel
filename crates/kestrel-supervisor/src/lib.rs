@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::harness::{Conversation, Harness};
+use crate::harness::{Conversation, Harness, Turn};
 use crate::link::{Answer, AnswerBody, Checkout, Down, Exit, Instruction, Link, Read, Report};
 
 const RECONNECT_AFTER: Duration = Duration::from_millis(250);
@@ -68,7 +68,7 @@ struct Carrying {
     session: String,
     checkout: Checkout,
     /// `None` for an unbriefed Session, which is opened without prompting.
-    prompt: Option<String>,
+    prompt: Option<Turn>,
     harness: Harness,
     conversation: Option<Conversation>,
     finished: bool,
@@ -657,6 +657,7 @@ async fn instructed(
         }
         Instruction::Start {
             checkout,
+            turn,
             prompt,
             harness,
         } if !carrying_it => {
@@ -666,7 +667,7 @@ async fn instructed(
                 diagnostics,
                 delivered.session,
                 checkout,
-                Some(prompt),
+                Some(Turn { seq: turn, prompt }),
                 harness,
             )
             .await;
@@ -683,7 +684,8 @@ async fn instructed(
             )
             .await;
         }
-        Instruction::Prompt { prompt } if carrying_it => {
+        Instruction::Prompt { turn, prompt } if carrying_it => {
+            let prompt = Turn { seq: turn, prompt };
             if let Some(carrying) = supervising.carrying.as_mut() {
                 carrying.working = true;
                 // An unbriefed Session's first Prompt is its Brief: it has started now.
@@ -701,10 +703,10 @@ async fn instructed(
                 None => diagnostics.info("prompted before the session started"),
             }
         }
-        Instruction::Interrupt if carrying_it => {
+        Instruction::Interrupt { turn } if carrying_it => {
             match supervising.carrying.as_ref() {
                 Some(carrying) if carrying.working => match carrying.conversation.as_ref() {
-                    Some(conversation) => conversation.interrupt(),
+                    Some(conversation) => conversation.interrupt(turn),
                     // The Turn has not reached the harness yet; it will end as it would have.
                     None => diagnostics.info("interrupted before the session started"),
                 },
@@ -754,7 +756,7 @@ async fn instructed(
         | Instruction::Start { .. }
         | Instruction::Unbriefed { .. }
         | Instruction::Prompt { .. }
-        | Instruction::Interrupt
+        | Instruction::Interrupt { .. }
         | Instruction::SetOption { .. }
         | Instruction::Unrecognized => {}
     }
@@ -768,7 +770,7 @@ async fn start_carrying(
     diagnostics: &dyn Diagnostics,
     session: String,
     checkout: Checkout,
-    prompt: Option<String>,
+    prompt: Option<Turn>,
     harness: link::Harness,
 ) {
     // A Session's start follows the last one's stop down the stream, so one still carried here is

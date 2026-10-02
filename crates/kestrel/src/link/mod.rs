@@ -50,6 +50,7 @@ const KEEP_ALIVE: Duration = Duration::from_secs(15);
 pub enum Instruction {
     Start {
         checkout: Checkout,
+        turn: i64,
         prompt: String,
         harness: Harness,
     },
@@ -60,11 +61,14 @@ pub enum Instruction {
         harness: Harness,
     },
     Prompt {
+        turn: i64,
         prompt: String,
     },
     /// Cancels the Turn the Session is in without ending it; the conversation and the Instance
-    /// stay.
-    Interrupt,
+    /// stay. Naming the Turn lets a cancel that arrives after it answered leave the next one be.
+    Interrupt {
+        turn: i64,
+    },
     /// Changes one of the Session's harness options before its next prompt (ADR-0041).
     SetOption {
         option: String,
@@ -81,7 +85,7 @@ impl Instruction {
             Instruction::Start { .. } => "start",
             Instruction::Unbriefed { .. } => "unbriefed",
             Instruction::Prompt { .. } => "prompt",
-            Instruction::Interrupt => "interrupt",
+            Instruction::Interrupt { .. } => "interrupt",
             Instruction::SetOption { .. } => "set_option",
             Instruction::Stop => "stop",
         }
@@ -208,17 +212,18 @@ pub async fn start(store: &Store, session: &Session, harness: Harness) -> Result
             workspace.id
         )
     })?;
+    let turn = tx.workspaces().first_turn(session).await?;
     let sent = sent_on(
         &mut tx,
         session,
         Instruction::Start {
             checkout: workspace.checkout.clone(),
+            turn,
             prompt,
             harness,
         },
     )
     .await?;
-    tx.workspaces().first_turn(session).await?;
     tx.commit().await?;
 
     Ok(sent)
@@ -280,11 +285,11 @@ pub(crate) async fn instruction(tx: &mut Tx<'_>, workspace: &Workspace) -> Resul
 
 /// The next turn of a waiting Session, in the same agent conversation (ADR-0024).
 pub(crate) async fn prompt(tx: &mut Tx<'_>, session: &Session, prompt: String) -> Result<()> {
-    sent_on(tx, session, Instruction::Prompt { prompt }).await?;
-    tx.workspaces()
-        .prompt_turn(session)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("the session {} is not waiting for a prompt", session.id))?;
+    let turn =
+        tx.workspaces().prompt_turn(session).await?.ok_or_else(|| {
+            anyhow::anyhow!("the session {} is not waiting for a prompt", session.id)
+        })?;
+    sent_on(tx, session, Instruction::Prompt { turn, prompt }).await?;
 
     Ok(())
 }

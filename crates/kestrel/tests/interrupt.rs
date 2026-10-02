@@ -137,7 +137,7 @@ async fn an_interrupt_records_who_asked_and_a_second_one_sends_nothing_more() {
     assert_eq!(
         instructions
             .iter()
-            .filter(|instruction| matches!(instruction, Instruction::Interrupt))
+            .filter(|instruction| matches!(instruction, Instruction::Interrupt { .. }))
             .count(),
         1,
         "a double interrupt sends one cancel: {instructions:?}"
@@ -379,7 +379,7 @@ async fn an_interrupted_report_takes_held_messages_at_once_on_the_slot_it_held()
             .await
             .iter()
             .any(|instruction| {
-                matches!(instruction, Instruction::Prompt { prompt } if prompt == "the next thing")
+                matches!(instruction, Instruction::Prompt { prompt, .. } if prompt == "the next thing")
             }),
         "the held message reached the agent"
     );
@@ -554,12 +554,60 @@ async fn a_held_message_becomes_the_next_turn_at_once() {
             .await
             .iter()
             .any(|instruction| {
-                matches!(instruction, Instruction::Prompt { prompt } if prompt == "and then this")
+                matches!(instruction, Instruction::Prompt { prompt, .. } if prompt == "and then this")
             }),
         "the held message went to the agent at once: {}",
         held.id
     );
     assert!(kestrel.held_messages(workspace.id).await.is_empty());
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_interrupt_for_a_turn_that_already_answered_leaves_the_next_turn_working() {
+    let kestrel = Kestrel::dispatching_to(
+        supervisor::binary(),
+        &scripted_agent::playing(Script::AnswersThenWorksUntilCancelled),
+    )
+    .await;
+    let workspace = a_workspace(&kestrel).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+    kestrel.answered(session.id, 1).await;
+
+    kestrel.post(workspace.id, "operator", "carry on").await;
+    until_entries(&kestrel, workspace.id, "the agent working", |entries| {
+        said(entries, "working on it")
+    })
+    .await;
+    kestrel
+        .instruct(&session, Instruction::Interrupt { turn: 1 })
+        .await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    while tokio::time::Instant::now() < deadline {
+        let session = kestrel.session(session.id).await;
+        assert_eq!(
+            session.state,
+            SessionState::Working,
+            "a cancel naming the answered turn left the next one alone"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    kestrel
+        .interrupt(session.id, "operator")
+        .await
+        .expect("the second turn is still working");
+    until_entries(&kestrel, workspace.id, "the interruption", |entries| {
+        entries.iter().any(|entry| {
+            matches!(
+                entry,
+                Entry::TurnInterrupted { participant, .. } if participant == "operator"
+            )
+        })
+    })
+    .await;
 
     kestrel.teardown().await;
 }
