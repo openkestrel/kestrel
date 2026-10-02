@@ -809,6 +809,8 @@ impl<'a> Log<'a> {
         }
     }
 
+    /// One entry beyond the window is read and dropped, which is what tells a reader whether
+    /// more are waiting without asking a second time.
     async fn read_window(
         &mut self,
         workspace: &Workspace,

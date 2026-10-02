@@ -250,11 +250,11 @@ impl Conversation {
         })
     }
 
-    /// Cancel-safe, so a caller may stop waiting on it and come back.
     pub fn try_next(&mut self) -> Option<ConversationEvent> {
         self.turns.try_recv().ok()
     }
 
+    /// Cancel-safe, so a caller may stop waiting on it and come back.
     pub async fn next(&mut self) -> ConversationEvent {
         self.turns.recv().await.unwrap_or_else(|| {
             ConversationEvent::Worked(Worked {
