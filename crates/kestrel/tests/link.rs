@@ -1002,7 +1002,10 @@ async fn a_transcript_follow_replaces_activity_and_snapshots_session_state_witho
         session.workspace
     );
     let mut stream = support::link_client::Events::over(client.get(&base).send().await.unwrap());
-    let snapshot = until_named(&mut stream, "session_state").await;
+    let Next::Event(snapshot) = stream.next_within(PATIENCE).await else {
+        panic!("no snapshot")
+    };
+    assert_eq!(snapshot.name.as_deref(), Some("session_state"));
     assert_eq!(snapshot.id, None);
     let state: serde_json::Value = serde_json::from_str(&snapshot.data).unwrap();
     assert_eq!(state["tools"], json!([]));
