@@ -1862,6 +1862,28 @@ impl Kestrel {
         self.session(session.id).await
     }
 
+    /// Enqueued and blocked in one transaction, so dispatch never sees it unblocked and starts it
+    /// unbriefed.
+    pub async fn enqueue_blocked(&self, workspace: WorkspaceId, blocker: &Session) -> Session {
+        let mut tx = self.store.begin().await.expect("a transaction");
+        let workspace = tx
+            .workspaces()
+            .get(workspace)
+            .await
+            .expect("the workspace should read");
+        let session = tx
+            .workspaces()
+            .enqueue_session(&workspace, None, Declared::default())
+            .await
+            .expect("the session should enqueue");
+        tx.workspaces()
+            .declare_blocked(&session, blocker)
+            .await
+            .expect("the session should be declared blocked");
+        tx.commit().await.expect("the enqueue should commit");
+        session
+    }
+
     pub async fn block_session(&self, session: &Session, blocker: &Session) {
         let mut tx = self.store.begin().await.expect("a transaction");
         tx.workspaces()

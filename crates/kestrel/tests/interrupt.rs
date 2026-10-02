@@ -223,9 +223,8 @@ async fn an_interrupt_is_refused_for_unbriefed_and_unreachable_sessions() {
 
     let dependent_workspace = a_workspace(&kestrel).await;
     let dependent = kestrel
-        .enqueue_session_with_nothing_posted(dependent_workspace.id)
+        .enqueue_blocked(dependent_workspace.id, &blocker)
         .await;
-    kestrel.block_session(&dependent, &blocker).await;
     kestrel.fail_session(&blocker, "the blocker failed").await;
     let unreachable = until_session(&kestrel, dependent.id, "unreachable", |session| {
         session.state == SessionState::Unreachable
