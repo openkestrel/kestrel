@@ -507,15 +507,7 @@ async fn report(
         usage,
     } = &reported.report
     {
-        let session = reported.session.ok_or(ReportRefused::MissingSession)?;
-        control_plane
-            .store
-            .read()
-            .await?
-            .workspaces()
-            .carried(&linked.instance, session)
-            .await?
-            .ok_or(ReportRefused::Gone(session))?;
+        let session = still_carried(&control_plane, &linked, reported.session).await?;
         control_plane.summaries.report_session(
             &instance,
             &session.to_string(),
@@ -529,8 +521,7 @@ async fn report(
         return Ok(StatusCode::ACCEPTED.into_response());
     }
     if let work::Report::Usage { usage } = &reported.report {
-        work::report(&control_plane.store, &linked.instance, reported.clone()).await?;
-        let session = reported.session.expect("validated session report");
+        let session = still_carried(&control_plane, &linked, reported.session).await?;
         control_plane
             .summaries
             .report_usage(&instance, &session.to_string(), usage.clone());
@@ -634,6 +625,24 @@ async fn carried(
         .carried(&linked.instance, id)
         .await?
         .ok_or_else(|| Refused::Gone(ReportRefused::Gone(id).to_string()))
+}
+
+async fn still_carried(
+    control_plane: &ControlPlane,
+    linked: &Linked,
+    session: Option<SessionId>,
+) -> Result<SessionId, Refused> {
+    let session = session.ok_or(ReportRefused::MissingSession)?;
+    control_plane
+        .store
+        .read()
+        .await?
+        .workspaces()
+        .carried(&linked.instance, session)
+        .await?
+        .ok_or(ReportRefused::Gone(session))?;
+
+    Ok(session)
 }
 
 fn bearer(headers: &HeaderMap) -> Option<Secret> {
