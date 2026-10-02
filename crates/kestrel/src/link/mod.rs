@@ -507,8 +507,15 @@ async fn report(
         usage,
     } = &reported.report
     {
-        work::report(&control_plane.store, &linked.instance, reported.clone()).await?;
-        let session = reported.session.expect("validated session report");
+        let session = reported.session.ok_or(ReportRefused::MissingSession)?;
+        control_plane
+            .store
+            .read()
+            .await?
+            .workspaces()
+            .carried(&linked.instance, session)
+            .await?
+            .ok_or(ReportRefused::Gone(session))?;
         control_plane.summaries.report_session(
             &instance,
             &session.to_string(),
