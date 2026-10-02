@@ -2,6 +2,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { Currency } from "./currency";
 import type { LinkChannel, LinkMessage } from "./link";
+import { Participant } from "./participant";
 import { transport, type StreamEvent, type Transport } from "./transport";
 
 const encoder = new TextEncoder();
@@ -280,6 +281,36 @@ describe("follow slots", () => {
 		expect(invalidated).toHaveBeenCalledWith({
 			queryKey: ["organizations", "acme", "workspaces", "brave-otter"],
 		});
+
+		tab.close();
+	});
+	it("follows anonymously until a name is declared, then follows again under it", async () => {
+		const wire = new Wire();
+		const remembered = new Map<string, string>();
+		const person = new Participant({
+			getItem: (key) => remembered.get(key) ?? null,
+			setItem: (key, value) => remembered.set(key, value),
+			removeItem: (key) => remembered.delete(key),
+		});
+		const tab = new Currency({
+			queryClient: new QueryClient(),
+			operations: wire.operations,
+			channel: null,
+			participant: person,
+			settle: 1,
+			poll: 5,
+			now: () => 7,
+			visible: () => true,
+		});
+		tab.watchFollow("acme", "brave-otter");
+
+		await vi.waitFor(() => expect(wire.requests("follow=true")).toBe(1));
+		expect(wire.requests("as=")).toBe(0);
+
+		person.remember("jill");
+
+		await vi.waitFor(() => expect(wire.held("follow=true&as=jill")).toBe(1));
+		expect(wire.held("follow=true")).toBe(1);
 
 		tab.close();
 	});

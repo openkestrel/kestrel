@@ -9,6 +9,7 @@ import {
 	type Wish,
 	type Watching,
 } from "./link";
+import type { Participant } from "./participant";
 import { noticedKey, workspaceKey } from "./queries";
 import { FollowSession, page, TranscriptMirror, type TranscriptSnapshot } from "./transcript";
 import { operatorPath, Refused, type Transport } from "./transport";
@@ -22,15 +23,15 @@ const SETTLE = 150;
 const NOTICE_RETRY = 250;
 const NOTICE_RETRY_CAP = 5_000;
 const POLL = 1_000;
-const PARTICIPANT = "operator";
 
 type Mode = "follow" | "poll" | "idle";
+type Named = Pick<Participant, "name" | "subscribe">;
 
 export type CurrencyOptions = {
 	queryClient: QueryClient;
 	operations: Transport;
 	channel?: LinkChannel | null;
-	participant?: string;
+	participant?: Named;
 	now?: () => number;
 	visible?: () => boolean;
 	settle?: number;
@@ -44,7 +45,6 @@ export type CurrencyOptions = {
 export class Currency {
 	readonly queryClient: QueryClient;
 	readonly operations: Transport;
-	readonly participant: string;
 
 	private readonly channel: LinkChannel | null;
 	private readonly now: () => number;
@@ -68,12 +68,14 @@ export class Currency {
 	private noticeOrganization: string | null = null;
 	private readonly undo: (() => void)[] = [];
 	private unlistened: (() => void) | null = null;
+	private readonly named: Named | null;
+	private unnamed: (() => void) | null = null;
 
 	constructor(options: CurrencyOptions) {
 		this.queryClient = options.queryClient;
 		this.operations = options.operations;
 		this.channel = options.channel === undefined ? sharedChannel() : options.channel;
-		this.participant = options.participant ?? PARTICIPANT;
+		this.named = options.participant ?? null;
 		this.now = options.now ?? (() => Date.now());
 		this.shown =
 			options.visible ??
@@ -84,6 +86,7 @@ export class Currency {
 		this.pollMillis = options.poll ?? POLL;
 		this.peers.set(this.tab, { watching: null, wish: null, open: null, seen: this.now() });
 		this.unlistened = this.channel?.subscribe((message) => this.heard(message)) ?? null;
+		this.unnamed = this.named?.subscribe(() => this.renamed()) ?? null;
 	}
 
 	// The Organization this tab reads. Callers are route loads; the oldest want leads, so a
@@ -114,7 +117,7 @@ export class Currency {
 				organization,
 				workspace,
 				operations: this.operations,
-				participant: this.participant,
+				participant: this.named?.name() ?? null,
 				mirror: new TranscriptMirror(),
 				refetch: () => this.refetchWorkspace(organization, workspace),
 				poll: this.pollMillis,
@@ -153,6 +156,7 @@ export class Currency {
 	close(): void {
 		this.broadcast({ kind: "bye", tab: this.tab });
 		this.unlistened?.();
+		this.unnamed?.();
 		for (const undo of this.undo) undo();
 		this.undo.length = 0;
 		for (const timer of this.timers) clearInterval(timer);
@@ -161,6 +165,11 @@ export class Currency {
 		for (const controller of this.controllers.values()) controller.setMode("idle");
 		this.channel?.close();
 		this.started = false;
+	}
+
+	private renamed(): void {
+		const name = this.named?.name() ?? null;
+		for (const controller of this.controllers.values()) controller.rename(name);
 	}
 
 	private start(): void {
@@ -430,7 +439,7 @@ export type FollowOptions = {
 	organization: string;
 	workspace: string;
 	operations: Transport;
-	participant: string;
+	participant: string | null;
 	mirror: TranscriptMirror;
 	refetch: () => void;
 	poll?: number;
@@ -446,7 +455,7 @@ export class FollowController {
 	refused = false;
 
 	private readonly operations: Transport;
-	private readonly participant: string;
+	private participant: string | null;
 	private readonly refetch: () => void;
 	private readonly pollMillis: number;
 	private mode: Mode = "idle";
@@ -475,6 +484,15 @@ export class FollowController {
 			this.mode = "idle";
 			this.apply();
 		}
+	}
+
+	// A follower registers its name when the follow opens, so a new name needs a new follow.
+	rename(participant: string | null): void {
+		if (participant === this.participant) return;
+		this.participant = participant;
+		if (!this.session) return;
+		this.stopFollow();
+		this.apply();
 	}
 
 	setMode(mode: Mode): void {

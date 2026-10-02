@@ -1,4 +1,10 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import {
+	expect,
+	test,
+	type APIRequestContext,
+	type BrowserContext,
+	type Page,
+} from "@playwright/test";
 
 const ORGANIZATION = "acme";
 
@@ -31,6 +37,13 @@ async function opened(
 
 function workPane(page: Page) {
 	return page.getByRole("region", { name: "Work", exact: true });
+}
+
+async function identified(context: BrowserContext, name: string): Promise<void> {
+	const remembered: [string, string] = ["kestrel:participant", name];
+	await context.addInitScript(([key, value]: [string, string]) => {
+		localStorage.setItem(key, value);
+	}, remembered);
 }
 
 async function viewing(page: Page, workspace: string): Promise<void> {
@@ -72,7 +85,7 @@ test("a Workspace with no Instance says so, and shows its Session and joined Par
 	await expect(work.locator("[data-joined]")).toContainText("builder");
 });
 
-test("People shows joined Participants apart from two followers and an anonymous one", async ({
+test("People shows joined Participants apart from named and anonymous followers", async ({
 	page,
 	request,
 }) => {
@@ -82,7 +95,7 @@ test("People shows joined Participants apart from two followers and an anonymous
 	await people.getByRole("tab", { name: "People" }).click();
 
 	await expect(people.locator("[data-joined]")).toContainText("builder");
-	await expect(people.locator('[data-follower="operator"]')).toBeVisible();
+	await expect(people.locator("[data-anonymous]")).toContainText("1 anonymous");
 
 	const follow = `/operator/organizations/${ORGANIZATION}/workspaces/${workspace.name}/transcript`;
 	await page.evaluate(async (transcript) => {
@@ -102,7 +115,39 @@ test("People shows joined Participants apart from two followers and an anonymous
 	}, follow);
 
 	await expect(people.locator('[data-follower="reviewer"]')).toBeVisible({ timeout: 20_000 });
+	await expect(people.locator("[data-anonymous]")).toContainText("2 anonymous");
+	await expect(people.locator("[data-follower]")).toHaveCount(1);
+});
+
+test("two browsers follow under their declared names, including one declared after loading", async ({
+	browser,
+	request,
+}) => {
+	const workspace = await opened(request, "an opening brief");
+	const jack = await browser.newContext();
+	const jill = await browser.newContext();
+	await identified(jack, "jack");
+	const first = await jack.newPage();
+	const second = await jill.newPage();
+	await viewing(first, workspace.name);
+	await viewing(second, workspace.name);
+	const people = workPane(first);
+	await people.getByRole("tab", { name: "People" }).click();
+
+	await expect(people.locator('[data-follower="jack"]')).toBeVisible({ timeout: 20_000 });
 	await expect(people.locator("[data-anonymous]")).toContainText("1 anonymous");
+
+	await second.getByLabel("Post").fill("not sent yet");
+	await second.getByRole("button", { name: "Post" }).click();
+	await second.getByLabel("Your name").fill("jill");
+	await second.getByRole("button", { name: "Use this name" }).click();
+
+	await expect(people.locator('[data-follower="jill"]')).toBeVisible({ timeout: 20_000 });
+	await expect(people.locator('[data-follower="jack"]')).toBeVisible();
+	await expect(people.locator("[data-anonymous]")).toHaveCount(0, { timeout: 20_000 });
+
+	await jack.close();
+	await jill.close();
 });
 
 // Serves the Work pane's live reads with one Workspace's answers.

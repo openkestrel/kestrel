@@ -179,7 +179,7 @@ export type FollowOptions = {
 	operations: Transport;
 	organization: string;
 	workspace: string;
-	participant: string;
+	participant: string | null;
 	mirror: TranscriptMirror;
 	onRefused: (error: Refused) => void;
 };
@@ -229,7 +229,10 @@ export class FollowSession {
 
 	private async consume(signal: AbortSignal): Promise<void> {
 		const { operations, organization, workspace, participant, mirror } = this.options;
-		const path = transcriptPath(organization, workspace, { follow: true, as: participant });
+		const path = transcriptPath(organization, workspace, {
+			follow: true,
+			as: participant ?? undefined,
+		});
 		for await (const event of operations.stream(path, { after: mirror.cursor, signal })) {
 			if (event.event === "end") {
 				mirror.apply(event);
