@@ -28,6 +28,8 @@ CREATE TABLE agent (
     name TEXT NOT NULL,
     harness TEXT NOT NULL,
     model TEXT NOT NULL,
+    mode TEXT,
+    thought_level TEXT,
     declared_at TEXT NOT NULL,
     UNIQUE (organization_id, name)
 ) STRICT;
@@ -45,6 +47,7 @@ CREATE TABLE workspace (
     observed TEXT,
     state TEXT NOT NULL,
     opened_at TEXT NOT NULL,
+    started_by_participant TEXT,
     UNIQUE (organization_id, name)
 ) STRICT;
 
