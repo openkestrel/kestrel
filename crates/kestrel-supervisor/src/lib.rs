@@ -326,33 +326,18 @@ async fn attend(
         }
     }
     if let Some(carrying) = supervising.carrying.as_ref() {
-        match report_state(link, carrying).await {
-            Ok(()) => {}
-            Err(link::Error::Session(why)) => {
-                if let Some(carrying) = supervising.carrying.take() {
-                    carrying.let_go(&why, diagnostics).await;
-                }
-            }
-            Err(error) => return Err(error),
-        }
+        let reported = report_state(link, carrying).await;
+        let_go_if_refused(reported, supervising, diagnostics).await?;
     }
     if let Some(carrying) = supervising.carrying.as_ref()
         && carrying.state.is_some()
         && carrying.prompt.is_none()
         && carrying.ready
     {
-        match link
+        let reported = link
             .report(&Report::Ready, Some(&carrying.session), None)
-            .await
-        {
-            Ok(()) => {}
-            Err(link::Error::Session(why)) => {
-                if let Some(carrying) = supervising.carrying.take() {
-                    carrying.let_go(&why, diagnostics).await;
-                }
-            }
-            Err(error) => return Err(error),
-        }
+            .await;
+        let_go_if_refused(reported, supervising, diagnostics).await?;
     }
     report_work(link, supervising, true).await?;
     // Whatever the Session held while the link was down goes up again now it is not: the
@@ -428,15 +413,8 @@ async fn attend(
                     match event {
                         harness::ConversationEvent::State(state) => {
                             carrying.state = Some(state);
-                            match report_state(link, carrying).await {
-                                Ok(()) => {}
-                                Err(link::Error::Session(why)) => {
-                                    if let Some(carrying) = supervising.carrying.take() {
-                                        carrying.let_go(&why, diagnostics).await;
-                                    }
-                                }
-                                Err(error) => return Err(error),
-                            }
+                            let reported = report_state(link, carrying).await;
+                            let_go_if_refused(reported, supervising, diagnostics).await?;
                         }
                         harness::ConversationEvent::Report(Report::Usage { usage }) => {
                             carrying.hold_usage(usage);
@@ -456,22 +434,16 @@ async fn attend(
                             report_work(link, supervising, true).await?;
                         }
                         harness::ConversationEvent::Ready => {
-                            ready(link, carrying).await?;
+                            let reported = ready(link, carrying).await;
+                            let_go_if_refused(reported, supervising, diagnostics).await?;
                         }
                     }
                 }
             }
             _ = checking.tick() => {
                 if let Some(carrying) = &supervising.carrying {
-                    match report_state(link, carrying).await {
-                        Ok(()) => {}
-                        Err(link::Error::Session(why)) => {
-                            if let Some(carrying) = supervising.carrying.take() {
-                                carrying.let_go(&why, diagnostics).await;
-                            }
-                        }
-                        Err(error) => return Err(error),
-                    }
+                    let reported = report_state(link, carrying).await;
+                    let_go_if_refused(reported, supervising, diagnostics).await?;
                 }
                 if supervising.carrying.as_ref().is_some_and(|carrying| carrying.working) {
                     report_work(link, supervising, false).await?;
@@ -479,12 +451,14 @@ async fn attend(
             }
             _ = until_session_info_due(info_due) => {
                 if let Some(carrying) = supervising.carrying.as_mut() {
-                    say_session_info(link, carrying, diagnostics).await?;
+                    let reported = say_session_info(link, carrying, diagnostics).await;
+                    let_go_if_refused(reported, supervising, diagnostics).await?;
                 }
             }
             _ = until_usage_due(usage_due) => {
                 if let Some(carrying) = supervising.carrying.as_mut() {
-                    say_usage(link, carrying, diagnostics).await?;
+                    let reported = say_usage(link, carrying, diagnostics).await;
+                    let_go_if_refused(reported, supervising, diagnostics).await?;
                 }
             }
             () = give_up_timer => {
@@ -501,6 +475,22 @@ async fn attend(
 /// An unbriefed Session's conversation is open and waiting, so dispatch can be told it is ready.
 /// A briefed one just opened the conversation its first prompt was waiting on; `started` already
 /// said so.
+async fn let_go_if_refused(
+    reported: Result<(), link::Error>,
+    supervising: &mut Supervising,
+    diagnostics: &dyn Diagnostics,
+) -> Result<(), link::Error> {
+    match reported {
+        Err(link::Error::Session(why)) => {
+            if let Some(carrying) = supervising.carrying.take() {
+                carrying.let_go(&why, diagnostics).await;
+            }
+            Ok(())
+        }
+        reported => reported,
+    }
+}
+
 async fn ready(link: &Link, carrying: &mut Carrying) -> Result<(), link::Error> {
     if carrying.prompt.is_none() {
         carrying.ready = true;
