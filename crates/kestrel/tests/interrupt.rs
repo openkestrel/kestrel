@@ -281,6 +281,37 @@ async fn a_turn_that_answers_before_the_cancel_lands_stays_answered() {
 }
 
 #[tokio::test]
+async fn a_session_that_ends_before_the_cancel_lands_no_longer_reads_as_interrupting() {
+    let kestrel = Kestrel::boot().await;
+
+    let stopped = a_working_session(&kestrel).await;
+    kestrel
+        .interrupt(stopped.id, "alice")
+        .await
+        .expect("a working turn should interrupt");
+    kestrel.stop_session(stopped.id).await;
+
+    let failed = a_working_session(&kestrel).await;
+    kestrel
+        .interrupt(failed.id, "alice")
+        .await
+        .expect("a working turn should interrupt");
+    kestrel.fail_session(&failed, "the harness crashed").await;
+
+    for (session, how) in [(stopped, "stopped"), (failed, "failed")] {
+        let after = kestrel.session(session.id).await;
+        assert_eq!(after.state, SessionState::Ended);
+        assert!(
+            after.interrupting.is_none(),
+            "a {how} Session is not still interrupting: {:?}",
+            after.interrupting
+        );
+    }
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn an_interrupted_turn_that_produced_nothing_leaves_the_session_unfailed() {
     let kestrel = Kestrel::boot().await;
     let session = a_working_session(&kestrel).await;

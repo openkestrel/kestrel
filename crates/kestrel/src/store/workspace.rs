@@ -1982,7 +1982,8 @@ impl<'a> Workspaces<'a> {
         let ended = sqlx::query(
             "UPDATE session
              SET state = ?, preparing = NULL, ended_at = ?, exit = ?, exit_because = ?,
-                 outcome_message = ?, lease_expires_at = NULL, changing_options = NULL
+                 outcome_message = ?, lease_expires_at = NULL, changing_options = NULL,
+                 interrupting_participant = NULL, interrupting_at = NULL
              WHERE id = ? AND state != ?",
         )
         .bind(SessionState::Ended.as_str())
