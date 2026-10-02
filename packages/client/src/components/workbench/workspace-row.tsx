@@ -1,13 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { CircleAlert } from "lucide-react";
+import type { WorkspaceListed } from "#/operator/generated";
 import { workQuery } from "#/operator/queries";
 import { currentUnit, needsAttention, phaseLabel } from "#/operator/session-state";
 import {
 	changedWork,
 	learnedPullRequest,
 	pullRequestsUnavailable,
-	type WorkspaceRow,
 	waitingText,
 	workNote,
 } from "#/operator/workspace-list";
@@ -17,12 +17,12 @@ export function WorkspaceRowView({
 	row,
 }: {
 	organization: string;
-	row: WorkspaceRow;
+	row: WorkspaceListed;
 }) {
-	const work = useQuery(workQuery(organization, row.workspace.name));
+	const work = useQuery(workQuery(organization, row.name));
 	const attention = needsAttention(row);
 	const changed = changedWork(work.data);
-	const pull = learnedPullRequest(row.workspace);
+	const pull = learnedPullRequest(row);
 	const unit = currentUnit(row.session);
 	const waiting = waitingText(row);
 	const note = workNote(work.data);
@@ -30,7 +30,7 @@ export function WorkspaceRowView({
 	return (
 		<Link
 			to="/organizations/$organization/workspaces/$workspace"
-			params={{ organization, workspace: row.workspace.name }}
+			params={{ organization, workspace: row.name }}
 			data-attention={attention ? "true" : "false"}
 			className="block rounded-md px-2 py-1.5 text-sm hover:bg-accent aria-[current=page]:bg-accent aria-[current=page]:font-medium"
 		>
@@ -41,12 +41,12 @@ export function WorkspaceRowView({
 						<span className="sr-only">Needs attention</span>
 					</>
 				)}
-				<span className="truncate font-medium">{row.session?.title ?? row.workspace.name}</span>
+				<span className="truncate font-medium">{row.session?.title ?? row.name}</span>
 				<span className="ml-auto shrink-0 text-muted-foreground text-xs">{phaseLabel(row)}</span>
 			</span>
 			{unit && <span className="block truncate text-muted-foreground text-xs">{unit}</span>}
 			<span className="mt-0.5 flex flex-wrap gap-x-2 text-muted-foreground text-xs">
-				<span className="truncate">{row.workspace.checkout.branch}</span>
+				<span className="truncate">{row.checkout.branch}</span>
 				{changed && (
 					<>
 						<span data-changed>
@@ -60,7 +60,7 @@ export function WorkspaceRowView({
 						#{pull.number} {pull.state}
 					</span>
 				) : (
-					pullRequestsUnavailable(row.workspace) && <span>pull requests unavailable</span>
+					pullRequestsUnavailable(row) && <span>pull requests unavailable</span>
 				)}
 			</span>
 			{waiting && (

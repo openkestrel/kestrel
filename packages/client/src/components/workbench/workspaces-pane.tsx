@@ -1,29 +1,19 @@
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { Refusal } from "#/components/refusal";
 import { buttonVariants } from "#/components/ui/button";
 import { Skeleton } from "#/components/ui/skeleton";
 import type { Queue } from "#/operator/generated";
-import { queueQuery, workspaceSessionsQuery, workspacesQuery } from "#/operator/queries";
-import { composeRow, order } from "#/operator/workspace-list";
+import { queueQuery, workspacesQuery } from "#/operator/queries";
+import { order } from "#/operator/workspace-list";
 import { PaneHeading } from "./workbench";
 import { WorkspaceRowView } from "./workspace-row";
 
 export function WorkspacesPane({ organization }: { organization: string }) {
 	const workspaces = useQuery(workspacesQuery(organization));
 	const queue = useQuery(queueQuery(organization));
-	const sessions = useQueries({
-		queries: (workspaces.data ?? []).map((workspace) =>
-			workspaceSessionsQuery(organization, workspace.name),
-		),
-	});
-
-	const rows = order(
-		(workspaces.data ?? []).map((workspace, index) =>
-			composeRow(workspace, sessions[index]?.data, queue.data),
-		),
-	);
+	const rows = order(workspaces.data ?? []);
 
 	return (
 		<>
@@ -49,7 +39,7 @@ export function WorkspacesPane({ organization }: { organization: string }) {
 				) : (
 					<ul className="grid gap-1">
 						{rows.map((row) => (
-							<li key={row.workspace.id}>
+							<li key={row.id}>
 								<WorkspaceRowView organization={organization} row={row} />
 							</li>
 						))}

@@ -1,5 +1,13 @@
 import { type QueryClient, queryOptions } from "@tanstack/react-query";
-import type { Change, Organization, Queue, Session, Workspace, WorkspaceWork } from "./generated";
+import type {
+	Change,
+	Organization,
+	Queue,
+	Session,
+	Workspace,
+	WorkspaceListed,
+	WorkspaceWork,
+} from "./generated";
 import { type Delivered, readRange, type Range } from "./transcript";
 import { operatorPath, transport } from "./transport";
 
@@ -14,7 +22,7 @@ export const workspacesQuery = (organization: string) =>
 	queryOptions({
 		queryKey: ["organizations", organization, "workspaces"],
 		queryFn: ({ signal }) =>
-			operator.read<Workspace[]>(operatorPath("organizations", organization, "workspaces"), {
+			operator.read<WorkspaceListed[]>(operatorPath("organizations", organization, "workspaces"), {
 				signal,
 			}),
 	});
@@ -109,20 +117,26 @@ export function refetchOrganization(client: QueryClient, organization: string): 
 	});
 }
 
+// The Workspace list carries each latest Session and its queue standing, so every notice refetches it.
 export async function refetchNoticed(
 	client: QueryClient,
 	organization: string,
 	change: Change,
 ): Promise<void> {
+	const list = client.invalidateQueries({
+		queryKey: workspacesQuery(organization).queryKey,
+		exact: true,
+	});
 	switch (change.resource) {
 		case "workspace":
 			await Promise.all([
-				client.invalidateQueries({ queryKey: workspacesQuery(organization).queryKey, exact: true }),
+				list,
 				client.invalidateQueries({ queryKey: workspaceKey(organization, change.workspace) }),
 			]);
 			return;
 		case "session":
 			await Promise.all([
+				list,
 				client.invalidateQueries({ queryKey: [...sessionsKey(organization), change.id] }),
 				client.invalidateQueries({
 					queryKey: workspaceSessionsQuery(organization, change.workspace).queryKey,
@@ -130,6 +144,6 @@ export async function refetchNoticed(
 			]);
 			return;
 		case "queue":
-			await client.invalidateQueries({ queryKey: queueKey(organization) });
+			await Promise.all([list, client.invalidateQueries({ queryKey: queueKey(organization) })]);
 	}
 }

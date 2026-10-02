@@ -122,8 +122,15 @@ function queued(index: number, overrides: Record<string, unknown> = {}) {
 	};
 }
 
+type Standing = {
+	workspace: string;
+	position?: number | null;
+	reasons?: unknown[];
+	pending_since?: string | null;
+};
+
 class Reads {
-	workspaces: unknown[] = [];
+	workspaces: ReturnType<typeof workspace>[] = [];
 	queue: unknown = queue();
 	sessions = new Map<number, unknown[]>();
 	work = new Map<number, unknown>();
@@ -135,7 +142,7 @@ class Reads {
 				await route.fulfill({
 					status: 200,
 					contentType: "application/json",
-					body: JSON.stringify(this.workspaces),
+					body: JSON.stringify(this.workspaces.map((listed) => this.listed(listed))),
 				});
 			},
 		);
@@ -175,6 +182,29 @@ class Reads {
 				});
 			},
 		);
+	}
+
+	// The list read carries each Workspace's latest Session and queue standing, joined as the control plane joins them.
+	private listed(listed: ReturnType<typeof workspace>) {
+		const index = Number(listed.name.replace("row-", ""));
+		// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the queue fixtures' shape.
+		const lists = this.queue as { queued: Standing[]; waiting: Standing[]; unbriefed: Standing[] };
+		const holding = (entries: Standing[]) => entries.find((entry) => entry.workspace === listed.id);
+		const ready = holding(lists.queued);
+		const waiting = holding(lists.waiting);
+		const unbriefed = holding(lists.unbriefed);
+		const standing = ready
+			? { position: ready.position ?? null, reasons: ready.reasons ?? [], pending_since: null }
+			: waiting
+				? {
+						position: null,
+						reasons: waiting.reasons ?? [],
+						pending_since: waiting.pending_since ?? null,
+					}
+				: unbriefed
+					? { position: null, reasons: [], pending_since: unbriefed.pending_since ?? null }
+					: null;
+		return { ...listed, session: this.sessions.get(index)?.at(-1) ?? null, queue: standing };
 	}
 }
 

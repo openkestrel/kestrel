@@ -574,6 +574,57 @@ struct WorkspaceRecord {
 }
 
 #[derive(Serialize)]
+struct WorkspaceListedRecord {
+    #[serde(flatten)]
+    workspace: WorkspaceRecord,
+    session: Option<SessionRecord>,
+    queue: Option<QueueStandingRecord>,
+}
+
+#[derive(Serialize)]
+struct QueueStandingRecord {
+    position: Option<usize>,
+    reasons: Vec<ReasonRecord>,
+    pending_since: Option<Timestamp>,
+}
+
+impl QueueStandingRecord {
+    fn of(snapshot: &queue::Snapshot, workspace: WorkspaceId) -> Option<Self> {
+        if let Some(queued) = snapshot
+            .queued
+            .iter()
+            .find(|queued| queued.session.workspace == workspace)
+        {
+            return Some(Self {
+                position: queued.position,
+                reasons: reasons(queued.reasons.clone()),
+                pending_since: None,
+            });
+        }
+        if let Some(waiting) = snapshot
+            .waiting
+            .iter()
+            .find(|waiting| waiting.session.workspace == workspace)
+        {
+            return Some(Self {
+                position: None,
+                reasons: reasons(waiting.reasons.clone()),
+                pending_since: waiting.pending_since,
+            });
+        }
+        snapshot
+            .unbriefed
+            .iter()
+            .find(|unbriefed| unbriefed.session.workspace == workspace)
+            .map(|unbriefed| Self {
+                position: None,
+                reasons: Vec::new(),
+                pending_since: unbriefed.pending_since,
+            })
+    }
+}
+
+#[derive(Serialize)]
 struct UnfinishedSessionRecord {
     id: String,
     name: String,
@@ -2147,11 +2198,22 @@ async fn release_instance(
 async fn workspaces(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<WorkspaceRecord>>, Refused> {
+) -> Result<Json<Vec<WorkspaceListedRecord>>, Refused> {
     let workspaces = workspace::workspaces(&control_plane.store, &organization).await?;
+    let snapshot = queue::snapshot(&control_plane.store, &organization).await?;
     let mut records = Vec::with_capacity(workspaces.len());
     for workspace in workspaces {
-        records.push(WorkspaceRecord::read(&control_plane.store, workspace).await?);
+        let id = workspace.id;
+        let session = work::sessions(&control_plane.store, id)
+            .await
+            .map_err(workspace_refusal)?
+            .pop()
+            .map(|session| SessionRecord::live(session, &control_plane.summaries));
+        records.push(WorkspaceListedRecord {
+            workspace: WorkspaceRecord::read(&control_plane.store, workspace).await?,
+            session,
+            queue: QueueStandingRecord::of(&snapshot, id),
+        });
     }
 
     Ok(Json(records))

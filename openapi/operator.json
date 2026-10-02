@@ -1108,7 +1108,7 @@
           "schema": { "type": "string" }
         }],
         "responses": {
-          "200": { "description": "Every Workspace, ordered by when it opened.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Workspace" } } } } },
+          "200": { "description": "Every Workspace, ordered by when it opened, with its latest Session and its place in the queue.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/WorkspaceListed" } } } } },
           "404": { "$ref": "#/components/responses/Refused" },
           "503": { "$ref": "#/components/responses/Refused" }
         }
@@ -3276,6 +3276,35 @@
           }
         },
         "required": ["id", "name", "organization", "project", "opened_with", "profile", "checkout", "instance", "held", "correlation", "state", "opened_at", "last_active_at", "sealed_at", "continues", "started_by", "continued_by", "held_messages", "pull_requests", "unfinished_session"]
+      },
+      "WorkspaceListed": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Workspace" },
+          {
+            "type": "object",
+            "properties": {
+              "session": {
+                "anyOf": [{ "$ref": "#/components/schemas/Session" }, { "type": "null" }],
+                "description": "The Workspace's latest Session, as the Session read answers it; null before it has one."
+              },
+              "queue": {
+                "anyOf": [{ "$ref": "#/components/schemas/QueueStanding" }, { "type": "null" }],
+                "description": "Where that Session stands in the Organization's queue; null when it is in none of the queue's lists."
+              }
+            },
+            "required": ["session", "queue"]
+          }
+        ]
+      },
+      "QueueStanding": {
+        "type": "object",
+        "description": "A Workspace's Session as the queue sees it: queued with a position or reasons, waiting with reasons and held input, or unbriefed with held input.",
+        "properties": {
+          "position": { "type": ["integer", "null"], "minimum": 1, "description": "Its place among queued Sessions; null while a reason holds it, or when it is not queued." },
+          "reasons": { "type": "array", "items": { "$ref": "#/components/schemas/QueueReason" } },
+          "pending_since": { "type": ["string", "null"], "format": "date-time", "description": "When the oldest input held for its next turn arrived." }
+        },
+        "required": ["position", "reasons", "pending_since"]
       },
       "UnfinishedSession": {
         "type": "object",

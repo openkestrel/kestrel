@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { Queue, QueueReason, Session, Workspace, WorkspaceWork } from "./generated";
+import type {
+	QueueStanding,
+	Session,
+	Workspace,
+	WorkspaceListed,
+	WorkspaceWork,
+} from "./generated";
 import { currentUnit, needsAttention, phaseLabel, phaseOf } from "./session-state";
 import {
 	changedWork,
-	composeRow,
 	learnedPullRequest,
 	order,
 	pullRequestsUnavailable,
@@ -73,15 +78,15 @@ function session(overrides: Partial<Session> = {}): Session {
 	};
 }
 
-function queue(overrides: Partial<Queue> = {}): Queue {
+function listed(
+	overrides: Partial<Workspace>,
+	latest: Session | null,
+	queue: Partial<QueueStanding> | null = null,
+): WorkspaceListed {
 	return {
-		work_role: null,
-		active_work: { limit: null, occupied: 0, occupants: [], elsewhere: 0 },
-		instances: { limit: null, count: 0, counted: [] },
-		queued: [],
-		waiting: [],
-		unbriefed: [],
-		...overrides,
+		...workspace(overrides),
+		session: latest,
+		queue: queue && { position: null, reasons: [], pending_since: null, ...queue },
 	};
 }
 
@@ -102,56 +107,22 @@ function pull(number: number, updated_at: string) {
 describe("the Workspace list order", () => {
 	it("puts attention, then working, waiting and queued FIFO", () => {
 		const rows = [
-			composeRow(
-				workspace({ id: "q2", name: "q2", opened_at: "2026-09-30T10:04:00Z" }),
-				[session({ workspace: "q2", enqueued_at: "2026-09-30T10:04:00Z" })],
-				queue({
-					queued: [
-						{
-							position: 2,
-							name: "q2",
-							workspace: "q2",
-							agent: "builder",
-							reasons: [],
-							enqueued_at: "2026-09-30T10:04:00Z",
-						},
-					],
-				}),
+			listed(
+				{ id: "q2", name: "q2", opened_at: "2026-09-30T10:04:00Z" },
+				session({ enqueued_at: "2026-09-30T10:04:00Z" }),
+				{ position: 2 },
 			),
-			composeRow(
-				workspace({ id: "working", name: "working" }),
-				[session({ workspace: "working", state: "working" })],
-				undefined,
-			),
-			composeRow(
-				workspace({ id: "attention", name: "attention" }),
-				[session({ workspace: "attention", state: "unreachable" })],
-				undefined,
-			),
-			composeRow(
-				workspace({ id: "waiting", name: "waiting" }),
-				[session({ workspace: "waiting", state: "waiting" })],
-				undefined,
-			),
-			composeRow(
-				workspace({ id: "q1", name: "q1", opened_at: "2026-09-30T10:03:00Z" }),
-				[session({ workspace: "q1", enqueued_at: "2026-09-30T10:03:00Z" })],
-				queue({
-					queued: [
-						{
-							position: 1,
-							name: "q1",
-							workspace: "q1",
-							agent: "builder",
-							reasons: [],
-							enqueued_at: "2026-09-30T10:03:00Z",
-						},
-					],
-				}),
+			listed({ id: "working", name: "working" }, session({ state: "working" })),
+			listed({ id: "attention", name: "attention" }, session({ state: "unreachable" })),
+			listed({ id: "waiting", name: "waiting" }, session({ state: "waiting" })),
+			listed(
+				{ id: "q1", name: "q1", opened_at: "2026-09-30T10:03:00Z" },
+				session({ enqueued_at: "2026-09-30T10:03:00Z" }),
+				{ position: 1 },
 			),
 		];
 
-		expect(order(rows).map((row) => row.workspace.name)).toEqual([
+		expect(order(rows).map((row) => row.name)).toEqual([
 			"attention",
 			"working",
 			"waiting",
@@ -159,92 +130,35 @@ describe("the Workspace list order", () => {
 			"q2",
 		]);
 	});
-
-	it("keeps a queued Session's place from the queue, and a waiting Session out of it", () => {
-		const row = composeRow(
-			workspace(),
-			[session({ state: "waiting" })],
-			queue({
-				waiting: [
-					{
-						name: "calm-river-abcdefgh",
-						workspace: "11111111-1111-1111-1111-111111111111",
-						agent: "builder",
-						pending_since: "2026-09-30T10:01:00Z",
-						reasons: [{ kind: "ahead", sessions: ["calm-river-abcdefgh"] }],
-						enqueued_at: "2026-09-30T10:00:00Z",
-					},
-				],
-			}),
-		);
-
-		expect(row.position).toBeNull();
-		expect(row.pendingSince).toBe("2026-09-30T10:01:00Z");
-		expect(phaseOf(row)).toBe("waiting");
-		expect(phaseLabel(row)).toBe("Waiting");
-	});
 });
 
 describe("attention", () => {
 	it("is a held Instance, a lost supervisor or a failed Session", () => {
-		expect(needsAttention(composeRow(workspace({ held: "unpublished work" }), [], undefined))).toBe(
-			true,
-		);
-		expect(
-			needsAttention(composeRow(workspace(), [session({ state: "unreachable" })], undefined)),
-		).toBe(true);
+		expect(needsAttention(listed({ held: "unpublished work" }, null))).toBe(true);
+		expect(needsAttention(listed({}, session({ state: "unreachable" })))).toBe(true);
 		expect(
 			needsAttention(
-				composeRow(
-					workspace(),
-					[session({ state: "ended", exit: { status: "failed", because: "it broke" } })],
-					undefined,
-				),
+				listed({}, session({ state: "ended", exit: { status: "failed", because: "it broke" } })),
 			),
 		).toBe(true);
 		expect(
-			needsAttention(
-				composeRow(
-					workspace(),
-					[session({ state: "ended", exit: { status: "succeeded" } })],
-					undefined,
-				),
-			),
+			needsAttention(listed({}, session({ state: "ended", exit: { status: "succeeded" } }))),
 		).toBe(false);
 	});
 });
 
 describe("a row's phase", () => {
 	it("names preparing, working, waiting and queued", () => {
-		expect(phaseLabel(composeRow(workspace(), [session({ state: "unbriefed" })], undefined))).toBe(
-			"Preparing",
-		);
-		expect(phaseLabel(composeRow(workspace(), [session({ state: "working" })], undefined))).toBe(
-			"Working",
-		);
-		expect(phaseLabel(composeRow(workspace(), [session({ state: "queued" })], undefined))).toBe(
-			"Queued",
-		);
-		expect(
-			phaseLabel(
-				composeRow(
-					workspace(),
-					[session({ state: "queued" })],
-					queue({
-						queued: [
-							{
-								position: 3,
-								name: "calm-river-abcdefgh",
-								workspace: "11111111-1111-1111-1111-111111111111",
-								agent: "builder",
-								reasons: [],
-								enqueued_at: "2026-09-30T10:00:00Z",
-							},
-						],
-					}),
-				),
-			),
-		).toBe("Queued #3");
+		expect(phaseLabel(listed({}, session({ state: "unbriefed" })))).toBe("Preparing");
+		expect(phaseLabel(listed({}, session({ state: "working" })))).toBe("Working");
+		expect(phaseLabel(listed({}, session({ state: "queued" })))).toBe("Queued");
+		expect(phaseLabel(listed({}, session({ state: "queued" }), { position: 3 }))).toBe("Queued #3");
+		const waiting = listed({}, session({ state: "waiting" }), {
+			pending_since: "2026-09-30T10:01:00Z",
+		});
+		expect(phaseOf(waiting)).toBe("waiting");
+		expect(phaseLabel(waiting)).toBe("Waiting");
+		expect(phaseLabel(listed({}, null))).toBe("Open");
 	});
 });
 
@@ -276,41 +190,15 @@ describe("the current unit", () => {
 
 describe("queue reasons", () => {
 	it("joins a waiting row's reasons, and falls back to held input", () => {
-		const held: QueueReason = { kind: "active_work_slots", limit: 1 };
-		const row = composeRow(
-			workspace(),
-			[session({ state: "waiting" })],
-			queue({
-				waiting: [
-					{
-						name: "calm-river-abcdefgh",
-						workspace: "11111111-1111-1111-1111-111111111111",
-						agent: "builder",
-						pending_since: "2026-09-30T10:01:00Z",
-						reasons: [held],
-						enqueued_at: "2026-09-30T10:00:00Z",
-					},
-				],
-			}),
-		);
+		const row = listed({}, session({ state: "waiting" }), {
+			pending_since: "2026-09-30T10:01:00Z",
+			reasons: [{ kind: "active_work_slots", limit: 1 }],
+		});
 		expect(waitingText(row)).toBe("every Active-Work Slot is occupied (1)");
 
-		const input = composeRow(
-			workspace(),
-			[session({ state: "waiting" })],
-			queue({
-				waiting: [
-					{
-						name: "calm-river-abcdefgh",
-						workspace: "11111111-1111-1111-1111-111111111111",
-						agent: "builder",
-						pending_since: new Date(Date.now() - 120_000).toISOString(),
-						reasons: [],
-						enqueued_at: "2026-09-30T10:00:00Z",
-					},
-				],
-			}),
-		);
+		const input = listed({}, session({ state: "waiting" }), {
+			pending_since: new Date(Date.now() - 120_000).toISOString(),
+		});
 		expect(waitingText(input)).toBe("input held since 2 minutes ago");
 	});
 });

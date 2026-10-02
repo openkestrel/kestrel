@@ -1,16 +1,12 @@
 import { preparingStep } from "./format";
-import type { Session, Workspace } from "./generated";
+import type { Session, WorkspaceListed } from "./generated";
 
 export type RowPhase = "attention" | "working" | "waiting" | "queued" | "idle";
 
-export type SessionRow = {
-	workspace: Pick<Workspace, "held">;
-	session: Session | undefined;
-	position: number | null;
-};
+export type SessionRow = Pick<WorkspaceListed, "held" | "session" | "queue">;
 
 export function needsAttention(row: SessionRow): boolean {
-	if (row.workspace.held !== null) return true;
+	if (row.held !== null) return true;
 	if (row.session?.state === "unreachable") return true;
 	return row.session?.state === "ended" && row.session.exit?.status === "failed";
 }
@@ -33,7 +29,8 @@ export function phaseOf(row: SessionRow): RowPhase {
 export function phaseLabel(row: SessionRow): string {
 	if (needsAttention(row)) return "Attention";
 	if (!row.session) return "Open";
-	if (row.session.state === "queued" && row.position !== null) return `Queued #${row.position}`;
+	const position = row.queue?.position ?? null;
+	if (row.session.state === "queued" && position !== null) return `Queued #${position}`;
 	return sessionPhase(row.session);
 }
 
@@ -58,7 +55,7 @@ export function sessionPhase(session: Session): string {
 	}
 }
 
-export function currentUnit(session: Session | undefined): string | undefined {
+export function currentUnit(session: Session | null | undefined): string | undefined {
 	if (!session) return undefined;
 	const running =
 		session.tools.find((tool) => tool.status !== "completed" && tool.status !== "failed") ??

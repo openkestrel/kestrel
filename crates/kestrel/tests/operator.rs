@@ -1957,6 +1957,10 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
         .as_str()
         .expect("a generated session name");
     assert_eq!(opened["session"]["state"], "queued");
+    let (status, listed) = got(&kestrel, &workspaces).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed[0]["session"]["id"], session_id, "{listed}");
+    assert!(listed[0]["queue"]["reasons"].is_array(), "{listed}");
     let shown = workspace_at("acme", workspace);
     let messages = workspace_messages_at("acme", workspace);
     let sessions = sessions_of("acme", workspace);
@@ -5641,6 +5645,12 @@ fn requires(document: &Value, schema: &Value, body: &Value) {
             .find(|option| (option["type"] == "null") == body.is_null())
             .expect("the documented alternatives include the answer");
         requires(document, option, body);
+        return;
+    }
+    if let Some(parts) = schema["allOf"].as_array() {
+        for part in parts {
+            requires(document, part, body);
+        }
         return;
     }
     if schema["type"] == "array" {

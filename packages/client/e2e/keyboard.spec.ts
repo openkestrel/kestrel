@@ -118,6 +118,17 @@ test("a keyboard-only pass finds a running Session, follows it, opens a diff and
 		},
 	);
 	await page.route(
+		(url) => url.pathname === `/operator/organizations/${ORGANIZATION}/workspaces`,
+		async (route) => {
+			if (route.request().method() !== "GET") return route.continue();
+			const listed = await route.fetch();
+			const body: { name: string }[] = await listed.json();
+			const shown = body.find((item) => item.name === workspace.name);
+			if (shown) Object.assign(shown, { session: workingSession(workspace)[0], queue: null });
+			await route.fulfill({ response: listed, json: body });
+		},
+	);
+	await page.route(
 		(url) => url.pathname === `${base}/changes`,
 		async (route) => {
 			await route.fulfill({

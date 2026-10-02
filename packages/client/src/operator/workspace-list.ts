@@ -1,21 +1,6 @@
 import { ago, reasonText } from "./format";
-import type {
-	PullRequest,
-	Queue,
-	QueueReason,
-	Session,
-	Workspace,
-	WorkspaceWork,
-} from "./generated";
+import type { PullRequest, Workspace, WorkspaceListed, WorkspaceWork } from "./generated";
 import { phaseOf, type RowPhase } from "./session-state";
-
-export type WorkspaceRow = {
-	workspace: Workspace;
-	session: Session | undefined;
-	position: number | null;
-	reasons: QueueReason[];
-	pendingSince: string | null;
-};
 
 const RANK: Record<RowPhase, number> = {
 	attention: 0,
@@ -25,80 +10,29 @@ const RANK: Record<RowPhase, number> = {
 	idle: 4,
 };
 
-export function composeRow(
-	workspace: Workspace,
-	sessions: Session[] | undefined,
-	queue: Queue | undefined,
-): WorkspaceRow {
-	const session = latestSession(sessions);
-	const entry = queueEntry(queue, session, workspace);
-
-	return {
-		workspace,
-		session,
-		position: entry.position,
-		reasons: entry.reasons,
-		pendingSince: entry.pendingSince,
-	};
-}
-
-function latestSession(sessions: Session[] | undefined): Session | undefined {
-	return sessions?.at(-1);
-}
-
-function queueEntry(
-	queue: Queue | undefined,
-	session: Session | undefined,
-	workspace: Workspace,
-): { position: number | null; reasons: QueueReason[]; pendingSince: string | null } {
-	if (!queue) return { position: null, reasons: [], pendingSince: null };
-
-	const names = session?.name;
-	const queued = queue.queued.find(
-		(entry) => entry.name === names || entry.workspace === workspace.id,
-	);
-	if (queued) return { position: queued.position, reasons: queued.reasons, pendingSince: null };
-
-	const waiting = queue.waiting.find(
-		(entry) => entry.name === names || entry.workspace === workspace.id,
-	);
-	if (waiting) {
-		return { position: null, reasons: waiting.reasons, pendingSince: waiting.pending_since };
-	}
-
-	const unbriefed = queue.unbriefed.find(
-		(entry) => entry.name === names || entry.workspace === workspace.id,
-	);
-	return {
-		position: null,
-		reasons: [],
-		pendingSince: unbriefed?.pending_since ?? null,
-	};
-}
-
-export function order(rows: WorkspaceRow[]): WorkspaceRow[] {
+export function order(rows: WorkspaceListed[]): WorkspaceListed[] {
 	return rows.toSorted((one, other) => {
 		const rank = RANK[phaseOf(one)] - RANK[phaseOf(other)];
 		if (rank !== 0) return rank;
 		if (phaseOf(one) === "queued") {
 			const position =
-				(one.position ?? Number.MAX_SAFE_INTEGER) - (other.position ?? Number.MAX_SAFE_INTEGER);
+				(one.queue?.position ?? Number.MAX_SAFE_INTEGER) -
+				(other.queue?.position ?? Number.MAX_SAFE_INTEGER);
 			if (position !== 0) return position;
 		}
-		return (
-			enqueued(one) - enqueued(other) || one.workspace.name.localeCompare(other.workspace.name)
-		);
+		return enqueued(one) - enqueued(other) || one.name.localeCompare(other.name);
 	});
 }
 
-function enqueued(row: WorkspaceRow): number {
-	const at = row.session?.enqueued_at ?? row.workspace.opened_at;
+function enqueued(row: WorkspaceListed): number {
+	const at = row.session?.enqueued_at ?? row.opened_at;
 	return Date.parse(at) || 0;
 }
 
-export function waitingText(row: WorkspaceRow): string | undefined {
-	if (row.reasons.length > 0) return row.reasons.map(reasonText).join("; ");
-	if (row.pendingSince) return `input held since ${ago(row.pendingSince)}`;
+export function waitingText(row: WorkspaceListed): string | undefined {
+	const reasons = row.queue?.reasons ?? [];
+	if (reasons.length > 0) return reasons.map(reasonText).join("; ");
+	if (row.queue?.pending_since) return `input held since ${ago(row.queue.pending_since)}`;
 	return undefined;
 }
 

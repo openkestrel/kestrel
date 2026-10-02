@@ -1,7 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { followChanges } from "./follow";
-import { queueKey, sessionsKey, workspaceSessionsQuery } from "./queries";
+import { queueKey, sessionsKey, workspaceSessionsQuery, workspacesQuery } from "./queries";
 import { transport } from "./transport";
 
 const encoder = new TextEncoder();
@@ -37,13 +37,15 @@ describe("an Organization's change notices", () => {
 
 		void followChanges(operations, client, "acme", controller.signal);
 		await vi.waitFor(() => expect(streams).toBe(2));
-		await vi.waitFor(() => expect(invalidated).toHaveBeenCalledTimes(5));
+		await vi.waitFor(() => expect(invalidated).toHaveBeenCalledTimes(7));
 		controller.abort();
 
 		const keys = invalidated.mock.calls.map(([filters]) => filters?.queryKey);
 		expect(keys).toEqual([
 			["organizations"],
+			workspacesQuery("acme").queryKey,
 			queueKey("acme"),
+			workspacesQuery("acme").queryKey,
 			[...sessionsKey("acme"), "s1"],
 			workspaceSessionsQuery("acme", "brave-otter").queryKey,
 			["organizations"],
