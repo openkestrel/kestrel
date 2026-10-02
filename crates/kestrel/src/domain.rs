@@ -67,8 +67,7 @@ pub struct Project {
     pub branch: String,
 }
 
-/// The three categories a declaration may name, each a Harness value id: a category named none
-/// for is the Harness's own default (ADR-0041).
+/// Each a Harness value id; a category named none for is the Harness's own default (ADR-0041).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Declared {
     pub model: Option<String>,
@@ -77,7 +76,6 @@ pub struct Declared {
 }
 
 impl Declared {
-    /// This declaration over one below it, category by category.
     pub fn over(self, below: Self) -> Self {
         Self {
             model: self.model.or(below.model),
@@ -110,7 +108,6 @@ pub struct Agent {
     pub organization: OrganizationId,
     pub name: String,
     pub harness: String,
-    /// What the Agent declares for the Harness's model, mode and thought level.
     pub declared: Declared,
 }
 
@@ -429,8 +426,7 @@ pub struct Trigger {
     pub templates: Templates,
     pub project: Project,
     pub agent: Agent,
-    /// What the Trigger declares for its Sessions' model, mode and thought level, over the
-    /// Agent's and under a Session's own (ADR-0041).
+    /// Over the Agent's and under a Session's own (ADR-0041).
     pub declared: Declared,
     pub allows: Vec<Agent>,
     pub profile: Option<SubscriptionProfile>,
@@ -646,15 +642,12 @@ pub struct Checkout {
     pub branch: String,
 }
 
-/// A person's request that a Session's working Turn stop, while the Turn is still in flight.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Interrupting {
     pub participant: String,
     pub requested_at: Timestamp,
 }
 
-/// A message the Workspace's unfinished Session cannot take yet: everyone can read it, and its
-/// author can edit or withdraw it until a Turn takes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeldMessage {
     /// The Workspace's own sequence, never reused because a taken or withdrawn row is kept.
@@ -665,8 +658,6 @@ pub struct HeldMessage {
     pub edited_at: Option<Timestamp>,
 }
 
-/// What started a Workspace: the Event whose firing opened it, or the Brief's author an operator
-/// named.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StartedBy {
     Event(EventRecordId),
@@ -711,7 +702,6 @@ pub struct Session {
     /// With the harness and model fixed when the Session was enqueued, never redeclared under it.
     pub agent: Agent,
     pub state: SessionState,
-    /// The step an unbriefed Session is preparing on, and `None` for every other state.
     pub preparing: Option<Preparing>,
     pub exit: Option<Exit>,
     pub outcome_message: Option<String>,
@@ -719,16 +709,10 @@ pub struct Session {
     pub supervisor: Option<String>,
     /// What the Harness reported it worked on.
     pub worked_model: Option<String>,
-    /// The harness's own name for the conversation, kept current.
     pub title: Option<String>,
-    /// The harness's whole config-option list, kept current.
     pub options: Vec<SessionOption>,
-    /// Option changes a person asked for while the Session is live, held until the harness
-    /// answers each (ADR-0041).
     pub changing_options: Vec<ChangingOption>,
-    /// The commands the harness offers for this Session.
     pub commands: Vec<SessionCommand>,
-    /// Who asked the working Turn to stop, while the request is in flight.
     pub interrupting: Option<Interrupting>,
     pub enqueued_at: Timestamp,
     pub started_at: Option<Timestamp>,
@@ -745,8 +729,6 @@ pub struct Turn {
     pub answered_at: Option<Timestamp>,
 }
 
-/// One option change a person asked for on a live Session, held from the write until the harness
-/// answers it (ADR-0041).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangingOption {
     pub option: String,
@@ -755,9 +737,8 @@ pub struct ChangingOption {
     pub participant: String,
 }
 
-/// A Session's harness config option: the whole of what it is, what it may be and what it is now
-/// (ADR-0041). `category` is kestrel's own name for a well-known option, or the harness's own
-/// string, which may begin with `_`.
+/// `category` is kestrel's own name for a well-known option, or the harness's own string, which may
+/// begin with `_`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionOption {
     pub id: String,
@@ -791,7 +772,6 @@ impl SessionOption {
     pub const MODEL_CONFIG: &'static str = "model_config";
     pub const THOUGHT_LEVEL: &'static str = "thought_level";
 
-    /// What the Session read and delivery call the model the agent is on.
     pub fn current_value(&self) -> Option<String> {
         match &self.kind {
             SessionOptionKind::Select { current, .. } => Some(current.clone()),
@@ -819,7 +799,6 @@ pub struct SessionOptionGroup {
     pub values: Vec<SessionOptionValue>,
 }
 
-/// A command the harness offers for the Session, as a composer lists it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionCommand {
     pub name: String,
@@ -857,8 +836,8 @@ pub enum SessionState {
     Queued,
     Working,
     Waiting,
-    /// Its harness is up and its conversation is open, with no Brief yet: the first message
-    /// becomes the Brief and the first Turn (ADR-0038). It holds no Active-Work Slot.
+    /// The first message becomes the Brief and the first Turn (ADR-0038); it holds no Active-Work
+    /// Slot.
     Unbriefed,
     Ended,
     /// Terminal like `Ended`, but with no exit status: a queued Session whose declared tolerance
@@ -918,17 +897,12 @@ impl FromStr for SessionState {
     }
 }
 
-/// How far an unbriefed Session's harness has been prepared. It is current Session state, never a
-/// Transcript entry.
+/// Current Session state, never a Transcript entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preparing {
-    /// From claim until the supervisor connects.
     Provisioning,
-    /// From the supervisor connecting until the checkout is reported.
     Cloning,
-    /// From the checkout being reported until the supervisor reports ready.
     StartingHarness,
-    /// Once the supervisor reports the harness up and its conversation open.
     HarnessReady,
 }
 

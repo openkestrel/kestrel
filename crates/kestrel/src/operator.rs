@@ -106,18 +106,14 @@ pub const SESSION: &str = "/operator/organizations/{organization}/sessions/{sess
 pub const SESSION_INTERRUPT: &str =
     "/operator/organizations/{organization}/sessions/{session}/interrupt";
 pub const SESSION_STOP: &str = "/operator/organizations/{organization}/sessions/{session}/stop";
-/// One option a person changes on a Session between Turns (ADR-0041).
 pub const SESSION_OPTIONS: &str =
     "/operator/organizations/{organization}/sessions/{session}/options";
 pub const TRANSCRIPT: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/transcript";
 pub const TRANSCRIPT_PAYLOAD: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/transcript/payloads/{payload}";
-/// Where a Workspace follow renews its presence lease.
 pub const FOLLOWER_LEASE: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/followers/{id}/lease";
-/// The Organization's change notices: which Workspace, Session or queue changed, never a copy
-/// of its state.
 pub const CHANGES: &str = "/operator/organizations/{organization}/changes";
 /// One read of a Workspace's queue: the limits, their occupancy, and the queued Sessions in
 /// dispatch order.
@@ -181,15 +177,12 @@ enum Because {
     Sealed,
 }
 
-/// The id and lease a registered follow is handed so it can renew.
 #[derive(Serialize)]
 struct FollowerEvent {
     id: crate::presence::FollowerId,
     lease_seconds: u64,
 }
 
-/// `open` and `resync` say the Client must refetch every view it subscribes to, and carry
-/// nothing else.
 #[derive(Serialize)]
 struct Refetch {}
 
@@ -553,8 +546,6 @@ struct WorkspaceRecord {
     continued_by: Vec<String>,
     held_messages: Vec<HeldMessage>,
     pull_requests: Vec<PullRequestAvailabilityRecord>,
-    /// The Session the Workspace has not let go of, while it has one: an unbriefed one shows the
-    /// step it is preparing on here.
     unfinished_session: Option<UnfinishedSessionRecord>,
 }
 
@@ -566,8 +557,6 @@ struct UnfinishedSessionRecord {
     preparing: Option<String>,
 }
 
-/// What a post became: the Session it started or woke, and the Held Message it left, if it was
-/// held rather than recorded at once.
 #[derive(Serialize)]
 struct PostedRecord {
     session: Option<SessionRecord>,
@@ -628,7 +617,6 @@ struct SessionRecord {
     name: String,
     workspace: String,
     state: String,
-    /// The step an unbriefed Session is preparing on; null in every other state.
     preparing: Option<String>,
     exit: Option<domain::Exit>,
     outcome_message: Option<String>,
@@ -642,11 +630,8 @@ struct SessionRecord {
     worked_model: Option<String>,
     title: Option<String>,
     options: Vec<SessionOptionRecord>,
-    /// Option changes a person asked for while the Session is live, held until the harness
-    /// answers each (ADR-0041).
     changing_options: Vec<domain::ChangingOption>,
     commands: Vec<domain::SessionCommand>,
-    /// Who asked the working Turn to stop, while the request is in flight.
     interrupting: Option<domain::Interrupting>,
     enqueued_at: Timestamp,
     started_at: Option<Timestamp>,
@@ -664,8 +649,6 @@ struct SessionRecord {
 struct SessionOptionRecord {
     #[serde(flatten)]
     option: domain::SessionOption,
-    /// Whether changing this option makes the next Turn re-read the context without the prompt
-    /// cache, by ADR-0041's per-harness table.
     warns_cache: bool,
 }
 
@@ -1959,7 +1942,6 @@ struct ReleasedRecord {
 struct WorkRoleRecord {
     active_work_slots: usize,
     serialized_harnesses: Vec<String>,
-    /// The Compute driver the role provisions Instances with.
     driver: String,
 }
 
@@ -2033,10 +2015,7 @@ struct UnbriefedSessionRecord {
     name: String,
     workspace: String,
     agent: String,
-    /// The step it is preparing on: provisioning, cloning, starting_harness or
-    /// harness_ready.
     preparing: Option<String>,
-    /// When the oldest message held for its Brief arrived, or null while it holds none.
     pending_since: Option<Timestamp>,
     enqueued_at: Timestamp,
 }
@@ -2465,8 +2444,6 @@ async fn show_session(
         .into_response())
 }
 
-/// A strong validator over the exact bytes served, so two reads of one unchanged Session answer
-/// the same tag and any change answers a new one (ADR-0041).
 fn strong_etag(body: &str) -> String {
     let digest = sha2::Sha256::digest(body.as_bytes());
     let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
@@ -2518,7 +2495,6 @@ async fn stop_session(
     Ok(Json(SessionRecord::read(session)))
 }
 
-/// A person changes one of a Session's options between Turns (ADR-0041).
 async fn set_session_option(
     State(control_plane): State<ControlPlane>,
     Path((organization, session)): Path<(String, String)>,
@@ -2799,8 +2775,7 @@ async fn transcript(
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(KEEP_ALIVE)))
 }
 
-/// Extends a registered follow's lease, so presence outlives a browser or CLI that keeps
-/// reading. An unknown or expired follower is a 404, never a fresh registration.
+/// An unknown or expired follower is a 404, never a fresh registration.
 async fn renew_follower(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace, id)): Path<(String, String, String)>,
@@ -2911,8 +2886,6 @@ enum Refused {
     Gone(String),
     Conflict(String),
     Unprocessable(String),
-    /// A value a person named, refused: the request field it came in travels with the reason, and
-    /// the status is the one the unnamed refusal would carry.
     Named {
         status: StatusCode,
         field: &'static str,

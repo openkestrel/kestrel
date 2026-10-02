@@ -1,6 +1,3 @@
-//! Live usage: what a harness has spent reaches a follower as transient Session state, and the
-//! Session read keeps what the latest Turn recorded (ADR-0041).
-
 mod support;
 
 use std::time::Duration;
@@ -88,8 +85,6 @@ async fn until_named(stream: &mut Events, name: &str) -> support::link_client::E
     }
 }
 
-/// A burst of usage updates reaches a follower as the one value it settled on: the trailing-edge
-/// report carries the last, never the ones a harness reported on the way there.
 #[tokio::test]
 async fn a_burst_of_usage_updates_reaches_a_follower_once_with_the_last_value() {
     let kestrel = dispatching(Script::BurstsUsage).await;
@@ -146,7 +141,6 @@ async fn a_burst_of_usage_updates_reaches_a_follower_once_with_the_last_value() 
     kestrel.teardown().await;
 }
 
-/// A follower that connects while the Turn is still working gets the usage in its first snapshot.
 #[tokio::test]
 async fn a_follower_connecting_mid_turn_gets_current_usage_in_its_snapshot() {
     let kestrel = dispatching(Script::BurstsUsage).await;
@@ -178,8 +172,6 @@ async fn a_follower_connecting_mid_turn_gets_current_usage_in_its_snapshot() {
     kestrel.teardown().await;
 }
 
-/// What a Turn reported is recorded when the Turn answers, so a Session that has ended — where
-/// nothing is live any more — still reads what it spent.
 #[tokio::test]
 async fn usage_reported_during_a_turn_reaches_the_read_once_the_session_ends() {
     let kestrel = dispatching(Script::BurstsUsage).await;

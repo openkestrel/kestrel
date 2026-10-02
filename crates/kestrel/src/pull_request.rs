@@ -150,8 +150,8 @@ async fn matching(
     Ok(matched)
 }
 
-/// Two deliveries whose source freshness ties while they disagree are settled by the repository
-/// itself, never by which arrived first. Nothing to settle leaves the current value alone.
+/// Two deliveries that tie on source freshness but disagree are settled by the repository itself,
+/// never by which arrived first.
 async fn reconciling(
     store: &Store,
     github: &Github,

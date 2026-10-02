@@ -89,8 +89,6 @@ impl Stream {
         }
     }
 
-    /// The `follower` event a follow is handed once it stays open past caught-up, after any
-    /// entries it replayed.
     async fn follower(&mut self) -> (String, u64) {
         loop {
             let frame = self
@@ -132,8 +130,6 @@ impl Stream {
         }
     }
 
-    /// The next presence event, or `None` when none arrives within `patience`; entries a follow
-    /// also carries are skipped.
     async fn presence_within(&mut self, patience: Duration) -> Option<Value> {
         let deadline = tokio::time::Instant::now() + patience;
 
@@ -198,7 +194,6 @@ fn lease_url(kestrel: &Kestrel, workspace: &Workspace, id: &str) -> String {
     format!("{}{path}", kestrel.operator())
 }
 
-/// Renews a follow every second until dropped, the way a Client keeps presence alive.
 struct Keeping(tokio::task::JoinHandle<()>);
 
 impl Drop for Keeping {
@@ -530,7 +525,6 @@ async fn the_cli_follow_is_counted_renews_and_prints_no_presence() {
         ],
     );
 
-    // The replay prints entries and nothing else, up to the first post.
     loop {
         let (returned, line) = printed(cli).await;
         cli = returned;
@@ -545,7 +539,6 @@ async fn the_cli_follow_is_counted_renews_and_prints_no_presence() {
         }
     }
 
-    // A test-side follow sees the CLI counted as Ada.
     let mut watcher = Stream::follow(&kestrel, &workspace, None).await;
     let (watcher_id, _) = watcher.follower().await;
     let _keeping = keeping(&kestrel, &workspace, &watcher_id);
@@ -577,7 +570,6 @@ async fn the_cli_follow_is_counted_renews_and_prints_no_presence() {
         "the CLI's follow lapsed instead of renewing: {lapsed:?}"
     );
 
-    // A dropped stream removes its follower at once.
     drop(cli);
     assert_eq!(
         watcher.presence().await,

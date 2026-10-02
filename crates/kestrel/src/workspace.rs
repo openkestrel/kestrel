@@ -17,7 +17,6 @@ use crate::work;
 /// standing in for presence.
 const IDLE: SignedDuration = SignedDuration::from_hours(24);
 
-/// Everything one operator's open asks for, by name or by value.
 pub struct Open<'a> {
     pub project: &'a str,
     pub agent: &'a str,
@@ -29,7 +28,6 @@ pub struct Open<'a> {
     pub participant: Option<&'a str>,
 }
 
-/// Every name an open resolved and every value it checked, ready to be written.
 pub(crate) struct Resolved<'a> {
     pub project: Project,
     pub agent: Agent,
@@ -41,8 +39,7 @@ pub(crate) struct Resolved<'a> {
     pub participant: Option<String>,
 }
 
-/// The one open: every name resolved, the Workspace opened and its first Session enqueued in one
-/// write, or nothing left behind (ADR-0038).
+/// One write, or nothing left behind (ADR-0038).
 pub async fn open(
     store: &Store,
     organization: &str,
@@ -57,8 +54,7 @@ pub async fn open(
     Ok((workspace, session))
 }
 
-/// A Workspace with no Session, which no operator path opens. Fixtures that need the state
-/// `session enqueue` refuses, and the tests of what else refuses it, call this.
+/// No operator path opens a Workspace without a Session; fixtures that need that state call this.
 pub async fn open_without_a_session(
     store: &Store,
     organization: &str,
@@ -104,8 +100,7 @@ pub async fn open_without_a_session(
     Ok(workspace)
 }
 
-/// The write an open and a start share, in the caller's transaction, so the same inputs give the
-/// same Transcript.
+/// Shared by open and start, so the same inputs give the same Transcript.
 pub(crate) async fn opened_in(
     tx: &mut Tx<'_>,
     organization: &Organization,
@@ -237,8 +232,6 @@ async fn resolved<'a>(
     })
 }
 
-/// The request field a name came in travels with its refusal, and the `Declined` behind it decides
-/// the status a boundary answers. Anything that is not a refusal travels untouched.
 fn named<T>(field: &'static str, named: Result<T>) -> Result<T> {
     named.map_err(|error| match error.downcast::<Declined>() {
         Ok(declined) => {
@@ -341,12 +334,9 @@ pub(crate) async fn unfinished_session(
 
 pub(crate) enum PostDestination<'a> {
     Start,
-    /// A queued Session that has not started its first Turn: the first message becomes its Brief.
     Brief(&'a Session),
     Held,
     Wake(&'a Session),
-    /// An unbriefed Session: ready, the message becomes its Brief; not ready, it is held for the
-    /// moment the harness is.
     Unbriefed(&'a Session),
 }
 
@@ -414,7 +404,6 @@ pub async fn show(store: &Store, id: WorkspaceId) -> Result<Workspace> {
     store.begin().await?.workspaces().get(id).await
 }
 
-/// The one Session a Workspace may have that has not let go of it, when it has one.
 pub async fn unfinished(store: &Store, id: WorkspaceId) -> Result<Option<Session>> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(id).await?;
@@ -433,8 +422,6 @@ pub async fn continuations(store: &Store, id: WorkspaceId) -> Result<Vec<Workspa
     store.begin().await?.workspaces().continuations(id).await
 }
 
-/// What a post became: the Session it started or woke, and the Held Message it left, if it was
-/// held rather than recorded at once.
 #[derive(Debug)]
 pub struct Posted {
     pub session: Option<Session>,
@@ -487,8 +474,6 @@ pub(crate) async fn post_as(
                 held_message: None,
             })
         }
-        // A queued Session with nothing to start it with takes this message as its Brief; one that
-        // already has an instruction has the message said, as it always was.
         PostDestination::Brief(queued) => {
             if work::awaiting_a_brief(tx, workspace).await? {
                 brief(tx, workspace, participant, message).await?;
@@ -522,9 +507,6 @@ pub(crate) async fn post_as(
                 held_message: Some(held_message),
             })
         }
-        // The message is this Session's first input either way: its Brief now, or held for the
-        // moment the harness is ready. Either way the client is handed the Session it reached, and
-        // the Held Message when the message was held rather than recorded.
         PostDestination::Unbriefed(unbriefed) => {
             let held_message = if unbriefed.preparing == Some(Preparing::HarnessReady) {
                 brief_or_hold(tx, workspace, participant, message).await?
@@ -582,14 +564,11 @@ pub async fn withdraw_message(
     Ok(())
 }
 
-/// What the unfinished Session cannot take yet, in arrival order.
 pub async fn held_messages(store: &Store, id: WorkspaceId) -> Result<Vec<HeldMessage>> {
     store.begin().await?.workspaces().held_messages(id).await
 }
 
-/// The first message a Session with no first Turn is given becomes its Brief, whoever wrote it
-/// joining directly before it. Anything after it is held for the Turn that follows the first. A
-/// held message is handed back so its author can still edit or withdraw it.
+/// A held message is handed back so its author can still edit or withdraw it.
 async fn brief_or_hold(
     tx: &mut Tx<'_>,
     workspace: &Workspace,
@@ -629,9 +608,6 @@ async fn brief(
     Ok(())
 }
 
-/// A message posted before the harness was ready becomes the Brief the moment it is: the oldest
-/// one is taken out of the held queue and written down, with its author's join. The rest stay
-/// held for the Turn after the first.
 pub(crate) async fn first_held_becomes_the_brief(
     tx: &mut Tx<'_>,
     workspace: &Workspace,

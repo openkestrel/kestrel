@@ -96,8 +96,6 @@ pub struct Kept {
     pub observed: Option<Vec<Observed>>,
 }
 
-/// Why an edit or a withdrawal was refused. The id was never held, the name is not the author's,
-/// or the message already left the Workspace's hands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeldMessageRefusal {
     NeverHeld(i64),
@@ -601,8 +599,8 @@ impl<'a> Workspaces<'a> {
         }
     }
 
-    /// No `agent` continues with the latest Session's; `declared` is the Session's own and the
-    /// Trigger's, resolved over whatever the Agent names, category by category.
+    /// No `agent` continues with the latest Session's; `declared` is resolved over the Agent's,
+    /// category by category.
     pub async fn enqueue_session(
         &mut self,
         workspace: &Workspace,
@@ -715,7 +713,6 @@ impl<'a> Workspaces<'a> {
         held(&row)
     }
 
-    /// When the oldest message held for the Workspace arrived, or `None` while it holds none.
     pub async fn pending_since(&mut self, workspace: WorkspaceId) -> Result<Option<Timestamp>> {
         let since = sqlx::query_scalar::<_, Option<String>>(
             "SELECT MIN(received_at) FROM pending_message
@@ -749,9 +746,7 @@ impl<'a> Workspaces<'a> {
         rows.iter().map(held).collect()
     }
 
-    /// The oldest message held for the Workspace, taken out of the queue. Leaves any that arrived
-    /// after a pending Session, the way `take_held_messages` does. An unbriefed Session's first
-    /// message becomes its Brief rather than draining into a Turn.
+    /// Leaves any that arrived after a pending Session, as `take_held_messages` does.
     pub async fn take_oldest_pending_message(
         &mut self,
         workspace: &Workspace,
@@ -792,9 +787,7 @@ impl<'a> Workspaces<'a> {
         Ok(taken)
     }
 
-    /// Marks taken the messages one Turn takes, in the caller's transaction, so the `Messages`
-    /// entry and the state move together. A command message at the front is its own Turn; before
-    /// the first one, every message is.
+    /// In the caller's transaction, so the `Messages` entry and the state move together.
     pub async fn take_held_messages(
         &mut self,
         workspace: &Workspace,
@@ -853,8 +846,6 @@ impl<'a> Workspaces<'a> {
         Ok(taken)
     }
 
-    /// The commands the Workspace's latest Session last reported: what a Held Message is judged
-    /// against as it drains, since the Session about to start has yet to reach a harness.
     pub async fn latest_commands(&mut self, workspace: WorkspaceId) -> Result<Vec<SessionCommand>> {
         let row = sqlx::query(
             "SELECT commands FROM session
@@ -928,8 +919,6 @@ impl<'a> Workspaces<'a> {
         Ok(())
     }
 
-    /// A message this Workspace still holds, by its author's name, or the reason it cannot be
-    /// changed.
     async fn held_message(
         &mut self,
         workspace: &Workspace,
@@ -1149,8 +1138,6 @@ impl<'a> Workspaces<'a> {
         Ok(sessions)
     }
 
-    /// Whether the Session's harness would wait on a serialized Profile another Session on it
-    /// already works through (ADR-0025).
     pub(crate) async fn holds_profile(
         &mut self,
         session: &Session,
@@ -1170,8 +1157,8 @@ impl<'a> Workspaces<'a> {
             .with_context(|| format!("reading what holds the profile of session {}", session.id))
     }
 
-    /// An unbriefed Session is claimed without a slot: its state and first preparing step are set
-    /// in the same write that takes it out of the queue (ADR-0038).
+    /// Claimed without a slot, its first preparing step set in the same write that takes it out of
+    /// the queue (ADR-0038).
     pub async fn claim_session(
         &mut self,
         session: &Session,
@@ -1228,8 +1215,6 @@ impl<'a> Workspaces<'a> {
             .collect()
     }
 
-    /// The unbriefed Sessions whose harness is ready, oldest first: each waits for a free slot to
-    /// take the Brief it has been given as its first Turn.
     pub async fn unbriefed_sessions(&mut self) -> Result<Vec<Session>> {
         sqlx::query(sessions_where!(
             "state = ? AND preparing = ? ORDER BY enqueued_at, id"
@@ -1296,8 +1281,7 @@ impl<'a> Workspaces<'a> {
         Ok(())
     }
 
-    /// The whole bookkeeping state as the supervisor last reported it. A report that changes
-    /// nothing already held writes nothing and raises nothing (ADR-0041).
+    /// A report that changes nothing already held writes nothing and raises nothing (ADR-0041).
     pub async fn record_session_info(
         &mut self,
         session: &Session,
@@ -1344,7 +1328,6 @@ impl<'a> Workspaces<'a> {
         Ok(true)
     }
 
-    /// Sets one of the three categories a queued Session declares, checked when it is set up.
     pub async fn set_declared_option(
         &mut self,
         session: &Session,
@@ -1371,8 +1354,6 @@ impl<'a> Workspaces<'a> {
         Ok(())
     }
 
-    /// Records the harness's whole option list from the change it answered, without the title and
-    /// commands a bookkeeping report carries.
     pub async fn record_options(
         &mut self,
         session: &Session,
@@ -1399,7 +1380,6 @@ impl<'a> Workspaces<'a> {
         Ok(())
     }
 
-    /// Holds a change until the harness answers it.
     pub async fn add_changing_option(
         &mut self,
         session: &Session,
@@ -1411,7 +1391,6 @@ impl<'a> Workspaces<'a> {
         self.write_changing_options(session, &held).await
     }
 
-    /// Takes the change an `option_changed` report settled; `None` when it was already taken.
     pub async fn take_changing_option(
         &mut self,
         session: &Session,
@@ -1771,8 +1750,7 @@ impl<'a> Workspaces<'a> {
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("recording the supervisor of {instance} connected"))?;
-        // An unbriefed Session stops provisioning once its supervisor is on the link. Its
-        // checkout is next, so a reconnect never moves a step that already went further.
+        // Guarded on the step, so a reconnect never moves one that already went further.
         sqlx::query(
             "UPDATE session SET preparing = ? WHERE instance = ? AND state = ? AND preparing = ?",
         )
@@ -1810,7 +1788,6 @@ impl<'a> Workspaces<'a> {
         Ok(())
     }
 
-    /// The supervisor reports its harness up and its conversation open, with no turn started.
     /// `false` when the Session was no longer unbriefed, so a late report changes nothing.
     pub async fn record_ready(&mut self, session: &Session) -> Result<bool> {
         let ready = sqlx::query("UPDATE session SET preparing = ? WHERE id = ? AND state = ?")
@@ -2089,7 +2066,7 @@ impl<'a> Workspaces<'a> {
     }
 
     /// `None` when the Session was neither waiting nor unbriefed, so a replayed prompt starts no
-    /// second turn. An unbriefed Session leaves its preparing step behind here: it is working now.
+    /// second turn.
     pub async fn prompt_turn(&mut self, session: &Session) -> Result<Option<i64>> {
         let moved = sqlx::query(
             "UPDATE session SET state = ?, preparing = NULL WHERE id = ? AND state IN (?, ?)",
@@ -2188,8 +2165,6 @@ impl<'a> Workspaces<'a> {
         Ok(answered.map(|row| (row.get("seq"), row.get("from_seq"))))
     }
 
-    /// Records the request only if none is already pending, so a second interrupt sends nothing
-    /// more down the link.
     pub async fn request_interrupt(
         &mut self,
         session: &Session,
@@ -2214,7 +2189,6 @@ impl<'a> Workspaces<'a> {
         Ok(set.rows_affected() == 1)
     }
 
-    /// Reads the pending interrupt and clears it, so the report that follows names who asked once.
     pub async fn take_interrupting(&mut self, session: &Session) -> Result<Option<Interrupting>> {
         let row = sqlx::query(
             "SELECT interrupting_participant, interrupting_at FROM session WHERE id = ?",
@@ -2484,9 +2458,7 @@ fn held(row: &SqliteRow) -> Result<HeldMessage> {
     })
 }
 
-/// One Turn's worth of held messages: the ones before the first command message, or the command
-/// alone when it is already at the front. A leading `/` the Session offers no command for is an
-/// ordinary message.
+/// A leading `/` the Session offers no command for is an ordinary message.
 fn one_turn(held: Vec<HeldMessage>, commands: &[SessionCommand]) -> Vec<HeldMessage> {
     match held
         .iter()

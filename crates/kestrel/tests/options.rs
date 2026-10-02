@@ -1,6 +1,3 @@
-//! What an Agent, a Trigger, `workspace open` and `session enqueue` declare for a Session's
-//! Harness options, and how the supervisor sets them at setup (ADR-0041).
-
 mod support;
 
 use std::time::Duration;
@@ -42,8 +39,6 @@ fn current(session: &Session, category: &str) -> Option<String> {
         .and_then(|option| option.current_value())
 }
 
-/// The value the harness ended up on for a category. The bookkeeping report is debounced, so it
-/// is waited for rather than read once.
 async fn until_current(kestrel: &Kestrel, session: SessionId, category: &str) -> String {
     let deadline = tokio::time::Instant::now() + PATIENCE;
 
@@ -114,8 +109,6 @@ async fn a_workspace(kestrel: &Kestrel, agent: Declared) -> Workspace {
     kestrel.open_workspace("acme", "kestrel", "builder").await
 }
 
-/// A Session's own value over the Agent's, category by category: the model the Agent named and
-/// the mode the Session named, both set on the harness before its first prompt.
 #[tokio::test]
 async fn a_session_naming_a_mode_sets_it_over_the_agents_before_its_first_prompt() {
     let kestrel = dispatching(Script::Speaks).await;
@@ -200,8 +193,6 @@ async fn a_mode_a_harness_offers_no_way_to_set_fails_the_session() {
     kestrel.teardown().await;
 }
 
-/// A harness that predates config options is set through `session/set_mode` instead, and its
-/// synthesized Mode option reads the mode it was set to.
 #[tokio::test]
 async fn a_legacy_modes_harness_is_set_through_session_set_mode() {
     let kestrel = dispatching(Script::LegacyModesKept).await;
@@ -221,9 +212,8 @@ async fn a_legacy_modes_harness_is_set_through_session_set_mode() {
     kestrel.teardown().await;
 }
 
-/// The scripted agent's process dies on the second prompt and a new one loads the session from
-/// disk: recovery applies the declared mode again. Its load answer offers the harness's own
-/// default, so a mode that is not applied again reads as that default.
+/// Its load answer offers the harness's own default, so a mode not applied again reads as that
+/// default.
 #[tokio::test]
 async fn a_recovered_harness_has_the_declared_mode_applied_again() {
     let kestrel = dispatching(Script::Revives).await;
@@ -255,8 +245,6 @@ async fn a_recovered_harness_has_the_declared_mode_applied_again() {
     kestrel.teardown().await;
 }
 
-/// The scripted agent's model option as the control plane stores it, for a test standing in for
-/// the supervisor.
 fn model_option(current: &str) -> SessionOption {
     SessionOption {
         id: SessionOption::MODEL.to_owned(),
@@ -278,7 +266,6 @@ fn model_option(current: &str) -> SessionOption {
     }
 }
 
-/// What the operator boundary answered to an option change.
 async fn set_option(kestrel: &Kestrel, session: SessionId, body: Value) -> (StatusCode, Value) {
     let path = operator::SESSION_OPTIONS
         .replace("{organization}", "acme")
@@ -340,8 +327,7 @@ async fn until_state(kestrel: &Kestrel, session: SessionId, state: SessionState)
     }
 }
 
-/// A Session live on the link with the scripted options reported, driven by the test itself: the
-/// phase a change needs, with no supervisor racing to answer it.
+/// Driven by the test itself, so no supervisor races to answer a change.
 async fn live_on_the_link(kestrel: &Kestrel) -> (Session, OnTheLink) {
     let workspace = a_workspace(kestrel, Declared::default()).await;
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
@@ -358,8 +344,6 @@ async fn live_on_the_link(kestrel: &Kestrel) -> (Session, OnTheLink) {
     (live, on)
 }
 
-/// A change to a waiting Session is durable and ordered ahead of the prompt after it, so the next
-/// Turn runs on the new model and the Transcript names the person, the option and both values.
 #[tokio::test]
 async fn changing_the_model_on_a_waiting_session_runs_the_next_turn_on_it() {
     let kestrel = dispatching(Script::Speaks).await;
@@ -428,8 +412,6 @@ async fn changing_the_model_on_a_waiting_session_runs_the_next_turn_on_it() {
     kestrel.teardown().await;
 }
 
-/// A harness that offers only legacy `modes` has no Mode-category option to set, so a change to
-/// its synthesized mode goes through `session/set_mode`.
 #[tokio::test]
 async fn changing_the_synthesized_mode_of_a_legacy_harness_goes_through_session_set_mode() {
     let kestrel = dispatching(Script::LegacyModesKept).await;
@@ -462,8 +444,6 @@ async fn changing_the_synthesized_mode_of_a_legacy_harness_goes_through_session_
     kestrel.teardown().await;
 }
 
-/// A queued Session has nothing to ask: the write sets its declared value at once, and the
-/// harness applies it when the Session is set up.
 #[tokio::test]
 async fn changing_thought_level_on_a_queued_session_starts_it_with_that_value() {
     let kestrel = Kestrel::boot().await;
@@ -520,8 +500,6 @@ async fn changing_thought_level_on_a_queued_session_starts_it_with_that_value() 
     kestrel.teardown().await;
 }
 
-/// A Turn in flight is the harness's; the write is refused, naming the phase, and nothing
-/// reaches the harness.
 #[tokio::test]
 async fn a_change_during_a_working_turn_is_refused_naming_working() {
     let kestrel = dispatching(Script::ReportsThenWaits).await;
@@ -600,8 +578,6 @@ async fn an_unoffered_value_an_unknown_option_and_an_agents_name_are_refused() {
     kestrel.teardown().await;
 }
 
-/// The harness has the last word: a change it refuses leaves the options where they were and the
-/// Transcript records why.
 #[tokio::test]
 async fn a_harness_that_refuses_a_change_leaves_the_options_and_records_why() {
     let kestrel = dispatching(Script::RefusesOptions).await;
@@ -650,8 +626,6 @@ async fn a_harness_that_refuses_a_change_leaves_the_options_and_records_why() {
     kestrel.teardown().await;
 }
 
-/// The instruction is durable: a change written while the supervisor's stream is down is handed
-/// to it once, when it comes back with its cursor.
 #[tokio::test]
 async fn a_change_written_while_the_supervisor_is_disconnected_is_applied_once_after_it_reconnects()
 {
@@ -706,8 +680,6 @@ async fn a_change_written_while_the_supervisor_is_disconnected_is_applied_once_a
     kestrel.teardown().await;
 }
 
-/// `changing_options` carries a change while the harness has not answered, and the answer stores
-/// the new list and clears it.
 #[tokio::test]
 async fn changing_options_shows_while_a_change_is_pending_and_clears_when_it_settles() {
     let kestrel = Kestrel::boot().await;

@@ -38,8 +38,6 @@ pub enum Report {
     Stderr {
         lines: Vec<String>,
     },
-    /// The harness is up and its conversation open, with no Turn started: an unbriefed Session is
-    /// ready for its first message (ADR-0038).
     Ready,
     Started,
     Model {
@@ -74,14 +72,11 @@ pub enum Report {
         #[serde(default)]
         usage: Option<Usage>,
     },
-    /// What the harness has spent, unnumbered and transient: held in memory beside the running
-    /// tools, never a row (ADR-0041).
+    /// Never a row: held in memory beside the running tools (ADR-0041).
     Usage {
         usage: Usage,
     },
-    /// The Session's whole bookkeeping state: what the harness calls the conversation, the options
-    /// it offers and their current values, and the commands it takes. Idempotent and unnumbered,
-    /// so a reconnect can say it again (ADR-0041).
+    /// Idempotent and unnumbered, so a reconnect can say it again (ADR-0041).
     SessionInfo {
         #[serde(default)]
         title: Option<String>,
@@ -90,8 +85,6 @@ pub enum Report {
         #[serde(default)]
         commands: Vec<SessionCommand>,
     },
-    /// The harness answered a person's option change, with the whole list it left or why it
-    /// refused (ADR-0041).
     OptionChanged {
         participant: String,
         option: String,
@@ -109,7 +102,6 @@ pub enum Report {
         #[serde(default)]
         usage: Option<Usage>,
     },
-    /// The working Turn was interrupted: its open units were closed and no answer follows.
     Interrupted,
     Checkout {
         repositories: Vec<Observed>,
@@ -245,8 +237,6 @@ pub async fn enqueue(
     Ok(session)
 }
 
-/// Whether a Session has ever been enqueued in the Workspace: `session enqueue` only continues
-/// one, so a Workspace's first Session comes from its open (ADR-0038).
 pub async fn has_had_session(store: &Store, workspace: WorkspaceId) -> Result<bool> {
     store
         .read()
@@ -320,10 +310,7 @@ pub async fn occupy(
     Ok(Some(occupied))
 }
 
-/// The first Turn waiting on a slot: an unbriefed Session whose harness is ready and whose Brief
-/// nothing has followed yet, by when that Brief was written. It competes with held input and
-/// queued Sessions for a free slot, and the serialized-Profile rule applies to it here rather
-/// than at dispatch (ADR-0025).
+/// The serialized-Profile rule applies to a Brief here rather than at dispatch (ADR-0025).
 async fn oldest_unstarted_brief(
     tx: &mut Tx<'_>,
     serialized: &[String],
@@ -343,8 +330,6 @@ async fn oldest_unstarted_brief(
     Ok(waiting.into_iter().next())
 }
 
-/// An unbriefed Session's first Turn: its Brief, verbatim, as an ordinary prompt in the
-/// conversation its start opened.
 async fn prompt_brief(tx: &mut Tx<'_>, session: &Session) -> Result<()> {
     let workspace = tx.workspaces().get(session.workspace).await?;
     let brief = tx
@@ -357,9 +342,8 @@ async fn prompt_brief(tx: &mut Tx<'_>, session: &Session) -> Result<()> {
     link::prompt(tx, session, brief).await
 }
 
-/// A queued Session whose Workspace holds nothing to start it with: dispatch claims it without an
-/// Active-Work Slot and without the serialized-Profile check, because it has no Turn to run yet
-/// (ADR-0038). The queue reads the same rule.
+/// Claimed without an Active-Work Slot or the serialized-Profile check, since it has no Turn to run
+/// yet (ADR-0038); the queue reads the same rule.
 pub(crate) async fn awaiting_a_brief(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<bool> {
     Ok(crate::link::instruction(tx, workspace).await?.is_none())
 }
@@ -433,24 +417,15 @@ pub async fn sessions(store: &Store, workspace: WorkspaceId) -> Result<Vec<Sessi
     tx.workspaces().sessions(&workspace).await
 }
 
-/// Which of the two identifiers a person named: an option's id, or its category.
 pub enum Named<'a> {
     Option(&'a str),
     Category(&'a str),
 }
 
-/// Why a person's option change was refused, so a boundary can answer what the caller can act on.
 pub enum OptionRefusal {
-    /// The phase the Session is in, named in the message.
     Phase(String),
-    /// The request named a value or a category the write cannot use, in that field.
-    Unacceptable {
-        field: &'static str,
-        why: String,
-    },
-    /// The option or category named nothing.
+    Unacceptable { field: &'static str, why: String },
     Missing(String),
-    /// The participant name rule refused the name.
     Named(anyhow::Error),
     Unavailable(anyhow::Error),
 }
@@ -463,13 +438,11 @@ impl From<anyhow::Error> for OptionRefusal {
 
 pub struct OptionSet {
     pub session: Session,
-    /// True when the change waits on the harness (202); false when it set a queued Session's
-    /// declared value at once (200).
+    /// Waits on the harness (202) rather than setting a queued Session's declared value at once
+    /// (200).
     pub live: bool,
 }
 
-/// A person changes one of a Session's options between Turns: a queued Session's declared value
-/// now, or a durable instruction the harness applies once for a live one (ADR-0041).
 pub async fn set_option(
     store: &Store,
     organization: &str,
@@ -603,7 +576,6 @@ pub async fn set_option(
     Ok(OptionSet { session, live })
 }
 
-/// The phase a write refuses, named so a caller can tell what the Session is doing.
 fn phase_refusal(phase: SessionState, session: &Session) -> String {
     match phase {
         SessionState::Working => format!(
@@ -629,7 +601,6 @@ fn declares(category: &str) -> bool {
     )
 }
 
-/// Whether an option offers a value: a selection's values, or a boolean's two.
 fn offers(option: &SessionOption, value: &str) -> bool {
     match &option.kind {
         crate::domain::SessionOptionKind::Select { values, groups, .. } => {
@@ -735,7 +706,6 @@ async fn reported(
         }
         Report::Ready => {
             if tx.workspaces().record_ready(session).await? {
-                // The first message posted while it was preparing becomes its Brief now.
                 let workspace = tx.workspaces().get(session.workspace).await?;
                 if workspace::first_held_becomes_the_brief(tx, &workspace).await? {
                     info!(session = %session.id, "the first held message became the Brief");
@@ -1029,8 +999,7 @@ pub async fn turns(store: &Store, session: SessionId) -> Result<Vec<Turn>> {
     store.begin().await?.workspaces().turns(session).await
 }
 
-/// Anyone who can post can interrupt a working Turn: the Session keeps its conversation and its
-/// Instance, and a second request while one is pending sends nothing more.
+/// Anyone who can post can interrupt; a second request while one is pending sends nothing more.
 pub async fn interrupt(store: &Store, id: SessionId, participant: &str) -> Result<Session> {
     let mut tx = store.begin().await?;
     let session = tx.workspaces().session(id).await?;

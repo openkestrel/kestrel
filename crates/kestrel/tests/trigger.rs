@@ -1712,8 +1712,6 @@ async fn a_trigger_that_fires_on_events_is_tested_against_a_named_one() {
     kestrel.teardown().await;
 }
 
-/// A Trigger's declared mode overrides its Agent's for the Session it starts, and the dispatched
-/// harness is set to it before its first prompt.
 #[tokio::test]
 async fn a_triggers_declared_mode_overrides_its_agents_for_the_session_it_starts() {
     let stub = GithubStub::start();

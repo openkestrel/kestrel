@@ -54,8 +54,6 @@ impl Stream {
         }
     }
 
-    /// `None` when nothing arrived within `patience`, or when the control plane closed the
-    /// stream.
     async fn next(&mut self, patience: Duration) -> Option<Frame> {
         let deadline = tokio::time::Instant::now() + patience;
 
@@ -108,7 +106,6 @@ impl Stream {
     }
 }
 
-/// Everything that arrives before a quiet gap, the connect `open` included.
 async fn notices_until_quiet(stream: &mut Stream) -> Vec<Frame> {
     let mut frames = Vec::new();
     while let Some(frame) = stream.next(QUIET).await {
@@ -409,7 +406,6 @@ fn resolve<'a>(document: &'a Value, reference: &str) -> &'a Value {
         .fold(document, |document, step| &document[step])
 }
 
-/// Live usage is held in memory and never written, so it raises no change notice.
 #[tokio::test]
 async fn live_usage_raises_no_change_notice() {
     let kestrel = Kestrel::dispatching_to(

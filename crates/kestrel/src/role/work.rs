@@ -35,8 +35,6 @@ pub struct Dispatch {
     pub auth: Option<String>,
     pub max_active_sessions: NonZeroUsize,
     pub serialized: Vec<String>,
-    /// How long a supervisor gives an interrupted turn to answer its cancel before it ends the
-    /// harness.
     pub interrupt_deadline: Duration,
 }
 

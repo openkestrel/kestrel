@@ -168,8 +168,6 @@ impl Drop for Cleanup {
     }
 }
 
-/// How long a supervisor gives an interrupted turn to answer its cancel, unless a test shortens
-/// it.
 pub const DEFAULT_INTERRUPT_DEADLINE: Duration = Duration::from_secs(30);
 
 /// What the work role provisions an Environment with.
@@ -219,8 +217,6 @@ pub fn harness_playing(script: scripted_agent::Script) -> link::Harness {
     }
 }
 
-/// What the matching path recorded for one pull request Event, as the `0.4` Audit Record will
-/// read it: the verdict, and every Workspace the Event matched with the state it was in.
 pub struct Consideration {
     pub outcome: String,
     pub candidates: Vec<(WorkspaceId, String)>,
@@ -243,7 +239,6 @@ impl Kestrel {
         Self::booted(None).await
     }
 
-    /// Boots with a follow lease short enough for a test to watch it pass.
     pub async fn boot_with_follow_lease(follow_lease: Duration) -> Self {
         Self::booted_with(None, follow_lease).await
     }
@@ -312,7 +307,6 @@ impl Kestrel {
         .await
     }
 
-    /// Dispatched with an interrupt deadline short enough for a test to watch it pass.
     pub async fn dispatching_with_a_quick_interrupt(
         supervisor: &Path,
         command: &str,
@@ -589,7 +583,6 @@ impl Kestrel {
             .expect("the agent should declare")
     }
 
-    /// An Agent that declares what it wants for the Harness's model, mode and thought level.
     pub async fn declare_agent_declaring(
         &self,
         organization: &Organization,
@@ -748,9 +741,6 @@ impl Kestrel {
             .expect("the events should list")
     }
 
-    /// The verdict the pull request matching path recorded for one considered Event, and every
-    /// Workspace it matched with the state that Workspace was in: what the `0.4` Audit Record
-    /// will read back. `None` when the Event was never considered.
     pub async fn consideration(&self, event: EventRecordId) -> Option<Consideration> {
         let mut tx = self.store.read().await.expect("a read transaction");
         let considered = tx
@@ -788,7 +778,6 @@ impl Kestrel {
         .await
     }
 
-    /// A Trigger that declares what it wants for its Sessions' model, mode and thought level.
     pub async fn declare_trigger_declaring(
         &self,
         organization: &str,
@@ -1374,8 +1363,7 @@ impl Kestrel {
         self.walk(id, None, Window::DEFAULT).await
     }
 
-    /// The whole Transcript, narration and detail included: the default read is shared state
-    /// alone.
+    /// The default read is shared state alone; this one includes narration and detail.
     pub async fn every_entry(&self, id: WorkspaceId) -> Vec<Entry> {
         let kinds: kestrel::log::Kinds =
             "shared_state,narration,detail".parse().expect("every kind");
@@ -1514,7 +1502,6 @@ impl Kestrel {
             .session
     }
 
-    /// What the post became, held message and all.
     pub async fn posted_while_busy(
         &self,
         id: WorkspaceId,
@@ -1551,8 +1538,6 @@ impl Kestrel {
         workspace::withdraw_message(&self.store, id, message, participant).await
     }
 
-    /// What a harness reported as its commands, so a drain can tell a command message from a
-    /// remark.
     pub async fn record_commands(&self, session: &Session, commands: &[SessionCommand]) {
         let mut tx = self.store.begin().await.expect("a transaction");
         tx.workspaces()
@@ -1567,8 +1552,6 @@ impl Kestrel {
         tx.commit().await.expect("the commands should commit");
     }
 
-    /// A Firing Session held behind the Workspace's unfinished one, as a `new-session` firing
-    /// holds one.
     pub async fn hold_session(&self, id: WorkspaceId, brief: &str) {
         let mut tx = self.store.begin().await.expect("a transaction");
         let held = tx
@@ -1591,9 +1574,8 @@ impl Kestrel {
         tx.commit().await.expect("the session should commit");
     }
 
-    /// What the control plane last sent down the link for this Session, as the supervisor would
-    /// have read it. Waits for one: a Session's instruction can be written after the state the
-    /// caller was waiting on.
+    /// Waits for one: a Session's instruction can be written after the state the caller was waiting
+    /// on.
     pub async fn instruction(&self, session: &Session) -> Instruction {
         let pool = database(self.data_dir()).await;
         let deadline = tokio::time::Instant::now() + PATIENCE;
@@ -1698,7 +1680,6 @@ impl Kestrel {
         .await
     }
 
-    /// A Session that declares what it wants for the Harness's model, mode and thought level.
     pub async fn enqueue_session_declaring(
         &self,
         workspace: WorkspaceId,
@@ -2024,14 +2005,12 @@ impl Kestrel {
             .expect("the ready report should be taken");
     }
 
-    /// Starts a claimed Session's conversation on the link, the way the work role does.
     pub async fn start_on_the_link(&self, session: &Session) {
         link::start(&self.store, session, harness())
             .await
             .expect("the session should start");
     }
 
-    /// Reports the harness's whole option list, the bookkeeping a supervisor says idempotently.
     pub async fn report_session_info(&self, session: &Session, options: &[SessionOption]) {
         work::report_on(
             &self.store,
@@ -2047,7 +2026,6 @@ impl Kestrel {
         .expect("the session info should be taken");
     }
 
-    /// Reports what a supervisor answered about a person's option change.
     pub async fn report_option_changed(&self, session: &Session, seq: i64, changed: work::Report) {
         work::report_on(&self.store, session, Some(seq), changed)
             .await
@@ -2091,7 +2069,6 @@ impl Kestrel {
         work::interrupt(&self.store, session, participant).await
     }
 
-    /// Every instruction the control plane has sent down the link for this Session, in order.
     pub async fn instructions(&self, session: &Session) -> Vec<Instruction> {
         let pool = database(self.data_dir()).await;
         let bodies: Vec<String> = sqlx::query_scalar(

@@ -1,7 +1,3 @@
-//! A signed `pull_request` delivery keeps a Workspace current through the pull request's
-//! lifecycle: it attaches only when its head repository and branch name exactly one open
-//! Workspace, appends each distinct observation, and never starts a Firing or a Session.
-
 mod support;
 
 use std::time::Duration;
@@ -466,8 +462,6 @@ async fn only_the_head_repository_and_branch_of_one_open_workspace_attach() {
     assert_eq!(events.len(), 5);
     assert!(kestrel.events("beta").await.is_empty());
 
-    // What a verdict was made of is kept, candidates included: the two Workspaces the branch
-    // could not choose between, and none at all for a repository no Workspace fixed.
     let ambiguous = consideration(&kestrel, event_named(&events, "d-ambiguous").record_id).await;
     assert_eq!(ambiguous.outcome, "ambiguous");
     let mut candidates = ambiguous.candidates;
@@ -652,7 +646,6 @@ async fn a_pull_requests_lifecycle_appends_each_observation_and_reads_the_latest
         ]
     );
 
-    // The Transcript keeps every observation; the Workspace read holds only the latest.
     let record = shown(&kestrel, "acme", &workspace).await;
     let latest = &known(&record)[0];
     assert_eq!(latest["state"], "open");
@@ -809,7 +802,6 @@ async fn a_duplicate_observation_appends_no_second_entry_however_it_arrives() {
         .open_workspace_on("acme", "kestrel", "builder", "feature")
         .await;
 
-    // A retry that arrives as a second Event, and a redelivery of that same Event.
     deliver(&kestrel, &one, "d-one", &opened(7, REVISION, OPENED_AT)).await;
     deliver(&kestrel, &two, "d-two", &opened(7, REVISION, OPENED_AT)).await;
     deliver(&kestrel, &one, "d-one", &opened(7, REVISION, OPENED_AT)).await;
@@ -848,7 +840,6 @@ async fn a_delayed_older_delivery_appears_in_history_without_regressing_the_valu
         .open_workspace_on("acme", "kestrel", "builder", "feature")
         .await;
 
-    // The head moved first; the older opening arrives after it.
     deliver(
         &kestrel,
         &github,
@@ -876,7 +867,6 @@ async fn a_delayed_older_delivery_appears_in_history_without_regressing_the_valu
     assert_eq!(latest["head_revision"], MOVED);
     assert_eq!(latest["updated_at"], MOVED_AT);
 
-    // The delayed observation repeated changes nothing either.
     deliver(
         &kestrel,
         &github,

@@ -163,7 +163,7 @@ pub struct SessionState {
     pub tools: Vec<RunningTool>,
     pub message_buffering: bool,
     pub thought_buffering: bool,
-    /// What the harness has spent so far, held in memory and never a row (ADR-0041).
+    /// Held in memory, never a row (ADR-0041).
     #[serde(default)]
     pub usage: Option<Usage>,
 }

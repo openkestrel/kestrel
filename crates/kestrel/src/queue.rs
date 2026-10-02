@@ -72,11 +72,9 @@ pub struct Waiting {
     pub reasons: Vec<Reason>,
 }
 
-/// A Session with no Brief yet: it holds an Instance and no Active-Work Slot, and waits for the
-/// first message that becomes its Brief. Its preparing step rides the Session.
+/// Holds an Instance and no Active-Work Slot.
 pub struct Unbriefed {
     pub session: Session,
-    /// When the oldest message held for its Brief arrived; `None` while nothing is held.
     pub pending_since: Option<Timestamp>,
 }
 
@@ -211,8 +209,8 @@ async fn queued(
     Ok(queued)
 }
 
-/// The Sessions getting ready for their first message, in enqueue order. They hold their
-/// Instances, so they are counted there, and no Active-Work Slot, so they are never numbered.
+/// They hold their Instances, so they are counted there, and no Active-Work Slot, so they are never
+/// numbered.
 async fn unbriefed(tx: &mut Tx<'_>, organization: &Organization) -> Result<Vec<Unbriefed>> {
     let mut unbriefed = Vec::new();
     for session in tx

@@ -1441,7 +1441,6 @@ async fn run() -> Result<()> {
             let session = &answer["session"];
             let held = &answer["held_message"];
             if client.json.is_some() {
-                // The answer is the whole `{session, held_message}`; `--json` names its fields.
                 show(&presentation, &view::DECLARED, &answer)?;
             } else if !session.is_null() {
                 show(&presentation, &view::DECLARED, session)?;
@@ -1809,8 +1808,7 @@ async fn started(
 /// The limits and their occupancy said first, so every row below is read against what it
 /// counts against. A script asks `--json` for the fields and gets the rows alone, each one
 /// carrying the limits it arrived with.
-/// `session show` says the title, each option as `category: current`, and the command names; a
-/// `--json` read asks for the fields themselves and gets them exactly as served.
+/// A `--json` read asks for the fields themselves and gets them exactly as served.
 fn shown_session(presentation: &Presentation, session: &Value) -> Result<()> {
     let mut record = session.clone();
     if !matches!(presentation, Presentation::Json(_)) {
@@ -1822,7 +1820,6 @@ fn shown_session(presentation: &Presentation, session: &Value) -> Result<()> {
     show(presentation, &view::SESSION, &record)
 }
 
-/// A change a person asked for that the harness has not answered yet.
 fn changing_options(changing: &Value) -> String {
     changing
         .as_array()
@@ -1866,7 +1863,6 @@ fn warn_about_cache(changed: &Value, named: &str) {
     }
 }
 
-/// The three categories a queued Session declares, which the write takes in place of an option id.
 fn declares(category: &str) -> bool {
     matches!(category, "model" | "mode" | "thought_level")
 }
@@ -1993,7 +1989,6 @@ fn why(row: &serde_json::Map<String, Value>) -> String {
     said.join("; ")
 }
 
-/// The Compute driver the work role provisions Instances with, read-only.
 fn environment(snapshot: &Value) -> String {
     snapshot["work_role"]["driver"]
         .as_str()

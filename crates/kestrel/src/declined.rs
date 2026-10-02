@@ -32,8 +32,6 @@ pub struct FieldRefusal {
     pub kind: Kind,
 }
 
-/// Which `Declined` a named field's refusal stands for, so a boundary answers it with the same
-/// status the unnamed form would carry.
 #[derive(Debug, Clone, Copy)]
 pub enum Kind {
     Unacceptable,

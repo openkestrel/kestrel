@@ -28,15 +28,11 @@ const HEARTBEAT_EVERY: Duration = Duration::from_secs(2);
 const GIVE_UP_MARGIN: Duration = Duration::from_secs(5);
 const STDERR_LINES_PER_REPORT: usize = 64;
 const STDERR_REPORT_PATIENCE: Duration = Duration::from_secs(5);
-/// At most one bookkeeping report a second, at the window's trailing edge, however chatty the
-/// harness is (ADR-0041).
+/// Trailing edge: a burst collapses into one report a second (ADR-0041).
 const SESSION_INFO_EVERY: Duration = Duration::from_secs(1);
-/// At most one usage report a second per Session, at the window's trailing edge, however often
-/// the harness reports what it has spent (ADR-0041).
 const USAGE_EVERY: Duration = Duration::from_secs(1);
 /// Long enough for the last lines of an agent that has just exited, which are often why.
 const STDERR_DRAINING: Duration = Duration::from_secs(1);
-/// How long an interrupted Turn is given to answer its cancel before its harness is ended.
 const INTERRUPT_DEADLINE: Duration = Duration::from_secs(30);
 
 pub trait Diagnostics {
@@ -67,14 +63,12 @@ struct Supervising {
 struct Carrying {
     session: String,
     checkout: Checkout,
-    /// `None` for an unbriefed Session, which is opened without prompting.
     prompt: Option<Turn>,
     harness: Harness,
     conversation: Option<Conversation>,
     finished: bool,
     working: bool,
-    /// An unbriefed Session's conversation has opened; `ready` is said again after a reconnect in
-    /// case the report was lost while on its way.
+    /// Said again after a reconnect, in case the report was lost on its way.
     ready: bool,
     taken: i64,
     state: Option<Report>,
@@ -83,12 +77,8 @@ struct Carrying {
     refreshed: BTreeMap<String, String>,
     written: Option<login::Written>,
     saying: VecDeque<Report>,
-    /// What the harness last said about the Session beyond its turns, and when that state is due
-    /// up the link: at most one report a second, at the window's trailing edge (ADR-0041).
     info: Option<link::SessionInfo>,
     info_due: Option<tokio::time::Instant>,
-    /// What the harness has spent so far, and when that is due up the link: the same window as
-    /// the bookkeeping report.
     usage: Option<link::Usage>,
     usage_due: Option<tokio::time::Instant>,
     /// What the last usage report said, which a snapshot carries so that a value still inside its
@@ -97,8 +87,6 @@ struct Carrying {
 }
 
 impl Carrying {
-    /// Takes a whole state the harness changed, arming the report the first time one is held; a
-    /// state identical to the one already held is dropped here.
     fn hold(&mut self, info: link::SessionInfo) {
         if self.info.as_ref() == Some(&info) {
             return;
@@ -109,8 +97,6 @@ impl Carrying {
         }
     }
 
-    /// Takes what the harness last spent, arming the report the first time one is held; a value
-    /// identical to the one already held is dropped here.
     fn hold_usage(&mut self, usage: link::Usage) {
         if self.usage.as_ref() == Some(&usage) {
             return;
@@ -184,8 +170,7 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
     status
 }
 
-/// Sends the Session's whole transient state, with what was last reported spent folded in, since
-/// the snapshot replaces the usage the control plane holds.
+/// Folds in the last reported usage, since the snapshot replaces what the control plane holds.
 async fn report_state(link: &Link, carrying: &Carrying) -> Result<(), link::Error> {
     let Some(Report::SessionState {
         tools,
@@ -301,7 +286,6 @@ async fn attend(
         supervising.checkout = Some(checkout);
     }
     if let Some(carrying) = supervising.carrying.as_mut() {
-        // Drain queued snapshots before replaying after a disconnected Turn.
         while let Some(event) = carrying
             .conversation
             .as_mut()
@@ -343,8 +327,8 @@ async fn attend(
         let_go_if_refused(reported, supervising, diagnostics).await?;
     }
     report_work(link, supervising, true).await?;
-    // Whatever the Session held while the link was down goes up again now it is not: the
-    // bookkeeping report is what a control plane that restarted under the Instance missed.
+    // The bookkeeping report goes up again: a control plane that restarted under the Instance
+    // missed it.
     if let Some(carrying) = supervising.carrying.as_mut() {
         if carrying.info.is_some() {
             carrying.info_due = Some(tokio::time::Instant::now());
@@ -476,9 +460,6 @@ async fn attend(
     }
 }
 
-/// An unbriefed Session's conversation is open and waiting, so dispatch can be told it is ready.
-/// A briefed one just opened the conversation its first prompt was waiting on; `started` already
-/// said so.
 async fn let_go_if_refused(
     reported: Result<(), link::Error>,
     supervising: &mut Supervising,
@@ -551,9 +532,8 @@ async fn report_work(
     Ok(())
 }
 
-/// Sends the Session's bookkeeping state once it is due: at most one report a second, at the
-/// window's trailing edge. An unchanged state is still sent after a reconnect, because the
-/// control plane may have missed the report that carried the change.
+/// An unchanged state is still sent after a reconnect: the control plane may have missed the
+/// change.
 async fn say_session_info(
     link: &Link,
     carrying: &mut Carrying,
@@ -583,8 +563,6 @@ async fn until_session_info_due(due: Option<tokio::time::Instant>) {
     }
 }
 
-/// Sends what the harness has spent once it is due: at most one report a second, at the window's
-/// trailing edge. The latest value is what the control plane needs, so a burst collapses into one.
 async fn say_usage(
     link: &Link,
     carrying: &mut Carrying,
@@ -722,16 +700,13 @@ async fn instructed(
                 None => diagnostics.info("prompted before the session started"),
             }
         }
-        Instruction::Interrupt { turn } if carrying_it => {
-            match supervising.carrying.as_ref() {
-                Some(carrying) if carrying.working => match carrying.conversation.as_ref() {
-                    Some(conversation) => conversation.interrupt(turn),
-                    // The Turn has not reached the harness yet; it will end as it would have.
-                    None => diagnostics.info("interrupted before the session started"),
-                },
-                _ => diagnostics.info("interrupted a session with no turn in flight"),
-            }
-        }
+        Instruction::Interrupt { turn } if carrying_it => match supervising.carrying.as_ref() {
+            Some(carrying) if carrying.working => match carrying.conversation.as_ref() {
+                Some(conversation) => conversation.interrupt(turn),
+                None => diagnostics.info("interrupted before the session started"),
+            },
+            _ => diagnostics.info("interrupted a session with no turn in flight"),
+        },
         Instruction::SetOption {
             option,
             value,
@@ -781,8 +756,6 @@ async fn instructed(
     }
 }
 
-/// Begins carrying a Session: checks it out, then opens its conversation. A briefed one is
-/// prompted by the conversation it opens; an unbriefed one waits, reporting ready instead.
 async fn start_carrying(
     stderr: &mpsc::UnboundedSender<String>,
     supervising: &mut Supervising,
@@ -799,7 +772,6 @@ async fn start_carrying(
             .let_go("another session started", diagnostics)
             .await;
     }
-    // A briefed Session is working from its first prompt; an unbriefed one is not working yet.
     let working = prompt.is_some();
     supervising.checkout = Some(checkout.clone());
     let mut carrying = Carrying {
@@ -1027,8 +999,6 @@ fn dialled(variables: &BTreeMap<String, String>) -> Option<Link> {
     Some(Link::to(base, instance, credential))
 }
 
-/// How long an interrupted Turn is given to answer its cancel, in seconds, as the control plane
-/// told this Instance when it started its supervisor.
 fn interrupt_deadline(variables: &BTreeMap<String, String>) -> Duration {
     set(variables, "KESTREL_INTERRUPT_DEADLINE")
         .and_then(|seconds| seconds.parse::<u64>().ok())

@@ -1,5 +1,4 @@
-//! The in-process hub a committed transaction hands its touched resources to, keyed by
-//! Organization (ADR-0035). A notice says only what changed, never what it changed to.
+//! A notice says only what changed, never what it changed to (ADR-0035).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,7 +10,6 @@ use tokio::time::Instant;
 
 use crate::domain::{OrganizationId, Session, SessionId, Workspace, WorkspaceId};
 
-/// At most one notice per resource per window, sent at the window's trailing edge.
 const COALESCE: Duration = Duration::from_millis(250);
 /// How many notices one subscriber may lag before it is told to resync instead.
 const BUFFER: usize = 64;
@@ -23,8 +21,7 @@ pub enum Resource {
     Queue,
 }
 
-/// What one transaction's writes touched, collected as it goes so `commit` can hand it to the
-/// hub and a dropped or rolled-back transaction hands over nothing.
+/// Collected as a transaction goes, so a dropped or rolled-back one hands the hub nothing.
 #[derive(Default)]
 pub struct Touched {
     resources: Vec<(OrganizationId, Resource)>,
@@ -64,8 +61,6 @@ impl Touched {
     }
 }
 
-/// One subscriber's view: a resource that changed, or word that it fell behind the buffer and
-/// must refetch everything rather than miss a gap.
 pub enum Watch {
     Change(Resource),
     Resync,
@@ -85,8 +80,7 @@ impl Subscription {
     }
 }
 
-/// The hub, cloned into every transaction and handed to every subscriber. One process runs one
-/// topology, so a subscriber reaches the same hub its writes do.
+/// One process runs one topology, so a subscriber reaches the same hub its writes do.
 #[derive(Clone, Default)]
 pub struct Notices {
     hub: Arc<Hub>,

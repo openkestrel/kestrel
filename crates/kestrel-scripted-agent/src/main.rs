@@ -42,12 +42,10 @@ const KEPT: &str = ".scripted-session";
 const DIED: &str = ".scripted-session-died";
 const PROMPT_SEPARATOR: char = '\u{1e}';
 const VANISHING: Duration = Duration::from_millis(100);
-/// How long `BurstsUsage` lets the Session's start settle before it reports.
 const BURST_SETTLED: Duration = Duration::from_millis(1_000);
 /// Between `BurstsUsage`'s updates: the burst still fits one usage window, but is long enough that
 /// a heartbeat landing inside it would carry a value the window has not reported.
 const BURST_SPACING: Duration = Duration::from_millis(200);
-/// How long `BurstsUsage` stays in its turn after reporting, so a follower sees the live value.
 const BURST_PATIENCE: Duration = Duration::from_millis(2_500);
 
 #[derive(Debug, Parser)]
@@ -317,7 +315,6 @@ async fn play(
         while !cancelled.load(Ordering::SeqCst) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        // The cancel is in flight, so a permission asked for now must come back `cancelled`.
         permission_cancelled(connection).await?;
 
         return Ok(StopReason::Cancelled);
@@ -800,8 +797,6 @@ fn models(current: impl Into<SessionConfigValueId>) -> SessionConfigOption {
     .category(SessionConfigOptionCategory::Model)
 }
 
-/// The whole config-option list the scripted agent offers: a model, a Mode-category option, and
-/// one in a category of its own beginning with `_`.
 fn offered(current: impl Into<SessionConfigValueId>) -> Vec<SessionConfigOption> {
     vec![
         models(current),
@@ -842,7 +837,6 @@ fn offered(current: impl Into<SessionConfigValueId>) -> Vec<SessionConfigOption>
     ]
 }
 
-/// A harness that predates config options and offers only `modes`.
 fn legacy_modes() -> SessionModeState {
     SessionModeState::new(
         STARTING_MODE,
@@ -881,8 +875,7 @@ async fn permission_to_use_a_tool(connection: &ConnectionTo<Client>) -> Result<(
     Ok(())
 }
 
-/// Asks for permission on a turn being cancelled, and refuses to go on unless the client answers
-/// `cancelled`, which is not a denial.
+/// Refuses to go on unless the client answers `cancelled`, which is not a denial.
 async fn permission_cancelled(connection: &ConnectionTo<Client>) -> Result<()> {
     let outcome = connection
         .send_request(RequestPermissionRequest::new(

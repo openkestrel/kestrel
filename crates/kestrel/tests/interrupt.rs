@@ -1,7 +1,3 @@
-//! 0.3/28: a person interrupts a working Turn without ending its Session. The conversation and
-//! the Instance stay, the Turn is recorded as interrupted, and held messages go to the agent at
-//! once.
-
 mod support;
 
 use std::time::Duration;

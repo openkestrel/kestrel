@@ -893,8 +893,6 @@ fn compact() -> SessionCommand {
     }
 }
 
-/// What the control plane put in front of the agent for this Session, as the supervisor would
-/// have read it.
 async fn prompt(kestrel: &Kestrel, session: &kestrel::domain::Session) -> String {
     kestrel.on_the_link(session).await;
     kestrel.start(session, support::harness()).await;
@@ -905,7 +903,6 @@ async fn prompt(kestrel: &Kestrel, session: &kestrel::domain::Session) -> String
     prompt
 }
 
-/// The prompt without the earlier-context preamble every Turn after the first carries.
 fn instruction(prompt: &str) -> &str {
     match prompt.strip_prefix("Earlier context, oldest first:\n") {
         Some(rest) => rest

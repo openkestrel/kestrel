@@ -1,5 +1,5 @@
-//! Who is following a Workspace's Transcript right now. Memory only: presence never enters the
-//! Transcript or a change notice, and nothing reads it to decide anything (ADR-0035).
+//! Memory only: presence never enters the Transcript or a change notice, and nothing reads it to
+//! decide anything (ADR-0035).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -15,7 +15,6 @@ use uuid::Uuid;
 
 use crate::domain::WorkspaceId;
 
-/// How long a follower's lease lasts before it must renew.
 pub const LEASE: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -41,8 +40,7 @@ impl FromStr for FollowerId {
     }
 }
 
-/// The whole current set, sent as one snapshot: a named follow displays once per name, and
-/// unnamed follows are counted.
+/// A named follow displays once per name; unnamed follows are counted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Presence {
     pub named: Vec<String>,
@@ -82,8 +80,6 @@ impl Followers {
         }
     }
 
-    /// Registers a follower of the Workspace and hands back its id, its lease, presence as it
-    /// changes, word of its own expiry, and a guard whose drop removes it.
     pub fn join(&self, workspace: WorkspaceId, name: Option<String>) -> Joined {
         let now = Instant::now();
         let (id, presence, expiration, start) = {
@@ -130,8 +126,6 @@ impl Followers {
         }
     }
 
-    /// Extends a known, unexpired follower's lease to a full period from now. `false` for one
-    /// that is unknown or whose lease has already passed.
     pub fn renew(&self, workspace: WorkspaceId, id: FollowerId) -> bool {
         let now = Instant::now();
         let mut workspaces = self.hub.workspaces.lock().unwrap();
@@ -151,19 +145,17 @@ impl Followers {
     }
 }
 
-/// One registered follower's view. Dropping it leaves at once, however the stream ended.
+/// Dropping it leaves at once, however the stream ended.
 pub struct Joined {
     pub id: FollowerId,
     pub lease: Duration,
     pub presence: watch::Receiver<Presence>,
-    /// Set when the lease expired and the follower was removed: its stream has nothing left.
     pub expiration: watch::Receiver<bool>,
     hub: Arc<Hub>,
     workspace: WorkspaceId,
 }
 
 impl Joined {
-    /// The snapshot as it stands, marked seen so the next change is a real update.
     pub fn snapshot(&mut self) -> Presence {
         self.presence.borrow_and_update().clone()
     }

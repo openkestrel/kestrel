@@ -2021,8 +2021,6 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     kestrel.teardown().await;
 }
 
-/// An Organization with one Project, two Agents and a Profile: everything an operator's open can
-/// name.
 async fn ready_to_open(kestrel: &Kestrel) -> kestrel::domain::Organization {
     let organization = kestrel.declare_organization("acme").await;
     kestrel
@@ -4924,9 +4922,7 @@ fn unbriefed_row<'a>(queue: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no unbriefed Session {name}: {queue}"))
 }
 
-/// A Session with no Brief, its Instance recorded and its preparing under way, with the Workspace
-/// it belongs to so a test can post to it. Its harness is not up yet, so a message posted to it is
-/// held for the Brief its readiness will make of it.
+/// Its harness is not up yet, so a message posted to it is held.
 async fn an_unbriefed_session(
     kestrel: &Kestrel,
     organization: &str,
@@ -5007,7 +5003,6 @@ async fn an_unbriefed_session_stands_beside_the_waiting_ones_without_a_slot_of_i
             .contains(&json!("docker/getting-ready"))
     );
 
-    // A message posted before the Brief shows as pending input, with when it arrived.
     kestrel
         .post_while_busy(getting_ready, "alice", "what I want")
         .await;
@@ -5231,9 +5226,6 @@ async fn a_session_that_failed_to_dispatch_shows_as_ended_and_not_as_waiting() {
     kestrel.teardown().await;
 }
 
-/// A ready Session, one blocked on the Working holder of a serialized profile, a Waiting Session
-/// the profile holds back with input beside one only waiting for a turn, and an unbriefed one
-/// whose harness is ready, its Brief written and a message held for the Turn after.
 struct EveryKind {
     holding: kestrel::domain::Session,
     ready: kestrel::domain::Session,

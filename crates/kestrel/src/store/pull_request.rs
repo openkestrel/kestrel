@@ -12,13 +12,11 @@ use crate::store::{due, integration, workspace};
 
 pub enum Considered {
     Attached(WorkspaceId),
-    /// The Event matched only sealed Workspaces, which it may not change.
     Sealed,
     Unmatched,
     Ambiguous,
 }
 
-/// What one considered Event was decided to be, and which Workspaces it matched.
 pub struct Consideration {
     pub outcome: String,
     pub candidates: Vec<(WorkspaceId, WorkspaceState)>,
@@ -71,8 +69,7 @@ impl<'a> PullRequests<'a> {
         .collect()
     }
 
-    /// Every Workspace on the branch, sealed ones too: those a sealed Workspace matched are
-    /// recorded rather than attached to.
+    /// Sealed ones too: those a sealed Workspace matched are recorded rather than attached to.
     pub async fn on_branch(
         &mut self,
         organization: OrganizationId,
@@ -106,14 +103,13 @@ impl<'a> PullRequests<'a> {
         self.record(workspace, learned, Freshness::Newer).await
     }
 
-    /// For a tie the Integration itself was read back for: the source's answer replaces what
-    /// it ties with.
+    /// The source's answer replaces what it ties with, for a tie the Integration itself was read
+    /// back for.
     pub async fn reconcile(&mut self, workspace: &Workspace, learned: &PullRequest) -> Result<()> {
         self.record(workspace, learned, Freshness::AtLeast).await
     }
 
-    /// Whether this observation is one the Workspace has not held before. Recording one already
-    /// held says the delivery repeated it, and a repeat appends nothing.
+    /// False for an observation already held: a repeated delivery appends nothing.
     pub async fn observe(
         &mut self,
         workspace: &Workspace,
@@ -198,7 +194,6 @@ impl<'a> PullRequests<'a> {
         Ok(())
     }
 
-    /// What the matching path recorded for one considered Event, whichever way it was decided.
     pub async fn considered(&mut self, event: EventRecordId) -> Result<Option<Consideration>> {
         let outcome = sqlx::query_scalar::<_, String>(
             "SELECT outcome FROM pull_request_attachment WHERE event_record_id = ?",

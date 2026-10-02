@@ -1,7 +1,3 @@
-//! ADR-0041: the supervisor keeps the harness's title, config options and commands for the
-//! Session's whole life, reports them as one unnumbered state, and the control plane serves them
-//! on the Session read with a strong `ETag`.
-
 mod support;
 
 use std::fs;
@@ -163,7 +159,6 @@ async fn a_session_read_shows_the_title_its_options_and_its_commands() {
         "an opencode harness keeps the cache for a thought level, and this one does not"
     );
 
-    // A category kestrel does not know is listed under the harness's own string (ADR-0041).
     let custom = option(&shown, CUSTOM_CATEGORY);
     assert_eq!(custom["id"], CUSTOM_OPTION);
     assert_eq!(custom["kind"], "boolean");

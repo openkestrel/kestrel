@@ -30,8 +30,6 @@ pub enum Instruction {
         prompt: String,
         harness: Harness,
     },
-    /// Opens the conversation and prompts nothing: the Session waits unbriefed for its first
-    /// message (ADR-0038).
     Unbriefed {
         checkout: Checkout,
         harness: Harness,
@@ -41,11 +39,9 @@ pub enum Instruction {
         turn: i64,
         prompt: String,
     },
-    /// Cancels the Turn it names, if that is still the one in flight, without ending the Session.
     Interrupt {
         turn: i64,
     },
-    /// Changes one of the Session's harness options before its next prompt (ADR-0041).
     SetOption {
         option: String,
         value: String,
@@ -185,8 +181,6 @@ pub enum AnswerBody {
     Raw(reqwest::Body),
 }
 
-/// What to spawn for the Session, which may be another Agent's than the last Session's, and
-/// what the Session declared for the harness's options.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Harness {
     pub command: String,
@@ -220,7 +214,6 @@ pub enum Report {
     Stderr {
         lines: Vec<String>,
     },
-    /// The harness is up and its conversation open, with no Turn started.
     Ready,
     Started,
     Model {
@@ -255,16 +248,12 @@ pub enum Report {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
     },
-    /// What the harness has spent, unnumbered and idempotent: at most one a second, at the
-    /// window's trailing edge, and never a row (ADR-0041).
+    /// Unnumbered and idempotent, and never a row (ADR-0041).
     Usage {
         usage: Usage,
     },
-    /// The Session's whole bookkeeping state, unnumbered and idempotent: a change is said once,
-    /// and the whole state is said again after a reconnect (ADR-0041).
+    /// Unnumbered and idempotent: the whole state is said again after a reconnect (ADR-0041).
     SessionInfo(SessionInfo),
-    /// The harness answered a person's option change, with the whole list it left or why it
-    /// refused (ADR-0041).
     OptionChanged {
         participant: String,
         option: String,
@@ -282,7 +271,6 @@ pub enum Report {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
     },
-    /// The Turn was interrupted: its open units were closed and no answer follows.
     Interrupted,
     Checkout {
         repositories: Vec<Observed>,
@@ -415,9 +403,8 @@ pub struct Cost {
     pub currency: String,
 }
 
-/// One config option the harness offers, whole: its current value and every value it offers
-/// (ADR-0041). A legacy harness that offers only `modes` is reported through a synthesized
-/// option of the `mode` category, so a reader sees one shape.
+/// A legacy harness that offers only `modes` is reported through a synthesized `mode`-category
+/// option, so a reader sees one shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionInfo {
     #[serde(default)]
@@ -460,7 +447,6 @@ impl SessionOption {
         self.category.as_deref() == Some(category)
     }
 
-    /// What the option is set to now.
     pub fn current_value(&self) -> Option<String> {
         match &self.kind {
             SessionOptionKind::Select { current, .. } => Some(current.clone()),

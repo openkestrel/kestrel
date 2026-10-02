@@ -45,11 +45,8 @@ pub struct Harness {
     pub auth: Option<String>,
     /// The model the Session named, if it named one.
     pub model: Option<String>,
-    /// The mode the Session named, if it named one.
     pub mode: Option<String>,
-    /// The thought level the Session named, if it named one.
     pub thought_level: Option<String>,
-    /// How long an interrupted Turn is given to answer its cancel before the harness is ended.
     pub interrupt_deadline: Duration,
     pub stderr: mpsc::UnboundedSender<String>,
 }
@@ -64,7 +61,6 @@ pub struct Worked {
     pub allowed: Vec<Subject>,
     pub on: Option<On>,
     pub failed: Option<String>,
-    /// What the harness had spent when the turn ended, for the report that persists it.
     pub usage: Option<crate::link::Usage>,
 }
 
@@ -74,8 +70,6 @@ pub struct On {
     pub model: String,
 }
 
-/// The categories a Session declared, each a harness value id (ADR-0041). A category named none
-/// for stays at whatever the harness already offers.
 #[derive(Debug, Default, Clone, Copy)]
 struct Declared<'a> {
     model: Option<&'a str>,
@@ -93,26 +87,19 @@ impl Harness {
     }
 }
 
-/// What a Session's declaration asks the agent to set, decided before anything is sent: one
-/// entry per category that differs from what the harness already offers.
 struct Planned {
     choices: Vec<Choice>,
-    /// The model the harness is on, whether or not this Session named one, for the report.
     on: Option<On>,
 }
 
 enum Choice {
-    /// A config option the harness categorized as this.
     Option { id: SessionConfigId, value: String },
-    /// A legacy mode, which has no Mode-category option to set.
     Mode(String),
 }
 
 /// Long enough for an agent between turns to see its connection close; one mid-turn is cut off.
 const CLOSING: Duration = Duration::from_millis(500);
 
-/// The channels one conversation's task listens on: the next prompt, a request to cancel the
-/// Turn in flight, and a change to apply between Turns.
 struct Channels {
     prompts: mpsc::UnboundedReceiver<Turn>,
     interrupts: mpsc::UnboundedReceiver<i64>,
@@ -135,7 +122,6 @@ pub struct Turn {
     pub prompt: String,
 }
 
-/// What the control plane asks of a conversation between Turns.
 enum Command {
     SetOption {
         option: String,
@@ -144,14 +130,12 @@ enum Command {
     },
 }
 
-/// What became of one option change the harness was asked to make (ADR-0041).
 pub struct SetOption {
     pub option: String,
     pub category: String,
     pub from: Option<String>,
     pub to: Option<String>,
     pub refused: Option<String>,
-    /// The whole list the harness left, for the change that applied.
     pub options: Vec<crate::link::SessionOption>,
 }
 
@@ -217,13 +201,11 @@ impl Conversation {
         let _ = self.prompts.send(prompt);
     }
 
-    /// Asks the agent to cancel the Turn `seq` if it is the one in flight; the conversation goes on.
     pub fn interrupt(&self, seq: i64) {
         let _ = self.interrupts.send(seq);
     }
 
-    /// Applies one option change between Turns, answering with what the harness left or why it
-    /// refused. Awaited, so a change is ordered ahead of any prompt after it (ADR-0041).
+    /// Awaited, so a change is ordered ahead of any prompt after it (ADR-0041).
     pub async fn set_option(&self, option: String, value: String) -> SetOption {
         let (answered, outcome) = oneshot::channel();
         let sent = self.commands.send(Command::SetOption {
@@ -475,8 +457,7 @@ async fn living(
                         .lock()
                         .expect("what the agent said should not be poisoned");
                     heard.completer.produced = true;
-                    // A request that arrives while the Turn is being cancelled is answered
-                    // `cancelled`, which is not a denial: the agent is stopping anyway.
+                    // Answered `cancelled`, not denied: the agent is stopping anyway.
                     let outcome = if heard.interrupting {
                         RequestPermissionOutcome::Cancelled
                     } else {
@@ -611,8 +592,8 @@ async fn living(
                             heard.emit(completed);
                             if cancelled {
                                 drop(heard);
-                                // kestrel asked for this one: the conversation and the Instance
-                                // stay, and the Turn is reported interrupted rather than ended.
+                                // kestrel asked for this cancel, so the conversation stays open and
+                                // the Turn is reported interrupted.
                                 let _ = turns.send(ConversationEvent::Interrupted);
                                 continue;
                             }
@@ -640,8 +621,6 @@ fn ended(error: &Error) -> Ended {
     }
 }
 
-/// Applies one option change between Turns: the option a person named, once, answering with the
-/// whole list the harness left or why it refused (ADR-0041).
 async fn applying(
     connection: &ConnectionTo<agent_client_protocol::Agent>,
     heard: &Arc<Mutex<Hearing>>,
@@ -887,12 +866,9 @@ async fn recover(
     Ok(())
 }
 
-/// What a `session/new`, `session/load` or `session/resume` led to once the declared categories,
-/// if any, were selected: the agent's state and the list its answer carried.
 struct Selected {
     on: Option<On>,
     options: Option<Vec<SessionConfigOption>>,
-    /// A legacy mode set through `session/set_mode`.
     mode: Option<SessionModeId>,
 }
 
@@ -940,9 +916,6 @@ async fn select(
     })
 }
 
-/// What each declared category asks of the agent: the option the harness categorized as it, or
-/// a legacy mode among `modes`. A category the harness offers no way to set fails rather than
-/// running on something the Session did not name.
 fn planned(
     offered: &[SessionConfigOption],
     modes: Option<&SessionModeState>,
@@ -950,7 +923,6 @@ fn planned(
 ) -> Result<Planned, Error> {
     let mut choices = Vec::new();
 
-    // The model the harness is on is reported whether or not this Session named one.
     let mut on = None;
     if let Some((id, select)) = selectable(offered, "model") {
         on = Some(On {
@@ -1006,7 +978,6 @@ fn planned(
     Ok(Planned { choices, on })
 }
 
-/// The option a harness categorized as this, when it is one a client can select.
 fn selectable<'o>(
     offered: &'o [SessionConfigOption],
     category: &str,
@@ -1035,9 +1006,8 @@ fn category_of(category: &SessionConfigOptionCategory) -> Option<&'static str> {
     }
 }
 
-/// Config options are optional and every agent ships a default (ADR-0007), so a harness may
-/// offer no way to set a category. One whose Session named a value for it then fails rather than
-/// quietly running on something else.
+/// A harness may offer no way to set a category (ADR-0007); a Session that named a value for it
+/// fails rather than quietly running on something else.
 fn no_option(category: &str, named: &str) -> Error {
     Error::internal_error().data(format!(
         "this agent lets no client select a {category}, and this session named {named}"
@@ -1126,7 +1096,6 @@ fn bounded(line: &str) -> String {
     format!("{}… [truncated]", &line[..end])
 }
 
-/// Waits until a deadline that a Turn being cancelled armed, or forever while it is not.
 async fn until(deadline: Option<tokio::time::Instant>) {
     match deadline {
         Some(at) => tokio::time::sleep_until(at).await,
@@ -1151,10 +1120,8 @@ fn stopped_short(stop: StopReason) -> Option<String> {
 pub enum ConversationEvent {
     Report(Report),
     Worked(Worked),
-    /// The working Turn was cancelled at kestrel's request: the conversation stays open.
     Interrupted,
     State(Report),
-    /// The conversation is open, with no Turn started: what an unbriefed Session waits for.
     Ready,
 }
 
@@ -1162,21 +1129,15 @@ struct Hearing {
     completer: Completer,
     allowed: Vec<Subject>,
     on: Option<On>,
-    /// What the harness last said it spent, for the report a turn's answer carries.
     usage: Option<crate::link::Usage>,
-    /// A cancel is in flight: permission requests are answered `cancelled` until the Turn
-    /// returns.
     interrupting: bool,
     reports: mpsc::UnboundedSender<ConversationEvent>,
     diagnostics: mpsc::UnboundedSender<String>,
     replaying: bool,
-    /// What the harness has said about the Session beyond its turns (ADR-0041), and the last
-    /// whole state this supervisor put on the link, so an unchanged resend is dropped here.
     info: Held,
     announced: Option<SessionInfo>,
 }
 
-/// The bookkeeping a harness keeps current for the Session's whole life.
 #[derive(Default)]
 struct Held {
     title: Option<String>,
@@ -1187,8 +1148,7 @@ struct Held {
 }
 
 impl Held {
-    /// The whole state as the link carries it, with a Mode option synthesized from legacy `modes`
-    /// for a harness that offers none of its own (ADR-0041).
+    /// Synthesizes a Mode option from legacy `modes` for a harness that offers none (ADR-0041).
     fn snapshot(&self) -> SessionInfo {
         let mut options: Vec<SessionOption> = self.options.iter().map(option).collect();
         let mode = self.current_mode.clone().or_else(|| {
@@ -1347,16 +1307,12 @@ impl Hearing {
         }
         self.on = on;
     }
-    /// A legacy mode set through `session/set_mode`, kept as the mode the Session is on.
     fn mode(&mut self, mode: Option<SessionModeId>) {
         if let Some(mode) = mode {
             self.info.current_mode = Some(mode);
             self.announce();
         }
     }
-    /// Takes the options a `session/new`, `session/load`, `session/resume` or a
-    /// `session/set_config_option` answer carried, when it carried any, and says the whole state
-    /// up the link if it differs from what was last said.
     fn hold(&mut self, options: Option<Vec<SessionConfigOption>>, modes: Option<SessionModeState>) {
         if let Some(options) = options {
             self.info.options = options;
@@ -1496,7 +1452,6 @@ mod tests {
         .category(SessionConfigOptionCategory::Mode)
     }
 
-    /// A `Hearing` with nothing but the bookkeeping state under test.
     fn hearing() -> (Hearing, mpsc::UnboundedReceiver<ConversationEvent>) {
         let (reports, heard) = mpsc::unbounded_channel();
         (

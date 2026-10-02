@@ -54,8 +54,6 @@ pub enum Instruction {
         prompt: String,
         harness: Harness,
     },
-    /// Opens the conversation and prompts nothing: the Session waits unbriefed for its first
-    /// message (ADR-0038).
     Unbriefed {
         checkout: Checkout,
         harness: Harness,
@@ -64,12 +62,10 @@ pub enum Instruction {
         turn: i64,
         prompt: String,
     },
-    /// Cancels the Turn the Session is in without ending it; the conversation and the Instance
-    /// stay. Naming the Turn lets a cancel that arrives after it answered leave the next one be.
+    /// Naming the Turn lets a cancel that arrives after it answered leave the next one be.
     Interrupt {
         turn: i64,
     },
-    /// Changes one of the Session's harness options before its next prompt (ADR-0041).
     SetOption {
         option: String,
         value: String,
@@ -93,7 +89,7 @@ impl Instruction {
 }
 
 /// What the supervisor spawns for one Session, since each Session in a Workspace may choose its
-/// own Agent (ADR-0031), and what that Session declared for the Harness's options (ADR-0041).
+/// own Agent (ADR-0031).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Harness {
     pub command: String,
@@ -229,9 +225,6 @@ pub async fn start(store: &Store, session: &Session, harness: Harness) -> Result
     Ok(sent)
 }
 
-/// Opens an unbriefed Session's conversation without a prompt: the supervisor checks out, spawns
-/// the harness and reports ready, and the first message becomes the Brief and the first Turn
-/// (ADR-0038).
 pub async fn unbriefed(
     store: &Store,
     session: &Session,

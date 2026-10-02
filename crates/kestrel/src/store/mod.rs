@@ -75,8 +75,6 @@ impl Store {
         })
     }
 
-    /// The change hub every transaction on this store publishes to, and which the operator
-    /// boundary subscribes its change streams to.
     pub fn notices(&self) -> Notices {
         self.notices.clone()
     }

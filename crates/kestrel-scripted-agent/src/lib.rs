@@ -24,29 +24,20 @@ pub const CHATTERED_MESSAGES: usize = 5;
 pub const FIRST_MEMORY: &str = "the first remembered message";
 pub const LAST_MEMORY: &str = "the last remembered message";
 
-/// What the `Announces` script calls its conversation, and the command it offers for it.
 pub const TITLE: &str = "the scripted conversation";
 pub const COMMAND: &str = "compact";
 pub const COMMAND_DESCRIPTION: &str = "Compact the conversation";
 pub const COMMAND_HINT: &str = "/compact";
-/// The option the `Announces` script reports in a category kestrel does not know, whose name
-/// begins with `_` as ACP reserves.
 pub const CUSTOM_OPTION: &str = "verbose";
 pub const CUSTOM_CATEGORY: &str = "_scripted";
-/// The Mode-category option a scripted agent offers, and the mode it starts on.
 pub const MODE_OPTION: &str = "mode";
 pub const STARTING_MODE: &str = "build";
 pub const SWITCHED_MODE: &str = "plan";
-/// The ThoughtLevel-category option a scripted agent offers, and the level it starts on.
 pub const THOUGHT_LEVEL_OPTION: &str = "thinking";
 pub const STARTING_THOUGHT_LEVEL: &str = "low";
 pub const OTHER_THOUGHT_LEVEL: &str = "high";
-/// The second mode a legacy-modes script offers beside the one it is on.
 pub const OTHER_MODE: &str = "review";
-/// What the `Repeats` script sends, identically, over and over inside one turn.
 pub const REPEATS: usize = 20;
-/// What the `BurstsUsage` script reports it has spent: one burst whose last value is
-/// [`BURSTED_USAGE`], inside a context of [`BURSTED_SIZE`] tokens.
 pub const BURSTED_USAGE: u64 = 400;
 pub const BURSTED_SIZE: u64 = 1_000;
 
@@ -118,24 +109,18 @@ pub enum Script {
     /// Says its title, offers commands and reports its config options with a Mode-category
     /// option and a `_`-prefixed one, then switches its own mode mid-turn.
     Announces,
-    /// Sends the same config options, identically, over and over inside one turn.
     Repeats,
-    /// Switches its own model mid-turn, as an agent asked to change model does.
     SwitchesModel,
     /// Offers only legacy `modes` and no Mode-category option, and switches mode mid-turn.
     LegacyModes,
     /// Offers only legacy `modes` and no Mode-category option, and keeps the mode it is set to.
     LegacyModesKept,
-    /// Reports what it has spent several times in one burst, then answers the turn.
     BurstsUsage,
     /// Says a message and works at a tool call until the client cancels the turn, then answers
     /// `cancelled` with the tool call still open.
     WorksUntilCancelled,
-    /// Answers its first turn, then works at the second as `WorksUntilCancelled` does.
     AnswersThenWorksUntilCancelled,
-    /// Works at a turn that never ends and never answers a cancel.
     IgnoresCancel,
-    /// Offers the usual options, and refuses every `session/set_config_option` a client sends.
     RefusesOptions,
 }
 

@@ -51,8 +51,6 @@ impl Fixture {
         let queued = enqueue(&store, workspace.id, None, Declared::default())
             .await
             .unwrap();
-        // This fixture drives turns, so its Session is claimed as one with work to do rather than
-        // as an unbriefed one waiting for its first message.
         let session = {
             let mut tx = store.begin().await.unwrap();
             let session = tx

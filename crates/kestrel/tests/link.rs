@@ -459,8 +459,8 @@ async fn the_link_takes_every_report_the_published_openapi_document_describes() 
     kestrel.teardown().await;
 }
 
-/// The next event with this name, skipping whatever else a follow sends first: a follow registers
-/// and says its presence once it has caught up, and entries and activities may come first.
+/// A follow registers and says its presence once caught up, so entries and activities may come
+/// first.
 async fn until_named(
     stream: &mut support::link_client::Events,
     name: &str,
@@ -1012,9 +1012,8 @@ async fn a_transcript_follow_replaces_activity_and_snapshots_session_state_witho
     let state: serde_json::Value = serde_json::from_str(&snapshot.data).unwrap();
     assert_eq!(state["tools"], json!([]));
     assert_eq!(state["message_buffering"], false);
-    // The follow replays what the Transcript holds, then hands the client its identity: one
-    // follower event, then a presence snapshot, neither of which carries an id. Session-state
-    // changes come after that framing, never interleaved before the follower.
+    // Session-state changes come after the follower and presence framing, never before the
+    // follower.
     loop {
         let Next::Event(event) = stream.next_within(PATIENCE).await else {
             panic!("the follow never handed the client its identity")

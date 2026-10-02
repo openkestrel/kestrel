@@ -1,7 +1,3 @@
-//! A Workspace opened without a Brief is dispatched at once, without an Active-Work Slot: its
-//! Instance is provisioned, the branch checked out and the harness spawned, and the Session waits
-//! unbriefed until its first message (ADR-0038).
-
 mod support;
 
 use std::time::Duration;
@@ -289,8 +285,6 @@ async fn a_spawn_failure_ends_an_unbriefed_session_failed() {
     kestrel.teardown().await;
 }
 
-/// The supervisor's side of the seam: it checks out, opens the ACP conversation, reports ready,
-/// and prompts nothing, so no Turn and no agent message exists.
 #[tokio::test]
 async fn an_unbriefed_start_opens_the_conversation_reports_ready_and_prompts_nothing() {
     let kestrel = Kestrel::dispatching(supervisor::binary()).await;
@@ -355,7 +349,6 @@ async fn a_post_to_a_ready_unbriefed_session_becomes_its_brief_and_the_agent_ech
         .hold_provider_credential(&organization, PROVIDER_KEY, A_PROVIDER_KEY)
         .await;
 
-    // A session that never answers holds the only slot.
     let holding = kestrel.open_workspace("acme", "kestrel", "holder").await;
     let held = kestrel.enqueue_session(holding.id).await;
     let held = until(&kestrel, held.id, "the holder working", |session| {
@@ -391,7 +384,6 @@ async fn a_post_to_a_ready_unbriefed_session_becomes_its_brief_and_the_agent_ech
         }
     );
 
-    // Every slot is taken, so the first Turn waits for one to free.
     assert!(kestrel.turns(queued.id).await.is_empty());
     assert_eq!(
         kestrel.session(queued.id).await.state,

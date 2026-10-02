@@ -188,7 +188,6 @@ struct Follower {
     lease_seconds: u64,
 }
 
-/// Renews a registered follow's lease until the stream ends, and stops with it.
 struct Renewal {
     task: tokio::task::JoinHandle<()>,
 }

@@ -81,7 +81,6 @@ pub enum Entry {
         action: String,
         state: PullRequestState,
     },
-    /// A person changed one of a Session's options between Turns (ADR-0041).
     OptionChanged {
         session: SessionId,
         participant: String,
@@ -93,7 +92,6 @@ pub enum Entry {
         from: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         to: Option<String>,
-        /// Why the harness refused, when it did; `to` is absent then.
         #[serde(skip_serializing_if = "Option::is_none")]
         refused: Option<String>,
     },
@@ -397,12 +395,8 @@ impl<'a> Log<'a> {
         Ok(said)
     }
 
-    /// The Brief that started this Session, and when it was written, if nothing has said anything
-    /// since it: participants joining, Sessions starting and pull requests learned are not
-    /// something said. Bounded to what the Transcript holds since the Workspace's last Session
-    /// ended, or since it opened if none has, so a Brief that started an earlier Session is not
-    /// mistaken for one starting this one. The moment orders an unbriefed Session's first Turn
-    /// against held input.
+    /// Joins, Session starts and learned pull requests do not follow a Brief, and the search stops
+    /// at the last Session's end so an earlier Session's Brief is never taken for this one's.
     pub async fn unfollowed_brief(
         &mut self,
         workspace: &Workspace,

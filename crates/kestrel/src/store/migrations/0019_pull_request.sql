@@ -25,8 +25,8 @@ CREATE TABLE pull_request_attachment (
     CHECK ((outcome = 'attached') = (workspace_id IS NOT NULL))
 ) STRICT;
 
--- Every Workspace an Event matched, with the state it was in at the time, so the Audit Record
--- `0.4` will explain an unmatched, ambiguous or sealed verdict from what was there then.
+-- Every Workspace an Event matched, with its state at the time, so an Audit Record can explain the
+-- verdict from what was there then.
 CREATE TABLE pull_request_candidate (
     event_record_id TEXT NOT NULL REFERENCES event (record_id),
     workspace_id TEXT NOT NULL REFERENCES workspace (id),

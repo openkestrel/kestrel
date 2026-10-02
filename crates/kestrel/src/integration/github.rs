@@ -310,8 +310,6 @@ impl Github {
         answered(response, &format!("{repository}#{number}")).await
     }
 
-    /// The pull request as the repository has it now, for settling two deliveries that tie on
-    /// source freshness while they disagree.
     pub async fn pull_request(
         &self,
         integration: &Integration,
