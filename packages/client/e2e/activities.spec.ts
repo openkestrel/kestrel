@@ -315,7 +315,7 @@ test("a failed, an interrupted and an unresolved call each show their word", asy
 			wire(
 				summary(workspace, 1, 3, {
 					counts: { tool_calls: 3, failed_calls: 1 },
-					latest: { kind: "detail", title: "tool 3", status: "unresolved" },
+					latest: { kind: "detail", title: "tool 3", status: "pending" },
 					anomaly: true,
 				}),
 				{ name: "end", data: { because: "sealed" } },
@@ -323,8 +323,8 @@ test("a failed, an interrupted and an unresolved call each show their word", asy
 		range: () =>
 			wire(
 				tool(workspace, 1, { status: "failed", result: { content: [], output: { exit_code: 1 } } }),
-				tool(workspace, 2, { status: "interrupted" }),
-				tool(workspace, 3, { status: "unresolved" }),
+				tool(workspace, 2, { status: "in_progress", closing_reason: "interrupted" }),
+				tool(workspace, 3, { status: "pending", closing_reason: "unresolved" }),
 				{ name: "end", data: { because: "caught_up" } },
 			),
 	});
