@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { Refusal } from "#/components/refusal";
 import { Skeleton } from "#/components/ui/skeleton";
+import { ago } from "#/operator/format";
 import { workspaceSessionsQuery } from "#/operator/queries";
 import { sessionPhase } from "#/operator/session-state";
 import { optionSummary, sessionContinuity, sessionOutcome, usageText } from "#/operator/work-view";
-import { when } from "#/operator/workspace-list";
 
 export function SessionsTab({
 	organization,
@@ -86,7 +86,7 @@ export function SessionsTab({
 								</>
 							)}
 							<dt className="text-muted-foreground">Enqueued</dt>
-							<dd>{when(session.enqueued_at)}</dd>
+							<dd>{ago(session.enqueued_at)}</dd>
 						</dl>
 					</article>
 				);

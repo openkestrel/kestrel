@@ -10,7 +10,6 @@ import {
 	optionCurrent,
 	pendingLine,
 	sessionTitle,
-	stateLabel,
 	usageLine,
 } from "./session-view";
 
@@ -83,14 +82,6 @@ describe("the header's title and state", () => {
 		);
 		expect(sessionTitle(session(), workspace())).toBe("calm-river");
 		expect(sessionTitle(undefined, workspace())).toBe("kind-sparrow");
-	});
-
-	it("names the step an unbriefed Session is preparing on", () => {
-		expect(stateLabel(session({ state: "unbriefed", preparing: "harness_ready" }))).toBe(
-			"unbriefed · harness ready",
-		);
-		expect(stateLabel(session({ state: "working" }))).toBe("working");
-		expect(stateLabel(undefined)).toBe("no session");
 	});
 });
 

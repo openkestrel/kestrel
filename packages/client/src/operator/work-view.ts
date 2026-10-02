@@ -1,6 +1,6 @@
+import { ago } from "./format";
 import type { FileEntry, Session } from "./generated";
 import type { Delivered } from "./transcript";
-import { when } from "./workspace-list";
 
 export function shortRevision(revision: string): string {
 	return revision.slice(0, 8);
@@ -64,13 +64,6 @@ export function breadcrumbs(path: string): { label: string; path: string }[] {
 	return [{ label: "repositories", path: "" }, ...crumbs];
 }
 
-export function fileSize(bytes: number | undefined): string {
-	if (bytes === undefined) return "";
-	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KiB`;
-	return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-}
-
 export function fileKindLabel(entry: FileEntry): string {
 	if (entry.kind === "directory") return "directory";
 	if (entry.kind === "symlink") return "symlink";
@@ -92,8 +85,8 @@ export function sessionContinuity(session: Session): string {
 	const parts: string[] = [];
 	parts.push(session.instance === null ? "no Instance" : `instance ${session.instance}`);
 	if (session.supervisor !== null) parts.push(`supervisor ${session.supervisor}`);
-	if (session.connected_at !== null) parts.push(`connected ${when(session.connected_at)}`);
-	if (session.lease_expires_at !== null) parts.push(`lease ${when(session.lease_expires_at)}`);
+	if (session.connected_at !== null) parts.push(`connected ${ago(session.connected_at)}`);
+	if (session.lease_expires_at !== null) parts.push(`lease ${ago(session.lease_expires_at)}`);
 	return parts.join(" · ");
 }
 

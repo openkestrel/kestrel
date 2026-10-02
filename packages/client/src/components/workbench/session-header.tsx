@@ -4,6 +4,7 @@ import { Button } from "#/components/ui/button";
 import { mayWriteOptions, nameToChangeOptions, optionValues } from "#/operator/composer";
 import type { Presence, Session, TranscriptSessionState, Workspace } from "#/operator/generated";
 import { useParticipant } from "#/operator/participant";
+import { sessionPhase } from "#/operator/session-state";
 import {
 	commandLine,
 	continuityLine,
@@ -13,7 +14,6 @@ import {
 	optionCurrent,
 	pendingLine,
 	sessionTitle,
-	stateLabel,
 	usageLine,
 } from "#/operator/session-view";
 import type { OptionWrite } from "./option-write";
@@ -49,7 +49,7 @@ export function SessionHeader({
 					{sessionTitle(session, read)}
 				</p>
 				<Badge variant="secondary" data-session-state>
-					{stateLabel(session)}
+					{session ? sessionPhase(session) : "no session"}
 				</Badge>
 				{interrupting && (
 					<span className="text-muted-foreground text-xs" data-session-interrupting>

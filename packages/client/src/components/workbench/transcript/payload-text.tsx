@@ -2,9 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "#/components/ui/button";
 import { Skeleton } from "#/components/ui/skeleton";
+import { size } from "#/operator/format";
 import type { PayloadReference } from "#/operator/generated";
 import { transcriptPayloadQuery } from "#/operator/queries";
-import { bytes } from "#/operator/transcript-view";
 import { Refused } from "#/operator/transport";
 
 export function PayloadText({
@@ -25,7 +25,7 @@ export function PayloadText({
 	if (!wanted) {
 		return (
 			<Button type="button" variant="outline" size="sm" onClick={() => setWanted(true)}>
-				Load {bytes(reference.bytes)} payload
+				Load {size(reference.bytes)} payload
 			</Button>
 		);
 	}

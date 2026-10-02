@@ -35,17 +35,6 @@ export function wasAmended(held: HeldMessage): boolean {
 	return held.edited_at !== null;
 }
 
-export function heldAge(postedAt: string, now: number = Date.now()): string {
-	const seconds = Math.max(0, Math.round((now - Date.parse(postedAt)) / 1000));
-	if (seconds < 45) return "just now";
-	if (seconds < 90) return "a minute ago";
-	const minutes = Math.round(seconds / 60);
-	if (minutes < 60) return `${minutes} minutes ago`;
-	const hours = Math.round(minutes / 60);
-	if (hours < 24) return `${hours} hours ago`;
-	return `${Math.round(hours / 24)} days ago`;
-}
-
 export function optionValues(option: SessionOption): SessionOptionValue[] {
 	return [...option.values, ...option.groups.flatMap((group) => group.values)];
 }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { Queue } from "./generated";
-import { openingQueueLine, reasonInWords, sessionQueueLine } from "./queue-line";
+import { openingQueueLine, sessionQueueLine } from "./queue-line";
 
 function a_queue(overrides: Partial<Queue> = {}): Queue {
 	return {
@@ -89,29 +89,10 @@ describe("the line a Workspace shows for its queued Session", () => {
 				},
 			],
 		});
-		expect(sessionQueueLine(queue, workspace)).toBe("Waiting: at the limit of 1 live Instance.");
+		expect(sessionQueueLine(queue, workspace)).toBe("Waiting: at the live Instance limit of 1.");
 	});
 
 	test("says nothing for a Workspace whose Session is not in the queue", () => {
 		expect(sessionQueueLine(a_queue(), workspace)).toBeUndefined();
-	});
-});
-
-describe("reasons in words", () => {
-	test("mirror the prose the Client shows", () => {
-		expect(reasonInWords({ kind: "dependencies", sessions: ["a", "b"] })).toBe("waits on a, b");
-		expect(reasonInWords({ kind: "subscription_profile", profile: "jack", session: "a" })).toBe(
-			"the Subscription Profile jack is held by a",
-		);
-		expect(reasonInWords({ kind: "instance_archiving", instance: "docker/x" })).toBe(
-			"waits for the Instance docker/x to be archived",
-		);
-		expect(reasonInWords({ kind: "live_instance_limit", limit: 2 })).toBe(
-			"at the limit of 2 live Instances",
-		);
-		expect(reasonInWords({ kind: "active_work_slots", limit: 1 })).toBe(
-			"all 1 Active-Work Slot occupied",
-		);
-		expect(reasonInWords({ kind: "ahead", sessions: ["a"] })).toBe("behind a");
 	});
 });

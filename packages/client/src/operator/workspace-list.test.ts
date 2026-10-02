@@ -7,7 +7,6 @@ import {
 	learnedPullRequest,
 	order,
 	pullRequestsUnavailable,
-	reasonText,
 	waitingText,
 	workNote,
 } from "./workspace-list";
@@ -266,7 +265,9 @@ describe("the current unit", () => {
 				}),
 			),
 		).toBe("cargo test");
-		expect(currentUnit(session({ state: "unbriefed", preparing: "cloning" }))).toBe("cloning");
+		expect(currentUnit(session({ state: "unbriefed", preparing: "cloning" }))).toBe(
+			"cloning the checkout",
+		);
 		expect(currentUnit(session({ state: "working", thought_buffering: true }))).toBe("thinking");
 		expect(currentUnit(session({ state: "working", message_buffering: true }))).toBe("writing");
 		expect(currentUnit(session({ state: "waiting" }))).toBeUndefined();
@@ -274,29 +275,6 @@ describe("the current unit", () => {
 });
 
 describe("queue reasons", () => {
-	it("phrase each structured reason", () => {
-		expect(reasonText({ kind: "dependencies", sessions: ["calm-river-abcdefgh"] })).toBe(
-			"waiting on calm-river-abcdefgh",
-		);
-		expect(reasonText({ kind: "live_instance_limit", limit: 2 })).toBe(
-			"at the live Instance limit of 2",
-		);
-		expect(reasonText({ kind: "instance_archiving", instance: "local-1" })).toBe(
-			"archiving local-1 to make room",
-		);
-		expect(reasonText({ kind: "active_work_slots", limit: 4 })).toBe(
-			"every Active-Work Slot is occupied (4)",
-		);
-		expect(
-			reasonText({
-				kind: "subscription_profile",
-				profile: "work",
-				session: "calm-river-abcdefgh",
-			}),
-		).toBe("calm-river-abcdefgh holds the work profile");
-		expect(reasonText({ kind: "ahead", sessions: ["a", "b"] })).toBe("behind a and b");
-	});
-
 	it("joins a waiting row's reasons, and falls back to held input", () => {
 		const held: QueueReason = { kind: "active_work_slots", limit: 1 };
 		const row = composeRow(
@@ -333,7 +311,7 @@ describe("queue reasons", () => {
 				],
 			}),
 		);
-		expect(waitingText(input)).toBe("input held since 2m ago");
+		expect(waitingText(input)).toBe("input held since 2 minutes ago");
 	});
 });
 

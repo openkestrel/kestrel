@@ -1,3 +1,4 @@
+import { preparingStep } from "./format";
 import type { Session, Workspace } from "./generated";
 
 export type RowPhase = "attention" | "working" | "waiting" | "queued" | "idle";
@@ -31,37 +32,9 @@ export function phaseOf(row: SessionRow): RowPhase {
 
 export function phaseLabel(row: SessionRow): string {
 	if (needsAttention(row)) return "Attention";
-	switch (row.session?.state) {
-		case "working":
-			return "Working";
-		case "unbriefed":
-			return "Preparing";
-		case "waiting":
-			return "Waiting";
-		case "queued":
-			return row.position === null ? "Queued" : `Queued #${row.position}`;
-		case "ended":
-			return "Ended";
-		case "unreachable":
-			return "Unreachable";
-		default:
-			return "Open";
-	}
-}
-
-export function preparingLabel(preparing: Session["preparing"] | undefined): string {
-	switch (preparing) {
-		case "provisioning":
-			return "provisioning";
-		case "cloning":
-			return "cloning";
-		case "starting_harness":
-			return "starting harness";
-		case "harness_ready":
-			return "harness ready";
-		default:
-			return "preparing";
-	}
+	if (!row.session) return "Open";
+	if (row.session.state === "queued" && row.position !== null) return `Queued #${row.position}`;
+	return sessionPhase(row.session);
 }
 
 export function sessionPhase(session: Session): string {
@@ -73,7 +46,7 @@ export function sessionPhase(session: Session): string {
 		case "waiting":
 			return "Waiting";
 		case "unbriefed":
-			return `Preparing (${preparingLabel(session.preparing)})`;
+			return "Preparing";
 		case "ended":
 			return "Ended";
 		case "unreachable":
@@ -91,15 +64,7 @@ export function currentUnit(session: Session | undefined): string | undefined {
 		session.tools.find((tool) => tool.status !== "completed" && tool.status !== "failed") ??
 		session.tools[0];
 	if (running) return running.title;
-	switch (session.preparing) {
-		case "provisioning":
-		case "cloning":
-		case "starting_harness":
-		case "harness_ready":
-			return preparingLabel(session.preparing);
-		default:
-			break;
-	}
+	if (session.preparing) return preparingStep(session.preparing);
 	if (session.thought_buffering) return "thinking";
 	if (session.message_buffering) return "writing";
 	return undefined;

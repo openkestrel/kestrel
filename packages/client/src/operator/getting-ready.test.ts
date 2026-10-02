@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Session, Workspace } from "./generated";
-import { continueDraft, preparingStep, sessionStatusLine } from "./getting-ready";
+import { continueDraft, sessionStatusLine } from "./getting-ready";
 
 function session(overrides: Partial<Session> = {}): Session {
 	return {
@@ -66,12 +66,6 @@ function workspace(overrides: Partial<Workspace> = {}): Workspace {
 
 describe("the preparing line", () => {
 	it("follows the Session's step from provisioning to harness ready", () => {
-		expect(preparingStep("provisioning")).toBe("provisioning the Instance");
-		expect(preparingStep("cloning")).toBe("cloning the checkout");
-		expect(preparingStep("starting_harness")).toBe("starting the harness");
-		expect(preparingStep("harness_ready")).toBe("the harness is ready");
-		expect(preparingStep(null)).toBe("preparing");
-
 		expect(sessionStatusLine(session({ preparing: "provisioning" }))).toBe(
 			"Getting ready: provisioning the Instance…",
 		);

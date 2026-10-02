@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
 	amendable,
 	cacheWarning,
-	heldAge,
 	mayWriteOptions,
 	modeOption,
 	modeStep,
@@ -72,13 +71,6 @@ describe("a held message", () => {
 	it("says when it was edited", () => {
 		expect(wasAmended(held())).toBe(false);
 		expect(wasAmended(held({ edited_at: "2026-09-30T10:01:00Z" }))).toBe(true);
-	});
-
-	it("reads its age from the moment it was posted", () => {
-		const now = Date.parse("2026-09-30T10:00:00Z");
-		expect(heldAge("2026-09-30T09:59:55Z", now)).toBe("just now");
-		expect(heldAge("2026-09-30T09:58:00Z", now)).toBe("2 minutes ago");
-		expect(heldAge("2026-09-30T07:00:00Z", now)).toBe("3 hours ago");
 	});
 });
 

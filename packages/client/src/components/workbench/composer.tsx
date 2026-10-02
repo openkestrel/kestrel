@@ -6,14 +6,8 @@ import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
 import { Textarea } from "#/components/ui/textarea";
-import {
-	amendable,
-	heldAge,
-	modeStep,
-	partialReport,
-	postLabel,
-	wasAmended,
-} from "#/operator/composer";
+import { amendable, modeStep, partialReport, postLabel, wasAmended } from "#/operator/composer";
+import { ago } from "#/operator/format";
 import type { HeldMessage, Session, Workspace } from "#/operator/generated";
 import { participant, useParticipant } from "#/operator/participant";
 import { operator, sessionsKey, workspaceKey } from "#/operator/queries";
@@ -198,7 +192,7 @@ export function Composer({
 						>
 							<div className="flex flex-wrap items-center gap-2">
 								<span className="font-medium">{message.participant}</span>
-								<span className="text-muted-foreground">{heldAge(message.posted_at)}</span>
+								<span className="text-muted-foreground">{ago(message.posted_at)}</span>
 								{wasAmended(message) && <span className="text-muted-foreground">edited</span>}
 								{amendable(message, name) && (
 									<span className="ml-auto flex gap-1">

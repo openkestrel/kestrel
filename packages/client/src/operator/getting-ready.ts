@@ -1,22 +1,8 @@
 import type { NewWorkspaceDraft } from "#/lib/new-workspace-draft";
+import { preparingStep } from "./format";
 import type { Session, Workspace } from "./generated";
 import { operator } from "./queries";
 import { operatorPath } from "./transport";
-
-export function preparingStep(preparing: Session["preparing"] | undefined): string {
-	switch (preparing) {
-		case "provisioning":
-			return "provisioning the Instance";
-		case "cloning":
-			return "cloning the checkout";
-		case "starting_harness":
-			return "starting the harness";
-		case "harness_ready":
-			return "the harness is ready";
-		default:
-			return "preparing";
-	}
-}
 
 export function sessionStatusLine(session: Session | undefined): string | undefined {
 	if (!session) return undefined;

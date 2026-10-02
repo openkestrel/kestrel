@@ -1,3 +1,4 @@
+import { ago, reasonText } from "./format";
 import type {
 	PullRequest,
 	Queue,
@@ -95,37 +96,10 @@ function enqueued(row: WorkspaceRow): number {
 	return Date.parse(at) || 0;
 }
 
-export function reasonText(reason: QueueReason): string {
-	switch (reason.kind) {
-		case "dependencies":
-			return `waiting on ${list(reason.sessions)}`;
-		case "subscription_profile":
-			return `${reason.session} holds the ${reason.profile} profile`;
-		case "instance_archiving":
-			return `archiving ${reason.instance} to make room`;
-		case "live_instance_limit":
-			return `at the live Instance limit of ${reason.limit}`;
-		case "active_work_slots":
-			return `every Active-Work Slot is occupied (${reason.limit})`;
-		case "ahead":
-			return `behind ${list(reason.sessions)}`;
-		default: {
-			const unhandled: never = reason;
-			throw new Error(`no such queue reason: ${String(unhandled)}`);
-		}
-	}
-}
-
 export function waitingText(row: WorkspaceRow): string | undefined {
 	if (row.reasons.length > 0) return row.reasons.map(reasonText).join("; ");
-	if (row.pendingSince) return `input held since ${when(row.pendingSince)}`;
+	if (row.pendingSince) return `input held since ${ago(row.pendingSince)}`;
 	return undefined;
-}
-
-function list(names: string[]): string {
-	if (names.length === 0) return "nothing";
-	if (names.length === 1) return names[0] ?? "nothing";
-	return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 export type ChangedWork = {
@@ -164,7 +138,7 @@ export function workNote(work: WorkspaceWork | undefined): string | undefined {
 	if (!work) return undefined;
 	switch (work.state) {
 		case "reported":
-			return `reported ${when(work.reported_at)}`;
+			return `reported ${ago(work.reported_at)}`;
 		case "no_instance":
 			return "no Instance";
 		case "not_answering":
@@ -187,14 +161,4 @@ export function pullRequestsUnavailable(workspace: Workspace): boolean {
 	return workspace.pull_requests.every(
 		(availability) => availability.availability === "unavailable",
 	);
-}
-
-export function when(timestamp: string): string {
-	const at = Date.parse(timestamp);
-	if (Number.isNaN(at)) return "at an unknown time";
-	const seconds = Math.max(0, (Date.now() - at) / 1000);
-	if (seconds < 60) return "just now";
-	if (seconds < 3_600) return `${Math.floor(seconds / 60)}m ago`;
-	if (seconds < 86_400) return `${Math.floor(seconds / 3_600)}h ago`;
-	return `${Math.floor(seconds / 86_400)}d ago`;
 }

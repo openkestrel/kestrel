@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Refusal } from "#/components/refusal";
 import { Skeleton } from "#/components/ui/skeleton";
+import { ago } from "#/operator/format";
 import type { Workspace } from "#/operator/generated";
 import { workQuery } from "#/operator/queries";
 import {
@@ -11,7 +12,7 @@ import {
 	stashedText,
 	untrackedText,
 } from "#/operator/work-view";
-import { learnedPullRequest, pullRequestsUnavailable, when } from "#/operator/workspace-list";
+import { learnedPullRequest, pullRequestsUnavailable } from "#/operator/workspace-list";
 
 export function WorkTab({
 	organization,
@@ -62,7 +63,7 @@ export function WorkTab({
 			) : (
 				<>
 					<span className="text-muted-foreground text-xs" data-reported>
-						reported {when(summary.reported_at)}
+						reported {ago(summary.reported_at)}
 					</span>
 					{summary.repositories.map((repository) => (
 						<article key={repository.repository} className="grid gap-2 rounded-md border p-3">

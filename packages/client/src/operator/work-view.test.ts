@@ -10,7 +10,6 @@ import {
 	childPath,
 	commitsText,
 	fileKindLabel,
-	fileSize,
 	joinedParticipants,
 	optionSummary,
 	parentPath,
@@ -106,10 +105,7 @@ describe("the file browser's paths", () => {
 		]);
 	});
 
-	it("sizes and kinds an entry", () => {
-		expect(fileSize(512)).toBe("512 B");
-		expect(fileSize(2048)).toBe("2 KiB");
-		expect(fileSize(3 * 1024 * 1024)).toBe("3.0 MiB");
+	it("kinds an entry", () => {
 		expect(fileKindLabel({ name: "src", kind: "directory" })).toBe("directory");
 		expect(fileKindLabel({ name: "new.rs", kind: "file", git: "untracked" })).toBe("untracked");
 		expect(fileKindLabel({ name: "main.rs", kind: "file", git: "tracked" })).toBe("tracked");
@@ -118,9 +114,7 @@ describe("the file browser's paths", () => {
 
 describe("a Session's reading", () => {
 	it("names its phase, outcome, continuity, options and usage", () => {
-		expect(sessionPhase(session({ state: "unbriefed", preparing: "cloning" }))).toBe(
-			"Preparing (cloning)",
-		);
+		expect(sessionPhase(session({ state: "unbriefed", preparing: "cloning" }))).toBe("Preparing");
 		expect(sessionPhase(session({ state: "ended" }))).toBe("Ended");
 		expect(
 			sessionOutcome(
@@ -139,7 +133,7 @@ describe("a Session's reading", () => {
 					connected_at: new Date(Date.now() - 120_000).toISOString(),
 				}),
 			),
-		).toContain("instance local-1 · supervisor 1.2.3 · connected 2m ago");
+		).toContain("instance local-1 · supervisor 1.2.3 · connected 2 minutes ago");
 		expect(sessionContinuity(session())).toBe("no Instance");
 		expect(
 			optionSummary(

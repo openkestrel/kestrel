@@ -120,12 +120,6 @@ export function planStep(value: unknown): PlanStep | undefined {
 	};
 }
 
-export function bytes(count: number): string {
-	if (count < 1024) return `${count} B`;
-	if (count < 1024 * 1024) return `${Math.round(count / 1024)} KiB`;
-	return `${(count / (1024 * 1024)).toFixed(1)} MiB`;
-}
-
 export function entryText(entry: Entry): string {
 	switch (entry.type) {
 		case "said":

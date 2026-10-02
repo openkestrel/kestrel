@@ -14,13 +14,6 @@ export function sessionTitle(session: Session | undefined, workspace: Workspace)
 	return workspace.name;
 }
 
-export function stateLabel(session: Session | undefined): string {
-	if (!session) return "no session";
-	return session.preparing
-		? `${session.state} · ${session.preparing.replaceAll("_", " ")}`
-		: session.state;
-}
-
 export function modelLine(session: Session | undefined): string {
 	const requested = session?.model ?? "the harness's default";
 	const running = session?.worked_model;

@@ -5,8 +5,9 @@ import { Refusal } from "#/components/refusal";
 import { Button } from "#/components/ui/button";
 import { Skeleton } from "#/components/ui/skeleton";
 import { Toggle } from "#/components/ui/toggle";
+import { size } from "#/operator/format";
 import { fileQuery, filesQuery } from "#/operator/work-queries";
-import { breadcrumbs, childPath, fileKindLabel, fileSize } from "#/operator/work-view";
+import { breadcrumbs, childPath, fileKindLabel } from "#/operator/work-view";
 
 export function FilesTab({ organization, workspace }: { organization: string; workspace: string }) {
 	const [path, setPath] = useState("");
@@ -72,7 +73,7 @@ export function FilesTab({ organization, workspace }: { organization: string; wo
 										<span className="truncate">{entry.name}</span>
 										<span className="text-muted-foreground text-xs">
 											{fileKindLabel(entry)}
-											{entry.size !== undefined ? ` · ${fileSize(entry.size)}` : ""}
+											{entry.size !== undefined ? ` · ${size(entry.size)}` : ""}
 										</span>
 									</button>
 								</li>
@@ -120,7 +121,7 @@ export function FilesTab({ organization, workspace }: { organization: string; wo
 						</pre>
 					) : (
 						<p data-binary className="text-muted-foreground text-xs">
-							binary content · {fileSize(file.data.bytes)}
+							binary content · {size(file.data.bytes)}
 						</p>
 					)}
 				</section>
