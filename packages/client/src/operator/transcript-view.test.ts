@@ -86,8 +86,13 @@ describe("a tool's state", () => {
 		expect(toolState("in_progress")).toBe("running");
 		expect(toolState("completed")).toBe("completed");
 		expect(toolState("failed")).toBe("failed");
-		expect(toolState("interrupted")).toBe("interrupted");
-		expect(toolState("unresolved")).toBe("unresolved");
+	});
+
+	it("reads how kestrel closed a call over the status the harness last reported", () => {
+		expect(toolState("in_progress", "interrupted")).toBe("interrupted");
+		expect(toolState("pending", "unresolved")).toBe("unresolved");
+		expect(toolState("in_progress", "failed")).toBe("failed");
+		expect(toolState("completed", null)).toBe("completed");
 	});
 });
 

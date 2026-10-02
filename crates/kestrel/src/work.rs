@@ -14,7 +14,7 @@ use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
 use crate::link;
 use crate::live_work::RunningTool;
-use crate::log::{Completion, Entry, Message, PlanEntry};
+use crate::log::{ClosingReason, Completion, Entry, Message, PlanEntry, ToolStatus};
 use crate::participant;
 use crate::store::workspace::Taken;
 use crate::store::{Store, Tx};
@@ -61,10 +61,10 @@ pub enum Report {
         call_id: String,
         title: String,
         tool_kind: String,
-        status: String,
+        status: ToolStatus,
         input: serde_json::Value,
         result: Box<serde_json::Value>,
-        closing_reason: Option<String>,
+        closing_reason: Option<ClosingReason>,
         completion: Completion,
     },
     SessionState {

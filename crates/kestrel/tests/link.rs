@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use kestrel::domain::{Exit, Session, SessionId};
 use kestrel::link::{self, Instruction};
-use kestrel::log::{Entry, Message};
+use kestrel::log::{Entry, Message, ToolStatus};
 use kestrel::work::{Report, Reported};
 use reqwest::{StatusCode, Version, header};
 use serde_json::json;
@@ -661,7 +661,7 @@ fn the_published_openapi_document_describes_every_transcript_entry_the_link_serv
             call_id: "call".to_owned(),
             title: "read".to_owned(),
             tool_kind: "read".to_owned(),
-            status: "completed".to_owned(),
+            status: ToolStatus::Completed,
             input: serde_json::json!({}),
             result: Box::new(serde_json::json!([])),
             closing_reason: None,
@@ -779,7 +779,7 @@ async fn completed_units_replay_once_and_filtered_pages_walk_the_global_cursor()
             call_id: "call".to_owned(),
             title: "read".to_owned(),
             tool_kind: "read".to_owned(),
-            status: "completed".to_owned(),
+            status: ToolStatus::Completed,
             input: serde_json::json!({"path":"a"}),
             result: Box::new(serde_json::json!(["read"])),
             closing_reason: None,

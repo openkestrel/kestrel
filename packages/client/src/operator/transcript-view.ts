@@ -62,17 +62,21 @@ export function at(timestamp: string | null | undefined): string | undefined {
 
 export type ToolState = "running" | "completed" | "failed" | "interrupted" | "unresolved";
 
-export function toolState(status: string): ToolState {
+export function toolState(status: string, closingReason?: string | null): ToolState {
+	switch (closingReason) {
+		case "interrupted":
+			return "interrupted";
+		case "unresolved":
+			return "unresolved";
+		case "failed":
+			return "failed";
+	}
 	switch (status) {
 		case "pending":
 		case "in_progress":
 			return "running";
 		case "failed":
 			return "failed";
-		case "interrupted":
-			return "interrupted";
-		case "unresolved":
-			return "unresolved";
 		default:
 			return "completed";
 	}

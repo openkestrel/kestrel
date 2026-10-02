@@ -5,7 +5,9 @@ use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, SessionUpdate, ToolCall, ToolCallStatus,
 };
 
-use crate::link::{Completion, Cost, PlanEntry, Report, TurnOutcome, Usage};
+use crate::link::{
+    ClosingReason, Completion, Cost, PlanEntry, Report, ToolStatus, TurnOutcome, Usage,
+};
 
 #[derive(Default)]
 pub struct Completer {
@@ -192,21 +194,17 @@ impl Completer {
         }
         let (call, started_at) = self.tools.remove(id).unwrap();
         self.completed_tools.insert(id.to_owned());
-        let closing_reason = outcome.as_ref().map(|outcome| {
-            match outcome {
-                TurnOutcome::Cancelled => "interrupted",
-                TurnOutcome::Failed { .. } => "failed",
-                TurnOutcome::Answered { .. } => "unresolved",
-            }
-            .to_owned()
+        let closing_reason = outcome.as_ref().map(|outcome| match outcome {
+            TurnOutcome::Cancelled => ClosingReason::Interrupted,
+            TurnOutcome::Failed { .. } => ClosingReason::Failed,
+            TurnOutcome::Answered { .. } => ClosingReason::Unresolved,
         });
-        let status = closing_reason.clone().unwrap_or_else(|| {
-            serde_json::to_value(call.status)
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_owned()
-        });
+        let status = match call.status {
+            ToolCallStatus::InProgress => ToolStatus::InProgress,
+            ToolCallStatus::Completed => ToolStatus::Completed,
+            ToolCallStatus::Failed => ToolStatus::Failed,
+            _ => ToolStatus::Pending,
+        };
         completed.reports.push(Report::ToolCall {
             call_id: id.to_owned(),
             title: call.title,
@@ -384,7 +382,7 @@ mod tests {
             let settled = completer.boundary(outcome.clone(), NOW);
             assert_eq!(settled.reports.len(), 1);
             let report = serde_json::to_value(&settled.reports[0]).unwrap();
-            assert_eq!(report["status"], reason);
+            assert_eq!(report["status"], "pending");
             assert_eq!(report["closing_reason"], reason);
             assert_eq!(
                 report["completion"]["turn_outcome"],

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use kestrel_supervisor::link::{
     self, Down, Error, Exit, Git, INSTRUCTIONS, Instruction, Link, Observed, REPORTS, Read, Report,
-    Reported,
+    Reported, ToolStatus,
 };
 
 mod support;
@@ -195,7 +195,7 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
                 call_id: "call".to_owned(),
                 title: "read".to_owned(),
                 tool_kind: "read".to_owned(),
-                status: "completed".to_owned(),
+                status: ToolStatus::Completed,
                 input: serde_json::json!({"path":"a"}),
                 result: Box::new(serde_json::json!({"output":"read"})),
                 closing_reason: None,

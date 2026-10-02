@@ -2389,7 +2389,14 @@
             "type": "string"
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "description": "The status the Harness last reported for the call.",
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed",
+              "failed"
+            ]
           },
           "input": {
             "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
@@ -2401,6 +2408,13 @@
             "type": [
               "string",
               "null"
+            ],
+            "description": "Why kestrel closed the call at a Turn boundary; null when the Harness settled it.",
+            "enum": [
+              "interrupted",
+              "failed",
+              "unresolved",
+              null
             ]
           },
           "completion": {
@@ -2475,7 +2489,14 @@
             "type": "string"
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "description": "The status the Harness last reported for the call.",
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed",
+              "failed"
+            ]
           },
           "input": {},
           "result": {},
@@ -2483,6 +2504,13 @@
             "type": [
               "string",
               "null"
+            ],
+            "description": "Why kestrel closed the call at a Turn boundary; null when the Harness settled it.",
+            "enum": [
+              "interrupted",
+              "failed",
+              "unresolved",
+              null
             ]
           },
           "completion": {

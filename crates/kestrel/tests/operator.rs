@@ -7,7 +7,7 @@ use std::time::Duration;
 use kestrel::domain::{EventRecordId, Exit, Preparing, SessionId, SessionState, WorkspaceId};
 use kestrel::instance::{Git, Observed};
 use kestrel::link;
-use kestrel::log::{Entry, Message};
+use kestrel::log::{Entry, Message, ToolStatus};
 use kestrel::operator;
 use kestrel::work;
 use reqwest::StatusCode;
@@ -5559,7 +5559,7 @@ fn the_published_operator_document_describes_every_transcript_entry() {
             call_id: "call".to_owned(),
             title: "read".to_owned(),
             tool_kind: "read".to_owned(),
-            status: "completed".to_owned(),
+            status: ToolStatus::Completed,
             input: serde_json::json!({}),
             result: Box::new(serde_json::json!([])),
             closing_reason: None,

@@ -195,7 +195,7 @@ function ToolRow({
 	mode,
 	...row
 }: { entry: Extract<Delivered["entry"], { type: "tool_call" }>; mode: Disclosure } & Row) {
-	const state = toolState(entry.status);
+	const state = toolState(entry.status, entry.closing_reason);
 	const duration = elapsed(
 		Date.parse(entry.completion.finished_at) - Date.parse(entry.completion.started_at),
 	);

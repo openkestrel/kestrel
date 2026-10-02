@@ -50,10 +50,10 @@ pub enum Entry {
         call_id: String,
         title: String,
         tool_kind: String,
-        status: String,
+        status: ToolStatus,
         input: serde_json::Value,
         result: Box<serde_json::Value>,
-        closing_reason: Option<String>,
+        closing_reason: Option<ClosingReason>,
         completion: Completion,
     },
     Messages {
@@ -132,7 +132,15 @@ impl fmt::Display for Entry {
                     .collect::<Vec<_>>()
                     .join("  ")
             ),
-            Entry::ToolCall { title, status, .. } => write!(f, "tool call  {title}  {status}"),
+            Entry::ToolCall {
+                title,
+                status,
+                closing_reason,
+                ..
+            } => match closing_reason {
+                Some(reason) => write!(f, "tool call  {title}  {status}  {reason}"),
+                None => write!(f, "tool call  {title}  {status}"),
+            },
             Entry::Messages { messages } => write!(
                 f,
                 "messages  {}",
@@ -608,12 +616,20 @@ impl<'a> Log<'a> {
                     "plan" => summary.counts.plans += 1,
                     "tool_call" => {
                         summary.counts.tool_calls += 1;
-                        if row.get::<Option<String>, _>("status").as_deref() == Some("failed") {
+                        let status: ToolStatus =
+                            serde_json::from_value(serde_json::Value::String(row.get("status")))
+                                .map_err(anyhow::Error::from)?;
+                        let closing_reason: Option<ClosingReason> = serde_json::from_value(
+                            row.get::<Option<String>, _>("closing_reason")
+                                .map_or(serde_json::Value::Null, serde_json::Value::String),
+                        )
+                        .map_err(anyhow::Error::from)?;
+                        if status == ToolStatus::Failed {
                             summary.counts.failed_calls += 1;
                         }
                         summary.anomaly |= matches!(
-                            row.get::<Option<String>, _>("closing_reason").as_deref(),
-                            Some("interrupted" | "unresolved")
+                            closing_reason,
+                            Some(ClosingReason::Interrupted | ClosingReason::Unresolved)
                         );
                     }
                     "expired" => summary.counts.tombstones += 1,
@@ -996,6 +1012,44 @@ impl Entry {
             | Self::OptionChanged { session, .. } => Some(*session),
             _ => None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClosingReason {
+    Interrupted,
+    Failed,
+    Unresolved,
+}
+
+impl std::fmt::Display for ToolStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Pending => "pending",
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        })
+    }
+}
+
+impl std::fmt::Display for ClosingReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Interrupted => "interrupted",
+            Self::Failed => "failed",
+            Self::Unresolved => "unresolved",
+        })
     }
 }
 

@@ -779,8 +779,28 @@ async fn open_calls_close_at_answer_cancel_and_failure_once() {
             )
             .unwrap()
         );
-        assert_eq!(detail[0]["entry"]["status"], reason);
+        assert_eq!(detail[0]["entry"]["status"], "in_progress");
         assert_eq!(detail[0]["entry"]["closing_reason"], reason);
+        let narration = reqwest::get(format!(
+            "{}/operator/organizations/acme/workspaces/{}/transcript?follow=false&kinds=narration",
+            kestrel.operator(),
+            workspace.id
+        ))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+        let activity: serde_json::Value = serde_json::from_str(
+            narration
+                .split("event: activity\n")
+                .nth(1)
+                .and_then(|frame| frame.lines().find_map(|line| line.strip_prefix("data: ")))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(activity["counts"]["tool_calls"], 1, "{script:?}");
+        assert_eq!(activity["counts"]["failed_calls"], 0, "{script:?}");
         kestrel.teardown().await;
     }
 }

@@ -242,10 +242,10 @@ pub enum Report {
         call_id: String,
         title: String,
         tool_kind: String,
-        status: String,
+        status: ToolStatus,
         input: serde_json::Value,
         result: Box<serde_json::Value>,
-        closing_reason: Option<String>,
+        closing_reason: Option<ClosingReason>,
         completion: Completion,
     },
     SessionState {
@@ -851,6 +851,23 @@ async fn refuse_if_declined(response: Response) -> Result<Response, Error> {
         }
         _ => Ok(response),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClosingReason {
+    Interrupted,
+    Failed,
+    Unresolved,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

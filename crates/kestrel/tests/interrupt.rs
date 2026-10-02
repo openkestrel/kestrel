@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use kestrel::domain::{Session, SessionId, SessionState, Workspace, WorkspaceId};
 use kestrel::link::Instruction;
-use kestrel::log::Entry;
+use kestrel::log::{ClosingReason, Entry};
 use support::repository;
 use support::scripted_agent::{self, Script};
 use support::supervisor;
@@ -440,7 +440,10 @@ async fn an_interrupted_scripted_turn_records_who_asked_and_keeps_what_it_said()
     assert!(
         entries.iter().any(|entry| matches!(
             entry,
-            Entry::ToolCall { closing_reason: Some(reason), .. } if reason == "interrupted"
+            Entry::ToolCall {
+                closing_reason: Some(ClosingReason::Interrupted),
+                ..
+            }
         )),
         "the open tool call closed interrupted: {entries:?}"
     );
@@ -650,7 +653,10 @@ async fn a_harness_that_ignores_the_cancel_ends_the_session_as_lost_continuity()
             .iter()
             .any(|entry| matches!(
                 entry,
-                Entry::ToolCall { closing_reason: Some(reason), .. } if reason == "unresolved"
+                Entry::ToolCall {
+                    closing_reason: Some(ClosingReason::Unresolved),
+                    ..
+                }
             )),
         "the open unit closed unresolved"
     );
