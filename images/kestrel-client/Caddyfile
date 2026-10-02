@@ -4,6 +4,8 @@
 	# The operator trusts Caddy's local CA once, by hand (USAGE.md); Caddy never edits a trust store.
 	skip_install_trust
 	auto_https disable_redirects
+	# A browser sends no SNI to an IP, and in a container the local address is not 127.0.0.1.
+	default_sni 127.0.0.1
 }
 
 # HTTPS so the browser speaks HTTP/2: over HTTP/1.1 its six connections per origin, shared by every
