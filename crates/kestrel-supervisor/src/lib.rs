@@ -404,10 +404,11 @@ async fn attend(
                     delivered.id,
                     delivered.session
                 ));
-                let closing = matches!(&delivered.instruction, Instruction::Stop)
-                    && supervising.carrying.as_ref().is_some_and(|carrying| carrying.session == delivered.session);
+                // Any Stop, not only one for the Session still carried: a report refused since the
+                // Session ended may already have let it go.
+                let stopped = matches!(&delivered.instruction, Instruction::Stop);
                 instructed(stderr, supervising, delivered, diagnostics).await;
-                if closing {
+                if stopped {
                     report_work(link, supervising, true).await?;
                 }
             }
