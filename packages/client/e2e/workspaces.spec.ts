@@ -180,6 +180,23 @@ class Reads {
 	}
 }
 
+// The Organization's notice stream: it opens once, and its reconnect carries one change when sent.
+function noticing(page: Page) {
+	const { promise: sent, resolve: send } = Promise.withResolvers<string>();
+	let connections = 0;
+	void page.route(
+		(url) => url.pathname === `/operator/organizations/${ORGANIZATION}/changes`,
+		async (route) => {
+			connections += 1;
+			const body = connections === 1 ? "event: open\ndata: {}\n\n" : await sent;
+			await route.fulfill({ status: 200, contentType: "text/event-stream", body });
+		},
+	);
+	return {
+		change: (changed: unknown) => send(`event: change\ndata: ${JSON.stringify(changed)}\n\n`),
+	};
+}
+
 function rows(page: Page) {
 	return page.locator('nav[aria-label="Workspaces"] li a');
 }
@@ -298,10 +315,7 @@ test("a dependency wait and an Instance wait show the queue's reasons, not an es
 	await Promise.all([1, 2].map((row) => expect(rows(page).nth(row)).not.toContainText("Queued #")));
 });
 
-test("changed work and a learned pull request update on a Workspace notice", async ({
-	page,
-	request,
-}) => {
+test("changed work and a learned pull request update on a Workspace notice", async ({ page }) => {
 	const reads = new Reads();
 	reads.workspaces = [
 		workspace(21, {
@@ -315,6 +329,7 @@ test("changed work and a learned pull request update on a Workspace notice", asy
 		}),
 	];
 	reads.sessions = new Map([[21, [session(21, { state: "working", title: "the turn" })]]]);
+	const notice = noticing(page);
 	reads.work = new Map([
 		[
 			21,
@@ -380,7 +395,7 @@ test("changed work and a learned pull request update on a Workspace notice", asy
 		],
 	]);
 
-	await opened(request, "raise a workspace notice");
+	notice.change({ resource: "workspace", id: id(21) });
 
 	await expect(row).toContainText("#7 merged");
 	await expect(row).toContainText("+0 −0");
