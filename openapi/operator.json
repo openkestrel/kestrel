@@ -3090,8 +3090,8 @@
           "agent": { "type": "string" },
           "preparing": {
             "type": ["string", "null"],
-            "enum": ["provisioning", "cloning", "harness_ready", null],
-            "description": "The step it is preparing on: provisioning from claim until its supervisor connects, cloning while it checks out, and harness_ready once the harness is up."
+            "enum": ["provisioning", "cloning", "starting_harness", "harness_ready", null],
+            "description": "The step it is preparing on: provisioning from claim until its supervisor connects, cloning until its checkout is reported, starting_harness until the harness is up, and harness_ready once it is."
           },
           "pending_since": {
             "type": ["string", "null"],
@@ -3285,7 +3285,7 @@
           "state": { "type": "string", "enum": ["queued", "working", "waiting", "unbriefed", "ended", "unreachable"] },
           "preparing": {
             "type": ["string", "null"],
-            "enum": ["provisioning", "cloning", "harness_ready", null]
+            "enum": ["provisioning", "cloning", "starting_harness", "harness_ready", null]
           }
         },
         "required": ["id", "name", "state", "preparing"]
@@ -3373,8 +3373,8 @@
           "state": { "type": "string", "enum": ["queued", "working", "waiting", "unbriefed", "ended", "unreachable"] },
           "preparing": {
             "type": ["string", "null"],
-            "enum": ["provisioning", "cloning", "harness_ready", null],
-            "description": "The step an unbriefed Session is preparing on: provisioning from claim until its supervisor connects, cloning while it checks out, and harness_ready once the harness is up. Null in every other state."
+            "enum": ["provisioning", "cloning", "starting_harness", "harness_ready", null],
+            "description": "The step an unbriefed Session is preparing on: provisioning from claim until its supervisor connects, cloning until its checkout is reported, starting_harness until the harness is up, and harness_ready once it is. Null in every other state."
           },
           "exit": { "anyOf": [{ "$ref": "#/components/schemas/Exit" }, { "type": "null" }] },
           "outcome_message": { "type": ["string", "null"] },

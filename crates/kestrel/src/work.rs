@@ -941,6 +941,7 @@ async fn reported(
             tx.workspaces()
                 .record_observed(session.organization, session.workspace, &repositories)
                 .await?;
+            tx.workspaces().record_checked_out(session).await?;
             info!(session = %session.id, "a supervisor reported what its checkout holds");
         }
         Report::Finished { exit, usage } => {

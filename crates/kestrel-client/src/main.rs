@@ -1964,6 +1964,7 @@ fn why(row: &serde_json::Map<String, Value>) -> String {
     let mut said: Vec<String> = Vec::new();
     if let Some(preparing) = row["preparing"].as_str() {
         said.push(match preparing {
+            "starting_harness" => "starting harness".to_owned(),
             "harness_ready" => "harness ready".to_owned(),
             step => step.to_owned(),
         });

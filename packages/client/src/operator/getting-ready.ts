@@ -9,6 +9,8 @@ export function preparingStep(preparing: Session["preparing"] | undefined): stri
 			return "provisioning the Instance";
 		case "cloning":
 			return "cloning the checkout";
+		case "starting_harness":
+			return "starting the harness";
 		case "harness_ready":
 			return "the harness is ready";
 		default:

@@ -244,6 +244,26 @@ async fn an_unbriefed_workspace_dispatches_past_a_serialized_profile() {
 }
 
 #[tokio::test]
+async fn an_unbriefed_session_is_starting_its_harness_once_its_checkout_is_reported() {
+    let kestrel =
+        Kestrel::dispatching_harnesses_up_to(supervisor::binary(), &[(HARNESS, "sleep 600")], 1)
+            .await;
+    let workspace = a_workspace(&kestrel).await;
+
+    let queued = kestrel
+        .enqueue_session_with_nothing_posted(workspace.id)
+        .await;
+    let starting = until(&kestrel, queued.id, "starting its harness", |session| {
+        session.preparing == Some(Preparing::StartingHarness)
+    })
+    .await;
+
+    assert_eq!(starting.state, SessionState::Unbriefed);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_spawn_failure_ends_an_unbriefed_session_failed() {
     let kestrel = Kestrel::dispatching_harnesses_up_to(
         supervisor::binary(),

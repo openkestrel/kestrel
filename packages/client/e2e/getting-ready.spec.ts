@@ -203,6 +203,10 @@ test("the preparing line follows the Session from provisioning to harness ready"
 	await page.reload();
 	await expect(line).toContainText("Getting ready: cloning the checkout…");
 
+	reads.sessions = [session(1, { preparing: "starting_harness" })];
+	await page.reload();
+	await expect(line).toContainText("Getting ready: starting the harness…");
+
 	reads.sessions = [session(1, { preparing: "harness_ready" })];
 	await page.reload();
 	await expect(line).toContainText("Ready: the harness is up");

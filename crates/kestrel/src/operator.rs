@@ -2033,7 +2033,8 @@ struct UnbriefedSessionRecord {
     name: String,
     workspace: String,
     agent: String,
-    /// The step it is preparing on: provisioning, cloning or harness_ready.
+    /// The step it is preparing on: provisioning, cloning, starting_harness or
+    /// harness_ready.
     preparing: Option<String>,
     /// When the oldest message held for its Brief arrived, or null while it holds none.
     pending_since: Option<Timestamp>,

@@ -31,8 +31,8 @@ stateDiagram-v2
   holds its Instance and no slot either, and counts against the live Instance limit like a Waiting
   one ([ADR-0038](../adr/0038-a-session-may-start-before-its-brief.md)).
 - **An Unbriefed Session carries a preparing step** (`session.preparing`): `provisioning` from claim
-  until its supervisor connects, `cloning` while it checks out, and `harness_ready` once the
-  supervisor reports the harness up. It is current state, never a Transcript entry.
+  until its supervisor connects, `cloning` until its checkout is reported, `starting_harness` until
+  the supervisor reports the harness up, and `harness_ready` once it does. It is current state, never a Transcript entry.
 - **A Session ends once.** `work::ending` is the single path; whoever reaches it first (the
   supervisor's `finished`, a stop, the lease sweep, the claimant failing) sets the exit, and later
   callers get the exit that stands. Ending appends `SessionEnded`, invalidates the link

@@ -924,8 +924,10 @@ impl FromStr for SessionState {
 pub enum Preparing {
     /// From claim until the supervisor connects.
     Provisioning,
-    /// While the checkout is made.
+    /// From the supervisor connecting until the checkout is reported.
     Cloning,
+    /// From the checkout being reported until the supervisor reports ready.
+    StartingHarness,
     /// Once the supervisor reports the harness up and its conversation open.
     HarnessReady,
 }
@@ -935,6 +937,7 @@ impl Preparing {
         match self {
             Preparing::Provisioning => "provisioning",
             Preparing::Cloning => "cloning",
+            Preparing::StartingHarness => "starting_harness",
             Preparing::HarnessReady => "harness_ready",
         }
     }
@@ -947,6 +950,7 @@ impl FromStr for Preparing {
         match preparing {
             "provisioning" => Ok(Preparing::Provisioning),
             "cloning" => Ok(Preparing::Cloning),
+            "starting_harness" => Ok(Preparing::StartingHarness),
             "harness_ready" => Ok(Preparing::HarnessReady),
             other => bail!("{other} is not a step a session prepares on"),
         }

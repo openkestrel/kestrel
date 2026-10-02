@@ -57,6 +57,8 @@ export function preparingLabel(preparing: Session["preparing"] | undefined): str
 			return "provisioning";
 		case "cloning":
 			return "cloning";
+		case "starting_harness":
+			return "starting harness";
 		case "harness_ready":
 			return "harness ready";
 		default:
@@ -96,6 +98,7 @@ export function currentUnit(session: Session | undefined): string | undefined {
 	switch (session.preparing) {
 		case "provisioning":
 		case "cloning":
+		case "starting_harness":
 		case "harness_ready":
 			return preparingLabel(session.preparing);
 		default:

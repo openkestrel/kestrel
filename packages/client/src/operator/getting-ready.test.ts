@@ -68,6 +68,7 @@ describe("the preparing line", () => {
 	it("follows the Session's step from provisioning to harness ready", () => {
 		expect(preparingStep("provisioning")).toBe("provisioning the Instance");
 		expect(preparingStep("cloning")).toBe("cloning the checkout");
+		expect(preparingStep("starting_harness")).toBe("starting the harness");
 		expect(preparingStep("harness_ready")).toBe("the harness is ready");
 		expect(preparingStep(null)).toBe("preparing");
 
@@ -76,6 +77,9 @@ describe("the preparing line", () => {
 		);
 		expect(sessionStatusLine(session({ preparing: "cloning" }))).toBe(
 			"Getting ready: cloning the checkout…",
+		);
+		expect(sessionStatusLine(session({ preparing: "starting_harness" }))).toBe(
+			"Getting ready: starting the harness…",
 		);
 		expect(sessionStatusLine(session({ preparing: "harness_ready" }))).toBe(
 			"Ready: the harness is up, and your first message becomes the Brief.",

@@ -1791,6 +1791,25 @@ impl<'a> Workspaces<'a> {
         Ok(())
     }
 
+    pub async fn record_checked_out(&mut self, session: &Session) -> Result<()> {
+        let moved = sqlx::query(
+            "UPDATE session SET preparing = ? WHERE id = ? AND state = ? AND preparing = ?",
+        )
+        .bind(Preparing::StartingHarness.as_str())
+        .bind(session.id.to_string())
+        .bind(SessionState::Unbriefed.as_str())
+        .bind(Preparing::Cloning.as_str())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("recording the session {} checked out", session.id))?;
+
+        if moved.rows_affected() > 0 {
+            self.touched.session(session);
+        }
+
+        Ok(())
+    }
+
     /// The supervisor reports its harness up and its conversation open, with no turn started.
     /// `false` when the Session was no longer unbriefed, so a late report changes nothing.
     pub async fn record_ready(&mut self, session: &Session) -> Result<bool> {
