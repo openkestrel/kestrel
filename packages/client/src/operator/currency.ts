@@ -10,7 +10,7 @@ import {
 	type Watching,
 } from "./link";
 import type { Participant } from "./participant";
-import { noticedKey, workspaceKey } from "./queries";
+import { refetchNoticed, refetchOrganization, workspaceKey } from "./queries";
 import { FollowSession, page, TranscriptMirror, type TranscriptSnapshot } from "./transcript";
 import { operatorPath, Refused, type Transport } from "./transport";
 
@@ -121,7 +121,6 @@ export class Currency {
 				operations: this.operations,
 				participant: this.named?.name() ?? null,
 				mirror: new TranscriptMirror(),
-				refetch: () => this.refetchWorkspace(organization, workspace),
 				poll: this.pollMillis,
 			});
 			this.controllers.set(key, controller);
@@ -251,7 +250,7 @@ export class Currency {
 				if (this.peers.delete(message.tab)) this.settle();
 				break;
 			case "refetch":
-				this.refetchAll();
+				void refetchOrganization(this.queryClient, message.organization);
 				break;
 			case "notice":
 				this.applyNotice(message.organization, message.notice);
@@ -428,7 +427,7 @@ export class Currency {
 						}
 					} else if (event.event === "open" || event.event === "resync") {
 						this.broadcast({ kind: "refetch", tab: this.tab, organization });
-						this.refetchAll();
+						void refetchOrganization(this.queryClient, organization);
 					}
 				}
 			} catch {
@@ -445,18 +444,12 @@ export class Currency {
 		this.channel?.post(message);
 	}
 
-	private refetchAll(): void {
-		void this.queryClient.invalidateQueries();
-	}
-
 	private refetchWorkspace(organization: string, workspace: string): void {
 		void this.queryClient.invalidateQueries({ queryKey: workspaceKey(organization, workspace) });
 	}
 
 	private applyNotice(organization: string, notice: LinkNotice): void {
-		void this.queryClient.invalidateQueries({
-			queryKey: noticedKey(organization, notice.resource),
-		});
+		void refetchNoticed(this.queryClient, organization, notice);
 	}
 }
 
@@ -466,7 +459,6 @@ export type FollowOptions = {
 	operations: Transport;
 	participant: string | null;
 	mirror: TranscriptMirror;
-	refetch: () => void;
 	poll?: number;
 };
 
@@ -481,7 +473,6 @@ export class FollowController {
 
 	private readonly operations: Transport;
 	private participant: string | null;
-	private readonly refetch: () => void;
 	private readonly pollMillis: number;
 	private mode: Mode = "idle";
 	private session: FollowSession | null = null;
@@ -495,7 +486,6 @@ export class FollowController {
 		this.operations = options.operations;
 		this.participant = options.participant;
 		this.mirror = options.mirror;
-		this.refetch = options.refetch;
 		this.pollMillis = options.poll ?? POLL;
 	}
 
@@ -575,7 +565,6 @@ export class FollowController {
 			return;
 		}
 		this.inFlight = true;
-		this.refetch();
 		try {
 			await page(
 				this.operations,

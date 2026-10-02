@@ -29,7 +29,7 @@ function channelOf(bus: Bus): LinkChannel {
 }
 
 // A stand-in operator: every GET opens an SSE stream the test pushes events into unless its URL
-// contains `refuse`, and every POST answers no content.
+// contains `refuse`, a paged read ends at once, and every POST answers no content.
 class Wire {
 	readonly seen: { url: string; method: string; after: string | null }[] = [];
 	readonly operations: Transport;
@@ -57,6 +57,7 @@ class Wire {
 					if (this.greets && url.endsWith("/changes")) {
 						controller.enqueue(encoder.encode("event: open\ndata: {}\n\n"));
 					}
+					if (url.includes("follow=false")) controller.close();
 				},
 			});
 			return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
@@ -205,9 +206,9 @@ describe("Organization notices", () => {
 		await Promise.all(
 			invalidated.map((spy) =>
 				vi.waitFor(() =>
-					expect(spy).toHaveBeenCalledWith({
-						queryKey: ["organizations", "acme", "workspaces"],
-					}),
+					expect(spy).toHaveBeenCalledWith(
+						expect.objectContaining({ queryKey: ["organizations", "acme", "workspaces"] }),
+					),
 				),
 			),
 		);
@@ -224,10 +225,40 @@ describe("Organization notices", () => {
 		tabs[1]?.close();
 	});
 
-	it("invalidates the Workspace, Session or queue read a change names", async () => {
+	it("refetches only the Workspace, Session or queue read a change names", async () => {
 		const wire = new Wire();
 		const client = new QueryClient();
-		const invalidated = vi.spyOn(client, "invalidateQueries");
+		const keys = {
+			organizations: ["organizations"],
+			list: ["organizations", "acme", "workspaces"],
+			otter: ["organizations", "acme", "workspaces", "brave-otter"],
+			otterWork: ["organizations", "acme", "workspaces", "brave-otter", "work"],
+			otterCommits: ["organizations", "acme", "workspaces", "brave-otter", "instance", "commits"],
+			heronWork: ["organizations", "acme", "workspaces", "calm-heron", "work"],
+			heronCommits: ["organizations", "acme", "workspaces", "calm-heron", "instance", "commits"],
+			otterSessions: ["organizations", "acme", "sessions", "workspace", "brave-otter"],
+			heronSessions: ["organizations", "acme", "sessions", "workspace", "calm-heron"],
+			first: ["organizations", "acme", "sessions", "s1"],
+			queue: ["organizations", "acme", "queue"],
+			globexQueue: ["organizations", "globex", "queue"],
+			range: ["transcript", "acme", "brave-otter", 1, 5],
+			payload: ["transcript", "acme", "brave-otter", "payload", "p1"],
+		};
+		const seed = () => {
+			for (const key of Object.values(keys)) client.setQueryData(key, {});
+			client.setQueryData(keys.list, [
+				{ id: "w1", name: "brave-otter" },
+				{ id: "w2", name: "calm-heron" },
+			]);
+			client.setQueryData(keys.otterSessions, [{ id: "s1" }]);
+			client.setQueryData(keys.heronSessions, [{ id: "s2" }]);
+		};
+		const refetched = () =>
+			Object.entries(keys)
+				.filter(([, key]) => client.getQueryState(key)?.isInvalidated)
+				.map(([name]) => name)
+				.toSorted();
+		seed();
 		const tab = new Currency({
 			queryClient: client,
 			operations: wire.operations,
@@ -237,19 +268,63 @@ describe("Organization notices", () => {
 		});
 		tab.watch("acme");
 
-		await vi.waitFor(() => expect(wire.requests("/changes")).toBe(1));
-
-		wire.send({ event: "change", id: undefined, data: '{"resource":"session","id":"x"}' });
-		wire.send({ event: "change", id: undefined, data: '{"resource":"queue"}' });
-
-		await vi.waitFor(() =>
-			expect(invalidated).toHaveBeenCalledWith({
-				queryKey: ["organizations", "acme", "sessions"],
-			}),
+		await vi.waitFor(() => expect(client.getQueryState(keys.list)?.isInvalidated).toBe(true));
+		expect(refetched()).toEqual(
+			[
+				"organizations",
+				"list",
+				"otter",
+				"otterWork",
+				"otterCommits",
+				"heronWork",
+				"heronCommits",
+				"otterSessions",
+				"heronSessions",
+				"first",
+				"queue",
+			].toSorted(),
 		);
-		await vi.waitFor(() =>
-			expect(invalidated).toHaveBeenCalledWith({ queryKey: ["organizations", "acme", "queue"] }),
-		);
+
+		const changed = async (data: string, expected: string[]) => {
+			seed();
+			wire.send({ event: "change", id: undefined, data });
+			await vi.waitFor(() => expect(refetched()).toEqual(expected.toSorted()));
+		};
+
+		await changed('{"resource":"workspace","id":"w1"}', [
+			"list",
+			"otter",
+			"otterWork",
+			"otterCommits",
+		]);
+		await changed('{"resource":"session","id":"s1"}', ["first", "otterSessions"]);
+		await changed('{"resource":"session","id":"s9"}', ["otterSessions", "heronSessions"]);
+		await changed('{"resource":"queue"}', ["queue"]);
+
+		tab.close();
+	});
+
+	it("pages a polled view without refetching what the notices keep current", async () => {
+		const wire = new Wire(true, "follow=true");
+		const client = new QueryClient();
+		const invalidated = vi.spyOn(client, "invalidateQueries");
+		const tab = new Currency({
+			queryClient: client,
+			operations: wire.operations,
+			channel: null,
+			settle: 1,
+			poll: 5,
+			now: () => 1,
+			visible: () => true,
+		});
+		tab.watch("acme");
+		tab.watchFollow("acme", "brave-otter");
+
+		await vi.waitFor(() => expect(wire.requests("follow=false")).toBeGreaterThan(3));
+		invalidated.mockClear();
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(wire.requests("follow=false")).toBeGreaterThan(5);
+		expect(invalidated).not.toHaveBeenCalled();
 
 		tab.close();
 	});

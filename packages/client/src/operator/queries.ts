@@ -1,5 +1,6 @@
-import { queryOptions } from "@tanstack/react-query";
+import { type QueryClient, queryOptions } from "@tanstack/react-query";
 import type { Organization, Queue, Session, Workspace, WorkspaceWork } from "./generated";
+import type { LinkNotice } from "./link";
 import { type Delivered, readRange, type Range } from "./transcript";
 import { operatorPath, transport } from "./transport";
 
@@ -103,15 +104,66 @@ export const transcriptPayloadQuery = (organization: string, workspace: string, 
 				{ signal },
 			),
 	});
-// The read a notice names. Every view of a changed resource matches one of these prefixes.
-export function noticedKey(
+
+// Every current-state read of an Organization, and the Organization list; never a transcript cache.
+export function refetchOrganization(client: QueryClient, organization: string): Promise<void> {
+	return client.invalidateQueries({
+		queryKey: organizationsQuery.queryKey,
+		predicate: ({ queryKey }) => queryKey.length === 1 || queryKey[1] === organization,
+	});
+}
+
+// A notice names its resource by id while read keys carry Workspace names, so the cached reads
+// translate one to the other.
+export function refetchNoticed(
+	client: QueryClient,
 	organization: string,
-	resource: "workspace" | "session" | "queue",
-): readonly unknown[] {
-	const keys: Record<typeof resource, readonly unknown[]> = {
-		workspace: ["organizations", organization, "workspaces"],
-		session: sessionsKey(organization),
-		queue: queueKey(organization),
-	};
-	return keys[resource];
+	notice: LinkNotice,
+): Promise<void> {
+	if (notice.resource === "workspace") {
+		const named = workspaceNames(client, organization, notice.id);
+		return client.invalidateQueries({
+			queryKey: workspacesQuery(organization).queryKey,
+			predicate: ({ queryKey }) => queryKey.length === 3 || named.has(queryKey[3]),
+		});
+	}
+	if (notice.resource === "session") {
+		const holding = sessionHolders(client, organization, notice.id);
+		return client.invalidateQueries({
+			queryKey: sessionsKey(organization),
+			predicate: ({ queryKey }) =>
+				queryKey[3] === notice.id ||
+				(queryKey[3] === "workspace" && (holding.size === 0 || holding.has(queryKey[4]))),
+		});
+	}
+	return client.invalidateQueries({ queryKey: queueKey(organization) });
+}
+
+function workspaceNames(client: QueryClient, organization: string, id: string): Set<unknown> {
+	const known = [...(client.getQueryData(workspacesQuery(organization).queryKey) ?? [])];
+	for (const query of client
+		.getQueryCache()
+		.findAll({ queryKey: workspacesQuery(organization).queryKey })) {
+		const name = query.queryKey[3];
+		if (query.queryKey.length !== 4 || typeof name !== "string") continue;
+		const read = client.getQueryData(workspaceQuery(organization, name).queryKey);
+		if (read) known.push(read);
+	}
+	return new Set(
+		known.filter((workspace) => workspace.id === id).map((workspace) => workspace.name),
+	);
+}
+
+// The Workspaces whose cached Session lists hold the Session; none when it is new to this tab.
+function sessionHolders(client: QueryClient, organization: string, id: string): Set<unknown> {
+	const holding = new Set<unknown>();
+	for (const query of client
+		.getQueryCache()
+		.findAll({ queryKey: [...sessionsKey(organization), "workspace"] })) {
+		const name = query.queryKey[4];
+		if (typeof name !== "string") continue;
+		const sessions = client.getQueryData(workspaceSessionsQuery(organization, name).queryKey);
+		if (sessions?.some((session) => session.id === id)) holding.add(name);
+	}
+	return holding;
 }
