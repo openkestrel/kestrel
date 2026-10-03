@@ -71,9 +71,9 @@ Credentials come in when the Session starts ([ADR-0010](../../docs/adr/0010-a-pr
 A Subscription Profile's files, such as `.codex/auth.json`, are written beneath `/home/kestrel`
 for the length of one Session and removed when it ends
 ([ADR-0025](../../docs/adr/0025-subscription-profiles-are-personal.md)). An OpenCode Go or Zen
-subscription is a Subscription Profile variable (`OPENCODE_API_KEY`) rather than a file, and an
-opencode `auth.json` is a one-time seed into the harness's database, not a login kestrel refreshes
-([ADR-0026](../../docs/adr/0026-kestrel-carries-named-credentials-never-a-runtimes-store.md)). `gh`
+subscription is a Subscription Profile variable (`OPENCODE_API_KEY`) rather than a file; an opencode
+`auth.json` is not a usable sign-in
+([ADR-0026](../../docs/adr/0026-kestrel-carries-named-credentials-never-a-runtimes-store.md), #369). `gh`
 reads `GH_TOKEN` from its own environment. The token's scope is the operator's and kestrel does not
 narrow it: a `repo`-scoped token merges pull requests as well as opening them, so a human merge gate
 needs a reviewer identity other than the token's ([GitHub automation](../../docs/usage/github-automation.md#give-the-agent-github-tools) covers it where the

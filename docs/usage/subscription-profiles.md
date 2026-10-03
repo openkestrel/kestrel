@@ -17,13 +17,12 @@ Codex and Claude can use subscription logins instead of provider keys. Supply a 
 
 ```sh
 kestrel profile set jack --file .codex/auth.json < ~/.codex/auth.json
-kestrel profile set jack --file .local/share/opencode/auth.json < ~/.local/share/opencode/auth.json
 kestrel profile set jack --variable CLAUDE_CODE_OAUTH_TOKEN
 ```
 
 A file is placed beneath the agent's home when the session starts. At the end of the session, Kestrel reads it back and removes it from the instance, allowing a refreshed login to reach the next session. Codex writes `auth.json` when `cli_auth_credentials_store = "file"` is set where you log in. Claude Code keeps its macOS login in Keychain; run `claude setup-token` and store its output as `CLAUDE_CODE_OAUTH_TOKEN`.
 
-OpenCode 2 imports `auth.json` into its own SQLite database once. It does not write refreshed OAuth tokens back to that file, so a rotated login must be supplied again. An `OPENCODE_API_KEY` subscription key does not have that limitation.
+OpenCode signs in with `OPENCODE_API_KEY` only. Do not hold an `auth.json` as a Profile file: OpenCode 2 never imports it into a fresh home, so the file gives the harness no provider and a Session fails at start with "this agent does not offer the model …" ([ADR-0026](../adr/0026-kestrel-carries-named-credentials-never-a-runtimes-store.md) records why).
 
 A Claude plan may serve only its owner's own Kestrel workspaces. Do not share that token with other people's workspaces; use a provider API key for shared work. See [ADR-0029](../adr/0029-a-claude-plan-serves-only-its-owners-own-kestrel.md).
 
