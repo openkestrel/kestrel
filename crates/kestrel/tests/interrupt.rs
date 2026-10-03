@@ -204,6 +204,40 @@ async fn an_interrupt_is_refused_for_queued_waiting_and_ended_sessions() {
 }
 
 #[tokio::test]
+async fn an_interrupt_of_a_trailing_session_says_its_turn_answered_and_points_to_stop() {
+    let kestrel = Kestrel::boot().await;
+    let session = a_working_session(&kestrel).await;
+    kestrel.report_answered(&session, 1).await;
+    let before = kestrel.session(session.id).await;
+    assert_eq!(before.state, SessionState::Trailing);
+    let sent = kestrel.instructions(&session).await;
+
+    let refusal = kestrel
+        .interrupt(session.id, "alice")
+        .await
+        .expect_err("a trailing turn has already answered")
+        .to_string();
+
+    assert!(
+        refusal.contains("already answered") && refusal.contains("stop the session"),
+        "the refusal says the turn answered and points to stop: {refusal}"
+    );
+    let after = kestrel.session(session.id).await;
+    assert_eq!(
+        after.state, before.state,
+        "a refused interrupt changes nothing"
+    );
+    assert!(after.interrupting.is_none());
+    assert_eq!(
+        kestrel.instructions(&session).await,
+        sent,
+        "a refused interrupt sends nothing"
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn an_interrupt_is_refused_for_unbriefed_and_unreachable_sessions() {
     let kestrel = Kestrel::dispatching_to(
         supervisor::binary(),
