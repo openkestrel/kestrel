@@ -1,6 +1,16 @@
 import { describe, expect, test } from "vitest";
-import type { Queue } from "./generated";
+import type { Occupant, Queue } from "./generated";
 import { openingQueueLine, sessionQueueLine } from "./queue-line";
+
+function an_occupant(name: string): Occupant {
+	return {
+		name,
+		workspace: "019a0000-0000-7000-8000-000000000000",
+		agent: "builder",
+		phase: "working",
+		enqueued_at: "2026-01-01T00:00:00Z",
+	};
+}
 
 function a_queue(overrides: Partial<Queue> = {}): Queue {
 	return {
@@ -29,7 +39,12 @@ describe("the line the form shows about a Session that has not opened yet", () =
 
 	test("a briefed Session would wait when every slot is occupied", () => {
 		const queue = a_queue({
-			active_work: { limit: 2, occupied: 2, occupants: ["a", "b"], elsewhere: 0 },
+			active_work: {
+				limit: 2,
+				occupied: 2,
+				occupants: [an_occupant("a"), an_occupant("b")],
+				elsewhere: 0,
+			},
 		});
 		expect(openingQueueLine(queue, true)).toBe(
 			"The Session would wait: all 2 Active-Work Slots are occupied.",
@@ -38,7 +53,12 @@ describe("the line the form shows about a Session that has not opened yet", () =
 
 	test("a Briefless Session is not held back by the slots", () => {
 		const queue = a_queue({
-			active_work: { limit: 2, occupied: 2, occupants: ["a", "b"], elsewhere: 0 },
+			active_work: {
+				limit: 2,
+				occupied: 2,
+				occupants: [an_occupant("a"), an_occupant("b")],
+				elsewhere: 0,
+			},
 		});
 		expect(openingQueueLine(queue, false)).toBe(
 			"Without a Brief, the Session starts preparing at once and waits for its first message.",
@@ -49,7 +69,9 @@ describe("the line the form shows about a Session that has not opened yet", () =
 		const said = [
 			openingQueueLine(a_queue(), true),
 			openingQueueLine(
-				a_queue({ active_work: { limit: 1, occupied: 1, occupants: ["a"], elsewhere: 0 } }),
+				a_queue({
+					active_work: { limit: 1, occupied: 1, occupants: [an_occupant("a")], elsewhere: 0 },
+				}),
 				true,
 			),
 		];

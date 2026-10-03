@@ -2029,8 +2029,17 @@ struct WorkRoleRecord {
 struct ActiveWorkRecord {
     limit: Option<usize>,
     occupied: usize,
-    occupants: Vec<String>,
+    occupants: Vec<OccupantRecord>,
     elsewhere: usize,
+}
+
+#[derive(Serialize)]
+struct OccupantRecord {
+    name: String,
+    workspace: String,
+    agent: String,
+    phase: &'static str,
+    enqueued_at: Timestamp,
 }
 
 #[derive(Serialize)]
@@ -2123,7 +2132,18 @@ impl QueueRecord {
             active_work: ActiveWorkRecord {
                 limit: snapshot.active_work.limit,
                 occupied: snapshot.active_work.occupied,
-                occupants: snapshot.active_work.occupants,
+                occupants: snapshot
+                    .active_work
+                    .occupants
+                    .into_iter()
+                    .map(|session| OccupantRecord {
+                        name: session.name,
+                        workspace: session.workspace.to_string(),
+                        agent: session.agent.name,
+                        phase: session.state.as_str(),
+                        enqueued_at: session.enqueued_at,
+                    })
+                    .collect(),
                 elsewhere: snapshot.active_work.elsewhere,
             },
             instances: InstancesRecord {

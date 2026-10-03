@@ -113,7 +113,7 @@ enum Command {
     /// List the Instances held for work that exists nowhere else, and release them
     #[command(subcommand)]
     Instance(InstanceCommand),
-    /// Read the queue: the limits and their occupancy, and one row per queued Session
+    /// Read the queue: the limits, one row per occupant with its phase, and one per queued Session
     Queue,
     /// Print the resolved scope, where each value came from, what exists in it, and what to
     /// session next
@@ -1907,7 +1907,7 @@ fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
         let said = [
             (
                 "active-work slots",
-                occupancy(slots, "no work role is dispatching", "working"),
+                occupancy(slots, "no work role is dispatching", "occupied"),
             ),
             (
                 "live instances",
@@ -1927,6 +1927,24 @@ fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
     }
 
     let mut rows = Vec::new();
+    for occupant in slots["occupants"].as_array().into_iter().flatten() {
+        let mut record = occupant.as_object().cloned().with_context(|| {
+            Failed::new(
+                Exit::Unavailable,
+                "reading one of the snapshot's Active-Work Slot occupants",
+            )
+        })?;
+        let phase = record.remove("phase").unwrap_or(Value::Null);
+        record.insert("state".to_owned(), phase);
+        record.insert("position".to_owned(), Value::Null);
+        record.insert("pending_since".to_owned(), Value::Null);
+        record.insert("preparing".to_owned(), Value::Null);
+        record.insert("reasons".to_owned(), Value::Array(Vec::new()));
+        record.insert("why".to_owned(), Value::from(why(&record)));
+        record.insert("active_work".to_owned(), slots.clone());
+        record.insert("instances".to_owned(), instances.clone());
+        rows.push(Value::Object(record));
+    }
     for state in ["queued", "waiting", "unbriefed"] {
         let section = snapshot[state].as_array().with_context(|| {
             Failed::new(
@@ -1978,6 +1996,8 @@ fn why(row: &serde_json::Map<String, Value>) -> String {
     if said.is_empty() {
         said.push(
             match row["state"].as_str() {
+                Some("working") => "in a turn",
+                Some("trailing") => "answered; its agent is still working",
                 Some("waiting") => "waiting for a turn",
                 Some("unbriefed") => "getting ready for its first message",
                 _ => "ready",
@@ -2051,7 +2071,11 @@ fn named_in(section: &Value) -> Vec<&str> {
     let of = section["counted"]
         .as_array()
         .or_else(|| section["occupants"].as_array());
-    of.map_or_else(Vec::new, |of| of.iter().filter_map(Value::as_str).collect())
+    of.map_or_else(Vec::new, |of| {
+        of.iter()
+            .filter_map(|named| named.as_str().or_else(|| named["name"].as_str()))
+            .collect()
+    })
 }
 
 fn confirmed() -> Result<bool> {
