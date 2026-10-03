@@ -1088,6 +1088,7 @@ async fn a_lapsed_supervisor_closes_its_open_adapter_units_unresolved() {
         let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
         let supervisor = Supervisor::provision_playing(&kestrel.link(), &on, script);
         kestrel.start(&session, supervisor.harness()).await;
+        kestrel.answering(session.id, 1).await;
         let before = listing_a_unit(&kestrel, session.id).await;
         let unit = &before["units"][0];
         supervisor.destroy();
