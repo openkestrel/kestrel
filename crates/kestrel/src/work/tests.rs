@@ -546,9 +546,14 @@ async fn a_supervisor_that_exits_after_its_sessions_lease_lapsed_fails_it_for_it
         .unwrap();
     tx.commit().await.unwrap();
 
-    supervisor_exited(&fixture.store, INSTANCE, "the supervisor exited unreported")
-        .await
-        .unwrap();
+    supervisor_exited(
+        &fixture.store,
+        INSTANCE,
+        &Default::default(),
+        "the supervisor exited unreported",
+    )
+    .await
+    .unwrap();
 
     let recorded = session(&fixture.store, fixture.session.id).await.unwrap();
     assert_eq!(recorded.exit, Some(expired_lease()));
@@ -558,9 +563,14 @@ async fn a_supervisor_that_exits_after_its_sessions_lease_lapsed_fails_it_for_it
 async fn a_supervisor_that_exits_while_its_sessions_lease_holds_fails_it_for_the_exit() {
     let fixture = Fixture::new().await;
 
-    supervisor_exited(&fixture.store, INSTANCE, "the supervisor exited unreported")
-        .await
-        .unwrap();
+    supervisor_exited(
+        &fixture.store,
+        INSTANCE,
+        &Default::default(),
+        "the supervisor exited unreported",
+    )
+    .await
+    .unwrap();
 
     let recorded = session(&fixture.store, fixture.session.id).await.unwrap();
     assert_eq!(

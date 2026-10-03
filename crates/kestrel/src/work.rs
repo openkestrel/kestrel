@@ -909,11 +909,18 @@ pub(crate) fn expired_lease() -> Exit {
 ///
 /// A lease that lapsed first decides the reason, so one lapse reads the same whether the sweep or
 /// the supervisor's exit gets to the Session first.
-pub async fn supervisor_exited(store: &Store, instance: &str, because: &str) -> Result<()> {
+pub async fn supervisor_exited(
+    store: &Store,
+    instance: &str,
+    summaries: &crate::live_work::Summaries,
+    because: &str,
+) -> Result<()> {
     let mut tx = store.begin().await?;
     tx.workspaces().forget_supervisor(instance).await?;
+    let sessions = tx.workspaces().live_sessions_on(instance).await?;
     let now = Timestamp::now();
-    for session in tx.workspaces().live_sessions_on(instance).await? {
+    for session in &sessions {
+        close_lost_units(&mut tx, session, summaries).await?;
         let exit = if session.lease_expires_at.is_some_and(|at| at <= now) {
             expired_lease()
         } else {
@@ -921,10 +928,14 @@ pub async fn supervisor_exited(store: &Store, instance: &str, because: &str) -> 
                 because: because.to_owned(),
             }
         };
-        ending(&mut tx, &session, exit).await?;
+        ending(&mut tx, session, exit).await?;
     }
 
-    tx.commit().await
+    tx.commit().await?;
+    for session in sessions {
+        summaries.clear_session(&session);
+    }
+    Ok(())
 }
 
 pub async fn turns(store: &Store, session: SessionId) -> Result<Vec<Turn>> {
@@ -982,7 +993,45 @@ pub async fn stop(store: &Store, id: SessionId, running: &[RunningTool]) -> Resu
     let Some(exit) = session.state.stop_exit() else {
         bail!("the session {id} has already ended");
     };
-    // The Session has ended before its supervisor hears the stop, so no report closes these.
+    close_tools(&mut tx, &session, running, ClosingReason::Interrupted).await?;
+    let stands = ending(&mut tx, &session, exit).await?;
+    tx.commit().await?;
+
+    Ok(stands)
+}
+
+pub(crate) async fn close_lost_units(
+    tx: &mut Tx<'_>,
+    session: &Session,
+    summaries: &crate::live_work::Summaries,
+) -> Result<()> {
+    let Some(instance) = session.instance.as_deref() else {
+        return Ok(());
+    };
+    let state = summaries.session(instance, &session.id.to_string());
+    let mut running = state.tools;
+    running.extend(state.units.into_iter().map(|unit| {
+        RunningTool {
+            call_id: format!("unit/{}", unit.id),
+            title: unit.title,
+            tool_kind: match unit.kind {
+                crate::live_work::UnitKind::BackgroundTask => "background_task",
+                crate::live_work::UnitKind::Subagent => "subagent",
+            }
+            .to_owned(),
+            status: ToolStatus::InProgress,
+            started_at: unit.started_at,
+        }
+    }));
+    close_tools(tx, session, &running, ClosingReason::Unresolved).await
+}
+
+async fn close_tools(
+    tx: &mut Tx<'_>,
+    session: &Session,
+    running: &[RunningTool],
+    reason: ClosingReason,
+) -> Result<()> {
     let workspace = tx.workspaces().get(session.workspace).await?;
     let now = Timestamp::now();
     for tool in running {
@@ -1004,7 +1053,7 @@ pub async fn stop(store: &Store, id: SessionId, running: &[RunningTool]) -> Resu
                     status: tool.status,
                     input: serde_json::Value::Null,
                     result: Box::new(serde_json::Value::Null),
-                    closing_reason: Some(ClosingReason::Interrupted),
+                    closing_reason: Some(reason),
                     completion: Completion {
                         started_at: tool.started_at,
                         finished_at: now,
@@ -1014,10 +1063,7 @@ pub async fn stop(store: &Store, id: SessionId, running: &[RunningTool]) -> Resu
             )
             .await?;
     }
-    let stands = ending(&mut tx, &session, exit).await?;
-    tx.commit().await?;
-
-    Ok(stands)
+    Ok(())
 }
 
 pub async fn complete(store: &Store, session: &Session) -> Result<Exit> {

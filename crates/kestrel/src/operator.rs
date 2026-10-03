@@ -2645,6 +2645,7 @@ async fn stop_session(
             ended if ended.ends_with("has already ended") => Refused::Conflict(ended),
             _ => error.into(),
         })?;
+    control_plane.live.summaries.clear_session(&session);
     let session = work::session(&control_plane.store, session.id).await?;
 
     Ok(Json(SessionRecord::read(session)))

@@ -132,19 +132,20 @@ pub async fn run(
     store: Store,
     dispatch: Option<Dispatch>,
     wake: timer::Wake,
+    summaries: crate::live_work::Summaries,
     shutdown: CancellationToken,
 ) -> Result<()> {
     info!(role = %Role::Work, "role started");
 
     tokio::try_join!(
-        timer::sweeping(&store, &wake, &shutdown),
+        timer::sweeping(&store, &wake, &summaries, &shutdown),
         // A work role with nowhere to run a Session claims none: claiming one it cannot dispatch
         // would spend the Session's one dispatch on nothing.
         async {
             match &dispatch {
                 Some(dispatch) => {
                     record(&store, dispatch).await?;
-                    dispatching(&store, dispatch, &shutdown).await
+                    dispatching(&store, dispatch, &summaries, &shutdown).await
                 }
                 None => {
                     shutdown.cancelled().await;
@@ -163,13 +164,14 @@ pub async fn run(
 async fn dispatching(
     store: &Store,
     dispatch: &Dispatch,
+    summaries: &crate::live_work::Summaries,
     shutdown: &CancellationToken,
 ) -> Result<()> {
     let mut active = JoinSet::new();
     let supervisors = Supervisors::default();
 
     while !shutdown.is_cancelled() {
-        if let Err(error) = watch(store, &supervisors).await {
+        if let Err(error) = watch(store, &supervisors, summaries).await {
             warn!(%error, "a pass over instances' supervisors found nothing it could do");
         }
         if let Err(error) = archive(store, &dispatch.driver, &supervisors).await {
@@ -505,12 +507,17 @@ fn relay(instance: &str, said: impl Read + Send + 'static) {
 
 /// A supervisor that exits takes the Session it was carrying with it, since nothing is left to
 /// report how that Session went.
-async fn watch(store: &Store, supervisors: &Supervisors) -> Result<()> {
+async fn watch(
+    store: &Store,
+    supervisors: &Supervisors,
+    summaries: &crate::live_work::Summaries,
+) -> Result<()> {
     for (instance, exited) in supervisors.exited() {
         warn!(instance, %exited, "an instance's supervisor exited");
         work::supervisor_exited(
             store,
             &instance,
+            summaries,
             &format!("the supervisor exited {exited} without reporting how the session went"),
         )
         .await?;

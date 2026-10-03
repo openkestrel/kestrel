@@ -29,6 +29,7 @@ pub struct Listening {
     store: Store,
     wake: Wake,
     follow_lease: Duration,
+    pub(crate) live: crate::live::Live,
 }
 
 impl Listening {
@@ -63,6 +64,7 @@ pub async fn bind(
         store,
         wake,
         follow_lease,
+        live: crate::live::Live::default(),
     })
 }
 
@@ -74,6 +76,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         store,
         wake,
         follow_lease,
+        live,
     } = listening;
 
     info!(role = %Role::Serve, link = %bound.link, operator = %bound.operator, "role started");
@@ -84,7 +87,6 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         );
     }
 
-    let live = crate::live::Live::default();
     let followers = crate::presence::Followers::new(follow_lease);
     let link_router = link::router(store.clone(), shutdown.clone(), live.clone())
         .merge(webhook::router(store.clone(), wake));
