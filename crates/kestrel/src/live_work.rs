@@ -5,6 +5,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::Usage;
+use crate::log::ToolStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Repository {
@@ -155,17 +156,23 @@ pub struct RunningTool {
     pub call_id: String,
     pub title: String,
     pub tool_kind: String,
-    pub status: String,
+    pub status: ToolStatus,
     pub started_at: Timestamp,
 }
 
-/// Work an adapter runs apart from any tool call, open until the adapter settles it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunningUnit {
     pub id: String,
-    pub kind: String,
+    pub kind: UnitKind,
     pub title: String,
     pub started_at: Timestamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnitKind {
+    BackgroundTask,
+    Subagent,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

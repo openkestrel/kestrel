@@ -516,7 +516,7 @@ async fn report(
             },
         );
         if last_activity_at.is_some() && session.state == SessionState::Waiting {
-            work::stirred(&control_plane.store, &session).await?;
+            work::resume_trailing(&control_plane.store, &session).await?;
         }
         return Ok(StatusCode::ACCEPTED.into_response());
     }

@@ -298,9 +298,9 @@ async fn attend(
                     carrying.working = false;
                     worked_on(carrying, worked, diagnostics).await;
                 }
-                harness::ConversationEvent::Interrupted => {
+                harness::ConversationEvent::Interrupted { trailing } => {
                     carrying.working = false;
-                    carrying.saying.push_back(Report::Interrupted);
+                    carrying.saying.push_back(Report::Interrupted { trailing });
                 }
                 harness::ConversationEvent::Settled => settled(carrying).await,
                 harness::ConversationEvent::Ready => carrying.ready = true,
@@ -411,9 +411,9 @@ async fn attend(
                             worked_on(carrying, worked, diagnostics).await;
                             report_work(link, supervising, true).await?;
                         }
-                        harness::ConversationEvent::Interrupted => {
+                        harness::ConversationEvent::Interrupted { trailing } => {
                             carrying.working = false;
-                            carrying.saying.push_back(Report::Interrupted);
+                            carrying.saying.push_back(Report::Interrupted { trailing });
                             report_work(link, supervising, true).await?;
                         }
                         harness::ConversationEvent::Settled => {

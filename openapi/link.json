@@ -1308,11 +1308,16 @@
         ]
       },
       "Interrupted": {
-        "description": "The working turn was cancelled at kestrel's request: its open units were closed and no answer follows. The conversation and the Instance stay.",
+        "description": "The working turn was cancelled at kestrel's request: its open tool calls were closed and no answer follows. The conversation and the Instance stay.",
         "type": "object",
         "properties": {
           "kind": {
             "const": "interrupted"
+          },
+          "trailing": {
+            "type": "boolean",
+            "default": false,
+            "description": "Background tasks or subagents the agent started still run, so the Session is trailing rather than waiting until they settle."
           },
           "seq": {
             "$ref": "#/components/schemas/Seq"

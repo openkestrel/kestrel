@@ -147,9 +147,8 @@ pub enum Script {
     ResumesAfterSettling,
     /// Answers, then writes `WRITTEN_WHILE_TRAILING` into its checkout.
     AnswersThenWrites,
-    /// Sends an `UNKNOWN_UPDATE` session update, then answers having spawned Claude's async task
-    /// `BACKGROUND_TASK`, which completes `TASK_RUNS` later without another word. As Claude's
-    /// adapter does, it sends the task only to a client that declared `asyncTasks`.
+    /// Sends an `UNKNOWN_UPDATE`, then answers with Claude's async task `BACKGROUND_TASK`, sent
+    /// only if the client declared `asyncTasks`, running silently for `TASK_RUNS`.
     AnswersWithABackgroundTask,
 }
 

@@ -34,7 +34,9 @@ stateDiagram-v2
   runs ([ADR-0040](../adr/0040-a-session-trails-its-answer-while-its-work-runs.md)): it is in flight
   for seal, the idle sweep and reclamation. It becomes Waiting on the supervisor's numbered
   `settled`, and a Waiting Session whose agent shows activity again trails again, taking a slot
-  whatever the limit. Waiting holds its Instance and ACP conversation but no slot ([ADR-0024](../adr/0024-a-run-spans-prompt-turns.md)).
+  whatever the limit. Input held while a Turn works becomes the next Turn at the answer, on the
+  slot the Session holds, and a Trailing Session holds its Subscription Profile as a Working one
+  does under the serialized-Profile rule. Waiting holds its Instance and ACP conversation but no slot ([ADR-0024](../adr/0024-a-run-spans-prompt-turns.md)).
   An **Unbriefed** Session — its harness up and its conversation open, before its first message —
   holds its Instance and no slot either, and counts against the live Instance limit like a Waiting
   one ([ADR-0038](../adr/0038-a-session-may-start-before-its-brief.md)).
@@ -50,8 +52,9 @@ stateDiagram-v2
   instruction; only a working Turn is interruptible, so every other phase is refused naming itself.
   On the supervisor's `interrupted` report the control plane writes shared-state
   `TurnInterrupted {session, participant}`, clears `interrupting`, closes the Turn, and prompts any
-  Held Message at once on the slot the Turn held; with none held the Session becomes Waiting. An
-  interrupted Turn never fails its Session and never trails.
+  Held Message at once on the slot the Turn held; with none held the Session becomes Waiting, or
+  Trailing while background tasks or subagents its agent started still run. An interrupted Turn
+  never fails its Session.
 - **Stopping a Waiting or Trailing Session succeeds** (`SessionState::stop_exit`). It has answered everything
   it was asked; ending it mid-turn is a failure.
 - **A stop closes the Session's open tool calls `interrupted`.** The Session has ended before its
@@ -67,7 +70,7 @@ stateDiagram-v2
   either way.
 - **Nothing stores why a Session waits.** `queue::snapshot` derives positions and reasons at read
   time from the dispatcher's own rules: `UNSATISFIED_BLOCKER`, the `profile_held!` conflict,
-  Working as the only slot occupant, `held_input!` ordering and `work::goes_before_input`. A rule
+  Working and Trailing as the slot occupants, `held_input!` ordering and `work::goes_before_input`. A rule
   changed in one place changes both: unless older held input is prompted first, a free slot
   claims position 1.
 - **The snapshot also lists the unbriefed Sessions**, beside the Waiting ones and never numbered:
@@ -102,7 +105,7 @@ What arrives while one exists is held, never interleaved:
 
 | Arrives | Held in | Released when |
 | --- | --- | --- |
-| A message (post, follow-up comment, a `continue` firing) | `pending_message` | A Trailing Session is prompted with it at once, in the same transaction, on the slot it holds. A Waiting Session is prompted with it once a slot is free (`work::occupy`), or the next Session starts with it. |
+| A message (post, follow-up comment, a `continue` firing) | `pending_message` | A Trailing Session is prompted with it at once, in the same transaction, on the slot it holds, and so is one whose Turn it waited on as that Turn answers or is interrupted. A Waiting Session is prompted with it once a slot is free (`work::occupy`), or the next Session starts with it. |
 | A `new-session` firing | `pending_session` | The unfinished Session lets go. A Waiting one is ended (succeeded) to make way. |
 
 `work::continue_pending` runs as the unfinished Session ends and releases the next thing. A pending
