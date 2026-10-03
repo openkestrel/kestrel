@@ -718,6 +718,7 @@ struct SessionRecord {
     tools: Vec<crate::live_work::RunningTool>,
     message_buffering: bool,
     thought_buffering: bool,
+    last_activity_at: Option<Timestamp>,
 }
 
 #[derive(Serialize)]
@@ -927,6 +928,7 @@ impl SessionRecord {
             tools: Vec::new(),
             message_buffering: false,
             thought_buffering: false,
+            last_activity_at: None,
         }
     }
 
@@ -938,6 +940,9 @@ impl SessionRecord {
         record.tools = state.tools;
         record.message_buffering = state.message_buffering;
         record.thought_buffering = state.thought_buffering;
+        if record.state == domain::SessionState::Trailing.as_str() {
+            record.last_activity_at = state.last_activity_at;
+        }
         record
     }
 }

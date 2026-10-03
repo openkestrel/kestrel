@@ -40,6 +40,8 @@ export function sessionPhase(session: Session): string {
 			return "Queued";
 		case "working":
 			return "Working";
+		case "trailing":
+			return "Trailing";
 		case "waiting":
 			return "Waiting";
 		case "unbriefed":

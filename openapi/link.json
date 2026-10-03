@@ -1017,6 +1017,9 @@
             "$ref": "#/components/schemas/Interrupted"
           },
           {
+            "$ref": "#/components/schemas/Settled"
+          },
+          {
             "$ref": "#/components/schemas/CheckoutObserved"
           },
           {
@@ -1051,6 +1054,7 @@
             "option_changed": "#/components/schemas/OptionChanged",
             "answered": "#/components/schemas/Answered",
             "interrupted": "#/components/schemas/Interrupted",
+            "settled": "#/components/schemas/Settled",
             "checkout": "#/components/schemas/CheckoutObserved",
             "finished": "#/components/schemas/Finished",
             "thought": "#/components/schemas/Thought",
@@ -1279,7 +1283,7 @@
         ]
       },
       "Answered": {
-        "description": "The agent answered the turn, and its conversation waits for another prompt. The Session goes on. It carries what the Harness had spent when the turn ended, which is what the Session read keeps.",
+        "description": "The agent answered the turn, and its conversation waits for another prompt. The Session goes on, trailing until its agent's work settles. It carries what the Harness had spent when the turn ended, which is what the Session read keeps.",
         "type": "object",
         "properties": {
           "kind": {
@@ -1309,6 +1313,27 @@
         "properties": {
           "kind": {
             "const": "interrupted"
+          },
+          "seq": {
+            "$ref": "#/components/schemas/Seq"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "kind",
+          "seq",
+          "session"
+        ]
+      },
+      "Settled": {
+        "description": "The trailing Session's agent has nothing open and has been quiet for the quiet period, so the Session is waiting. Sent after the checkout observed then, which is the report the Unpublished Work hold reads. Activity after it needs no report of its own: a later unit report, or a `session_state` carrying `last_activity_at`, makes the Session trailing again.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "settled"
           },
           "seq": {
             "$ref": "#/components/schemas/Seq"
@@ -2571,7 +2596,7 @@
         ]
       },
       "SessionState": {
-        "description": "A whole transient Session snapshot, sent on changes and reconnect: the running tools, whether a message or thought is still buffering, and what the Harness has spent. Unnumbered; never enters the Transcript and never recorded.",
+        "description": "A whole transient Session snapshot, sent on changes and reconnect: the running tools, whether a message or thought is still buffering, what the Harness has spent, and when its agent last showed activity while trailing. Unnumbered; never enters the Transcript and never recorded.",
         "type": "object",
         "properties": {
           "kind": {
@@ -2596,6 +2621,11 @@
           "usage": {
             "$ref": "#/components/schemas/Usage",
             "description": "What the Harness has spent so far. Absent until it reports one."
+          },
+          "last_activity_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the agent last showed activity, present only while the Session trails its answer. A waiting Session that reports it is trailing again."
           }
         },
         "required": [

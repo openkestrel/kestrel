@@ -761,9 +761,8 @@ async fn a_running_tool_is_session_state_until_it_settles_into_detail() {
 }
 
 #[tokio::test]
-async fn open_calls_close_at_answer_cancel_and_failure_once() {
+async fn open_calls_close_at_cancel_and_failure_once() {
     for (script, reason) in [
-        (Script::OpenToolAnswered, "unresolved"),
         (Script::OpenToolCancelled, "interrupted"),
         (Script::OpenToolFailed, "failed"),
     ] {

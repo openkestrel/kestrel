@@ -36,6 +36,7 @@ pub struct Dispatch {
     pub max_active_sessions: NonZeroUsize,
     pub serialized: Vec<String>,
     pub interrupt_deadline: Duration,
+    pub quiet_period: Option<Duration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -400,18 +401,26 @@ async fn supervised(
         .await?;
     tx.commit().await?;
 
+    let after = after.to_string();
     let lease = work::LEASE.as_secs().to_string();
     let interrupt_deadline = dispatch.interrupt_deadline.as_secs().to_string();
-    let mut supervisor = instance.supervise(&[
+    let quiet_period = dispatch
+        .quiet_period
+        .map(|period| period.as_secs().to_string());
+    let mut variables = vec![
         ("KESTREL_LINK", dispatch.link.as_str()),
         ("KESTREL_INSTANCE", &name),
         ("KESTREL_INSTANCE_CREDENTIAL", credential.as_str()),
-        ("KESTREL_INSTRUCTIONS_AFTER", &after.to_string()),
+        ("KESTREL_INSTRUCTIONS_AFTER", &after),
         // How long a Session's lease is held out for, so a supervisor nothing answers can let its
         // Session go once the lease has certainly lapsed.
         ("KESTREL_LEASE", &lease),
         ("KESTREL_INTERRUPT_DEADLINE", &interrupt_deadline),
-    ])?;
+    ];
+    if let Some(quiet_period) = &quiet_period {
+        variables.push(("KESTREL_QUIET_PERIOD", quiet_period));
+    }
+    let mut supervisor = instance.supervise(&variables)?;
     let mut tx = store.begin().await?;
     tx.workspaces()
         .name_supervisor(&name, &credential.digest(), supervisor.name())

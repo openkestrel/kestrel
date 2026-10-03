@@ -615,12 +615,13 @@ async fn posts_after_the_brief_are_held_and_drain_into_the_next_turn() {
     assert_eq!(kestrel.turns(session.id).await.len(), 1);
 
     kestrel.report_answered(&session, 1).await;
-    let prompted = match kestrel.occupy_up_to(2).await {
-        Some(Occupied::Resumed(prompted)) => prompted,
-        _ => panic!("the held message should follow as the next turn"),
-    };
-    assert_eq!(prompted.id, session.id);
+    assert_eq!(
+        kestrel.session(session.id).await.state,
+        SessionState::Working,
+        "the held message should follow at the answer, on the slot the Session holds"
+    );
     assert_eq!(kestrel.turns(session.id).await.len(), 2);
+    assert!(!kestrel.has_pending_messages(workspace.id).await);
 
     kestrel.teardown().await;
 }

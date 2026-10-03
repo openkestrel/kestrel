@@ -192,6 +192,17 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     )
     .await
     .unwrap();
+    report(
+        &store,
+        &format!("local-exec/{}", first_session.id),
+        Reported {
+            session: Some(first_session.id),
+            seq: Some(2),
+            report: Report::Settled,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(
         session(&store, first_session.id).await.unwrap().state,
         SessionState::Waiting
@@ -260,6 +271,17 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
             session: Some(alex_session.id),
             seq: Some(1),
             report: Report::Answered { usage: None },
+        },
+    )
+    .await
+    .unwrap();
+    report(
+        &store,
+        &format!("local-exec/{}", alex_session.id),
+        Reported {
+            session: Some(alex_session.id),
+            seq: Some(2),
+            report: Report::Settled,
         },
     )
     .await

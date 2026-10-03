@@ -34,6 +34,7 @@ const USAGE_EVERY: Duration = Duration::from_secs(1);
 /// Long enough for the last lines of an agent that has just exited, which are often why.
 const STDERR_DRAINING: Duration = Duration::from_secs(1);
 const INTERRUPT_DEADLINE: Duration = Duration::from_secs(30);
+const QUIET_PERIOD: Duration = Duration::from_secs(30);
 
 pub trait Diagnostics {
     fn info(&self, message: &str);
@@ -56,6 +57,7 @@ struct Supervising {
     checkout: Option<Checkout>,
     summary: Option<Vec<link::WorkRepository>>,
     interrupt_deadline: Duration,
+    quiet_period: Duration,
 }
 
 /// One Session's part of the supervisor's life. The conversation goes on whether or not the link
@@ -140,6 +142,7 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
         checkout: None,
         summary: None,
         interrupt_deadline: interrupt_deadline(variables),
+        quiet_period: quiet_period(variables),
     };
 
     let alive = tokio::spawn(saying_it_is_alive(Arc::clone(&link)));
@@ -176,6 +179,7 @@ async fn report_state(link: &Link, carrying: &Carrying) -> Result<(), link::Erro
         tools,
         message_buffering,
         thought_buffering,
+        last_activity_at,
         ..
     }) = &carrying.state
     else {
@@ -186,6 +190,7 @@ async fn report_state(link: &Link, carrying: &Carrying) -> Result<(), link::Erro
         message_buffering: *message_buffering,
         thought_buffering: *thought_buffering,
         usage: carrying.usage_reported.clone(),
+        last_activity_at: *last_activity_at,
     };
 
     match tokio::time::timeout(
@@ -308,6 +313,7 @@ async fn attend(
                     carrying.working = false;
                     carrying.saying.push_back(Report::Interrupted);
                 }
+                harness::ConversationEvent::Settled => settled(carrying).await,
                 harness::ConversationEvent::Ready => carrying.ready = true,
             }
         }
@@ -419,6 +425,10 @@ async fn attend(
                         harness::ConversationEvent::Interrupted => {
                             carrying.working = false;
                             carrying.saying.push_back(Report::Interrupted);
+                            report_work(link, supervising, true).await?;
+                        }
+                        harness::ConversationEvent::Settled => {
+                            settled(carrying).await;
                             report_work(link, supervising, true).await?;
                         }
                         harness::ConversationEvent::Ready => {
@@ -785,6 +795,7 @@ async fn start_carrying(
             mode: harness.mode,
             thought_level: harness.thought_level,
             interrupt_deadline: supervising.interrupt_deadline,
+            quiet_period: supervising.quiet_period,
             stderr: stderr.clone(),
         },
         conversation: None,
@@ -797,6 +808,7 @@ async fn start_carrying(
             message_buffering: false,
             thought_buffering: false,
             usage: None,
+            last_activity_at: None,
         }),
         refreshed: BTreeMap::new(),
         written: None,
@@ -867,6 +879,16 @@ async fn worked_on(
     carrying
         .saying
         .extend(everything_left_to_say(worked, observed));
+}
+
+/// The checkout is observed again because what the agent did while trailing decides whether the
+/// Instance holds Unpublished Work.
+async fn settled(carrying: &mut Carrying) {
+    let observed = checkout::observe(&carrying.checkout).await;
+    carrying.saying.push_back(Report::Checkout {
+        repositories: observed,
+    });
+    carrying.saying.push_back(Report::Settled);
 }
 
 /// Waits out whatever is left of the bound since the link last answered, so a stream that stays
@@ -1003,6 +1025,12 @@ fn interrupt_deadline(variables: &BTreeMap<String, String>) -> Duration {
     set(variables, "KESTREL_INTERRUPT_DEADLINE")
         .and_then(|seconds| seconds.parse::<u64>().ok())
         .map_or(INTERRUPT_DEADLINE, Duration::from_secs)
+}
+
+fn quiet_period(variables: &BTreeMap<String, String>) -> Duration {
+    set(variables, "KESTREL_QUIET_PERIOD")
+        .and_then(|seconds| seconds.parse::<u64>().ok())
+        .map_or(QUIET_PERIOD, Duration::from_secs)
 }
 
 /// How long the control plane holds a Session's lease out, in seconds, as it told this Instance

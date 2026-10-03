@@ -3311,7 +3311,7 @@
         "properties": {
           "id": { "type": "string", "format": "uuid" },
           "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
-          "state": { "type": "string", "enum": ["queued", "working", "waiting", "unbriefed", "ended", "unreachable"] },
+          "state": { "type": "string", "enum": ["queued", "working", "trailing", "waiting", "unbriefed", "ended", "unreachable"], "description": "A trailing Session has answered its Turn while work its agent started still runs: it holds its Active-Work Slot and its Instance, refuses seal, and is waiting once that work settles and its agent falls quiet." },
           "preparing": {
             "type": ["string", "null"],
             "enum": ["provisioning", "cloning", "starting_harness", "harness_ready", null]
@@ -3399,7 +3399,7 @@
           "id": { "type": "string", "format": "uuid" },
           "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
           "workspace": { "type": "string", "format": "uuid" },
-          "state": { "type": "string", "enum": ["queued", "working", "waiting", "unbriefed", "ended", "unreachable"] },
+          "state": { "type": "string", "enum": ["queued", "working", "trailing", "waiting", "unbriefed", "ended", "unreachable"], "description": "A trailing Session has answered its Turn while work its agent started still runs: it holds its Active-Work Slot and its Instance, refuses seal, and is waiting once that work settles and its agent falls quiet." },
           "preparing": {
             "type": ["string", "null"],
             "enum": ["provisioning", "cloning", "starting_harness", "harness_ready", null],
@@ -3429,9 +3429,10 @@
           "usage": { "anyOf": [{ "$ref": "#/components/schemas/Usage" }, { "type": "null" }] },
           "tools": { "type": "array", "items": { "$ref": "#/components/schemas/RunningTool" } },
           "message_buffering": { "type": "boolean" },
-          "thought_buffering": { "type": "boolean" }
+          "thought_buffering": { "type": "boolean" },
+          "last_activity_at": { "type": ["string", "null"], "format": "date-time", "description": "When the trailing Session's agent last showed activity; null in every other state." }
         },
-        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "changing_options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "message_buffering", "thought_buffering"]
+        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "changing_options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "message_buffering", "thought_buffering", "last_activity_at"]
       },
       "SessionOption": {
         "type": "object",
@@ -4524,6 +4525,11 @@
               }
             ],
             "description": "What the Harness has spent so far, kept in memory while the Session is live; null until it reports one."
+          },
+          "last_activity_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the agent last showed activity, present only while its Session trails its answer."
           }
         },
         "required": [

@@ -169,6 +169,8 @@ impl Drop for Cleanup {
 }
 
 pub const DEFAULT_INTERRUPT_DEADLINE: Duration = Duration::from_secs(30);
+/// Short, so a Session that answered is waiting soon after, unless a test watches it trail.
+pub const QUIET_PERIOD: Duration = Duration::from_secs(1);
 
 /// What the work role provisions an Environment with.
 #[derive(Clone)]
@@ -389,6 +391,7 @@ impl Kestrel {
             max_active_sessions: provisions.max_active_sessions,
             serialized: vec![SERIALIZED.to_owned()],
             interrupt_deadline: provisions.interrupt_deadline,
+            quiet_period: Some(QUIET_PERIOD),
         });
         let roles = tokio::spawn(all_in_one.run(dispatch, shutdown.clone()));
 
@@ -1858,6 +1861,7 @@ impl Kestrel {
         )
         .await
         .expect("the answer should be reported");
+        self.report_settled(session, 2).await;
 
         self.session(session.id).await
     }
@@ -1925,12 +1929,28 @@ impl Kestrel {
         self.answered_within(session, count, PATIENCE).await
     }
 
-    /// Once `count` of the Session's turns are answered, or once it has ended short of them.
+    /// Once `count` of the Session's turns are answered and it has stopped trailing the last, or
+    /// once it has ended short of them.
     pub async fn answered_within(
         &self,
         session: SessionId,
         count: usize,
         patience: std::time::Duration,
+    ) -> Session {
+        self.answering_within(session, count, patience, true).await
+    }
+
+    /// Once `count` of the Session's turns are answered, trailing or not.
+    pub async fn answering(&self, session: SessionId, count: usize) -> Session {
+        self.answering_within(session, count, PATIENCE, false).await
+    }
+
+    async fn answering_within(
+        &self,
+        session: SessionId,
+        count: usize,
+        patience: std::time::Duration,
+        settled: bool,
     ) -> Session {
         let deadline = tokio::time::Instant::now() + patience;
 
@@ -1942,7 +1962,8 @@ impl Kestrel {
                 .filter(|turn| turn.answered_at.is_some())
                 .count();
             let session = self.session(session).await;
-            if answered >= count || session.state == SessionState::Ended {
+            let trailing = settled && session.state == SessionState::Trailing;
+            if (answered >= count && !trailing) || session.state == SessionState::Ended {
                 return session;
             }
             assert!(
@@ -1966,7 +1987,7 @@ impl Kestrel {
         session: SessionId,
         patience: std::time::Duration,
     ) -> Session {
-        let answered = self.answered_within(session, 1, patience).await;
+        let answered = self.answering_within(session, 1, patience, false).await;
         if answered.state != SessionState::Ended {
             self.try_stop_session(session)
                 .await
@@ -2063,6 +2084,12 @@ impl Kestrel {
         )
         .await
         .expect("the answer should be taken");
+    }
+
+    pub async fn report_settled(&self, session: &Session, seq: i64) {
+        work::report_on(&self.store, session, Some(seq), work::Report::Settled)
+            .await
+            .expect("the settling should be taken");
     }
 
     pub async fn instances_to_archive(&self) -> Vec<String> {

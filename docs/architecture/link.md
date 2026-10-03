@@ -81,6 +81,9 @@ sequenceDiagram
     H-->>S: session updates, permission requests (allowed once)
     S->>L: POST model, said/thought/plan as units complete, used as it arrives
     S->>L: POST checkout, answered
+    Note over L: Session is Trailing
+    H-->>S: activity after the answer, until it settles and falls quiet
+    S->>L: POST checkout, settled
     Note over L: Session is Waiting
     L-->>S: prompt {session, turn, prompt}
     S->>H: ACP prompt, same conversation
@@ -140,16 +143,17 @@ effects (ADR-0004).
 | `ready` | no | An unbriefed Session's harness is up and its conversation open: records `harness_ready`. |
 | `started` | yes | Appends `SessionStarted`. |
 | `model {model}` | yes | Records the model the harness is actually on. |
-| `said {message, completion}` | yes | Appends shared-state `Said`, naming its Session. |
+| `said {message, completion}` | yes | Appends shared-state `Said`, naming its Session. Like `thought`, `plan` and `tool_call`, it moves a Waiting Session to Trailing. |
 | `thought {text, completion}` | yes | Appends narration `Thought`. |
 | `plan {entries, completion}` | yes | Appends one narration plan replacement. |
 | `tool_call {call_id, title, tool_kind, status, input, result, closing_reason, completion}` | yes | Appends one completed detail entry. |
-| `session_state {tools, message_buffering, thought_buffering, usage?}` | no | Replaces the Session’s transient snapshot in serve-role memory; reconnect resends it. |
+| `session_state {tools, message_buffering, thought_buffering, usage?, last_activity_at?}` | no | Replaces the Session’s transient snapshot in serve-role memory; reconnect resends it. `last_activity_at` is present only while the supervisor trails; a Waiting Session that reports it moves to Trailing. |
 | `usage {usage}` | no | Held in serve-role memory beside the running tools: at most one a second, at the window's trailing edge, and never recorded (ADR-0041). |
 | `session_info {title, options, commands}` | no | Records the harness's whole bookkeeping state on the Session (ADR-0041). Sent when it changes, at most once a second, and again after a reconnect. |
 | `checkout {repositories}` | yes | Replaces the Workspace's observed git state (decides Unpublished Work); an unbriefed Session moves from `cloning` to `starting_harness`. |
-| `answered {usage?}` | yes | Closes the open Turn, moves the Session to Waiting, clears any pending interrupt, records a delivery, and records the usage it carries. |
+| `answered {usage?}` | yes | Closes the open Turn, moves the Session to Trailing, clears any pending interrupt, records a delivery from what was said up to it, and records the usage it carries; held messages become the next Turn at once, so the Session stays Working when there are any. |
 | `interrupted` | yes | Closes the interrupted Turn, moves the Session to Waiting, and appends shared-state `TurnInterrupted` naming who asked; held messages become the next Turn at once, so the Session stays Working when there are any. Writes no delivery. |
+| `settled` | yes | Moves a Trailing Session to Waiting and records the Workspace active. Follows the `checkout` observed then. |
 | `finished {exit, usage?}` | yes | Ends the Session, recording the usage it carries. |
 
 **Numbered reports are exactly-once.** The supervisor numbers each Session's reports from 1 and
@@ -157,7 +161,8 @@ resends from the first one not acknowledged. The control plane keeps `session.re
 next number is applied, an old one is acknowledged and ignored, and a gap is refused with `400`. A
 supervisor sends completed units immediately, and `model` as it arrives. Usage and bookkeeping are
 transient and unnumbered; a Turn's answer and a Session's end carry the usage that stands. It
-reports `checkout` and then `answered` or `finished` at the Turn boundary.
+reports `checkout` and then `answered` or `finished` at the Turn boundary, and `checkout` and then
+`settled` when trailing ends.
 
 ## Authentication
 
@@ -217,18 +222,21 @@ with no branch on which harness it drives.
   (`permission.rs`). There is no policy yet.
 - The pure completer buffers messages and thoughts independently by ID, completes chunks without
   IDs immediately, and records each plan replacement. ID changes and Turn boundaries close text
-  units; late updates become operator diagnostics. Tool starts and updates maintain transient Session
-  state, and terminal updates complete one detail entry. Open tools close interrupted on cancellation,
-  failed on failure, and unresolved with the stop reason when a Turn answers.
+  units; updates for a completed unit become operator diagnostics. Tool starts and updates maintain
+  transient Session state, and terminal updates complete one detail entry. Open tools close
+  interrupted on cancellation and failed on failure.
+- The completer keeps running between Turns. An answer leaves open tools open and starts the
+  Session trailing. Message and thought chunks, plans, tool calls and their updates are activity
+  and restart the quiet period (`KESTREL_QUIET_PERIOD`, 30 s, handed down by the work role);
+  bookkeeping never does. Once no tool is open and the quiet period has passed, the supervisor
+  closes buffered text, closes any tool still open unresolved, and reports `checkout` and
+  `settled`. Activity after that trails again. A tool still open when trailing ends any other way
+  closes unresolved.
 - A Turn in which the agent produced no message, thought, plan or tool call fails the Session.
 - `checkout.rs` clones each repository side by side under `/workspace`, cuts the declared branch
   from the base when the remote lacks it, and leaves an existing checkout as an earlier Session
   left it.
 
-The answer boundary follows [#372](https://github.com/openkestrel/kestrel/issues/372), which
-explicitly excludes Trailing Sessions and activity after the answer. It intentionally differs
-from the accepted [ADR-0034](../adr/0034-completed-harness-updates-become-transcript-entries.md)
-and [ADR-0040](../adr/0040-a-session-trails-its-answer-while-its-work-runs.md): open tools close
-unresolved, late activity becomes diagnostics, and `answered` moves the Session to Waiting.
-The [architecture map](README.md#where-the-code-lags-the-adrs) records this implementation gap;
-[#370](https://github.com/openkestrel/kestrel/issues/370) scopes the Trailing behavior.
+Trailing is the ACP-only baseline of
+[ADR-0040](../adr/0040-a-session-trails-its-answer-while-its-work-runs.md); the
+[architecture map](README.md#where-the-code-lags-the-adrs) records what of it is not built yet.

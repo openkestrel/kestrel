@@ -40,6 +40,13 @@ pub const OTHER_MODE: &str = "review";
 pub const REPEATS: usize = 20;
 pub const BURSTED_USAGE: u64 = 400;
 pub const BURSTED_SIZE: u64 = 1_000;
+/// How long a unit an agent runs after answering stays open.
+pub const BACKGROUND: std::time::Duration = std::time::Duration::from_secs(3);
+pub const BOOKKEEPING: std::time::Duration = std::time::Duration::from_secs(6);
+/// Longer than a test's quiet period, so the Session is waiting before its agent resumes.
+pub const RESUMES_AFTER: std::time::Duration = std::time::Duration::from_secs(4);
+pub const SAID_WHILE_TRAILING: &str = "the background tests passed";
+pub const WRITTEN_WHILE_TRAILING: &str = "written-while-trailing.txt";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Script {
@@ -48,7 +55,6 @@ pub enum Script {
     SlowTool,
     OversizedTool,
     ReconnectingTools,
-    OpenToolAnswered,
     OpenToolCancelled,
     OpenToolFailed,
     ReportsThenWaits,
@@ -122,6 +128,19 @@ pub enum Script {
     AnswersThenWorksUntilCancelled,
     IgnoresCancel,
     RefusesOptions,
+    /// Answers, then says `SAID_WHILE_TRAILING` and runs a tool call for `BACKGROUND`, as an agent
+    /// waiting on its own background command does.
+    AnswersThenWorks,
+    /// Answers with a tool call still running, and settles it `BACKGROUND` later.
+    AnswersWithAToolOpen,
+    /// Answers with a tool call still running, then exits cleanly without settling it.
+    AnswersWithAToolOpenThenExits,
+    /// Answers, then sends only usage and config option updates for `BOOKKEEPING`.
+    AnswersThenKeepsBooks,
+    /// Answers, stays quiet for `RESUMES_AFTER`, then runs a tool call for `BACKGROUND`.
+    ResumesAfterSettling,
+    /// Answers, then writes `WRITTEN_WHILE_TRAILING` into its checkout.
+    AnswersThenWrites,
 }
 
 impl Script {
@@ -131,7 +150,6 @@ impl Script {
             Script::ReconnectingTools => "reconnecting-tools",
             Script::OversizedTool => "oversized-tool",
             Script::SlowTool => "slow-tool",
-            Script::OpenToolAnswered => "open-tool-answered",
             Script::OpenToolCancelled => "open-tool-cancelled",
             Script::OpenToolFailed => "open-tool-failed",
             Script::ReportsThenWaits => "reports-then-waits",
@@ -171,6 +189,12 @@ impl Script {
             Script::AnswersThenWorksUntilCancelled => "answers-then-works-until-cancelled",
             Script::IgnoresCancel => "ignores-cancel",
             Script::RefusesOptions => "refuses-options",
+            Script::AnswersThenWorks => "answers-then-works",
+            Script::AnswersWithAToolOpen => "answers-with-a-tool-open",
+            Script::AnswersWithAToolOpenThenExits => "answers-with-a-tool-open-then-exits",
+            Script::AnswersThenKeepsBooks => "answers-then-keeps-books",
+            Script::ResumesAfterSettling => "resumes-after-settling",
+            Script::AnswersThenWrites => "answers-then-writes",
         }
     }
 }

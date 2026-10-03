@@ -175,6 +175,16 @@ pub struct Cli {
         default_value_t = DEFAULT_INTERRUPT_DEADLINE
     )]
     interrupt_deadline: NonZeroU64,
+
+    /// How long a trailing Session's agent stays quiet, with nothing open, before the Session is
+    /// waiting, in seconds; the supervisor's own default when unset
+    #[arg(
+        long = "quiet-period",
+        env = "KESTREL_QUIET_PERIOD",
+        global = true,
+        value_name = "SECONDS"
+    )]
+    quiet_period: Option<NonZeroU64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -236,6 +246,9 @@ impl Cli {
                 .cloned()
                 .collect(),
             interrupt_deadline: Duration::from_secs(self.interrupt_deadline.get()),
+            quiet_period: self
+                .quiet_period
+                .map(|seconds| Duration::from_secs(seconds.get())),
         })
     }
 

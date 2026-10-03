@@ -24,11 +24,12 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Agent, Client, ConnectionTo, Error, Result, Stdio};
 use clap::Parser;
 use kestrel_scripted_agent::{
-    BURSTED_SIZE, BURSTED_USAGE, CHATTER, CHATTERED_LINES, CHATTERED_MESSAGES, COMMAND,
-    COMMAND_DESCRIPTION, COMMAND_HINT, CONFIDED, CUSTOM_CATEGORY, CUSTOM_OPTION, DEFAULT_MODEL,
-    FIRST_MEMORY, LAST_MEMORY, LOGIN, MODE_OPTION, MUTTERED, OTHER_MODE, OTHER_MODEL,
-    OTHER_THOUGHT_LEVEL, OVERLONG, REFRESHED, REPEATS, STARTING_MODE, STARTING_THOUGHT_LEVEL,
-    SWITCHED_MODE, Script, THOUGHT_LEVEL_OPTION, TITLE, chattered, conversed,
+    BACKGROUND, BOOKKEEPING, BURSTED_SIZE, BURSTED_USAGE, CHATTER, CHATTERED_LINES,
+    CHATTERED_MESSAGES, COMMAND, COMMAND_DESCRIPTION, COMMAND_HINT, CONFIDED, CUSTOM_CATEGORY,
+    CUSTOM_OPTION, DEFAULT_MODEL, FIRST_MEMORY, LAST_MEMORY, LOGIN, MODE_OPTION, MUTTERED,
+    OTHER_MODE, OTHER_MODEL, OTHER_THOUGHT_LEVEL, OVERLONG, REFRESHED, REPEATS, RESUMES_AFTER,
+    SAID_WHILE_TRAILING, STARTING_MODE, STARTING_THOUGHT_LEVEL, SWITCHED_MODE, Script,
+    THOUGHT_LEVEL_OPTION, TITLE, WRITTEN_WHILE_TRAILING, chattered, conversed,
 };
 
 const SESSION: &str = "scripted";
@@ -270,12 +271,16 @@ async fn main() -> Result<()> {
                         script,
                         &prompted,
                         &earlier,
-                        located,
+                        located.clone(),
                         &connection,
                         &cancelled,
                     )
                     .await?;
-                    responder.respond(PromptResponse::new(stop))
+                    responder.respond(PromptResponse::new(stop))?;
+                    if earlier.is_empty() {
+                        trail(script, located, &connection).await?;
+                    }
+                    Ok(())
                 })
             },
             agent_client_protocol::on_receive_request!(),
@@ -538,10 +543,31 @@ async fn play(
     }
     if matches!(
         script,
-        Script::SlowTool
-            | Script::OpenToolAnswered
-            | Script::OpenToolCancelled
-            | Script::OpenToolFailed
+        Script::AnswersThenWorks
+            | Script::AnswersThenKeepsBooks
+            | Script::ResumesAfterSettling
+            | Script::AnswersThenWrites
+    ) {
+        say(connection, "message-1", "answered, with more to do")?;
+        return Ok(StopReason::EndTurn);
+    }
+    if matches!(
+        script,
+        Script::AnswersWithAToolOpen | Script::AnswersWithAToolOpenThenExits
+    ) && earlier.is_empty()
+    {
+        update(
+            connection,
+            SessionUpdate::ToolCall(
+                ToolCall::new(TOOL_CALL, "background tests").status(ToolCallStatus::InProgress),
+            ),
+        )?;
+        say(connection, "message-1", "waiting on the background tests")?;
+        return Ok(StopReason::EndTurn);
+    }
+    if matches!(
+        script,
+        Script::SlowTool | Script::OpenToolCancelled | Script::OpenToolFailed
     ) {
         update(
             connection,
@@ -552,7 +578,6 @@ async fn play(
             ),
         )?;
         match script {
-            Script::OpenToolAnswered => return Ok(StopReason::EndTurn),
             Script::OpenToolCancelled => return Ok(StopReason::Cancelled),
             Script::OpenToolFailed => return Ok(StopReason::MaxTokens),
             _ => {}
@@ -707,6 +732,90 @@ async fn play(
     )?;
 
     Ok(StopReason::EndTurn)
+}
+
+/// What the agent does after answering its first turn, outside any turn.
+async fn trail(
+    script: Script,
+    located: Option<PathBuf>,
+    connection: &ConnectionTo<Client>,
+) -> Result<()> {
+    let background = format!("{TOOL_CALL}-background");
+    let runs_in_the_background = async |after: Duration| -> Result<()> {
+        tokio::time::sleep(after).await;
+        update(
+            connection,
+            SessionUpdate::ToolCall(
+                ToolCall::new(background.clone(), "background build")
+                    .status(ToolCallStatus::InProgress),
+            ),
+        )?;
+        tokio::time::sleep(BACKGROUND).await;
+        update(
+            connection,
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                background.clone(),
+                ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+            )),
+        )
+    };
+    match script {
+        Script::AnswersThenWorks => {
+            update(
+                connection,
+                SessionUpdate::AgentMessageChunk(chunk(None, SAID_WHILE_TRAILING)),
+            )?;
+            runs_in_the_background(Duration::ZERO).await
+        }
+        Script::AnswersWithAToolOpen => {
+            tokio::time::sleep(BACKGROUND).await;
+            update(
+                connection,
+                SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                    TOOL_CALL,
+                    ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+                )),
+            )
+        }
+        Script::AnswersWithAToolOpenThenExits => {
+            tokio::time::sleep(VANISHING).await;
+            std::process::exit(0);
+        }
+        Script::AnswersThenKeepsBooks => {
+            let until = tokio::time::Instant::now() + BOOKKEEPING;
+            let mut used = 0;
+            while tokio::time::Instant::now() < until {
+                used += 1;
+                update(
+                    connection,
+                    SessionUpdate::UsageUpdate(UsageUpdate::new(used, 1_000)),
+                )?;
+                update(
+                    connection,
+                    SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(offered(
+                        DEFAULT_MODEL,
+                    ))),
+                )?;
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Ok(())
+        }
+        Script::ResumesAfterSettling => runs_in_the_background(RESUMES_AFTER).await,
+        Script::AnswersThenWrites => {
+            tokio::time::sleep(VANISHING).await;
+            let directory = located.ok_or_else(Error::internal_error)?;
+            std::fs::write(directory.join(WRITTEN_WHILE_TRAILING), "left behind\n")
+                .map_err(Error::into_internal_error)?;
+            update(
+                connection,
+                SessionUpdate::ToolCall(
+                    ToolCall::new(background.clone(), "write a file")
+                        .status(ToolCallStatus::Completed),
+                ),
+            )
+        }
+        _ => Ok(()),
+    }
 }
 
 /// The only way a test sees where a credential reached: an agent saying what its own process

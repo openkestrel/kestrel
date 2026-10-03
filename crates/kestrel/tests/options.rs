@@ -333,6 +333,7 @@ async fn live_on_the_link(kestrel: &Kestrel) -> (Session, OnTheLink) {
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
     kestrel.start_on_the_link(&session).await;
     kestrel.report_answered(&session, 1).await;
+    kestrel.report_settled(&session, 2).await;
     kestrel
         .report_session_info(&session, &[model_option(DEFAULT_MODEL)])
         .await;
@@ -497,6 +498,37 @@ async fn changing_thought_level_on_a_queued_session_starts_it_with_that_value() 
     until_current_is(&kestrel, session.id, "thought_level", OTHER_THOUGHT_LEVEL).await;
 
     kestrel.stop_session(session.id).await;
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_trailing_session_takes_a_change_as_a_waiting_one_does() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel, Declared::default()).await;
+    let (session, _) = kestrel.dispatch_to_the_link(workspace.id).await;
+    kestrel.start_on_the_link(&session).await;
+    kestrel.report_answered(&session, 1).await;
+    kestrel
+        .report_session_info(&session, &[model_option(DEFAULT_MODEL)])
+        .await;
+    assert_eq!(
+        kestrel.session(session.id).await.state,
+        SessionState::Trailing
+    );
+
+    let (status, changed) = set_option(
+        &kestrel,
+        session.id,
+        json!({"participant": "operator", "option": "model", "value": OTHER_MODEL}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::ACCEPTED, "{changed}");
+    assert!(matches!(
+        kestrel.instruction(&session).await,
+        kestrel::link::Instruction::SetOption { .. }
+    ));
+
     kestrel.teardown().await;
 }
 
@@ -706,7 +738,7 @@ async fn changing_options_shows_while_a_change_is_pending_and_clears_when_it_set
     kestrel
         .report_option_changed(
             &session,
-            2,
+            3,
             work::Report::OptionChanged {
                 participant: "operator".to_owned(),
                 option: "model".to_owned(),

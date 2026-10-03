@@ -4,7 +4,7 @@ use sqlx::{Row, SqliteConnection};
 
 use crate::domain::{Exit, Organization, SessionId, SessionState};
 use crate::fanout::Touched;
-use crate::store::workspace::{UNSATISFIED_BLOCKER, held_input, live, profile_held};
+use crate::store::workspace::{UNSATISFIED_BLOCKER, held_input, live, occupying, profile_held};
 
 /// What a work role that can dispatch recorded on start: the Active-Work Slot limit it
 /// enforces, the harnesses it dispatches one Session at a time, and the Compute driver it
@@ -108,17 +108,17 @@ impl<'a> Queue<'a> {
         .collect())
     }
 
-    /// The Working Sessions that occupy an Active-Work Slot, `true` when the Organization
-    /// named holds the one that occupies it.
+    /// The Sessions that occupy an Active-Work Slot, `true` when the Organization named holds
+    /// the one that occupies it.
     pub async fn occupying(&mut self, organization: &Organization) -> Result<Vec<(String, bool)>> {
         Ok(sqlx::query(
             "SELECT s.name, s.organization_id = ? AS ours
              FROM session AS s
-             WHERE s.state = ?
+             WHERE s.state IN (SELECT value FROM json_each(?))
              ORDER BY s.enqueued_at, s.id",
         )
         .bind(organization.id.to_string())
-        .bind(SessionState::Working.as_str())
+        .bind(occupying()?)
         .fetch_all(&mut *self.connection)
         .await
         .context("reading which sessions occupy an active-work slot")?
@@ -188,7 +188,7 @@ impl<'a> Queue<'a> {
              ORDER BY s.id, a.enqueued_at, a.id"
         ))
         .bind(serde_json::to_string(serialized)?)
-        .bind(SessionState::Working.as_str())
+        .bind(occupying()?)
         .bind(organization.id.to_string())
         .bind(SessionState::Queued.as_str())
         .bind(SessionState::Waiting.as_str())

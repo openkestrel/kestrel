@@ -166,6 +166,8 @@ pub struct SessionState {
     /// Held in memory, never a row (ADR-0041).
     #[serde(default)]
     pub usage: Option<Usage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<Timestamp>,
 }
 
 impl Summaries {

@@ -259,7 +259,7 @@ async fn a_turn_that_answers_before_the_cancel_lands_stays_answered() {
     kestrel.report_answered(&session, 1).await;
 
     let after = kestrel.session(session.id).await;
-    assert_eq!(after.state, SessionState::Waiting);
+    assert_eq!(after.state, SessionState::Trailing);
     assert!(
         after.interrupting.is_none(),
         "a turn that answered clears the interrupt with nothing written"

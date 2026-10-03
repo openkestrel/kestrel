@@ -47,7 +47,7 @@ macro_rules! profile_held {
          JOIN session AS a ON a.workspace_id = o.id AND a.harness = s.harness
          WHERE w.id = s.workspace_id
            AND s.harness IN (SELECT value FROM json_each(?))
-           AND a.state = ?"
+           AND a.state IN (SELECT value FROM json_each(?))"
     };
 }
 pub(crate) use profile_held;
@@ -1151,7 +1151,7 @@ impl<'a> Workspaces<'a> {
         sqlx::query_scalar(sqlx::AssertSqlSafe(holds))
             .bind(session.id.to_string())
             .bind(serde_json::to_string(serialized)?)
-            .bind(SessionState::Working.as_str())
+            .bind(occupying()?)
             .fetch_one(&mut *self.connection)
             .await
             .with_context(|| format!("reading what holds the profile of session {}", session.id))
@@ -2065,15 +2065,16 @@ impl<'a> Workspaces<'a> {
         self.turn(session).await
     }
 
-    /// `None` when the Session was neither waiting nor unbriefed, so a replayed prompt starts no
-    /// second turn.
+    /// `None` when the Session was not waiting, trailing or unbriefed, so a replayed prompt starts
+    /// no second turn.
     pub async fn prompt_turn(&mut self, session: &Session) -> Result<Option<i64>> {
         let moved = sqlx::query(
-            "UPDATE session SET state = ?, preparing = NULL WHERE id = ? AND state IN (?, ?)",
+            "UPDATE session SET state = ?, preparing = NULL WHERE id = ? AND state IN (?, ?, ?)",
         )
         .bind(SessionState::Working.as_str())
         .bind(session.id.to_string())
         .bind(SessionState::Waiting.as_str())
+        .bind(SessionState::Trailing.as_str())
         .bind(SessionState::Unbriefed.as_str())
         .execute(&mut *self.connection)
         .await?;
@@ -2130,7 +2131,11 @@ impl<'a> Workspaces<'a> {
     /// The seq of the Turn waiting on an answer and the Transcript position its prompt followed,
     /// or `None` when no Turn was waiting, so an answer replayed after a reconnect closes
     /// nothing twice.
-    pub async fn answer_turn(&mut self, session: &Session) -> Result<Option<(i64, i64)>> {
+    pub async fn answer_turn(
+        &mut self,
+        session: &Session,
+        then: SessionState,
+    ) -> Result<Option<(i64, i64)>> {
         let answered = sqlx::query(
             "UPDATE turn SET answered_at = ?
              WHERE session_id = ? AND answered_at IS NULL
@@ -2153,7 +2158,7 @@ impl<'a> Workspaces<'a> {
                  SET state = ?, interrupting_participant = NULL, interrupting_at = NULL
                  WHERE id = ? AND state = ?",
             )
-            .bind(SessionState::Waiting.as_str())
+            .bind(then.as_str())
             .bind(session.id.to_string())
             .bind(SessionState::Working.as_str())
             .execute(&mut *self.connection)
@@ -2163,6 +2168,42 @@ impl<'a> Workspaces<'a> {
             self.touched.queue(session.organization);
         }
         Ok(answered.map(|row| (row.get("seq"), row.get("from_seq"))))
+    }
+
+    /// `false` when the Session was not trailing, so a replayed `settled` changes nothing.
+    pub async fn settle(&mut self, session: &Session) -> Result<bool> {
+        self.move_session(session, SessionState::Trailing, SessionState::Waiting)
+            .await
+    }
+
+    /// A waiting Session whose agent is working again takes a slot whatever the limit, since the
+    /// work is already running.
+    pub async fn resume_trailing(&mut self, session: &Session) -> Result<bool> {
+        self.move_session(session, SessionState::Waiting, SessionState::Trailing)
+            .await
+    }
+
+    async fn move_session(
+        &mut self,
+        session: &Session,
+        from: SessionState,
+        to: SessionState,
+    ) -> Result<bool> {
+        let moved = sqlx::query("UPDATE session SET state = ? WHERE id = ? AND state = ?")
+            .bind(to.as_str())
+            .bind(session.id.to_string())
+            .bind(from.as_str())
+            .execute(&mut *self.connection)
+            .await
+            .with_context(|| format!("moving the session {} from {from} to {to}", session.id))?;
+        if moved.rows_affected() == 0 {
+            return Ok(false);
+        }
+
+        self.touched.session(session);
+        self.touched.queue(session.organization);
+
+        Ok(true)
     }
 
     pub async fn request_interrupt(
@@ -2244,11 +2285,14 @@ impl<'a> Workspaces<'a> {
     }
 
     pub async fn occupying_slots(&mut self) -> Result<usize> {
-        let row = sqlx::query("SELECT COUNT(*) AS occupying FROM session WHERE state = ?")
-            .bind(SessionState::Working.as_str())
-            .fetch_one(&mut *self.connection)
-            .await
-            .context("counting the sessions occupying an active-work slot")?;
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS occupying FROM session
+             WHERE state IN (SELECT value FROM json_each(?))",
+        )
+        .bind(occupying()?)
+        .fetch_one(&mut *self.connection)
+        .await
+        .context("counting the sessions occupying an active-work slot")?;
 
         Ok(usize::try_from(row.get::<i64, _>("occupying"))?)
     }
@@ -2260,7 +2304,7 @@ impl<'a> Workspaces<'a> {
         let row = sqlx::query(concat!(held_input!(profile_free!()), " LIMIT 1"))
             .bind(SessionState::Waiting.as_str())
             .bind(serde_json::to_string(serialized)?)
-            .bind(SessionState::Working.as_str())
+            .bind(occupying()?)
             .fetch_optional(&mut *self.connection)
             .await
             .context("reading which waiting session has input held longest")?;
@@ -2290,6 +2334,12 @@ pub struct Linked {
 pub(crate) struct Unfinished {
     pub session: Session,
     pub held_input: bool,
+}
+
+pub(crate) fn occupying() -> Result<String> {
+    Ok(serde_json::to_string(
+        &SessionState::OCCUPYING.map(SessionState::as_str),
+    )?)
 }
 
 /// A waiting Session still heartbeats and still holds its Instance.

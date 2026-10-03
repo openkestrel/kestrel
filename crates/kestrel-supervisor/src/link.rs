@@ -247,6 +247,8 @@ pub enum Report {
         thought_buffering: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_activity_at: Option<jiff::Timestamp>,
     },
     /// Unnumbered and idempotent, and never a row (ADR-0041).
     Usage {
@@ -272,6 +274,7 @@ pub enum Report {
         usage: Option<Usage>,
     },
     Interrupted,
+    Settled,
     Checkout {
         repositories: Vec<Observed>,
     },
@@ -302,6 +305,7 @@ impl Report {
             Report::OptionChanged { .. } => "option_changed",
             Report::Answered { .. } => "answered",
             Report::Interrupted => "interrupted",
+            Report::Settled => "settled",
             Report::Checkout { .. } => "checkout",
             Report::Finished { .. } => "finished",
         }
