@@ -2543,6 +2543,9 @@
           "title": {
             "type": "string"
           },
+          "tool_kind": {
+            "type": "string"
+          },
           "status": {
             "type": "string"
           },
@@ -2554,6 +2557,7 @@
         "required": [
           "call_id",
           "title",
+          "tool_kind",
           "status",
           "started_at"
         ]

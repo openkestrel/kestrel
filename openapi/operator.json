@@ -3004,12 +3004,12 @@
           "occupied": {
             "type": "integer",
             "minimum": 0,
-            "description": "Every Working Session on the control plane: the pool it counts against is shared by every Organization."
+            "description": "Every working or trailing Session on the control plane: the pool it counts against is shared by every Organization."
           },
           "occupants": {
             "type": "array",
-            "items": { "type": "string" },
-            "description": "This Organization's Working Sessions, named."
+            "items": { "$ref": "#/components/schemas/Occupant" },
+            "description": "This Organization's working and trailing Sessions, in the order they were enqueued."
           },
           "elsewhere": {
             "type": "integer",
@@ -3018,6 +3018,18 @@
           }
         },
         "required": ["limit", "occupied", "occupants", "elsewhere"]
+      },
+      "Occupant": {
+        "type": "object",
+        "description": "A Session holding an Active-Work Slot. A trailing one answered its Turn while work its agent started still runs; it is never among the Waiting Sessions.",
+        "properties": {
+          "name": { "type": "string" },
+          "workspace": { "type": "string", "format": "uuid" },
+          "agent": { "type": "string" },
+          "phase": { "type": "string", "enum": ["working", "trailing"] },
+          "enqueued_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["name", "workspace", "agent", "phase", "enqueued_at"]
       },
       "QueueInstances": {
         "type": "object",
@@ -4943,6 +4955,9 @@
           "title": {
             "type": "string"
           },
+          "tool_kind": {
+            "type": "string"
+          },
           "status": {
             "type": "string"
           },
@@ -4954,6 +4969,7 @@
         "required": [
           "call_id",
           "title",
+          "tool_kind",
           "status",
           "started_at"
         ]

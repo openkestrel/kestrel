@@ -139,6 +139,8 @@ pub enum Script {
     AnswersWithAToolOpen,
     /// Answers with a tool call still running, then exits cleanly without settling it.
     AnswersWithAToolOpenThenExits,
+    /// Answers with a tool call still running, and settles it `BACKGROUND` into the next turn.
+    CarriesAToolOver,
     /// Answers, then sends only usage and config option updates for `BOOKKEEPING`.
     AnswersThenKeepsBooks,
     /// Answers, stays quiet for `RESUMES_AFTER`, then runs a tool call for `BACKGROUND`.
@@ -200,6 +202,7 @@ impl Script {
             Script::AnswersThenWorks => "answers-then-works",
             Script::AnswersWithAToolOpen => "answers-with-a-tool-open",
             Script::AnswersWithAToolOpenThenExits => "answers-with-a-tool-open-then-exits",
+            Script::CarriesAToolOver => "carries-a-tool-over",
             Script::AnswersThenKeepsBooks => "answers-then-keeps-books",
             Script::ResumesAfterSettling => "resumes-after-settling",
             Script::AnswersThenWrites => "answers-then-writes",

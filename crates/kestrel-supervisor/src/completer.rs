@@ -285,6 +285,11 @@ impl Completer {
                 .map(|(id, (call, started_at))| crate::link::RunningTool {
                     call_id: id.clone(),
                     title: call.title.clone(),
+                    tool_kind: serde_json::to_value(call.kind)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
                     status: serde_json::to_value(call.status)
                         .unwrap()
                         .as_str()

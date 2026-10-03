@@ -2032,8 +2032,17 @@ struct WorkRoleRecord {
 struct ActiveWorkRecord {
     limit: Option<usize>,
     occupied: usize,
-    occupants: Vec<String>,
+    occupants: Vec<OccupantRecord>,
     elsewhere: usize,
+}
+
+#[derive(Serialize)]
+struct OccupantRecord {
+    name: String,
+    workspace: String,
+    agent: String,
+    phase: &'static str,
+    enqueued_at: Timestamp,
 }
 
 #[derive(Serialize)]
@@ -2126,7 +2135,18 @@ impl QueueRecord {
             active_work: ActiveWorkRecord {
                 limit: snapshot.active_work.limit,
                 occupied: snapshot.active_work.occupied,
-                occupants: snapshot.active_work.occupants,
+                occupants: snapshot
+                    .active_work
+                    .occupants
+                    .into_iter()
+                    .map(|session| OccupantRecord {
+                        name: session.name,
+                        workspace: session.workspace.to_string(),
+                        agent: session.agent.name,
+                        phase: session.state.as_str(),
+                        enqueued_at: session.enqueued_at,
+                    })
+                    .collect(),
                 elsewhere: snapshot.active_work.elsewhere,
             },
             instances: InstancesRecord {
@@ -2578,7 +2598,8 @@ async fn stop_session(
     Path((organization, session)): Path<(String, String)>,
 ) -> Result<Json<SessionRecord>, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
-    work::stop(&control_plane.store, session.id)
+    let running = control_plane.summaries.current_session(&session).tools;
+    work::stop(&control_plane.store, session.id, &running)
         .await
         .map_err(|error| match error.to_string() {
             ended if ended.ends_with("has already ended") => Refused::Conflict(ended),

@@ -6,17 +6,23 @@ mod support;
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
-use kestrel::domain::{Session, SessionId, SessionState, Workspace, WorkspaceState};
+use kestrel::domain::{
+    Direction, Exit, OnOpenWorkspace, Session, SessionId, SessionState, Workspace, WorkspaceState,
+};
 use kestrel::instance::{Git, Observed};
+use kestrel::link::Instruction;
 use kestrel::log::{ClosingReason, Entry, ToolStatus};
 use kestrel::work::Occupied;
 use kestrel_scripted_agent::{
     BACKGROUND, BACKGROUND_TASK, BOOKKEEPING, OTHER_MODEL, SAID_WHILE_TRAILING, TASK_RUNS,
     UNKNOWN_UPDATE,
 };
+use support::github_stub::{self, GithubStub};
 use support::scripted_agent::{self, Script};
 use support::supervisor::Supervisor;
-use support::{HARNESS, Kestrel, QUIET_PERIOD, operator_log, repository, supervisor};
+use support::{
+    HARNESS, Kestrel, QUIET_PERIOD, labelled_on, operator_log, repository, supervisor, templates,
+};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 
@@ -25,6 +31,12 @@ async fn a_workspace(kestrel: &Kestrel) -> Workspace {
 }
 
 async fn a_workspace_in(kestrel: &Kestrel, instance_limit: Option<usize>) -> Workspace {
+    an_organization(kestrel, instance_limit).await;
+
+    kestrel.open_workspace("acme", "kestrel", "builder").await
+}
+
+async fn an_organization(kestrel: &Kestrel, instance_limit: Option<usize>) {
     let organization = match instance_limit {
         Some(limit) => kestrel.declare_limited_organization("acme", limit).await,
         None => kestrel.declare_organization("acme").await,
@@ -47,8 +59,6 @@ async fn a_workspace_in(kestrel: &Kestrel, instance_limit: Option<usize>) -> Wor
             support::A_PROVIDER_KEY,
         )
         .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
 }
 
 async fn playing(script: Script) -> (Kestrel, Workspace, Session) {
@@ -253,9 +263,17 @@ async fn an_agent_that_answers_and_falls_silent_is_waiting_once_the_quiet_period
 }
 
 #[tokio::test]
-async fn a_call_still_open_when_trailing_ends_closes_unresolved_once() {
+async fn an_agent_that_exits_cleanly_while_trailing_ends_its_session_as_a_waiting_one_would() {
     let (kestrel, workspace, session) = playing(Script::AnswersWithAToolOpenThenExits).await;
-    ended(&kestrel, session.id).await;
+    let ended = ended(&kestrel, session.id).await;
+
+    let Some(Exit::Failed { because }) = &ended.exit else {
+        panic!("the session ended {:?}, and its agent exited", ended.exit);
+    };
+    assert!(
+        because.contains("process was lost") && because.contains("cannot resume"),
+        "{because}"
+    );
 
     let calls = tool_calls(&kestrel, &workspace).await;
     assert!(
@@ -266,6 +284,129 @@ async fn a_call_still_open_when_trailing_ends_closes_unresolved_once() {
                 closing_reason: Some(ClosingReason::Unresolved),
                 ..
             }]
+        ),
+        "{calls:#?}"
+    );
+
+    kestrel.teardown().await;
+}
+
+/// The Session read once it is `state` with a call running.
+async fn running(kestrel: &Kestrel, session: SessionId, state: &str) -> serde_json::Value {
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    loop {
+        let read = session_read(kestrel, session).await;
+        if read["state"] == state
+            && read["tools"]
+                .as_array()
+                .is_some_and(|tools| !tools.is_empty())
+        {
+            return read;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the session never read {state} with a call running: {read}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+async fn stopped(kestrel: &Kestrel, session: SessionId) {
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}/operator/organizations/acme/sessions/{session}/stop",
+            kestrel.operator()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success(), "{response:?}");
+}
+
+#[tokio::test]
+async fn a_call_open_when_the_next_turn_starts_runs_on_into_it_and_settles_there() {
+    let (kestrel, workspace, session) = playing(Script::CarriesAToolOver).await;
+    running(&kestrel, session.id, "trailing").await;
+
+    kestrel
+        .post_while_busy(workspace.id, "jack", "and the next thing")
+        .await;
+    let read = running(&kestrel, session.id, "working").await;
+    assert_eq!(read["tools"][0]["title"], "background tests");
+    kestrel.answering(session.id, 2).await;
+
+    let entries = kestrel.every_entry(workspace.id).await;
+    let prompt = position(&entries, "next prompt", |entry| {
+        matches!(entry, Entry::Messages { .. })
+    });
+    let settled = position(&entries, "carried call", |entry| {
+        matches!(
+            entry,
+            Entry::ToolCall { title, status: ToolStatus::Completed, closing_reason: None, .. }
+                if title == "background tests"
+        )
+    });
+    assert!(prompt < settled, "{entries:#?}");
+    assert_eq!(tool_calls(&kestrel, &workspace).await.len(), 1);
+
+    kestrel.stop_session(session.id).await;
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn stopping_a_trailing_session_succeeds_and_closes_its_open_calls_interrupted() {
+    let (kestrel, workspace, session) = playing(Script::CarriesAToolOver).await;
+    running(&kestrel, session.id, "trailing").await;
+
+    stopped(&kestrel, session.id).await;
+
+    assert_eq!(
+        kestrel.session(session.id).await.exit,
+        Some(Exit::Succeeded)
+    );
+    assert_eq!(
+        session_read(&kestrel, session.id).await["tools"],
+        serde_json::json!([])
+    );
+    let calls = tool_calls(&kestrel, &workspace).await;
+    assert!(
+        matches!(
+            calls.as_slice(),
+            [Entry::ToolCall {
+                title,
+                tool_kind,
+                status: ToolStatus::InProgress,
+                closing_reason: Some(ClosingReason::Interrupted),
+                result,
+                ..
+            }] if title == "background tests" && tool_kind == "execute" && result.is_null()
+        ),
+        "{calls:#?}"
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn stopping_a_working_session_records_its_open_call_interrupted() {
+    let (kestrel, workspace, session) = playing(Script::WorksUntilCancelled).await;
+    running(&kestrel, session.id, "working").await;
+
+    stopped(&kestrel, session.id).await;
+
+    assert!(matches!(
+        kestrel.session(session.id).await.exit,
+        Some(Exit::Failed { .. })
+    ));
+    let calls = tool_calls(&kestrel, &workspace).await;
+    assert!(
+        matches!(
+            calls.as_slice(),
+            [Entry::ToolCall {
+                title,
+                closing_reason: Some(ClosingReason::Interrupted),
+                ..
+            }] if title == "a long read"
         ),
         "{calls:#?}"
     );
@@ -474,6 +615,10 @@ fn clean_checkout() -> Vec<Observed> {
 /// answer.
 async fn trailing(kestrel: &Kestrel, workspace: &Workspace, instance: &str) -> Session {
     let queued = kestrel.enqueue_session(workspace.id).await;
+    answered_on(kestrel, &queued, instance).await
+}
+
+async fn answered_on(kestrel: &Kestrel, queued: &Session, instance: &str) -> Session {
     let session = kestrel
         .occupy_session()
         .await
@@ -508,6 +653,119 @@ async fn a_trailing_session_holds_its_active_work_slot_until_its_work_settles() 
         Some(Occupied::Claimed(claimed)) => assert_eq!(claimed.id, next.id),
         _ => panic!("the slot the trailing Session held should be free"),
     }
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_message_to_a_trailing_session_starts_its_turn_at_once_with_every_slot_occupied() {
+    let kestrel = Kestrel::boot().await;
+    let first = a_workspace(&kestrel).await;
+    let second = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let session = trailing(&kestrel, &first, "trailing").await;
+    kestrel.enqueue_session(second.id).await;
+    assert!(kestrel.occupy_up_to(1).await.is_none());
+
+    let posted = kestrel
+        .posted_while_busy(first.id, "jack", "and the next thing")
+        .await;
+
+    assert!(posted.held_message.is_none(), "{posted:?}");
+    assert_eq!(
+        kestrel.session(session.id).await.state,
+        SessionState::Working
+    );
+    assert_eq!(kestrel.turns(session.id).await.len(), 2);
+    assert!(
+        matches!(
+            kestrel.instruction(&session).await,
+            Instruction::Prompt { turn: 2, prompt } if prompt == "and the next thing"
+        ),
+        "the message is the next Turn's prompt"
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_firing_that_continues_a_trailing_session_starts_its_turn_at_once() {
+    const REPOSITORY: &str = "jtmthf/kestrel";
+    const EVENTS: &str = "/issues/events?";
+    let correlated = |name: &str, label: &str| {
+        (
+            name.to_owned(),
+            labelled_on(REPOSITORY, label),
+            templates(
+                support::BRIEF,
+                None,
+                Some("{{ event.source }}{{ event.subject }}"),
+            ),
+        )
+    };
+    let stub = GithubStub::start();
+    stub.script_answer(
+        "GET",
+        EVENTS,
+        github_stub::page(&[github_stub::labelled(7, 43, "ready-for-agent")]),
+    );
+    let kestrel = Kestrel::boot().await;
+    an_organization(&kestrel, None).await;
+    for (name, filter, templates) in [
+        correlated("ready", "ready-for-agent"),
+        correlated("ci", "ci-failed"),
+    ] {
+        kestrel
+            .declare_correlated_trigger(
+                "acme",
+                &name,
+                &filter,
+                "builder",
+                &[],
+                &templates,
+                OnOpenWorkspace::Continue,
+            )
+            .await;
+    }
+    kestrel
+        .register_integration(
+            "acme",
+            "github",
+            REPOSITORY,
+            &stub.base_url(),
+            &[Direction::Inbound],
+            SignedDuration::from_millis(1),
+        )
+        .await;
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    let queued = loop {
+        if let Some(workspace) = kestrel.workspaces("acme").await.first()
+            && let Some(queued) = kestrel.sessions(workspace.id).await.into_iter().next()
+        {
+            break queued;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "nothing opened");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let session = answered_on(&kestrel, &queued, "trailing").await;
+
+    stub.script_answer(
+        "GET",
+        EVENTS,
+        github_stub::page(&[github_stub::labelled(8, 43, "ci-failed")]),
+    );
+
+    while kestrel.session(session.id).await.state != SessionState::Working {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the firing never continued the trailing Session"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(kestrel.turns(session.id).await.len(), 2);
+    assert!(matches!(
+        kestrel.instruction(&session).await,
+        Instruction::Prompt { turn: 2, .. }
+    ));
 
     kestrel.teardown().await;
 }
