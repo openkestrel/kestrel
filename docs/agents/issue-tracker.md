@@ -91,6 +91,12 @@ GitHub shares one number space across issues and PRs, so a bare `#42` may be eit
 
 Create a GitHub issue.
 
+Publishing a set of tickets, check each **blocking edge** before you write it: a ticket is blocked
+by every ticket that builds a type, report, field or endpoint its What-to-build uses, not only by
+the ones its prose names. Spec 0.3 Trailing Sessions published #390 blocked by #386 alone, though
+it used the adapter units #388 builds. Write each edge as a native dependency (see **Blocking**
+under Wayfinding operations).
+
 ## When a skill says "fetch the relevant ticket"
 
 Run `gh issue view <number> --comments`.
