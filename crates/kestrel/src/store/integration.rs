@@ -31,7 +31,7 @@ macro_rules! integrations_where {
         concat!(
             "SELECT id, organization_id, name, kind, repository, api, credential, inbound,
                     outbound, interval_ms, signing_secret IS NOT NULL AS signed, poll_due_at,
-                    polled_through, comments_polled_through,
+                    polled_through, comments_polled_through, bot_login,
                     last_event_refusal_source, last_event_refusal_id, last_event_refusal_bytes,
                     last_event_refusal_reason, last_event_refusal_at
              FROM integration
@@ -94,8 +94,8 @@ impl<'a> Integrations<'a> {
             "INSERT INTO integration
                  (id, organization_id, name, kind, repository, api, credential, inbound,
                   outbound, interval_ms, signing_secret, shared_secret_digest, poll_due_at,
-                  registered_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  registered_at, bot_login)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(integration.id.to_string())
         .bind(integration.organization.to_string())
@@ -115,6 +115,7 @@ impl<'a> Integrations<'a> {
         .bind(shared_secret_digest)
         .bind(integration.poll_due_at.map(due))
         .bind(Timestamp::now().to_string())
+        .bind(github.and_then(|github| github.bot_login.as_deref()))
         .execute(&mut *self.connection)
         .await
         .map_err(|error| match error.as_database_error() {
@@ -684,6 +685,7 @@ fn integration(row: &SqliteRow) -> Result<Integration> {
             credential: Token::held(row.get("credential")),
             interval: SignedDuration::from_millis(row.get("interval_ms")),
             signed: row.get("signed"),
+            bot_login: row.get("bot_login"),
         }),
         IntegrationKind::Webhook => Connection::Webhook,
     };

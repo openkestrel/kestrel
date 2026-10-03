@@ -312,6 +312,10 @@ enum RegisterCommand {
         webhook_secret: Option<String>,
         #[arg(long, env = "KESTREL_GITHUB_API", hide = true)]
         api: Option<String>,
+        /// The login the Integration's own identity says as on GitHub, so what it says is never
+        /// taken as input or as a command
+        #[arg(long, value_name = "LOGIN")]
+        bot_login: Option<String>,
     },
     /// A generic endpoint any producer can POST CloudEvents to
     Webhook {
@@ -1014,6 +1018,7 @@ async fn run() -> Result<()> {
                     interval,
                     webhook_secret,
                     api,
+                    bot_login,
                 } => json!({
                     "kind": "github",
                     "name": name,
@@ -1023,6 +1028,7 @@ async fn run() -> Result<()> {
                     "interval": interval,
                     "webhook_secret": webhook_secret,
                     "api": api,
+                    "bot_login": bot_login,
                 }),
                 RegisterCommand::Webhook { name, secret } => {
                     json!({ "kind": "webhook", "name": name, "secret": secret })

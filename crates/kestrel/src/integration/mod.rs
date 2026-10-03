@@ -29,6 +29,8 @@ pub enum Connecting<'a> {
         token: &'a str,
         interval: SignedDuration,
         signing_secret: Option<&'a str>,
+        /// The login the Integration's own identity says as on GitHub.
+        bot_login: Option<&'a str>,
     },
     Webhook {
         secret: &'a str,
@@ -55,6 +57,7 @@ pub async fn register(store: &Store, registration: Registration<'_>) -> Result<I
             token,
             interval,
             signing_secret,
+            bot_login,
         } => {
             if interval <= SignedDuration::ZERO {
                 bail!(Declined::Unacceptable(
@@ -69,6 +72,7 @@ pub async fn register(store: &Store, registration: Registration<'_>) -> Result<I
                     credential: Token::held(token),
                     interval,
                     signed: signing_secret.is_some(),
+                    bot_login: bot_login.map(str::to_owned),
                 }),
                 signing_secret,
             )

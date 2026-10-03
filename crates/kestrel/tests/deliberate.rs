@@ -204,7 +204,7 @@ async fn ordinary_comments_strangers_and_kestrel_itself_command_nothing() {
             github_stub::issue_comment(
                 23,
                 53,
-                MAINTAINER,
+                "kestrel[bot]",
                 "@kestrel done\n<!-- kestrel session 01a0 -->",
             ),
             github_stub::issue_comment(22, 52, "a-stranger", "@kestrel /implement"),
@@ -223,13 +223,12 @@ async fn ordinary_comments_strangers_and_kestrel_itself_command_nothing() {
             .contains(&issue_link(55))
     );
     for event in kestrel.events("acme").await {
-        assert_ne!(
-            event.occurrence.subject.as_deref(),
-            Some("#53"),
-            "kestrel heard its own comment"
-        );
         let firings = kestrel.firings(event.record_id).await;
         match event.occurrence.subject.as_deref() {
+            Some("#53") => assert!(
+                firings.is_empty(),
+                "the integration's own comment fired a trigger"
+            ),
             Some("#55") => {}
             Some("#56") => assert!(
                 firings.iter().all(|firing| firing.outcome == "failed"),

@@ -3942,6 +3942,13 @@
             ],
             "default": "https://api.github.com",
             "description": "The GitHub API it reaches."
+          },
+          "bot_login": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The login the Integration says as on GitHub. What it says is never taken as input or as a command."
           }
         },
         "required": [
@@ -4027,6 +4034,13 @@
             ],
             "description": "Where on the link its events are delivered, when they are delivered rather than polled."
           },
+          "bot_login": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The login the Integration says as on GitHub."
+          },
           "last_event_refusal": {
             "oneOf": [
               {
@@ -4046,6 +4060,7 @@
           "carries",
           "polled_every",
           "webhook_path",
+          "bot_login",
           "last_event_refusal"
         ]
       },

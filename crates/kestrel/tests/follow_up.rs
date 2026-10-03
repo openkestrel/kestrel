@@ -576,6 +576,7 @@ async fn a_comment_backlog_larger_than_ten_pages_loses_nothing() {
             credential: Token::held("not-a-secret"),
             interval: SignedDuration::from_secs(1),
             signed: false,
+            bot_login: None,
         }),
         carries: vec![Direction::Inbound],
         poll_due_at: None,
@@ -827,7 +828,7 @@ async fn a_remark_from_the_trigger_actor_feeds_an_open_workspace() {
 }
 
 #[tokio::test]
-async fn a_comment_kestrel_left_is_never_heard_as_input() {
+async fn a_comment_from_the_integration_s_own_identity_is_never_heard_as_input() {
     let stub = GithubStub::start();
     stub.script_answer(
         "GET",
@@ -850,7 +851,7 @@ async fn a_comment_kestrel_left_is_never_heard_as_input() {
         github_stub::page(&[github_stub::issue_comment(
             11,
             ISSUE,
-            MAINTAINER,
+            "kestrel[bot]",
             "what kestrel said\n\n<!-- kestrel session 01a0 turn 1 -->",
         )]),
     );
@@ -861,6 +862,39 @@ async fn a_comment_kestrel_left_is_never_heard_as_input() {
         "kestrel heard its own comment as input"
     );
     assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_marker_does_not_silence_a_comment_from_an_operator() {
+    let stub = GithubStub::start();
+    stub.script_answer(
+        "GET",
+        COMMENTS,
+        github_stub::page(&[github_stub::issue_comment(
+            10, ISSUE, MAINTAINER, "@kestrel",
+        )]),
+    );
+    let kestrel = Kestrel::boot().await;
+    watching_a_named_actor(&kestrel, &stub).await;
+    let workspace = workspaces(&kestrel, 1).await.remove(0);
+    kestrel
+        .claim_session()
+        .await
+        .expect("the command should have opened a session");
+    stub.script_answer(
+        "GET",
+        COMMENTS,
+        github_stub::page(&[github_stub::issue_comment(
+            11,
+            ISSUE,
+            MAINTAINER,
+            "what kestrel said\n\n<!-- kestrel session 01a0 turn 1 -->",
+        )]),
+    );
+
+    pending_arrived(&kestrel, workspace.id).await;
 
     kestrel.teardown().await;
 }

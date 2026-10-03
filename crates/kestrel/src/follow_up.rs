@@ -66,13 +66,30 @@ async fn receiving(store: &Store, event: &Event) -> Result<Received> {
     }
 
     let data = github::EventData::new(&event.occurrence);
+    // kestrel never feeds on its own voice, whatever the filter admits (ADR-0028).
+    let own = match event.integration {
+        Some(integration) => tx
+            .integrations()
+            .find(integration)
+            .await?
+            .is_some_and(|integration| github::authored_by_own(&integration, &event.occurrence)),
+        None => false,
+    };
+    if own {
+        info!(
+            workspace = %workspace.id,
+            author = data.actor().unwrap_or_default(),
+            "a comment from the integration's own identity was not taken as input"
+        );
+    }
     // A command belongs to the Triggers, which is where whether it may start or feed work is
     // decided; only a remark is judged here.
     let command = data.command().is_some();
-    let feeds = workspace.state != WorkspaceState::Sealed
+    let feeds = !own
+        && workspace.state != WorkspaceState::Sealed
         && !command
         && admitted(&mut tx, &workspace, event).await?;
-    if workspace.state != WorkspaceState::Sealed && !command && !feeds {
+    if !own && workspace.state != WorkspaceState::Sealed && !command && !feeds {
         info!(
             workspace = %workspace.id,
             author = data.actor().unwrap_or_default(),

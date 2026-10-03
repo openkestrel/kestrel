@@ -238,6 +238,9 @@ pub struct GithubConnection {
     pub interval: SignedDuration,
     /// Delivered by a signed webhook rather than polled.
     pub signed: bool,
+    /// The login the Integration's own identity says as on GitHub. Recorded so its voice is
+    /// never taken as input or as a command (ADR-0028).
+    pub bot_login: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

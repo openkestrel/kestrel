@@ -674,6 +674,7 @@ impl Kestrel {
                     token: TOKEN,
                     interval,
                     signing_secret: None,
+                    bot_login: Some("kestrel[bot]"),
                 },
             },
         )
@@ -700,6 +701,7 @@ impl Kestrel {
                     token: TOKEN,
                     interval: SignedDuration::from_millis(1),
                     signing_secret: Some(signing_secret),
+                    bot_login: Some("kestrel[bot]"),
                 },
             },
         )
