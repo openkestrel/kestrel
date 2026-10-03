@@ -19,6 +19,12 @@ const DOMAIN: [&str; 10] = [
     "audit",
 ];
 
+/// The wire names of an adapter extension the supervisor declares to every harness (ADR-0040).
+const EXTENSION_NAMES: [&str; 2] = [
+    "opencode/child-session-updates",
+    "opencode/session/child_update",
+];
+
 #[test]
 fn nothing_in_the_supervisor_names_a_thing_only_the_control_plane_may_reason_about() {
     let sources = sources(&support::crate_root().join("src"));
@@ -55,9 +61,13 @@ fn nothing_in_the_supervisor_names_an_agent_it_might_be_driving() {
 }
 
 fn spoken(source: &Path) -> String {
-    fs::read_to_string(source)
+    let spoken = fs::read_to_string(source)
         .expect("a readable source file")
-        .to_lowercase()
+        .to_lowercase();
+
+    EXTENSION_NAMES
+        .iter()
+        .fold(spoken, |spoken, name| spoken.replace(name, ""))
 }
 
 fn sources(directory: &Path) -> Vec<PathBuf> {

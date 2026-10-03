@@ -21,7 +21,7 @@ pub struct ChildUpdate {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChildEvent {
-    /// Already projected onto the parent, its tool call ids prefixed by the child's.
+    /// Already folded onto the parent, its tool call ids prefixed by the child's.
     Update {
         update: serde_json::Value,
     },
