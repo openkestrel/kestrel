@@ -4,6 +4,7 @@ use std::fs;
 use std::time::Duration;
 
 use kestrel::domain::{SessionId, SessionState};
+use kestrel::log::Entry;
 use kestrel_scripted_agent::{
     COMMAND, COMMAND_DESCRIPTION, COMMAND_HINT, CUSTOM_CATEGORY, CUSTOM_OPTION, MODE_OPTION,
     OTHER_MODEL, STARTING_MODE, SWITCHED_MODE, TITLE,
@@ -293,6 +294,31 @@ async fn a_current_mode_update_changes_the_mode_options_current_value() {
         option(shown, "mode")["current"] == STARTING_MODE
     })
     .await;
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    let changes = loop {
+        let changes: Vec<_> = kestrel
+            .transcript(workspace.id)
+            .await
+            .into_iter()
+            .filter_map(|entry| match entry.entry {
+                Entry::OptionChanged { participant, .. } => Some(participant),
+                _ => None,
+            })
+            .collect();
+        if !changes.is_empty() {
+            break changes;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the person's mode change was never recorded"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(
+        changes,
+        ["operator"],
+        "the agent's own mode switch was recorded as a person's change"
+    );
 
     kestrel.stop_session(session.id).await;
     kestrel.teardown().await;
