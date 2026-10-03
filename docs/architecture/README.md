@@ -97,9 +97,11 @@ flowchart LR
 image and served beside the control plane on the operator interface's origin
 ([ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md)).
 
-No crate depends on another. The two HTTP contracts are `openapi/link.json` and
-`openapi/operator.json`; each side defines its own types, and tests on both sides read the
-documents.
+The four crates never depend on each other or form a cycle
+([ADR-0050](../adr/0050-the-crate-rule-forbids-cycles-not-a-shared-leaf.md)); `kestrel-operator-types`
+is a generated leaf both Rust consumers share. The two HTTP contracts are `openapi/link.json` and
+`openapi/operator.json`; each side of the link defines its own types, the browser Client generates
+its own from the operator document, and tests on both sides read them.
 
 ## The control plane
 
