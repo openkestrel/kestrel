@@ -155,10 +155,8 @@ pub enum Script {
     /// Sends an `UNKNOWN_UPDATE`, then answers with Claude's async task `BACKGROUND_TASK`, sent
     /// only if the client declared `asyncTasks`, running silently for `TASK_RUNS`.
     AnswersWithABackgroundTask,
-    /// Runs an OpenCode child session through its turn and on past the answer, silent for
-    /// `CHILD_SILENT_FOR` before it completes. As OpenCode does, it sends the child's output on
-    /// the child channel only to a client that declared it, and otherwise folds it into the turn
-    /// and drops it after the answer.
+    /// Runs an OpenCode child through its turn and silently past the answer for `CHILD_SILENT_FOR`,
+    /// sending its output on the child channel only to a client that declared it.
     #[value(name = "runs-an-opencode-child")]
     RunsAnOpenCodeChild,
 }
