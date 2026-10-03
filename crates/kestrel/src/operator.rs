@@ -128,8 +128,7 @@ const KEEP_ALIVE: Duration = Duration::from_secs(15);
 struct ControlPlane {
     store: Store,
     shutdown: CancellationToken,
-    summaries: crate::live_work::Summaries,
-    reads: crate::live_read::Reads,
+    live: crate::live::Live,
     followers: crate::presence::Followers,
 }
 
@@ -237,8 +236,7 @@ struct TranscriptSessionState {
 pub fn router(
     store: Store,
     shutdown: CancellationToken,
-    summaries: crate::live_work::Summaries,
-    reads: crate::live_read::Reads,
+    live: crate::live::Live,
     followers: crate::presence::Followers,
 ) -> Router {
     Router::new()
@@ -301,8 +299,7 @@ pub fn router(
         .with_state(ControlPlane {
             store,
             shutdown,
-            summaries,
-            reads,
+            live,
             followers,
         })
         .layer(middleware::from_fn(addressed_here))
@@ -2279,7 +2276,7 @@ async fn workspaces(
             .await
             .map_err(workspace_refusal)?
             .pop()
-            .map(|session| SessionRecord::live(session, &control_plane.summaries));
+            .map(|session| SessionRecord::live(session, &control_plane.live.summaries));
         records.push(WorkspaceListedRecord {
             workspace: WorkspaceRecord::read(&control_plane.store, workspace).await?,
             session,
@@ -2329,7 +2326,7 @@ async fn work_summary(
     Ok(Json(
         crate::live_work::read(
             &control_plane.store,
-            &control_plane.summaries,
+            &control_plane.live.summaries,
             &organization,
             &reference,
         )
@@ -2367,7 +2364,7 @@ async fn workspace_changes(
         .collect();
     Ok(crate::live_read::read(
         &control_plane.store,
-        &control_plane.reads,
+        &control_plane.live.reads,
         &organization,
         &reference,
         crate::live_read::Read::Changes { scope, paths },
@@ -2381,7 +2378,7 @@ async fn workspace_commits(
 ) -> Result<crate::live_read::AnswerBody, Refused> {
     Ok(crate::live_read::read(
         &control_plane.store,
-        &control_plane.reads,
+        &control_plane.live.reads,
         &organization,
         &reference,
         crate::live_read::Read::Commits,
@@ -2395,7 +2392,7 @@ async fn workspace_stashes(
 ) -> Result<crate::live_read::AnswerBody, Refused> {
     Ok(crate::live_read::read(
         &control_plane.store,
-        &control_plane.reads,
+        &control_plane.live.reads,
         &organization,
         &reference,
         crate::live_read::Read::Stashes,
@@ -2410,7 +2407,7 @@ async fn workspace_files(
 ) -> Result<crate::live_read::AnswerBody, Refused> {
     Ok(crate::live_read::read(
         &control_plane.store,
-        &control_plane.reads,
+        &control_plane.live.reads,
         &organization,
         &reference,
         crate::live_read::Read::Files {
@@ -2427,7 +2424,7 @@ async fn workspace_file(
 ) -> Result<crate::live_read::AnswerBody, Refused> {
     Ok(crate::live_read::read(
         &control_plane.store,
-        &control_plane.reads,
+        &control_plane.live.reads,
         &organization,
         &reference,
         crate::live_read::Read::File {
@@ -2545,7 +2542,7 @@ async fn sessions(
     Ok(Json(
         sessions
             .into_iter()
-            .map(|session| SessionRecord::live(session, &control_plane.summaries))
+            .map(|session| SessionRecord::live(session, &control_plane.live.summaries))
             .collect(),
     ))
 }
@@ -2582,7 +2579,7 @@ async fn show_session(
     headers: HeaderMap,
 ) -> Result<Response, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
-    let record = SessionRecord::live(session, &control_plane.summaries);
+    let record = SessionRecord::live(session, &control_plane.live.summaries);
     let body = serde_json::to_string(&record).map_err(anyhow::Error::from)?;
     let tag = strong_etag(&body);
 
@@ -2641,14 +2638,14 @@ async fn stop_session(
     Path((organization, session)): Path<(String, String)>,
 ) -> Result<Json<SessionRecord>, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
-    let running = control_plane.summaries.current_session(&session).tools;
+    let running = control_plane.live.summaries.current_session(&session).tools;
     work::stop(&control_plane.store, session.id, &running)
         .await
         .map_err(|error| match error.to_string() {
             ended if ended.ends_with("has already ended") => Refused::Conflict(ended),
             _ => error.into(),
         })?;
-    control_plane.summaries.clear_session(&session);
+    control_plane.live.summaries.clear_session(&session);
     let session = work::session(&control_plane.store, session.id).await?;
 
     Ok(Json(SessionRecord::read(session)))
@@ -3019,7 +3016,7 @@ async fn reading(
         session_id: session.as_ref().map(|session| session.id),
         state: session
             .as_ref()
-            .map(|session| control_plane.summaries.current_session(session))
+            .map(|session| control_plane.live.summaries.current_session(session))
             .unwrap_or_default(),
     };
     Ok(Read {

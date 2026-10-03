@@ -29,7 +29,7 @@ pub struct Listening {
     store: Store,
     wake: Wake,
     follow_lease: Duration,
-    pub(crate) summaries: crate::live_work::Summaries,
+    pub(crate) live: crate::live::Live,
 }
 
 impl Listening {
@@ -64,7 +64,7 @@ pub async fn bind(
         store,
         wake,
         follow_lease,
-        summaries: crate::live_work::Summaries::default(),
+        live: crate::live::Live::default(),
     })
 }
 
@@ -76,7 +76,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         store,
         wake,
         follow_lease,
-        summaries,
+        live,
     } = listening;
 
     info!(role = %Role::Serve, link = %bound.link, operator = %bound.operator, "role started");
@@ -87,16 +87,10 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         );
     }
 
-    let reads = crate::live_read::Reads::default();
     let followers = crate::presence::Followers::new(follow_lease);
-    let link_router = link::router(
-        store.clone(),
-        shutdown.clone(),
-        summaries.clone(),
-        reads.clone(),
-    )
-    .merge(webhook::router(store.clone(), wake));
-    let operator_router = operator::router(store, shutdown.clone(), summaries, reads, followers);
+    let link_router = link::router(store.clone(), shutdown.clone(), live.clone())
+        .merge(webhook::router(store.clone(), wake));
+    let operator_router = operator::router(store, shutdown.clone(), live, followers);
 
     let serving_link = axum::serve(link_listener, link_router)
         .with_graceful_shutdown(shutdown.clone().cancelled_owned());
