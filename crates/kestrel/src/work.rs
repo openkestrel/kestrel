@@ -1105,8 +1105,7 @@ pub async fn stop(store: &Store, id: SessionId, running: &[RunningTool]) -> Resu
                     call_id: tool.call_id.clone(),
                     title: tool.title.clone(),
                     tool_kind: tool.tool_kind.clone(),
-                    status: serde_json::from_value(serde_json::Value::String(tool.status.clone()))
-                        .unwrap_or(ToolStatus::Pending),
+                    status: tool.status,
                     input: serde_json::Value::Null,
                     result: Box::new(serde_json::Value::Null),
                     closing_reason: Some(ClosingReason::Interrupted),
