@@ -48,9 +48,13 @@ test("the only Project and Agent are preselected, with the resolved values besid
 	await expect(page.getByText("main", { exact: true })).toBeVisible();
 	await expect(page.getByText("opencode", { exact: true })).toBeVisible();
 	await expect(page.getByText("the harness's default", { exact: true })).toBeVisible();
-	await expect(page.getByText("No work role is dispatching.", { exact: true })).toBeVisible();
 	await expect(
-		page.getByText("No work role is dispatching, so the Session would wait.", { exact: true }),
+		page.getByText("No dispatch configuration is recorded.", { exact: true }),
+	).toBeVisible();
+	await expect(
+		page.getByText("No dispatch configuration is recorded, so queue order is unknown.", {
+			exact: true,
+		}),
 	).toBeVisible();
 });
 
@@ -150,7 +154,11 @@ test("opening lands on the new Workspace, queued for its turn, and follows it", 
 	const workspace = new URL(page.url()).pathname.split("/").at(-1) ?? "";
 	await expect(page.getByRole("heading", { name: workspace })).toBeVisible();
 	await expect(page.getByRole("region", { name: "Transcript" })).toBeVisible();
-	await expect(page.getByText(/^Queued at position \d+\.$/)).toBeVisible();
+	await expect(
+		page.getByText("Queue order is unknown: no dispatch configuration is recorded.", {
+			exact: true,
+		}),
+	).toBeVisible();
 });
 
 test("a draft survives opening a Workspace and coming back to the form", async ({ page }) => {

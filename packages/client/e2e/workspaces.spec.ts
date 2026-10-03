@@ -242,7 +242,7 @@ function learnedPull(state: string) {
 	};
 }
 
-test("a ready queued Session shows its FIFO place, and notices add the next one", async ({
+test("queued Sessions have unknown order without dispatch configuration, and notices add the next one", async ({
 	page,
 	request,
 }) => {
@@ -252,15 +252,15 @@ test("a ready queued Session shows its FIFO place, and notices add the next one"
 	await expect(page.locator("[data-queue-header]")).toContainText("Slots 0 (no limit)");
 	await expect(page.locator("[data-queue-header]")).toContainText("Instances 0 (no limit)");
 
-	// Other specs share this Organization, so the exact place is asserted on a scripted queue below.
 	const queuedRow = rows(page).filter({ hasText: first.name });
-	await expect(queuedRow).toContainText(/Queued #\d+/);
+	await expect(queuedRow).toContainText("Queued");
+	await expect(queuedRow).not.toContainText(/Queued #\d+/);
 	await expect(queuedRow).toContainText("kestrel/");
 	await expect(queuedRow).toContainText("no Instance");
 
 	const second = await opened(request, "do the second thing");
-	await expect(rows(page).filter({ hasText: second.name })).toContainText(/Queued #\d+/);
-	await expect(rows(page).filter({ hasText: first.name })).toContainText(/Queued #\d+/);
+	await expect(rows(page).filter({ hasText: second.name })).toContainText("Queued");
+	await expect(rows(page).filter({ hasText: first.name })).toContainText("Queued");
 });
 
 test("attention outranks working, waiting and queued", async ({ page }) => {

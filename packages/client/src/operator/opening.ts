@@ -60,5 +60,5 @@ export function resolvedModel(model: string, agent: Agent | undefined): string {
 }
 
 export function resolvedEnvironment(workRole: { driver: string } | null | undefined): string {
-	return workRole?.driver ?? "No work role is dispatching.";
+	return workRole?.driver ?? "No dispatch configuration is recorded.";
 }

@@ -25,7 +25,7 @@ function a_queue(overrides: Partial<Queue> = {}): Queue {
 }
 
 describe("the line the form shows about a Session that has not opened yet", () => {
-	test("says no work role is dispatching when none recorded", () => {
+	test("says order is unknown when no dispatch configuration is recorded", () => {
 		expect(openingQueueLine(a_queue({ work_role: null }), true)).toBe(
 			"No dispatch configuration is recorded, so queue order is unknown.",
 		);
