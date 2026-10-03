@@ -2029,8 +2029,24 @@ struct WorkRoleRecord {
 struct ActiveWorkRecord {
     limit: Option<usize>,
     occupied: usize,
-    occupants: Vec<String>,
+    occupants: Vec<OccupantRecord>,
     elsewhere: usize,
+}
+
+#[derive(Serialize)]
+struct OccupantRecord {
+    name: String,
+    workspace: String,
+    agent: String,
+    phase: OccupantPhase,
+    enqueued_at: Timestamp,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum OccupantPhase {
+    Working,
+    Trailing,
 }
 
 #[derive(Serialize)]
@@ -2123,7 +2139,21 @@ impl QueueRecord {
             active_work: ActiveWorkRecord {
                 limit: snapshot.active_work.limit,
                 occupied: snapshot.active_work.occupied,
-                occupants: snapshot.active_work.occupants,
+                occupants: snapshot
+                    .active_work
+                    .occupants
+                    .into_iter()
+                    .map(|session| OccupantRecord {
+                        name: session.name,
+                        workspace: session.workspace.to_string(),
+                        agent: session.agent.name,
+                        phase: match session.state {
+                            domain::SessionState::Trailing => OccupantPhase::Trailing,
+                            _ => OccupantPhase::Working,
+                        },
+                        enqueued_at: session.enqueued_at,
+                    })
+                    .collect(),
                 elsewhere: snapshot.active_work.elsewhere,
             },
             instances: InstancesRecord {

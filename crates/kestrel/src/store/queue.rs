@@ -108,25 +108,6 @@ impl<'a> Queue<'a> {
         .collect())
     }
 
-    /// The Sessions that occupy an Active-Work Slot, `true` when the Organization named holds
-    /// the one that occupies it.
-    pub async fn occupying(&mut self, organization: &Organization) -> Result<Vec<(String, bool)>> {
-        Ok(sqlx::query(
-            "SELECT s.name, s.organization_id = ? AS ours
-             FROM session AS s
-             WHERE s.state IN (SELECT value FROM json_each(?))
-             ORDER BY s.enqueued_at, s.id",
-        )
-        .bind(organization.id.to_string())
-        .bind(occupying()?)
-        .fetch_all(&mut *self.connection)
-        .await
-        .context("reading which sessions occupy an active-work slot")?
-        .iter()
-        .map(|row| (row.get("name"), row.get("ours")))
-        .collect())
-    }
-
     /// The Instances the Organization counts against its live limit, apart from what its
     /// Workspaces keep and what is being archived: live Sessions on a Workspace that has
     /// kept none.
