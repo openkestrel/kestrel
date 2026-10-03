@@ -110,7 +110,10 @@ pub enum Report {
         #[serde(default)]
         trailing: bool,
     },
-    Settled,
+    Settled {
+        #[serde(default)]
+        usage: Option<Usage>,
+    },
     Checkout {
         repositories: Vec<Observed>,
     },
@@ -141,7 +144,7 @@ impl Report {
             | Report::OptionChanged { .. }
             | Report::Answered { .. }
             | Report::Interrupted { .. }
-            | Report::Settled
+            | Report::Settled { .. }
             | Report::Checkout { .. }
             | Report::Finished { .. } => true,
         }
@@ -774,10 +777,7 @@ async fn reported(
                 tx.workspaces()
                     .record_active(session.organization, session.workspace, Timestamp::now())
                     .await?;
-                if let Some(usage) = usage {
-                    info!(session = %session.id, %usage, "a supervisor reported what its agent used");
-                    tx.workspaces().record_usage(session, &usage).await?;
-                }
+                record_usage(tx, session, usage.as_ref()).await?;
                 prompt_pending(tx, session).await?;
             }
             info!(session = %session.id, "a supervisor reported its agent answered a turn");
@@ -810,12 +810,13 @@ async fn reported(
             prompt_pending(tx, session).await?;
             info!(session = %session.id, "a supervisor reported its agent's turn interrupted");
         }
-        Report::Settled => {
+        Report::Settled { usage } => {
             if tx.workspaces().settle(session).await? {
                 tx.workspaces()
                     .record_active(session.organization, session.workspace, Timestamp::now())
                     .await?;
             }
+            record_usage(tx, session, usage.as_ref()).await?;
             info!(session = %session.id, "a supervisor reported its agent's work settled");
         }
         Report::Checkout { repositories } => {
@@ -827,15 +828,20 @@ async fn reported(
         }
         Report::Finished { exit, usage } => {
             let stands = ending(tx, session, exit).await?;
-            if let Some(usage) = usage {
-                info!(session = %session.id, %usage, "a supervisor reported what its agent used");
-                tx.workspaces().record_usage(session, &usage).await?;
-            }
+            record_usage(tx, session, usage.as_ref()).await?;
             info!(session = %session.id, %stands, "a supervisor reported its session finished");
         }
     }
 
     Ok(())
+}
+
+async fn record_usage(tx: &mut Tx<'_>, session: &Session, usage: Option<&Usage>) -> Result<()> {
+    let Some(usage) = usage else {
+        return Ok(());
+    };
+    info!(session = %session.id, %usage, "a supervisor reported what its agent used");
+    tx.workspaces().record_usage(session, usage).await
 }
 
 pub async fn instance(store: &Store, workspace: WorkspaceId) -> Result<Option<String>> {

@@ -213,7 +213,7 @@ async fn a_turns_response_holds_only_what_was_said_up_to_its_answer() {
     report(&link, &session, &on, 2, said("waiting on the tests")).await;
     report(&link, &session, &on, 3, Report::Answered { usage: None }).await;
     report(&link, &session, &on, 4, said("the tests passed")).await;
-    report(&link, &session, &on, 5, Report::Settled).await;
+    report(&link, &session, &on, 5, Report::Settled { usage: None }).await;
 
     let bodies = replies(&stub, 1).await;
     assert!(bodies[0].contains("waiting on the tests"), "{}", bodies[0]);
@@ -369,7 +369,7 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
     )
     .await;
     report(&link, &session, &on, 3, Report::Answered { usage: None }).await;
-    report(&link, &session, &on, 4, Report::Settled).await;
+    report(&link, &session, &on, 4, Report::Settled { usage: None }).await;
     let bodies = replies(&stub, 1).await;
     assert!(bodies[0].contains("the first answer"), "{}", bodies[0]);
 

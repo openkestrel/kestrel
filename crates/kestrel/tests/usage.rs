@@ -2,7 +2,7 @@ mod support;
 
 use std::time::Duration;
 
-use kestrel::domain::{Exit, SessionId, Workspace, WorkspaceId};
+use kestrel::domain::{Exit, SessionId, SessionState, Workspace, WorkspaceId};
 use kestrel_scripted_agent::BURSTED_USAGE;
 use serde_json::Value;
 use support::Kestrel;
@@ -186,6 +186,29 @@ async fn usage_reported_during_a_turn_reaches_the_read_once_the_session_ends() {
     assert_eq!(
         shown["usage"]["context_used"], BURSTED_USAGE,
         "the usage the Turn reported was not recorded: {shown}"
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn usage_reported_while_trailing_reaches_the_read_once_the_session_settles() {
+    let kestrel = dispatching(Script::AnswersThenKeepsBooks).await;
+    let workspace = a_workspace(&kestrel).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+
+    let waiting = kestrel.answered(session.id, 1).await;
+    assert_eq!(waiting.state, SessionState::Waiting);
+
+    let recorded = kestrel.session(session.id).await;
+    // The answer carried no usage, so anything recorded can only have come from the trailing work.
+    assert!(
+        recorded
+            .usage
+            .as_ref()
+            .is_some_and(|usage| usage.context_used > 0),
+        "the usage reported while trailing was not kept when the Session settled: {:?}",
+        recorded.usage
     );
 
     kestrel.teardown().await;

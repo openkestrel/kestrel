@@ -2101,9 +2101,14 @@ impl Kestrel {
     }
 
     pub async fn report_settled(&self, session: &Session, seq: i64) {
-        work::report_on(&self.store, session, Some(seq), work::Report::Settled)
-            .await
-            .expect("the settling should be taken");
+        work::report_on(
+            &self.store,
+            session,
+            Some(seq),
+            work::Report::Settled { usage: None },
+        )
+        .await
+        .expect("the settling should be taken");
     }
 
     pub async fn instances_to_archive(&self) -> Vec<String> {

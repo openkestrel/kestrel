@@ -1283,7 +1283,7 @@
         ]
       },
       "Answered": {
-        "description": "The agent answered the turn, and its conversation waits for another prompt. The Session goes on, trailing until its agent's work settles. It carries what the Harness had spent when the turn ended, which is what the Session read keeps.",
+        "description": "The agent answered the turn, and its conversation waits for another prompt. The Session goes on, trailing until its agent's work settles. It carries what the Harness had spent when the turn ended, which the Session read keeps until the trailing end reports the usage it spent afterward.",
         "type": "object",
         "properties": {
           "kind": {
@@ -1334,7 +1334,7 @@
         ]
       },
       "Settled": {
-        "description": "The trailing Session's agent has nothing open and has been quiet for the quiet period, so the Session is waiting. Sent after the checkout observed then, which is the report the Unpublished Work hold reads. Activity after it needs no report of its own: a later unit report, or a `session_state` carrying `last_activity_at`, makes the Session trailing again.",
+        "description": "The trailing Session's agent has nothing open and has been quiet for the quiet period, so the Session is waiting. Sent after the checkout observed then, which is the report the Unpublished Work hold reads. It carries what the Harness had spent when the trailing work ended, which supersedes the answer's in the Session read. Activity after it needs no report of its own: a later unit report, or a `session_state` carrying `last_activity_at`, makes the Session trailing again.",
         "type": "object",
         "properties": {
           "kind": {
@@ -1346,6 +1346,10 @@
           "session": {
             "type": "string",
             "format": "uuid"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage",
+            "description": "What the Harness had spent when the trailing work ended. Absent for a supervisor that never heard a usage update."
           }
         },
         "required": [

@@ -277,7 +277,10 @@ pub enum Report {
     Interrupted {
         trailing: bool,
     },
-    Settled,
+    Settled {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
+    },
     Checkout {
         repositories: Vec<Observed>,
     },
@@ -308,7 +311,7 @@ impl Report {
             Report::OptionChanged { .. } => "option_changed",
             Report::Answered { .. } => "answered",
             Report::Interrupted { .. } => "interrupted",
-            Report::Settled => "settled",
+            Report::Settled { .. } => "settled",
             Report::Checkout { .. } => "checkout",
             Report::Finished { .. } => "finished",
         }
