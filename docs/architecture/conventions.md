@@ -21,9 +21,11 @@ Patterns the code relies on that no single file states. Comment style is in `AGE
 ## Sweeps and roles
 
 - **Poll `Store`; nothing notifies**, apart from Organization change notices: a committed
-  transaction hands what it touched to `Fanout`, and the change stream tells subscribers to
-  refetch. The dispatch loop, link streams and Transcript streams still poll every 100 ms and
-  `timer` sweeps every 500 ms. `Wake` shortens the wait after ingest within one process only.
+  transaction hands what it touched to `Fanout`, the serve role's memory-only state (a running
+  tool call or unit, the work summary) hands what it changed as it changes, and the change stream
+  tells subscribers to refetch. The dispatch loop, link streams and Transcript streams still poll
+  every 100 ms and `timer` sweeps every 500 ms. `Wake` shortens the wait after ingest within one
+  process only.
 - **Due times live in `Store`**, never only in memory: lease expiry, schedule `due_at`, poll due,
   held-firing reconsideration, delivery `due_at`. A restarted control plane finds all of them.
 - **A failed pass warns and waits for the next.** Nothing in a sweep or the dispatch loop stops a

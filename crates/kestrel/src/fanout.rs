@@ -111,8 +111,8 @@ impl Notices {
         }
     }
 
-    /// Never called before the transaction committed: a refused or rolled-back write has nothing
-    /// to announce.
+    /// Never called before the change it announces is visible to a read: a refused or rolled-back
+    /// write has nothing to announce, and a memory-only change is published once it is stored.
     pub fn publish(&self, touched: Touched) {
         if touched.is_empty() {
             return;
