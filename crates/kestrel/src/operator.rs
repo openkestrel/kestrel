@@ -2575,7 +2575,8 @@ async fn stop_session(
     Path((organization, session)): Path<(String, String)>,
 ) -> Result<Json<SessionRecord>, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
-    work::stop(&control_plane.store, session.id)
+    let running = control_plane.summaries.current_session(&session).tools;
+    work::stop(&control_plane.store, session.id, &running)
         .await
         .map_err(|error| match error.to_string() {
             ended if ended.ends_with("has already ended") => Refused::Conflict(ended),

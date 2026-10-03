@@ -20,6 +20,7 @@ stateDiagram-v2
     Trailing --> Waiting: supervisor reports settled
     Waiting --> Trailing: activity reported
     Waiting --> Working: held input prompts the next Turn
+    Trailing --> Working: a message or a feeding firing prompts the next Turn
     Working --> Ended: finished, stopped (failed), or lease lapsed (failed)
     Trailing --> Ended: finished, stopped (succeeded), or lease lapsed (failed)
     Unbriefed --> Ended: stopped, sealed, or replaced (succeeded), or lease lapsed (failed)
@@ -53,6 +54,10 @@ stateDiagram-v2
   interrupted Turn never fails its Session and never trails.
 - **Stopping a Waiting or Trailing Session succeeds** (`SessionState::stop_exit`). It has answered everything
   it was asked; ending it mid-turn is a failure.
+- **A stop closes the Session's open tool calls `interrupted`.** The Session has ended before its
+  supervisor hears the stop, so `work::stop` writes each `tool_call` entry itself, in the same
+  transaction, from the running tools the serve role holds: title, tool kind, start time and
+  closing reason, with no input or result.
 - **Unreachable has no exit.** A queued Session whose blocker failed never ran, so nothing failed
   (`cascade_unreachable`, `session_dependency`).
 - **A queued Session may wait for an Instance.** When the Organization's `max_live_instances` is
@@ -97,7 +102,7 @@ What arrives while one exists is held, never interleaved:
 
 | Arrives | Held in | Released when |
 | --- | --- | --- |
-| A message (post, follow-up comment, a `continue` firing) | `pending_message` | A Waiting Session is prompted with it once a slot is free (`work::occupy`), or the next Session starts with it. |
+| A message (post, follow-up comment, a `continue` firing) | `pending_message` | A Trailing Session is prompted with it at once, in the same transaction, on the slot it holds. A Waiting Session is prompted with it once a slot is free (`work::occupy`), or the next Session starts with it. |
 | A `new-session` firing | `pending_session` | The unfinished Session lets go. A Waiting one is ended (succeeded) to make way. |
 
 `work::continue_pending` runs as the unfinished Session ends and releases the next thing. A pending

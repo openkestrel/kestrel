@@ -2065,15 +2065,16 @@ impl<'a> Workspaces<'a> {
         self.turn(session).await
     }
 
-    /// `None` when the Session was neither waiting nor unbriefed, so a replayed prompt starts no
-    /// second turn.
+    /// `None` when the Session was not waiting, trailing or unbriefed, so a replayed prompt starts
+    /// no second turn.
     pub async fn prompt_turn(&mut self, session: &Session) -> Result<Option<i64>> {
         let moved = sqlx::query(
-            "UPDATE session SET state = ?, preparing = NULL WHERE id = ? AND state IN (?, ?)",
+            "UPDATE session SET state = ?, preparing = NULL WHERE id = ? AND state IN (?, ?, ?)",
         )
         .bind(SessionState::Working.as_str())
         .bind(session.id.to_string())
         .bind(SessionState::Waiting.as_str())
+        .bind(SessionState::Trailing.as_str())
         .bind(SessionState::Unbriefed.as_str())
         .execute(&mut *self.connection)
         .await?;

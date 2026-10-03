@@ -896,6 +896,7 @@ impl Completion {
 pub struct RunningTool {
     pub call_id: String,
     pub title: String,
+    pub tool_kind: String,
     pub status: String,
     pub started_at: jiff::Timestamp,
 }

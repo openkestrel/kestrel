@@ -1922,7 +1922,7 @@ impl Kestrel {
     }
 
     pub async fn try_stop_session(&self, session: SessionId) -> anyhow::Result<Exit> {
-        work::stop(&self.store, session).await
+        work::stop(&self.store, session, &[]).await
     }
 
     pub async fn answered(&self, session: SessionId, count: usize) -> Session {

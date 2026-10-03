@@ -172,6 +172,7 @@ describe("the current unit", () => {
 						{
 							call_id: "call",
 							title: "cargo test",
+							tool_kind: "execute",
 							status: "in_progress",
 							started_at: "2026-09-30T10:00:00Z",
 						},

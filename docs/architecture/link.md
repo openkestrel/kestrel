@@ -147,7 +147,7 @@ effects (ADR-0004).
 | `thought {text, completion}` | yes | Appends narration `Thought`. |
 | `plan {entries, completion}` | yes | Appends one narration plan replacement. |
 | `tool_call {call_id, title, tool_kind, status, input, result, closing_reason, completion}` | yes | Appends one completed detail entry. |
-| `session_state {tools, message_buffering, thought_buffering, usage?, last_activity_at?}` | no | Replaces the Session’s transient snapshot in serve-role memory; reconnect resends it. `last_activity_at` is present only while the supervisor trails; a Waiting Session that reports it moves to Trailing. |
+| `session_state {tools, message_buffering, thought_buffering, usage?, last_activity_at?}` | no | Each tool is `{call_id, title, tool_kind, status, started_at}`. Replaces the Session’s transient snapshot in serve-role memory; reconnect resends it. `last_activity_at` is present only while the supervisor trails; a Waiting Session that reports it moves to Trailing. |
 | `usage {usage}` | no | Held in serve-role memory beside the running tools: at most one a second, at the window's trailing edge, and never recorded (ADR-0041). |
 | `session_info {title, options, commands}` | no | Records the harness's whole bookkeeping state on the Session (ADR-0041). Sent when it changes, at most once a second, and again after a reconnect. |
 | `checkout {repositories}` | yes | Replaces the Workspace's observed git state (decides Unpublished Work); an unbriefed Session moves from `cloning` to `starting_harness`. |
@@ -231,7 +231,7 @@ with no branch on which harness it drives.
   bookkeeping never does. Once no tool is open and the quiet period has passed, the supervisor
   closes buffered text, closes any tool still open unresolved, and reports `checkout` and
   `settled`. Activity after that trails again. A tool still open when trailing ends any other way
-  closes unresolved.
+  closes unresolved. A tool open when the next Turn starts stays open into it.
 - A Turn in which the agent produced no message, thought, plan or tool call fails the Session.
 - `checkout.rs` clones each repository side by side under `/workspace`, cuts the declared branch
   from the base when the remote lacks it, and leaves an existing checkout as an earlier Session

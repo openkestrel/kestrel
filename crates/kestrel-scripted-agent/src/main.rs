@@ -19,7 +19,7 @@ use agent_client_protocol::schema::v1::{
     SessionMode, SessionModeState, SessionNotification, SessionUpdate,
     SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest,
     SetSessionModeResponse, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
-    ToolCallUpdateFields, UnstructuredCommandInput, UsageUpdate,
+    ToolCallUpdateFields, ToolKind, UnstructuredCommandInput, UsageUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Error, Result, Stdio};
 use clap::Parser;
@@ -549,6 +549,30 @@ async fn play(
             | Script::AnswersThenWrites
     ) {
         say(connection, "message-1", "answered, with more to do")?;
+        return Ok(StopReason::EndTurn);
+    }
+    if script == Script::CarriesAToolOver {
+        if earlier.is_empty() {
+            update(
+                connection,
+                SessionUpdate::ToolCall(
+                    ToolCall::new(TOOL_CALL, "background tests")
+                        .kind(ToolKind::Execute)
+                        .status(ToolCallStatus::InProgress),
+                ),
+            )?;
+            say(connection, "message-1", "waiting on the background tests")?;
+        } else {
+            tokio::time::sleep(BACKGROUND).await;
+            update(
+                connection,
+                SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                    TOOL_CALL,
+                    ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+                )),
+            )?;
+            say(connection, "message-2", "the background tests passed")?;
+        }
         return Ok(StopReason::EndTurn);
     }
     if matches!(
