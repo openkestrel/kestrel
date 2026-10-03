@@ -1,6 +1,7 @@
 pub mod changes;
 pub mod checkout;
 pub mod completer;
+mod extension;
 pub mod files;
 pub mod harness;
 pub mod link;

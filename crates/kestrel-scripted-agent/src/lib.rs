@@ -51,6 +51,11 @@ pub const BACKGROUND_TASK: &str = "cargo test --workspace";
 pub const TASK_RUNS: std::time::Duration = std::time::Duration::from_secs(4);
 pub const UNKNOWN_UPDATE: &str = "scripted_mystery";
 pub const WRITTEN_WHILE_TRAILING: &str = "written-while-trailing.txt";
+pub const CHILD_TITLE: &str = "explore the checkout";
+pub const CHILD_SAID_IN_TURN: &str = "the child read the code";
+pub const CHILD_SAID_WHILE_TRAILING: &str = "the child finished its search";
+/// Longer than a test's quiet period, so only the child still running keeps its Session trailing.
+pub const CHILD_SILENT_FOR: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Script {
@@ -150,6 +155,10 @@ pub enum Script {
     /// Sends an `UNKNOWN_UPDATE`, then answers with Claude's async task `BACKGROUND_TASK`, sent
     /// only if the client declared `asyncTasks`, running silently for `TASK_RUNS`.
     AnswersWithABackgroundTask,
+    /// Runs an OpenCode child through its turn and silently past the answer for `CHILD_SILENT_FOR`,
+    /// sending its output on the child channel only to a client that declared it.
+    #[value(name = "runs-an-opencode-child")]
+    RunsAnOpenCodeChild,
 }
 
 impl Script {
@@ -206,6 +215,7 @@ impl Script {
             Script::ResumesAfterSettling => "resumes-after-settling",
             Script::AnswersThenWrites => "answers-then-writes",
             Script::AnswersWithABackgroundTask => "answers-with-a-background-task",
+            Script::RunsAnOpenCodeChild => "runs-an-opencode-child",
         }
     }
 }
