@@ -3,7 +3,7 @@
 use std::io::{self, Write as _};
 use std::process::{Child, Command, Stdio};
 
-use super::{Exited, Instance, Provisioned, Streaming, Supervising, Supervisor};
+use super::{Exited, IdleHint, Instance, Provisioned, Streaming, Supervising, Supervisor};
 use crate::domain::SessionId;
 
 /// Where the image puts an Instance's checkouts, and so what every path an operation takes is
@@ -17,6 +17,10 @@ pub struct Docker {
 }
 
 impl Docker {
+    pub(super) fn idle_hint(&self, _hint: &IdleHint) -> io::Result<()> {
+        Ok(())
+    }
+
     pub fn provisioning_from(image: impl Into<String>) -> Self {
         Self {
             image: image.into(),

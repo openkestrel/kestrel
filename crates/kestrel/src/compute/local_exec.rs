@@ -13,7 +13,7 @@ use std::os::fd::AsRawFd as _;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
 
-use super::{Exited, Instance, Provisioned, Streaming, Supervising, Supervisor};
+use super::{Exited, IdleHint, Instance, Provisioned, Streaming, Supervising, Supervisor};
 use crate::domain::SessionId;
 
 #[derive(Debug, Clone)]
@@ -23,6 +23,10 @@ pub struct LocalExec {
 }
 
 impl LocalExec {
+    pub(super) fn idle_hint(&self, _hint: &IdleHint) -> io::Result<()> {
+        Ok(())
+    }
+
     pub fn running(supervisor: impl Into<PathBuf>) -> Self {
         Self {
             supervisor: supervisor.into(),
