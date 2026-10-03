@@ -20,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::domain::{Checkout, Session, SessionId, SessionState, Workspace};
+use crate::fanout::Touched;
 use crate::link::credential::Secret;
 use crate::log::{Cursor, Unreadable, Window};
 use crate::profile;
@@ -490,7 +491,11 @@ async fn report(
 ) -> Result<Response, Refused> {
     let (linked, _) = authenticated(&control_plane, &headers, &instance).await?;
     if let work::Report::Work { repositories } = reported.report {
-        control_plane.summaries.report(&instance, repositories);
+        if control_plane.summaries.report(&instance, repositories) {
+            let mut touched = Touched::default();
+            touched.workspace_id(linked.organization, linked.workspace);
+            control_plane.store.notices().publish(touched);
+        }
         return Ok(StatusCode::ACCEPTED.into_response());
     }
     if let work::Report::SessionState {
@@ -503,7 +508,7 @@ async fn report(
     } = &reported.report
     {
         let session = still_carried(&control_plane, &linked, reported.session).await?;
-        control_plane.summaries.report_session(
+        let noticed = control_plane.summaries.report_session(
             &instance,
             &session.id.to_string(),
             crate::live_work::SessionState {
@@ -515,6 +520,11 @@ async fn report(
                 last_activity_at: *last_activity_at,
             },
         );
+        if noticed {
+            let mut touched = Touched::default();
+            touched.session(&session);
+            control_plane.store.notices().publish(touched);
+        }
         if last_activity_at.is_some() && session.state == SessionState::Waiting {
             work::resume_trailing(&control_plane.store, &session).await?;
         }

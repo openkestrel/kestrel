@@ -1714,7 +1714,7 @@ impl<'a> Workspaces<'a> {
     /// Only while a Workspace still holds the Instance: one let go takes its link with it.
     pub async fn linked(&mut self, digest: &str) -> Result<Option<Linked>> {
         sqlx::query(
-            "SELECT supervisor.instance, workspace.id AS workspace_id
+            "SELECT supervisor.instance, workspace.id AS workspace_id, workspace.organization_id
              FROM supervisor
              JOIN workspace ON workspace.instance = supervisor.instance
              WHERE supervisor.token_hash = ?",
@@ -1727,6 +1727,7 @@ impl<'a> Workspaces<'a> {
             Ok(Linked {
                 instance: row.get("instance"),
                 workspace: row.get::<String, _>("workspace_id").parse()?,
+                organization: row.get::<String, _>("organization_id").parse()?,
             })
         })
         .transpose()
@@ -2323,6 +2324,7 @@ pub struct Supervisor {
 pub struct Linked {
     pub instance: String,
     pub workspace: WorkspaceId,
+    pub organization: OrganizationId,
 }
 
 pub(crate) struct Unfinished {

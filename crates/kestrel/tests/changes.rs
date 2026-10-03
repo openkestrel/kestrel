@@ -3,10 +3,16 @@ mod support;
 use std::fs;
 use std::time::Duration;
 
+use kestrel::domain::{Session, SessionId, Workspace};
+use kestrel::live_work::{Changes, Commits, Git, Repository, RunningTool, RunningUnit, UnitKind};
+use kestrel::log::ToolStatus;
 use kestrel::operator;
+use kestrel::work::{Report, Reported};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use support::Kestrel;
+use support::OnTheLink;
+use support::link_client::Link;
 use support::scripted_agent::{self, Script};
 use support::supervisor;
 
@@ -169,6 +175,110 @@ async fn post(kestrel: &Kestrel, workspace: kestrel::domain::WorkspaceId, messag
 
     let posted: Value = response.json().await.expect("the post's answer as JSON");
     posted["session"].clone()
+}
+
+fn a_running_tool(title: &str) -> RunningTool {
+    RunningTool {
+        call_id: "call".to_owned(),
+        title: title.to_owned(),
+        tool_kind: "read".to_owned(),
+        status: ToolStatus::InProgress,
+        started_at: "2026-09-29T12:00:00Z".parse().expect("a timestamp"),
+    }
+}
+
+fn a_running_unit() -> RunningUnit {
+    RunningUnit {
+        id: "task".to_owned(),
+        kind: UnitKind::BackgroundTask,
+        title: "background tests".to_owned(),
+        started_at: "2026-09-29T12:00:00Z".parse().expect("a timestamp"),
+    }
+}
+
+fn a_session_state(
+    tools: Vec<RunningTool>,
+    units: Vec<RunningUnit>,
+    message_buffering: bool,
+) -> Report {
+    Report::SessionState {
+        tools,
+        units,
+        message_buffering,
+        thought_buffering: false,
+        usage: None,
+        last_activity_at: None,
+    }
+}
+
+fn a_reported_checkout() -> Repository {
+    Repository {
+        repository: "https://github.com/jtmthf/kestrel".to_owned(),
+        git: Git::Read {
+            branch: Some("main".to_owned()),
+            changed: Changes {
+                files: 2,
+                added: 7,
+                removed: 1,
+            },
+            staged: Changes {
+                files: 0,
+                added: 0,
+                removed: 0,
+            },
+            committed: Commits {
+                commits: 1,
+                added: 3,
+                removed: 0,
+            },
+            pushed: None,
+            untracked: 0,
+            stashed: 0,
+        },
+    }
+}
+
+/// Sends a report the way a supervisor does, and holds the link to accepting it.
+async fn reported(link: &Link, on: &OnTheLink, session: Option<SessionId>, report: Report) {
+    let status = link
+        .report(
+            &on.instance,
+            Some(&on.credential),
+            &Reported {
+                session,
+                seq: None,
+                report,
+            },
+        )
+        .await
+        .status();
+    assert_eq!(status, StatusCode::ACCEPTED, "the link refused the report");
+}
+
+async fn session_read(kestrel: &Kestrel, session: &Session) -> Value {
+    let path = operator::SESSION
+        .replace("{organization}", "acme")
+        .replace("{session}", &session.name);
+
+    reqwest::get(format!("{}{path}", kestrel.operator()))
+        .await
+        .expect("the operator boundary should answer")
+        .json()
+        .await
+        .expect("the session as JSON")
+}
+
+async fn work_read(kestrel: &Kestrel, workspace: &Workspace) -> Value {
+    let path = operator::WORKSPACE_WORK
+        .replace("{organization}", "acme")
+        .replace("{workspace}", &workspace.name);
+
+    reqwest::get(format!("{}{path}", kestrel.operator()))
+        .await
+        .expect("the operator boundary should answer")
+        .json()
+        .await
+        .expect("the work as JSON")
 }
 
 #[tokio::test]
@@ -484,6 +594,213 @@ async fn live_usage_raises_no_change_notice() {
         late.is_empty(),
         "live usage raised a notice: {late:?}",
         late = names(&late)
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_running_tool_call_raises_a_session_notice_at_start_and_settle_and_none_on_progress() {
+    let kestrel = Kestrel::boot().await;
+    declare_organization(&kestrel, "acme").await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let link = Link::to(&kestrel.link());
+    let _instructions = link.open(&on.instance, &on.credential, None).await;
+
+    let mut changes = Stream::open(&kestrel, "acme").await;
+    assert_eq!(
+        changes.next(QUIET).await.expect("an open event").name,
+        "open"
+    );
+    notices_until_quiet(&mut changes).await;
+
+    let id = session.id.to_string();
+    reported(
+        &link,
+        &on,
+        Some(session.id),
+        a_session_state(vec![a_running_tool("read a")], vec![], false),
+    )
+    .await;
+    let started = notices_until_quiet(&mut changes).await;
+    assert!(
+        names_changed(&started, "session", Some(&id)),
+        "starting a call raised no session notice: {started:?}",
+        started = names(&started)
+    );
+    assert_eq!(
+        session_read(&kestrel, &session).await["tools"][0]["title"],
+        "read a",
+        "the notice came before the session read showed the running call"
+    );
+
+    reported(
+        &link,
+        &on,
+        Some(session.id),
+        a_session_state(vec![a_running_tool("read b")], vec![], false),
+    )
+    .await;
+    let progressed = notices_until_quiet(&mut changes).await;
+    assert!(
+        progressed.is_empty(),
+        "a call's progress update raised a notice: {progressed:?}",
+        progressed = names(&progressed)
+    );
+
+    reported(
+        &link,
+        &on,
+        Some(session.id),
+        a_session_state(vec![], vec![], false),
+    )
+    .await;
+    let settled = notices_until_quiet(&mut changes).await;
+    assert!(
+        names_changed(&settled, "session", Some(&id)),
+        "settling a call raised no session notice: {settled:?}",
+        settled = names(&settled)
+    );
+    assert_eq!(
+        session_read(&kestrel, &session).await["tools"],
+        json!([]),
+        "the session read still shows the settled call"
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_open_background_unit_raises_a_session_notice_when_it_opens_and_settles() {
+    let kestrel = Kestrel::boot().await;
+    declare_organization(&kestrel, "acme").await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let link = Link::to(&kestrel.link());
+    let _instructions = link.open(&on.instance, &on.credential, None).await;
+
+    let mut changes = Stream::open(&kestrel, "acme").await;
+    assert_eq!(
+        changes.next(QUIET).await.expect("an open event").name,
+        "open"
+    );
+    notices_until_quiet(&mut changes).await;
+
+    let id = session.id.to_string();
+    reported(
+        &link,
+        &on,
+        Some(session.id),
+        a_session_state(vec![], vec![a_running_unit()], false),
+    )
+    .await;
+    let opened = notices_until_quiet(&mut changes).await;
+    assert!(
+        names_changed(&opened, "session", Some(&id)),
+        "opening a unit raised no session notice: {opened:?}",
+        opened = names(&opened)
+    );
+    assert_eq!(
+        session_read(&kestrel, &session).await["units"][0]["title"],
+        "background tests",
+        "the notice came before the session read showed the open unit"
+    );
+
+    // A snapshot change that is not a unit opening or settling raises nothing.
+    reported(
+        &link,
+        &on,
+        Some(session.id),
+        a_session_state(vec![], vec![a_running_unit()], true),
+    )
+    .await;
+    let quiet = notices_until_quiet(&mut changes).await;
+    assert!(
+        quiet.is_empty(),
+        "an unrelated snapshot change raised a notice: {quiet:?}",
+        quiet = names(&quiet)
+    );
+
+    reported(
+        &link,
+        &on,
+        Some(session.id),
+        a_session_state(vec![], vec![], false),
+    )
+    .await;
+    let settled = notices_until_quiet(&mut changes).await;
+    assert!(
+        names_changed(&settled, "session", Some(&id)),
+        "settling a unit raised no session notice: {settled:?}",
+        settled = names(&settled)
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_checkout_report_that_changes_the_work_summary_raises_a_workspace_notice() {
+    let kestrel = Kestrel::boot().await;
+    declare_organization(&kestrel, "acme").await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let (_session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let link = Link::to(&kestrel.link());
+    let _instructions = link.open(&on.instance, &on.credential, None).await;
+    // On the link, so the work read reports a summary rather than saying the Instance isn't answering.
+    reported(
+        &link,
+        &on,
+        None,
+        Report::Connected {
+            version: "0.0".to_owned(),
+        },
+    )
+    .await;
+
+    let mut changes = Stream::open(&kestrel, "acme").await;
+    assert_eq!(
+        changes.next(QUIET).await.expect("an open event").name,
+        "open"
+    );
+    notices_until_quiet(&mut changes).await;
+
+    reported(
+        &link,
+        &on,
+        None,
+        Report::Work {
+            repositories: vec![a_reported_checkout()],
+        },
+    )
+    .await;
+    let changed = notices_until_quiet(&mut changes).await;
+    assert!(
+        names_changed(&changed, "workspace", Some(&workspace.id.to_string())),
+        "a changed work summary raised no workspace notice: {changed:?}",
+        changed = names(&changed)
+    );
+    let read = work_read(&kestrel, &workspace).await;
+    assert_eq!(
+        read["state"], "reported",
+        "the notice came before the work read showed the summary: {read}"
+    );
+    assert_eq!(read["repositories"][0]["changed"]["files"], 2, "{read}");
+
+    reported(
+        &link,
+        &on,
+        None,
+        Report::Work {
+            repositories: vec![a_reported_checkout()],
+        },
+    )
+    .await;
+    let unchanged = notices_until_quiet(&mut changes).await;
+    assert!(
+        unchanged.is_empty(),
+        "an unchanged work summary raised a notice: {unchanged:?}",
+        unchanged = names(&unchanged)
     );
 
     kestrel.teardown().await;

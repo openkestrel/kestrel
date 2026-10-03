@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use jiff::Timestamp;
@@ -75,13 +75,21 @@ impl Summaries {
         }
     }
 
-    pub fn report(&self, instance: &str, repositories: Vec<Repository>) {
-        if let Some(live) = self.0.lock().unwrap().get_mut(instance) {
-            live.summary = Some(Summary {
-                repositories,
-                reported_at: Timestamp::now(),
-            });
-        }
+    /// Reports the repositories the Instance holds and says whether that changed what a reader
+    /// sees: a report saying what the last one said raises nothing, and the time still moves.
+    pub fn report(&self, instance: &str, repositories: Vec<Repository>) -> bool {
+        let mut summaries = self.0.lock().unwrap();
+        let Some(live) = summaries.get_mut(instance) else {
+            return false;
+        };
+        let changed =
+            live.summary.as_ref().map(|summary| &summary.repositories) != Some(&repositories);
+        live.summary = Some(Summary {
+            repositories,
+            reported_at: Timestamp::now(),
+        });
+
+        changed
     }
 
     pub fn get(&self, instance: &str) -> Option<Summary> {
@@ -189,10 +197,20 @@ pub struct SessionState {
 }
 
 impl Summaries {
-    pub fn report_session(&self, instance: &str, session: &str, state: SessionState) {
-        if let Some(live) = self.0.lock().unwrap().get_mut(instance) {
-            live.sessions.insert(session.to_owned(), state);
-        }
+    /// Reports a Session's live state and says whether a call or unit opened or settled, the only
+    /// changes that raise a notice: an update to one already listed raises none (ADR-0037).
+    pub fn report_session(&self, instance: &str, session: &str, state: SessionState) -> bool {
+        let mut summaries = self.0.lock().unwrap();
+        let Some(live) = summaries.get_mut(instance) else {
+            return false;
+        };
+        let before = live
+            .sessions
+            .insert(session.to_owned(), state.clone())
+            .unwrap_or_default();
+
+        turned_over(&before.tools, &state.tools, |tool| tool.call_id.clone())
+            || turned_over(&before.units, &state.units, |unit| unit.id.clone())
     }
 
     pub fn report_usage(&self, instance: &str, session: &str, usage: Usage) {
@@ -224,5 +242,104 @@ impl Summaries {
             .and_then(|live| live.sessions.get(session))
             .cloned()
             .unwrap_or_default()
+    }
+}
+
+/// Whether a call or unit opened or settled between two snapshots. An entry whose id is unchanged
+/// is a progress update, whatever else about it moved, and raises nothing (ADR-0037).
+fn turned_over<T>(before: &[T], after: &[T], id: impl Fn(&T) -> String) -> bool {
+    let ids = |items: &[T]| items.iter().map(&id).collect::<HashSet<String>>();
+
+    ids(before) != ids(after)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn a_tool(title: &str) -> RunningTool {
+        RunningTool {
+            call_id: "call".to_owned(),
+            title: title.to_owned(),
+            tool_kind: "read".to_owned(),
+            status: ToolStatus::InProgress,
+            started_at: "2026-09-29T12:00:00Z".parse().unwrap(),
+        }
+    }
+
+    fn a_unit() -> RunningUnit {
+        RunningUnit {
+            id: "task".to_owned(),
+            kind: UnitKind::BackgroundTask,
+            title: "tests".to_owned(),
+            started_at: "2026-09-29T12:00:00Z".parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn a_call_or_unit_opening_or_settling_is_noticed_but_a_progress_update_is_not() {
+        let summaries = Summaries::default();
+        let _connection = summaries.connected("instance");
+
+        assert!(summaries.report_session(
+            "instance",
+            "session",
+            SessionState {
+                tools: vec![a_tool("read a")],
+                ..SessionState::default()
+            }
+        ));
+        assert!(!summaries.report_session(
+            "instance",
+            "session",
+            SessionState {
+                tools: vec![a_tool("read b")],
+                ..SessionState::default()
+            }
+        ));
+        assert!(summaries.report_session("instance", "session", SessionState::default()));
+
+        assert!(summaries.report_session(
+            "instance",
+            "session",
+            SessionState {
+                units: vec![a_unit()],
+                ..SessionState::default()
+            }
+        ));
+        assert!(summaries.report_session("instance", "session", SessionState::default()));
+    }
+
+    #[test]
+    fn a_work_summary_that_says_what_the_last_one_did_is_not_noticed() {
+        let summaries = Summaries::default();
+        let _connection = summaries.connected("instance");
+        let repository = || Repository {
+            repository: "https://github.com/jtmthf/kestrel".to_owned(),
+            git: Git::Read {
+                branch: Some("main".to_owned()),
+                changed: Changes {
+                    files: 1,
+                    added: 2,
+                    removed: 3,
+                },
+                staged: Changes {
+                    files: 0,
+                    added: 0,
+                    removed: 0,
+                },
+                committed: Commits {
+                    commits: 0,
+                    added: 0,
+                    removed: 0,
+                },
+                pushed: None,
+                untracked: 0,
+                stashed: 0,
+            },
+        };
+
+        assert!(summaries.report("instance", vec![repository()]));
+        assert!(!summaries.report("instance", vec![repository()]));
     }
 }
