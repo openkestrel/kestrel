@@ -26,11 +26,11 @@ pub struct ActiveWork {
     /// The Active-Work Slot limit the recorded dispatch carries. `None` while no work role is
     /// dispatching: nothing enforces one.
     pub limit: Option<usize>,
-    /// Every Working Session, whatever Organization holds it: one slot is a unit of the
-    /// control plane's pool, shared by every Organization.
+    /// Every working or trailing Session, whatever Organization holds it: one slot is a unit of
+    /// the control plane's pool, shared by every Organization.
     pub occupied: usize,
     /// The slots this Organization names its occupants of.
-    pub occupants: Vec<String>,
+    pub occupants: Vec<Session>,
     /// Occupants of other Organizations, counted and never named.
     pub elsewhere: usize,
 }
@@ -117,21 +117,14 @@ async fn active_work(
     organization: &Organization,
     recorded: Option<&Recorded>,
 ) -> Result<ActiveWork> {
-    let mut occupants = Vec::new();
-    let mut elsewhere = 0;
-    for (name, ours) in tx.queue().occupying(organization).await? {
-        if ours {
-            occupants.push(name);
-        } else {
-            elsewhere += 1;
-        }
-    }
+    let occupants = tx.workspaces().sessions_occupying(organization).await?;
+    let occupied = tx.workspaces().occupying_slots().await?;
 
     Ok(ActiveWork {
         limit: recorded.map(|recorded| recorded.active_work_slots),
-        occupied: occupants.len() + elsewhere,
+        occupied,
+        elsewhere: occupied - occupants.len(),
         occupants,
-        elsewhere,
     })
 }
 

@@ -1247,6 +1247,24 @@ impl<'a> Workspaces<'a> {
         .collect()
     }
 
+    pub async fn sessions_occupying(
+        &mut self,
+        organization: &Organization,
+    ) -> Result<Vec<Session>> {
+        sqlx::query(sessions_where!(
+            "organization_id = ? AND state IN (SELECT value FROM json_each(?))
+             ORDER BY enqueued_at, id"
+        ))
+        .bind(organization.id.to_string())
+        .bind(occupying()?)
+        .fetch_all(&mut *self.connection)
+        .await
+        .context("reading the organization's sessions occupying an active-work slot")?
+        .iter()
+        .map(session)
+        .collect()
+    }
+
     /// The figures are cumulative, so the last report of them is the one that stands.
     pub async fn record_usage(&mut self, session: &Session, usage: &Usage) -> Result<()> {
         sqlx::query(

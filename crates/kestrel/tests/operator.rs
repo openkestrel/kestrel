@@ -4305,15 +4305,18 @@ async fn a_session_of_another_organization_occupying_the_shared_slots_is_counted
     assert_eq!(status, StatusCode::OK, "{queue}");
     assert_eq!(queue["active_work"]["occupied"], 2);
     assert_eq!(
-        queue["active_work"]["occupants"],
-        json!([held.name]),
+        occupants(&queue),
+        [(json!(held.name), json!("working"))],
         "the Session of another Organization is named by ours"
     );
     assert_eq!(queue["active_work"]["elsewhere"], 1);
 
     let (status, their_queue) = got(&kestrel, &queue_of("globex")).await;
     assert_eq!(status, StatusCode::OK, "{their_queue}");
-    assert_eq!(their_queue["active_work"]["occupants"], json!([hit.name]));
+    assert_eq!(
+        occupants(&their_queue),
+        [(json!(hit.name), json!("working"))]
+    );
     assert_eq!(their_queue["active_work"]["elsewhere"], 1);
 
     kestrel.teardown().await;
@@ -4557,7 +4560,7 @@ async fn a_terminal_reads_the_kestrel_queue_with_the_limits_said_first() {
     assert!(shown.status.success(), "{}", shown.said);
     let said = shown.said;
     assert!(
-        said.contains("active-work slots  no work role is dispatching; 0 working"),
+        said.contains("active-work slots  no work role is dispatching; 0 occupied"),
         "{said}"
     );
     assert!(
@@ -4827,10 +4830,10 @@ async fn a_ready_session_behind_full_slots_keeps_its_place() {
         .await;
 
     let queue = queue_read(&kestrel).await;
-    assert_eq!(
-        queue["active_work"],
-        json!({ "limit": 1, "occupied": 1, "occupants": [working.name], "elsewhere": 0 })
-    );
+    assert_eq!(queue["active_work"]["limit"], 1);
+    assert_eq!(queue["active_work"]["occupied"], 1);
+    assert_eq!(queue["active_work"]["elsewhere"], 0);
+    assert_eq!(occupants(&queue), [(json!(working.name), json!("working"))]);
     assert_eq!(
         numbered(&queue)
             .iter()
@@ -4843,6 +4846,88 @@ async fn a_ready_session_behind_full_slots_keeps_its_place() {
         [
             (json!(first.name), json!(1), json!([])),
             (json!(second.name), json!(2), json!([])),
+        ]
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_trailing_session_holds_its_slot_until_it_settles_into_waiting() {
+    let kestrel = Kestrel::boot().await;
+    sharing_a_serialized_profile(&kestrel, None, 2).await;
+    let trailing = kestrel
+        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    kestrel.on_the_link(&trailing).await;
+    kestrel.start_on_the_link(&trailing).await;
+    kestrel.report_answered(&trailing, 1).await;
+    let working = kestrel
+        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(
+        occupants(&queue),
+        [
+            (json!(trailing.name), json!("trailing")),
+            (json!(working.name), json!("working")),
+        ]
+    );
+    assert_eq!(queue["active_work"]["occupied"], 2);
+    assert_eq!(queue["waiting"], json!([]));
+
+    kestrel.report_settled(&trailing, 2).await;
+
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(occupants(&queue), [(json!(working.name), json!("working"))]);
+    waiting_row(&queue, &trailing.name);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn kestrel_queue_says_each_occupants_phase_on_its_row() {
+    let kestrel = Kestrel::boot().await;
+    sharing_a_serialized_profile(&kestrel, None, 2).await;
+    let trailing = kestrel
+        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    kestrel.on_the_link(&trailing).await;
+    kestrel.start_on_the_link(&trailing).await;
+    kestrel.report_answered(&trailing, 1).await;
+    let working = kestrel
+        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+
+    let operator = kestrel.operator();
+    let shown = tokio::task::spawn_blocking(move || {
+        client::ran_on_a_terminal(&operator, &["queue", "--organization", "acme"], 240, "")
+    })
+    .await
+    .expect("the client should run");
+    assert!(shown.status.success(), "{}", shown.said);
+    for (session, phase) in [(&trailing, "trailing"), (&working, "working")] {
+        let row = shown
+            .said
+            .lines()
+            .find(|line| line.contains(&session.name) && line.contains(phase))
+            .unwrap_or_else(|| panic!("no row says {} is {phase}: {}", session.name, shown.said));
+        assert!(!row.contains("waiting"), "{row}");
+    }
+
+    let rows = recorded(
+        &client(
+            &kestrel,
+            &["queue", "--organization", "acme", "--json", "name,state"],
+        )
+        .await,
+    );
+    assert_eq!(
+        rows,
+        [
+            json!({ "name": trailing.name, "state": "trailing" }),
+            json!({ "name": working.name, "state": "working" }),
         ]
     );
 
@@ -4906,6 +4991,15 @@ async fn the_session_dispatch_claims_next_is_the_queues_first_position() {
 async fn a_waiting_session(kestrel: &Kestrel, workspace: WorkspaceId) -> kestrel::domain::Session {
     let session = kestrel.dispatch_session(workspace).await;
     kestrel.waits_after_its_first_turn(&session).await
+}
+
+fn occupants(queue: &Value) -> Vec<(Value, Value)> {
+    queue["active_work"]["occupants"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the snapshot's occupants: {queue}"))
+        .iter()
+        .map(|row| (row["name"].clone(), row["phase"].clone()))
+        .collect()
 }
 
 fn waiting_row<'a>(queue: &'a Value, name: &str) -> &'a Value {
@@ -5352,6 +5446,16 @@ async fn kestrel_queue_json_agrees_with_the_operator_read() {
     );
 
     let mut read = Vec::new();
+    for (name, phase) in occupants(&queue) {
+        read.push(json!({
+            "name": name,
+            "state": phase,
+            "position": null,
+            "reasons": [],
+            "pending_since": null,
+            "preparing": null,
+        }));
+    }
     for row in numbered(&queue) {
         read.push(json!({
             "name": row["name"],
