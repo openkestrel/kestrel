@@ -1553,6 +1553,7 @@ impl Hearing {
         match &update {
             SessionUpdate::ConfigOptionUpdate(update) => {
                 self.hold(Some(update.config_options.clone()), None);
+                return;
             }
             SessionUpdate::SessionInfoUpdate(update) => match &update.title {
                 MaybeUndefined::Value(title) => self.info.title = Some(title.clone()),
