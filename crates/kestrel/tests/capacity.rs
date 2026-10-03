@@ -5,7 +5,7 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{Exit, Session, SessionState, Workspace};
 use kestrel::instance::{Git, Observed};
-use kestrel::queue::Reason;
+use kestrel::scheduling::Reason;
 use support::Kestrel;
 use support::repository;
 use support::supervisor;

@@ -52,6 +52,13 @@ describe("queue reasons", () => {
 				session: "calm-river-abcdefgh",
 			}),
 		).toBe("calm-river-abcdefgh holds the work profile");
+		expect(reasonText({ kind: "subscription_profile", profile: "work", session: null })).toBe(
+			"a Session in another Organization holds the work profile",
+		);
+		expect(reasonText({ kind: "ahead", sessions: [], elsewhere: 2 })).toBe(
+			"behind 2 Sessions in other Organizations",
+		);
+
 		expect(reasonText({ kind: "ahead", sessions: ["a", "b"] })).toBe("behind a and b");
 	});
 });

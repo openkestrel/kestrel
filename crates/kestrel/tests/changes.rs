@@ -329,7 +329,7 @@ async fn a_refused_post_raises_nothing() {
 }
 
 #[tokio::test]
-async fn notices_for_one_organization_never_reach_anothers_subscribers() {
+async fn other_organizations_receive_only_anonymous_queue_changes() {
     let kestrel = Kestrel::boot().await;
     declare_organization(&kestrel, "acme").await;
     declare_organization(&kestrel, "other").await;
@@ -337,11 +337,12 @@ async fn notices_for_one_organization_never_reach_anothers_subscribers() {
     let mut other = Stream::open(&kestrel, "other").await;
     assert_eq!(other.next(QUIET).await.expect("an open event").name, "open");
 
-    kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    post(&kestrel, workspace.id, "begin").await;
     let theirs = notices_until_quiet(&mut other).await;
     assert!(
-        theirs.is_empty(),
-        "acme's change reached other's subscriber: {theirs:?}",
+        theirs.len() == 1 && names_changed(&theirs, "queue", None),
+        "only a queue invalidation may reach the other Organization: {theirs:?}",
         theirs = names(&theirs)
     );
 
@@ -353,6 +354,32 @@ async fn notices_for_one_organization_never_reach_anothers_subscribers() {
         noticed = names(&noticed)
     );
 
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn held_input_changes_invalidate_foreign_queue_positions() {
+    let kestrel = Kestrel::boot().await;
+    declare_organization(&kestrel, "acme").await;
+    declare_organization(&kestrel, "other").await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let session = kestrel.dispatch_session(workspace.id).await;
+    kestrel.waits_after_its_first_turn(&session).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let mut other = Stream::open(&kestrel, "other").await;
+    assert_eq!(other.next(QUIET).await.expect("an open event").name, "open");
+    kestrel
+        .post_while_busy(workspace.id, "alice", "next Turn")
+        .await;
+    let held = notices_until_quiet(&mut other).await;
+    assert_eq!(names(&held), ["change({\"resource\":\"queue\"})"]);
+    let message = kestrel.held_messages(workspace.id).await.remove(0);
+    kestrel
+        .withdraw_message(workspace.id, message.id, "alice")
+        .await
+        .unwrap();
+    let withdrawn = notices_until_quiet(&mut other).await;
+    assert_eq!(names(&withdrawn), ["change({\"resource\":\"queue\"})"]);
     kestrel.teardown().await;
 }
 

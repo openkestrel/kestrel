@@ -38,8 +38,8 @@ use crate::log::{self, Cursor, Unreadable, Window};
 use crate::participant;
 use crate::profile::{self, Entry};
 use crate::provider::{self, Held};
-use crate::queue;
 use crate::role::serve;
+use crate::scheduling;
 use crate::store::organization::NoSuchOrganization;
 use crate::store::workspace::HeldMessageRefusal;
 use crate::store::{self, Declared as DeclaredRecord, Store};
@@ -589,7 +589,7 @@ struct QueueStandingRecord {
 }
 
 impl QueueStandingRecord {
-    fn of(snapshot: &queue::Snapshot, workspace: WorkspaceId) -> Option<Self> {
+    fn of(snapshot: &scheduling::Snapshot, workspace: WorkspaceId) -> Option<Self> {
         if let Some(queued) = snapshot
             .queued
             .iter()
@@ -607,7 +607,7 @@ impl QueueStandingRecord {
             .find(|waiting| waiting.session.workspace == workspace)
         {
             return Some(Self {
-                position: None,
+                position: waiting.position,
                 reasons: reasons(waiting.reasons.clone()),
                 pending_since: waiting.pending_since,
             });
@@ -617,9 +617,9 @@ impl QueueStandingRecord {
             .iter()
             .find(|unbriefed| unbriefed.session.workspace == workspace)
             .map(|unbriefed| Self {
-                position: None,
-                reasons: Vec::new(),
-                pending_since: unbriefed.pending_since,
+                position: unbriefed.position,
+                reasons: reasons(unbriefed.reasons.clone()),
+                pending_since: unbriefed.brief_since.or(unbriefed.pending_since),
             })
     }
 }
@@ -2062,30 +2062,55 @@ struct InstancesRecord {
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ReasonRecord {
-    Dependencies { sessions: Vec<String> },
-    SubscriptionProfile { profile: String, session: String },
-    InstanceArchiving { instance: String },
-    LiveInstanceLimit { limit: usize },
-    ActiveWorkSlots { limit: usize },
-    Ahead { sessions: Vec<String> },
+    Dependencies {
+        sessions: Vec<String>,
+    },
+    SubscriptionProfile {
+        profile: String,
+        session: Option<String>,
+    },
+    InstanceArchiving {
+        instance: String,
+    },
+    LiveInstanceLimit {
+        limit: usize,
+    },
+    ActiveWorkSlots {
+        limit: usize,
+    },
+    Ahead {
+        sessions: Vec<String>,
+        #[serde(skip_serializing_if = "is_zero")]
+        elsewhere: usize,
+    },
 }
 
-impl From<queue::Reason> for ReasonRecord {
-    fn from(reason: queue::Reason) -> Self {
+fn is_zero(value: &usize) -> bool {
+    *value == 0
+}
+
+impl From<scheduling::Reason> for ReasonRecord {
+    fn from(reason: scheduling::Reason) -> Self {
         match reason {
-            queue::Reason::Dependencies(sessions) => Self::Dependencies { sessions },
-            queue::Reason::SubscriptionProfile { profile, session } => {
+            scheduling::Reason::Dependencies(sessions) => Self::Dependencies { sessions },
+            scheduling::Reason::SubscriptionProfile { profile, session } => {
                 Self::SubscriptionProfile { profile, session }
             }
-            queue::Reason::InstanceArchiving(instance) => Self::InstanceArchiving { instance },
-            queue::Reason::LiveInstanceLimit(limit) => Self::LiveInstanceLimit { limit },
-            queue::Reason::ActiveWorkSlots(limit) => Self::ActiveWorkSlots { limit },
-            queue::Reason::Ahead(sessions) => Self::Ahead { sessions },
+            scheduling::Reason::InstanceArchiving(instance) => Self::InstanceArchiving { instance },
+            scheduling::Reason::LiveInstanceLimit(limit) => Self::LiveInstanceLimit { limit },
+            scheduling::Reason::ActiveWorkSlots(limit) => Self::ActiveWorkSlots { limit },
+            scheduling::Reason::Ahead {
+                sessions,
+                elsewhere,
+            } => Self::Ahead {
+                sessions,
+                elsewhere,
+            },
         }
     }
 }
 
-fn reasons(reasons: Vec<queue::Reason>) -> Vec<ReasonRecord> {
+fn reasons(reasons: Vec<scheduling::Reason>) -> Vec<ReasonRecord> {
     reasons.into_iter().map(ReasonRecord::from).collect()
 }
 
@@ -2101,6 +2126,7 @@ struct QueuedSessionRecord {
 
 #[derive(Serialize)]
 struct WaitingSessionRecord {
+    position: Option<usize>,
     name: String,
     workspace: String,
     agent: String,
@@ -2111,6 +2137,9 @@ struct WaitingSessionRecord {
 
 #[derive(Serialize)]
 struct UnbriefedSessionRecord {
+    position: Option<usize>,
+    brief_since: Option<Timestamp>,
+    reasons: Vec<ReasonRecord>,
     name: String,
     workspace: String,
     agent: String,
@@ -2130,7 +2159,7 @@ struct QueueRecord {
 }
 
 impl QueueRecord {
-    fn of(snapshot: queue::Snapshot) -> Self {
+    fn of(snapshot: scheduling::Snapshot) -> Self {
         let recorded = snapshot.recorded.map(|recorded| WorkRoleRecord {
             active_work_slots: recorded.active_work_slots,
             serialized_harnesses: recorded.serialized_harnesses,
@@ -2180,6 +2209,7 @@ impl QueueRecord {
                 .waiting
                 .into_iter()
                 .map(|waiting| WaitingSessionRecord {
+                    position: waiting.position,
                     name: waiting.session.name,
                     workspace: waiting.session.workspace.to_string(),
                     agent: waiting.session.agent.name,
@@ -2192,6 +2222,9 @@ impl QueueRecord {
                 .unbriefed
                 .into_iter()
                 .map(|unbriefed| UnbriefedSessionRecord {
+                    position: unbriefed.position,
+                    brief_since: unbriefed.brief_since,
+                    reasons: reasons(unbriefed.reasons),
                     name: unbriefed.session.name,
                     workspace: unbriefed.session.workspace.to_string(),
                     agent: unbriefed.session.agent.name,
@@ -2211,7 +2244,7 @@ async fn show_queue(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
 ) -> Result<Json<QueueRecord>, Refused> {
-    let snapshot = queue::snapshot(&control_plane.store, &organization).await?;
+    let snapshot = scheduling::snapshot(&control_plane.store, &organization).await?;
 
     Ok(Json(QueueRecord::of(snapshot)))
 }
@@ -2238,7 +2271,7 @@ async fn workspaces(
     Path(organization): Path<String>,
 ) -> Result<Json<Vec<WorkspaceListedRecord>>, Refused> {
     let workspaces = workspace::workspaces(&control_plane.store, &organization).await?;
-    let snapshot = queue::snapshot(&control_plane.store, &organization).await?;
+    let snapshot = scheduling::snapshot(&control_plane.store, &organization).await?;
     let mut records = Vec::with_capacity(workspaces.len());
     for workspace in workspaces {
         let id = workspace.id;

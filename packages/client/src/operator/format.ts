@@ -39,7 +39,7 @@ export function reasonText(reason: QueueReason): string {
 		case "dependencies":
 			return `waiting on ${list(reason.sessions)}`;
 		case "subscription_profile":
-			return `${reason.session} holds the ${reason.profile} profile`;
+			return `${reason.session ?? "a Session in another Organization"} holds the ${reason.profile} profile`;
 		case "instance_archiving":
 			return `archiving ${reason.instance} to make room`;
 		case "live_instance_limit":
@@ -47,7 +47,14 @@ export function reasonText(reason: QueueReason): string {
 		case "active_work_slots":
 			return `every Active-Work Slot is occupied (${reason.limit})`;
 		case "ahead":
-			return `behind ${list(reason.sessions)}`;
+			return `behind ${list([
+				...reason.sessions,
+				...((reason.elsewhere ?? 0) > 0
+					? [
+							`${reason.elsewhere} Session${reason.elsewhere === 1 ? "" : "s"} in other Organizations`,
+						]
+					: []),
+			])}`;
 		default: {
 			const unhandled: never = reason;
 			throw new Error(`no such queue reason: ${String(unhandled)}`);

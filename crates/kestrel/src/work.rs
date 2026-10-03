@@ -10,7 +10,7 @@ use crate::domain::{
     ChangingOption, Declared, Exit, HeldMessage, Session, SessionCommand, SessionId, SessionOption,
     SessionState, Turn, Usage, Workspace, WorkspaceId,
 };
-use crate::instance::{Admission, Observed};
+use crate::instance::Observed;
 use crate::integration::delivery;
 use crate::link;
 use crate::live_work::{RunningTool, RunningUnit};
@@ -255,151 +255,12 @@ pub async fn has_had_session(store: &Store, workspace: WorkspaceId) -> Result<bo
         .await
 }
 
-/// A queued Session is dispatched at most once: what this hands back is already active, so a
-/// second claimant asking at the same moment is handed something else, or nothing.
-pub async fn claim(store: &Store, serialized: &[String]) -> Result<Option<Session>> {
-    let mut tx = store.begin().await?;
-    let claimed = claiming(&mut tx, serialized, None, false).await?;
-    tx.commit().await?;
-
-    Ok(claimed)
-}
-
-pub enum Occupied {
-    Claimed(Session),
-    Resumed(Session),
-}
-
-/// A waiting Session holds no slot (ADR-0024), so a free one goes to whichever asked for it
-/// first: a queued Session, or input held for a waiting Session.
-pub async fn occupy(
-    store: &Store,
-    slots: usize,
-    serialized: &[String],
-) -> Result<Option<Occupied>> {
-    let mut tx = store.begin().await?;
-    let full = tx.workspaces().occupying_slots().await? >= slots;
-    let held = tx.workspaces().oldest_held_input(serialized).await?;
-    let first_turn = oldest_unstarted_brief(&mut tx, serialized).await?;
-    let input_since = match (&held, &first_turn) {
-        (Some((_, held_at)), Some((_, brief_at))) => Some((*held_at).min(*brief_at)),
-        (Some((_, at)), None) | (None, Some((_, at))) => Some(*at),
-        (None, None) => None,
-    };
-    let occupied = match claiming(&mut tx, serialized, input_since, full).await? {
-        Some(claimed) => Occupied::Claimed(claimed),
-        None => {
-            // A full pool still lets an unbriefed Session provision, but leaves held input and
-            // first Turns for a slot that frees.
-            if full {
-                tx.commit().await?;
-                return Ok(None);
-            }
-            let (session, is_first_turn) = match (held, first_turn) {
-                (Some((_, held_at)), Some((first_turn, brief_at))) if brief_at < held_at => {
-                    (first_turn, true)
-                }
-                (Some((held, _)), _) => (held, false),
-                (None, Some((first_turn, _))) => (first_turn, true),
-                (None, None) => {
-                    tx.commit().await?;
-                    return Ok(None);
-                }
-            };
-            if is_first_turn {
-                prompt_brief(&mut tx, &session).await?;
-            } else {
-                prompt_pending(&mut tx, &session).await?;
-            }
-            Occupied::Resumed(tx.workspaces().session(session.id).await?)
-        }
-    };
-    tx.commit().await?;
-
-    Ok(Some(occupied))
-}
-
-/// The serialized-Profile rule applies to a Brief here rather than at dispatch (ADR-0025).
-async fn oldest_unstarted_brief(
-    tx: &mut Tx<'_>,
-    serialized: &[String],
-) -> Result<Option<(Session, Timestamp)>> {
-    let mut waiting = Vec::new();
-    for session in tx.workspaces().unbriefed_sessions().await? {
-        if tx.workspaces().holds_profile(&session, serialized).await? {
-            continue;
-        }
-        let workspace = tx.workspaces().get(session.workspace).await?;
-        if let Some((_, written_at)) = tx.log().unfollowed_brief(&workspace).await? {
-            waiting.push((session, written_at));
-        }
-    }
-    waiting.sort_by_key(|(_, written_at)| *written_at);
-
-    Ok(waiting.into_iter().next())
-}
-
-async fn prompt_brief(tx: &mut Tx<'_>, session: &Session) -> Result<()> {
-    let workspace = tx.workspaces().get(session.workspace).await?;
-    let brief = tx
-        .log()
-        .unfollowed_brief(&workspace)
-        .await?
-        .map(|(brief, _)| brief)
-        .ok_or_else(|| anyhow::anyhow!("the session {} has no Brief to prompt", session.id))?;
-
-    link::prompt(tx, session, brief).await
-}
-
-/// Claimed without an Active-Work Slot or the serialized-Profile check, since it has no Turn to run
-/// yet (ADR-0038); the queue reads the same rule.
 pub(crate) async fn awaiting_a_brief(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<bool> {
-    Ok(crate::link::instruction(tx, workspace).await?.is_none())
+    Ok(link::instruction(tx, workspace).await?.is_none())
 }
 
-/// A freed slot goes to whichever asked first, so a queued Session enqueued before the oldest held
-/// input takes it ahead of that input.
-pub(crate) fn goes_before_input(queued: &Session, input_since: Timestamp) -> bool {
-    queued.enqueued_at < input_since
-}
-
-async fn claiming(
-    tx: &mut Tx<'_>,
-    serialized: &[String],
-    input_since: Option<Timestamp>,
-    full: bool,
-) -> Result<Option<Session>> {
-    let claimable = tx.workspaces().claimable_sessions().await?;
-    for queued in claimable {
-        let workspace = tx.workspaces().get(queued.workspace).await?;
-        let unbriefed = awaiting_a_brief(tx, &workspace).await?;
-        if !unbriefed {
-            if full {
-                continue;
-            }
-            if input_since.is_some_and(|since| !goes_before_input(&queued, since)) {
-                continue;
-            }
-            if tx.workspaces().holds_profile(&queued, serialized).await? {
-                continue;
-            }
-        }
-        match crate::instance::admission(tx, &workspace).await? {
-            Admission::Available => {
-                if let Some(session) = tx
-                    .workspaces()
-                    .claim_session(&queued, Timestamp::now() + LEASE, unbriefed)
-                    .await?
-                {
-                    return Ok(Some(session));
-                }
-            }
-            Admission::Archivable(kept) => crate::instance::reclaim(tx, &kept).await?,
-            Admission::Archiving(_) | Admission::AtLimit(_) => {}
-        }
-    }
-
-    Ok(None)
+pub async fn claim(store: &Store, serialized: &[String]) -> Result<Option<Session>> {
+    crate::scheduling::claim(store, serialized).await
 }
 
 pub async fn session(store: &Store, id: SessionId) -> Result<Session> {

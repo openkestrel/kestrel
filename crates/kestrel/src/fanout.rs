@@ -49,9 +49,9 @@ impl Touched {
 
     pub fn queue(&mut self, organization: OrganizationId) {
         self.resources.push((organization, Resource::Queue));
+        self.queues_everywhere = true;
     }
 
-    /// A write no Organization owns, such as the work role's limits: every subscriber hears it.
     pub fn every_queue(&mut self) {
         self.queues_everywhere = true;
     }
@@ -243,14 +243,14 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_notice_stays_in_the_organization_that_changed() {
+    async fn a_session_notice_stays_in_the_organization_that_changed() {
         let notices = Notices::default();
         let ours = OrganizationId::generate();
         let theirs = OrganizationId::generate();
         let mut ours = notices.subscribe(ours);
 
         let mut touched = Touched::default();
-        touched.queue(theirs);
+        touched.session_id(theirs, SessionId::generate());
         notices.publish(touched);
         tokio::time::sleep(COALESCE * 2).await;
 

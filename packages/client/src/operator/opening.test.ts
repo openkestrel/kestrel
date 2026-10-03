@@ -43,6 +43,6 @@ describe("the resolved values the form shows", () => {
 
 	test("the Environment is the driver the work role recorded, or says none is dispatching", () => {
 		expect(resolvedEnvironment({ driver: "local-exec" })).toBe("local-exec");
-		expect(resolvedEnvironment(null)).toBe("No work role is dispatching.");
+		expect(resolvedEnvironment(null)).toBe("No dispatch configuration is recorded.");
 	});
 });

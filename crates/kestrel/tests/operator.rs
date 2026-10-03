@@ -9,7 +9,7 @@ use kestrel::instance::{Git, Observed};
 use kestrel::link;
 use kestrel::log::{BriefSource, Entry, Message, ToolStatus};
 use kestrel::operator;
-use kestrel::work;
+use kestrel::scheduling;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use support::client::{self, Client};
@@ -4206,6 +4206,7 @@ fn numbered(said: &Value) -> Vec<Value> {
 #[tokio::test]
 async fn a_client_reads_the_queue_in_enqueue_order_with_positions_its_blockers_and_limits() {
     let kestrel = Kestrel::boot().await;
+    kestrel.record_dispatch(8, "local-exec").await;
     let organization = kestrel.declare_organization("acme").await;
     kestrel
         .declare_project(
@@ -4272,7 +4273,7 @@ async fn a_client_reads_the_queue_in_enqueue_order_with_positions_its_blockers_a
             .iter()
             .map(|row| row["reasons"].as_array().map(Vec::len))
             .collect::<Vec<_>>(),
-        [Some(0); 3]
+        [Some(0), Some(1), Some(1)]
     );
 
     kestrel.teardown().await;
@@ -4429,7 +4430,7 @@ async fn the_queue_reads_the_recorded_dispatch_which_a_restart_with_new_flags_re
 }
 
 #[tokio::test]
-async fn a_queue_without_a_recorded_dispatch_says_so_and_still_numbers_the_queue() {
+async fn a_queue_without_a_recorded_dispatch_leaves_positions_unknown() {
     let kestrel = Kestrel::boot().await;
     let organization = kestrel.declare_organization("acme").await;
     kestrel
@@ -4458,7 +4459,7 @@ async fn a_queue_without_a_recorded_dispatch_says_so_and_still_numbers_the_queue
             .iter()
             .map(|row| row["position"].as_u64())
             .collect::<Vec<_>>(),
-        [Some(1), Some(2)]
+        [None, None]
     );
 
     kestrel.teardown().await;
@@ -4471,6 +4472,7 @@ const QUEUE_LIMITS: &str =
 #[tokio::test]
 async fn a_client_reads_the_queue_with_kestrel_queue_and_whatever_fields_it_names() {
     let kestrel = Kestrel::boot().await;
+    kestrel.record_dispatch(8, "local-exec").await;
     let organization = kestrel.declare_organization("acme").await;
     kestrel
         .declare_project(
@@ -4522,7 +4524,7 @@ async fn a_client_reads_the_queue_with_kestrel_queue_and_whatever_fields_it_name
     assert_eq!(
         limits[0],
         json!({
-            "active_work": { "limit": Value::Null, "occupied": 0, "elsewhere": 0 },
+            "active_work": { "limit": 8, "occupied": 0, "elsewhere": 0 },
             "instances": { "limit": Value::Null, "count": 0 },
         })
     );
@@ -4560,7 +4562,7 @@ async fn a_terminal_reads_the_kestrel_queue_with_the_limits_said_first() {
     assert!(shown.status.success(), "{}", shown.said);
     let said = shown.said;
     assert!(
-        said.contains("active-work slots  no work role is dispatching; 0 occupied"),
+        said.contains("active-work slots  no dispatch configuration recorded; 0 occupied"),
         "{said}"
     );
     assert!(
@@ -4568,9 +4570,8 @@ async fn a_terminal_reads_the_kestrel_queue_with_the_limits_said_first() {
         "{said}"
     );
     assert!(
-        said.lines()
-            .any(|line| line.starts_with("environment")
-                && line.contains("no work role is dispatching")),
+        said.lines().any(|line| line.starts_with("environment")
+            && line.contains("no dispatch configuration recorded")),
         "the environment is not said first: {said}"
     );
     // The table's own labels and the enqueued times are truncated on a terminal this wide.
@@ -4579,11 +4580,11 @@ async fn a_terminal_reads_the_kestrel_queue_with_the_limits_said_first() {
         "the columns come without their labels: {said}"
     );
     assert!(
-        said.contains(&format!("1         {}", blocker.name)),
+        said.contains(&format!("-         {}", blocker.name)),
         "{said}"
     );
     assert!(
-        said.contains(&format!("2         {}", queued.name)),
+        said.contains(&format!("-         {}", queued.name)),
         "{said}"
     );
 
@@ -4845,7 +4846,11 @@ async fn a_ready_session_behind_full_slots_keeps_its_place() {
             .collect::<Vec<_>>(),
         [
             (json!(first.name), json!(1), json!([])),
-            (json!(second.name), json!(2), json!([])),
+            (
+                json!(second.name),
+                json!(2),
+                json!([{ "kind": "ahead", "sessions": [first.name] }])
+            ),
         ]
     );
 
@@ -4963,8 +4968,8 @@ async fn the_session_dispatch_claims_next_is_the_queues_first_position() {
             .find(|row| row["position"] == 1)
             .map(|row| row["name"].as_str().expect("a name").to_owned());
         let next = match kestrel.occupy_up_to(8).await {
-            Some(work::Occupied::Claimed(next)) => Some(next),
-            Some(work::Occupied::Resumed(_)) => panic!("nothing waits to resume"),
+            Some(scheduling::Occupied::Claimed(next)) => Some(next),
+            Some(scheduling::Occupied::Resumed(_)) => panic!("nothing waits to resume"),
             None => None,
         };
         assert_eq!(
@@ -4985,6 +4990,257 @@ async fn the_session_dispatch_claims_next_is_the_queues_first_position() {
         [blocker.id, ready.id, held.id, blocked.id]
     );
 
+    kestrel.teardown().await;
+}
+
+async fn mixed_slot_requests(kestrel: &Kestrel) -> Vec<kestrel::domain::Session> {
+    sharing_a_serialized_profile(kestrel, None, 8).await;
+    let (unbriefed_workspace, unbriefed) =
+        an_unbriefed_session(kestrel, "acme", "kestrel", "docker/first-brief").await;
+    kestrel
+        .post_while_busy(unbriefed_workspace, "alice", "first Brief")
+        .await;
+    let queue = queue_read(kestrel).await;
+    let preparing = unbriefed_row(&queue, &unbriefed.name);
+    assert_eq!(preparing["position"], Value::Null);
+    assert_eq!(preparing["brief_since"], Value::Null);
+    assert!(preparing["pending_since"].is_string());
+
+    let workspace = a_queued_workspace_in(kestrel, "acme", "kestrel").await;
+    let waiting = a_waiting_session(kestrel, workspace).await;
+    kestrel
+        .post_while_busy(workspace, "alice", "next Turn")
+        .await;
+    kestrel.report_ready(&unbriefed).await;
+    let queued = kestrel
+        .enqueue_session(a_queued_workspace_in(kestrel, "acme", "kestrel").await)
+        .await;
+    kestrel
+        .post_while_busy(unbriefed_workspace, "alice", "after the Brief")
+        .await;
+    vec![waiting, unbriefed, queued]
+}
+
+async fn assert_queue_dispatch_order(kestrel: &Kestrel, sessions: &[kestrel::domain::Session]) {
+    for expected in sessions {
+        let queue = queue_read(kestrel).await;
+        let next: Vec<_> = ["queued", "waiting", "unbriefed"]
+            .into_iter()
+            .flat_map(|section| queue[section].as_array().unwrap())
+            .filter(|row| row["position"] == 1)
+            .collect();
+        assert_eq!(next.len(), 1, "{queue}");
+        assert_eq!(next[0]["name"], expected.name, "{queue}");
+        let actual = match kestrel.occupy_up_to(8).await {
+            Some(
+                scheduling::Occupied::Claimed(session) | scheduling::Occupied::Resumed(session),
+            ) => session,
+            None => panic!("dispatch failed to take {}: {queue}", expected.name),
+        };
+        assert_eq!(actual.id, expected.id, "{queue}");
+    }
+}
+
+#[tokio::test]
+async fn queue_and_dispatch_agree_for_held_messages_first_briefs_and_queued_sessions() {
+    let kestrel = Kestrel::boot().await;
+    let requests = mixed_slot_requests(&kestrel).await;
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(waiting_row(&queue, &requests[0].name)["position"], 1);
+    let first = unbriefed_row(&queue, &requests[1].name);
+    assert_eq!(first["position"], 2);
+    assert!(first["brief_since"].as_str().unwrap() < first["pending_since"].as_str().unwrap());
+    assert_eq!(
+        first["reasons"],
+        json!([{ "kind": "ahead", "sessions": [requests[0].name] }])
+    );
+    assert_eq!(numbered(&queue)[0]["position"], 3);
+    assert_queue_dispatch_order(&kestrel, &requests).await;
+    let (status, read) = got(
+        &kestrel,
+        &format!(
+            "/operator/organizations/acme/workspaces/{}",
+            requests[1].workspace
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(read["unfinished_session"]["id"], requests[1].id.to_string());
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn queue_and_dispatch_preserve_input_priority_at_equal_timestamps() {
+    let kestrel = Kestrel::boot().await;
+    let requests = mixed_slot_requests(&kestrel).await;
+    let at: jiff::Timestamp = "2026-10-01T12:00:00Z".parse().unwrap();
+    kestrel.backdate_transcript(requests[1].workspace, at).await;
+    let pool = support::database(kestrel.data_dir()).await;
+    sqlx::query(
+        "UPDATE pending_message SET received_at = ? WHERE workspace_id = ? AND state = 'held'",
+    )
+    .bind(at.to_string())
+    .bind(requests[0].workspace.to_string())
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE session SET enqueued_at = ? WHERE id = ?")
+        .bind(at.to_string())
+        .bind(requests[2].id.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    assert_queue_dispatch_order(&kestrel, &requests).await;
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn queue_positions_include_other_organizations_without_exposing_their_sessions() {
+    let kestrel = Kestrel::boot().await;
+    sharing_a_serialized_profile(&kestrel, None, 8).await;
+    let other = kestrel.declare_organization("other").await;
+    kestrel
+        .declare_project(
+            &other,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&other, "builder", "opencode", None)
+        .await;
+    let earlier = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "other", "kestrel").await)
+        .await;
+    let ours = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(numbered(&queue)[0]["position"], 2);
+    assert_eq!(
+        numbered(&queue)[0]["reasons"],
+        json!([{ "kind": "ahead", "sessions": [], "elsewhere": 1 }])
+    );
+    let text = queue.to_string();
+    for secret in [
+        earlier.name.clone(),
+        earlier.id.to_string(),
+        earlier.workspace.to_string(),
+    ] {
+        assert!(!text.contains(&secret), "foreign identity leaked: {queue}");
+    }
+    let listed = got(&kestrel, "/operator/organizations/acme/workspaces")
+        .await
+        .1;
+    assert_eq!(listed[0]["queue"]["position"], 2);
+    assert_eq!(
+        listed[0]["queue"]["reasons"],
+        numbered(&queue)[0]["reasons"]
+    );
+    let output = client(&kestrel, &["queue", "--organization", "acme"]).await;
+    assert!(output.status.success(), "{}", failed(&output));
+    let shown = output.out.join("\n");
+    assert!(
+        shown.contains("1 Session in other Organizations"),
+        "{shown}"
+    );
+    assert!(!shown.contains(&earlier.name), "{shown}");
+    let claimed = kestrel.occupy_up_to(8).await.unwrap();
+    assert!(matches!(claimed, scheduling::Occupied::Claimed(session) if session.id == earlier.id));
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(numbered(&queue)[0]["position"], 1);
+    assert_eq!(queue["active_work"]["elsewhere"], 1);
+    assert_queue_dispatch_order(&kestrel, &[ours]).await;
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_profile_held_first_brief_has_no_queue_position_until_the_profile_is_free() {
+    let kestrel = Kestrel::boot().await;
+    sharing_a_serialized_profile(&kestrel, None, 8).await;
+    let workspace = jacks_workspace(&kestrel).await;
+    let first = kestrel.enqueue_session_with_nothing_posted(workspace).await;
+    let claimed = kestrel.claim_session().await.unwrap();
+    assert_eq!(claimed.id, first.id);
+    kestrel.executes_on(&claimed, "docker/profile-brief").await;
+    kestrel.report_ready(&claimed).await;
+    kestrel
+        .post_while_busy(workspace, "jack", "first Brief")
+        .await;
+    let holding = kestrel
+        .dispatch_session(jacks_workspace(&kestrel).await)
+        .await;
+    let ready = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(unbriefed_row(&queue, &first.name)["position"], Value::Null);
+    assert_eq!(
+        unbriefed_row(&queue, &first.name)["reasons"],
+        json!([{ "kind": "subscription_profile", "profile": "jack", "session": holding.name }])
+    );
+    assert_eq!(numbered(&queue)[0]["position"], 1);
+    kestrel.complete_session(&holding).await;
+    assert_queue_dispatch_order(&kestrel, &[first, ready]).await;
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn the_queue_counts_trailing_occupants_above_the_limit_and_dispatch_preserves_their_slots() {
+    let kestrel = Kestrel::boot().await;
+    sharing_a_serialized_profile(&kestrel, None, 1).await;
+    let first = a_waiting_session(
+        &kestrel,
+        a_queued_workspace_in(&kestrel, "acme", "kestrel").await,
+    )
+    .await;
+    let second = a_waiting_session(
+        &kestrel,
+        a_queued_workspace_in(&kestrel, "acme", "kestrel").await,
+    )
+    .await;
+    kestrel
+        .report_activity(&first, 3, "activity after settling")
+        .await;
+    kestrel
+        .report_activity(&second, 3, "more activity after settling")
+        .await;
+    let queued = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(queue["active_work"]["occupied"], 2);
+    assert_eq!(queue["active_work"]["limit"], 1);
+    assert_eq!(queue["waiting"], json!([]));
+    assert_eq!(
+        queue["active_work"]["occupants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["phase"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["trailing", "trailing"]
+    );
+    assert_eq!(numbered(&queue)[0]["position"], 1);
+    assert!(kestrel.occupy_up_to(1).await.is_none());
+    let output = client(&kestrel, &["queue", "--organization", "acme"]).await;
+    assert!(output.status.success(), "{}", failed(&output));
+    let shown = output.out.join("\n");
+    assert!(shown.contains("2 occupied"), "{shown}");
+    assert!(shown.contains("trailing"), "{shown}");
+    assert!(
+        shown.find(&first.name).unwrap() < shown.find(&queued.name).unwrap(),
+        "{shown}"
+    );
+    kestrel
+        .post_while_busy(first.workspace, "alice", "a new Turn while Trailing")
+        .await;
+    assert_eq!(kestrel.session(first.id).await.state, SessionState::Working);
+    assert_eq!(kestrel.turns(first.id).await.len(), 2);
+    assert_eq!(queue_read(&kestrel).await["active_work"]["occupied"], 2);
+    assert!(kestrel.occupy_up_to(1).await.is_none());
     kestrel.teardown().await;
 }
 
@@ -5218,7 +5474,7 @@ async fn a_waiting_session_with_held_input_says_why_its_next_turn_has_not_starte
     );
     assert_eq!(
         waiting_row(&queue, &late_session.name)["reasons"],
-        json!([{ "kind": "ahead", "sessions": [queued.name, early_session.name] }])
+        json!([{ "kind": "ahead", "sessions": [early_session.name, queued.name] }])
     );
     assert_eq!(
         waiting_row(&queue, &idle_session.name)["pending_since"],
@@ -5244,8 +5500,8 @@ async fn a_waiting_session_with_held_input_says_why_its_next_turn_has_not_starte
     ];
     for expected in order {
         let taken = match kestrel.occupy_up_to(8).await {
-            Some(work::Occupied::Claimed(claimed)) => claimed,
-            Some(work::Occupied::Resumed(resumed)) => resumed,
+            Some(scheduling::Occupied::Claimed(claimed)) => claimed,
+            Some(scheduling::Occupied::Resumed(resumed)) => resumed,
             None => panic!("a slot is free and {expected} is ahead"),
         };
         assert_eq!(taken.name, expected);
@@ -5392,7 +5648,7 @@ async fn kestrel_queue_says_each_reason_in_words_with_the_waiting_sessions_after
     let line_of = |name: &str| {
         lines
             .iter()
-            .position(|line| line.contains(name))
+            .position(|line| line.split_whitespace().nth(1) == Some(name))
             .unwrap_or_else(|| panic!("no line names {name}: {}", shown.said))
     };
     assert!(
@@ -5404,7 +5660,7 @@ async fn kestrel_queue_says_each_reason_in_words_with_the_waiting_sessions_after
         shown.said
     );
     for (session, said) in [
-        (&every.ready, "ready".to_owned()),
+        (&every.ready, format!("behind {}", every.unbriefed.name)),
         (&every.blocked, format!("waits on {}", every.holding.name)),
         (
             &every.prompted,
@@ -5470,7 +5726,7 @@ async fn kestrel_queue_json_agrees_with_the_operator_read() {
         read.push(json!({
             "name": row["name"],
             "state": "waiting",
-            "position": null,
+            "position": row["position"],
             "reasons": row["reasons"],
             "pending_since": row["pending_since"],
             "preparing": null,
@@ -5483,8 +5739,8 @@ async fn kestrel_queue_json_agrees_with_the_operator_read() {
         read.push(json!({
             "name": row["name"],
             "state": "unbriefed",
-            "position": null,
-            "reasons": [],
+            "position": row["position"],
+            "reasons": row["reasons"],
             "pending_since": row["pending_since"],
             "preparing": row["preparing"],
         }));

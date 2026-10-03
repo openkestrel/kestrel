@@ -18,9 +18,10 @@ use crate::instance;
 use crate::link::{self, credential::Secret};
 use crate::profile;
 use crate::provider;
+use crate::scheduling::{self, Occupied};
 use crate::store::{self, Store};
 use crate::timer;
-use crate::work::{self, Occupied};
+use crate::work;
 use crate::workspace;
 
 /// Nothing subscribes to `Fanout` at 0.1 (ADR-0005), so a queued Session is found by asking
@@ -174,7 +175,7 @@ async fn dispatching(
         if let Err(error) = archive(store, &dispatch.driver, &supervisors).await {
             warn!(%error, "an archiving pass found nothing it could do");
         }
-        match work::occupy(
+        match scheduling::dispatch(
             store,
             dispatch.max_active_sessions.get(),
             &dispatch.serialized,

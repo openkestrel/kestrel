@@ -1,3 +1,4 @@
+use crate::scheduling::{Occupied, dispatch};
 use tempfile::TempDir;
 
 use super::*;
@@ -166,7 +167,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         .unwrap()
         .session
         .expect("a fresh workspace's first message starts a session");
-    let first_session = match occupy(&store, 1, &["codex".to_owned()]).await.unwrap() {
+    let first_session = match dispatch(&store, 1, &["codex".to_owned()]).await.unwrap() {
         Some(Occupied::Claimed(claimed)) => claimed,
         _ => panic!("the first session should claim"),
     };
@@ -213,7 +214,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         .unwrap()
         .session
         .expect("a fresh workspace's first message starts a session");
-    let second_session = match occupy(&store, 1, &["codex".to_owned()]).await.unwrap() {
+    let second_session = match dispatch(&store, 1, &["codex".to_owned()]).await.unwrap() {
         Some(Occupied::Claimed(claimed)) => claimed,
         _ => panic!("the waiting session should leave its slot and profile available"),
     };
@@ -223,7 +224,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         .await
         .unwrap();
     assert!(
-        occupy(&store, 2, &["codex".to_owned()])
+        dispatch(&store, 2, &["codex".to_owned()])
             .await
             .unwrap()
             .is_none()
@@ -251,7 +252,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         .unwrap()
         .session
         .expect("a fresh workspace's first message starts a session");
-    let alex_session = match occupy(&store, 2, &["codex".to_owned()]).await.unwrap() {
+    let alex_session = match dispatch(&store, 2, &["codex".to_owned()]).await.unwrap() {
         Some(Occupied::Claimed(claimed)) => claimed,
         _ => panic!("another profile should be able to claim while Jack is busy"),
     };
@@ -289,13 +290,13 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     workspace::post(&store, alex.id, "operator", "continue")
         .await
         .unwrap();
-    match occupy(&store, 2, &["codex".to_owned()]).await.unwrap() {
+    match dispatch(&store, 2, &["codex".to_owned()]).await.unwrap() {
         Some(Occupied::Resumed(session)) => assert_eq!(session.id, alex_session.id),
         _ => panic!("an eligible held prompt should pass the blocked one"),
     }
 
     complete(&store, &second_session).await.unwrap();
-    match occupy(&store, 2, &["codex".to_owned()]).await.unwrap() {
+    match dispatch(&store, 2, &["codex".to_owned()]).await.unwrap() {
         Some(Occupied::Resumed(session)) => assert_eq!(session.id, first_session.id),
         _ => panic!("the held prompt should resume after the profile is free"),
     }

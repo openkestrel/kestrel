@@ -25,9 +25,9 @@ function a_queue(overrides: Partial<Queue> = {}): Queue {
 }
 
 describe("the line the form shows about a Session that has not opened yet", () => {
-	test("says no work role is dispatching when none recorded", () => {
+	test("says order is unknown when no dispatch configuration is recorded", () => {
 		expect(openingQueueLine(a_queue({ work_role: null }), true)).toBe(
-			"No work role is dispatching, so the Session would wait.",
+			"No dispatch configuration is recorded, so queue order is unknown.",
 		);
 	});
 
@@ -112,6 +112,63 @@ describe("the line a Workspace shows for its queued Session", () => {
 			],
 		});
 		expect(sessionQueueLine(queue, workspace)).toBe("Waiting: at the live Instance limit of 1.");
+	});
+
+	test("shows a waiting Turn's global position and foreign predecessors", () => {
+		const queue = a_queue({
+			waiting: [
+				{
+					position: 3,
+					name: "waiting",
+					workspace,
+					agent: "builder",
+					enqueued_at: "2026-09-30T10:00:00Z",
+					pending_since: "2026-09-30T10:01:00Z",
+					reasons: [{ kind: "ahead", sessions: ["local"], elsewhere: 1 }],
+				},
+			],
+		});
+		expect(sessionQueueLine(queue, workspace)).toBe(
+			"Next Turn at position 3. Waiting: behind local and 1 Session in other Organizations.",
+		);
+	});
+
+	test("shows the first Turn's position", () => {
+		const queue = a_queue({
+			unbriefed: [
+				{
+					position: 1,
+					name: "unbriefed",
+					workspace,
+					agent: "builder",
+					enqueued_at: "2026-09-30T10:00:00Z",
+					preparing: "harness_ready",
+					pending_since: null,
+					brief_since: "2026-09-30T10:01:00Z",
+					reasons: [],
+				},
+			],
+		});
+		expect(sessionQueueLine(queue, workspace)).toBe("First Turn at position 1.");
+	});
+
+	test("explains unknown order without a recorded dispatch configuration", () => {
+		const queue = a_queue({
+			work_role: null,
+			queued: [
+				{
+					position: null,
+					name: "queued",
+					workspace,
+					agent: "builder",
+					reasons: [],
+					enqueued_at: "2026-09-30T10:00:00Z",
+				},
+			],
+		});
+		expect(sessionQueueLine(queue, workspace)).toBe(
+			"Queue order is unknown: no dispatch configuration is recorded.",
+		);
 	});
 
 	test("says nothing for a Workspace whose Session is not in the queue", () => {
