@@ -243,14 +243,14 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_notice_stays_in_the_organization_that_changed() {
+    async fn a_session_notice_stays_in_the_organization_that_changed() {
         let notices = Notices::default();
         let ours = OrganizationId::generate();
         let theirs = OrganizationId::generate();
         let mut ours = notices.subscribe(ours);
 
         let mut touched = Touched::default();
-        touched.queue(theirs);
+        touched.session_id(theirs, SessionId::generate());
         notices.publish(touched);
         tokio::time::sleep(COALESCE * 2).await;
 
