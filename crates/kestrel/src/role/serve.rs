@@ -84,17 +84,11 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         );
     }
 
-    let summaries = crate::live_work::Summaries::default();
-    let reads = crate::live_read::Reads::default();
+    let live = crate::live::Live::default();
     let followers = crate::presence::Followers::new(follow_lease);
-    let link_router = link::router(
-        store.clone(),
-        shutdown.clone(),
-        summaries.clone(),
-        reads.clone(),
-    )
-    .merge(webhook::router(store.clone(), wake));
-    let operator_router = operator::router(store, shutdown.clone(), summaries, reads, followers);
+    let link_router = link::router(store.clone(), shutdown.clone(), live.clone())
+        .merge(webhook::router(store.clone(), wake));
+    let operator_router = operator::router(store, shutdown.clone(), live, followers);
 
     let serving_link = axum::serve(link_listener, link_router)
         .with_graceful_shutdown(shutdown.clone().cancelled_owned());
