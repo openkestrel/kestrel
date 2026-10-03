@@ -502,6 +502,37 @@ async fn changing_thought_level_on_a_queued_session_starts_it_with_that_value() 
 }
 
 #[tokio::test]
+async fn a_trailing_session_takes_a_change_as_a_waiting_one_does() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel, Declared::default()).await;
+    let (session, _) = kestrel.dispatch_to_the_link(workspace.id).await;
+    kestrel.start_on_the_link(&session).await;
+    kestrel.report_answered(&session, 1).await;
+    kestrel
+        .report_session_info(&session, &[model_option(DEFAULT_MODEL)])
+        .await;
+    assert_eq!(
+        kestrel.session(session.id).await.state,
+        SessionState::Trailing
+    );
+
+    let (status, changed) = set_option(
+        &kestrel,
+        session.id,
+        json!({"participant": "operator", "option": "model", "value": OTHER_MODEL}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::ACCEPTED, "{changed}");
+    assert!(matches!(
+        kestrel.instruction(&session).await,
+        kestrel::link::Instruction::SetOption { .. }
+    ));
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_change_during_a_working_turn_is_refused_naming_working() {
     let kestrel = dispatching(Script::ReportsThenWaits).await;
     let workspace = a_workspace(&kestrel, Declared::default()).await;

@@ -514,7 +514,7 @@ async fn living(
                                     let mut heard = heard.lock().expect("the observation lock");
                                     match heard.completer.settle(jiff::Timestamp::now(), quiet) {
                                         Settling::Settled(completed) => {
-                                            heard.emit(completed);
+                                            heard.emit(*completed);
                                             drop(heard);
                                             if turns.send(ConversationEvent::Settled).is_err() {
                                                 return Ok(Ended::HungUp);
