@@ -1605,7 +1605,7 @@ mod tests {
     }
 
     #[test]
-    fn every_initialize_declares_claudes_async_tasks() {
+    fn every_initialize_declares_async_tasks() {
         let declared = serde_json::to_value(declarations()).unwrap();
         assert_eq!(
             declared["_meta"]["jetbrains"]["air"],
@@ -1620,8 +1620,7 @@ mod tests {
             "asyncTaskId": "task",
             "name": "cargo test",
             "taskType": "local_bash",
-            "description": "cargo test --workspace",
-            "showInTranscript": false,
+            "description": "cargo test --all",
             "canStop": true,
         }));
         assert!(matches!(
