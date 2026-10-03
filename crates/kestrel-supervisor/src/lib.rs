@@ -1,11 +1,11 @@
 pub mod changes;
 pub mod checkout;
 pub mod completer;
+mod extension;
 pub mod files;
 pub mod harness;
 pub mod link;
 pub mod login;
-mod opencode;
 pub mod permission;
 
 use std::collections::{BTreeMap, VecDeque};
