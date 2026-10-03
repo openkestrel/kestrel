@@ -1,4 +1,4 @@
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use std::collections::{BTreeMap, BTreeSet};
 
 use agent_client_protocol::schema::v1::{
@@ -16,7 +16,28 @@ pub struct Completer {
     tools: BTreeMap<String, (ToolCall, Timestamp)>,
     completed_tools: BTreeSet<String>,
     pub produced: bool,
-    ended: bool,
+    phase: Phase,
+    last_activity: Option<Timestamp>,
+    reported_activity: Option<Timestamp>,
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    #[default]
+    Unprompted,
+    Turn,
+    Trailing,
+    Between,
+}
+
+/// How often a trailing Session's last activity alone is worth a new snapshot.
+const ACTIVITY_GRAIN: SignedDuration = SignedDuration::from_secs(1);
+
+pub enum Settling {
+    Settled(Completed),
+    /// Asked again then; a Completer that is not trailing is asked again a quiet period on, since
+    /// activity may start it trailing in between.
+    Until(Timestamp),
 }
 
 #[derive(Default)]
@@ -41,7 +62,8 @@ pub struct Completed {
 impl Completer {
     pub fn begin(&mut self) {
         self.produced = false;
-        self.ended = false;
+        self.phase = Phase::Turn;
+        self.last_activity = None;
     }
 
     pub fn update(&mut self, update: SessionUpdate, now: Timestamp) -> Completed {
@@ -49,29 +71,16 @@ impl Completer {
         let before = self.snapshot();
         match update {
             SessionUpdate::AgentMessageChunk(chunk) => {
-                if self.ended {
-                    completed
-                        .diagnostics
-                        .push("kestrel: a message arrived after its turn ended".to_owned());
-                } else {
-                    self.produced |= self.messages.chunk(chunk, now, false, &mut completed);
-                }
+                self.active(now);
+                self.produced |= self.messages.chunk(chunk, now, false, &mut completed);
             }
             SessionUpdate::AgentThoughtChunk(chunk) => {
-                if self.ended {
-                    completed
-                        .diagnostics
-                        .push("kestrel: a thought arrived after its turn ended".to_owned());
-                } else {
-                    self.produced |= self.thoughts.chunk(chunk, now, true, &mut completed);
-                }
+                self.active(now);
+                self.produced |= self.thoughts.chunk(chunk, now, true, &mut completed);
             }
             SessionUpdate::Plan(plan) => {
-                if self.ended {
-                    completed
-                        .diagnostics
-                        .push("kestrel: a plan arrived after its turn ended".to_owned());
-                } else {
+                self.active(now);
+                {
                     self.produced = true;
                     completed.reports.push(Report::Plan {
                         entries: plan
@@ -96,23 +105,24 @@ impl Completer {
                 }
             }
             SessionUpdate::ToolCall(call) => {
+                self.active(now);
                 let id = call.tool_call_id.0.to_string();
-                if self.ended || self.completed_tools.contains(&id) || self.tools.contains_key(&id)
-                {
+                if self.completed_tools.contains(&id) || self.tools.contains_key(&id) {
                     completed.diagnostics.push(format!(
                         "kestrel: a late or duplicate tool start arrived for {id}"
                     ));
                 } else {
                     self.produced = true;
                     self.tools.insert(id.clone(), (call, now));
-                    self.settle(&id, now, None, &mut completed);
+                    self.settle_tool(&id, now, None, false, &mut completed);
                 }
             }
             SessionUpdate::ToolCallUpdate(update) => {
+                self.active(now);
                 let id = update.tool_call_id.0.to_string();
                 if let Some((call, _)) = self.tools.get_mut(&id) {
                     call.update(update.fields);
-                    self.settle(&id, now, None, &mut completed);
+                    self.settle_tool(&id, now, None, false, &mut completed);
                 } else {
                     completed.diagnostics.push(format!(
                         "kestrel: an update arrived for unknown or completed tool {id}"
@@ -132,25 +142,77 @@ impl Completer {
             _ => {}
         }
         let after = self.snapshot();
-        if before != after {
-            completed.state = Some(after);
+        let grain_passed = matches!(
+            (self.last_activity, self.reported_activity),
+            (Some(last), Some(reported)) if last.duration_since(reported) >= ACTIVITY_GRAIN
+        );
+        if before != after || grain_passed {
+            completed.state = Some(self.reported());
         }
         completed
     }
 
+    fn active(&mut self, now: Timestamp) {
+        if matches!(self.phase, Phase::Trailing | Phase::Between) {
+            self.phase = Phase::Trailing;
+            self.last_activity = Some(now);
+        }
+    }
+
+    pub fn settle(&mut self, now: Timestamp, quiet: SignedDuration) -> Settling {
+        let Some(last) = self.last_activity.filter(|_| self.phase == Phase::Trailing) else {
+            return Settling::Until(now + quiet);
+        };
+        if !self.tools.is_empty() {
+            return Settling::Until(now + quiet);
+        }
+        if now < last + quiet {
+            return Settling::Until(last + quiet);
+        }
+        let mut completed = Completed::default();
+        self.messages.close(now, false, None, &mut completed);
+        self.thoughts.close(now, true, None, &mut completed);
+        for id in self.tools.keys().cloned().collect::<Vec<_>>() {
+            self.settle_tool(&id, now, None, true, &mut completed);
+        }
+        self.phase = Phase::Between;
+        self.last_activity = None;
+        completed.state = Some(self.reported());
+
+        Settling::Settled(completed)
+    }
+
+    /// An answer leaves open calls running and starts the Session trailing; a call still open
+    /// when trailing ends is closed `unresolved`, whatever ended it.
     pub fn boundary(&mut self, outcome: TurnOutcome, now: Timestamp) -> Completed {
         let mut completed = Completed::default();
         self.messages
             .close(now, false, Some(outcome.clone()), &mut completed);
         self.thoughts
             .close(now, true, Some(outcome.clone()), &mut completed);
-        for id in self.tools.keys().cloned().collect::<Vec<_>>() {
-            self.settle(&id, now, Some(outcome.clone()), &mut completed);
+        let trailing = self.phase == Phase::Trailing;
+        if !matches!(outcome, TurnOutcome::Answered { .. }) || trailing {
+            for id in self.tools.keys().cloned().collect::<Vec<_>>() {
+                self.settle_tool(&id, now, Some(outcome.clone()), trailing, &mut completed);
+            }
         }
-        completed.state = Some(self.snapshot());
-        self.ended = true;
+        match outcome {
+            TurnOutcome::Answered { .. } => {
+                self.phase = Phase::Trailing;
+                self.last_activity = Some(now);
+            }
+            _ if trailing => self.last_activity = Some(now),
+            _ => self.phase = Phase::Between,
+        }
+        completed.state = Some(self.reported());
         completed
     }
+
+    fn reported(&mut self) -> Report {
+        self.reported_activity = self.last_activity;
+        self.snapshot()
+    }
+
     pub fn snapshot(&self) -> Report {
         Report::SessionState {
             tools: self
@@ -171,20 +233,23 @@ impl Completer {
             thought_buffering: self.thoughts.open.is_some(),
             // Filled in when the state goes up the link, which is what holds the latest usage.
             usage: None,
+            last_activity_at: self.last_activity.filter(|_| self.phase == Phase::Trailing),
         }
     }
 
-    fn settle(
+    fn settle_tool(
         &mut self,
         id: &str,
         now: Timestamp,
         outcome: Option<TurnOutcome>,
+        unresolved: bool,
         completed: &mut Completed,
     ) {
         let Some((call, _)) = self.tools.get(id) else {
             return;
         };
-        if outcome.is_none()
+        if !unresolved
+            && outcome.is_none()
             && !matches!(
                 call.status,
                 ToolCallStatus::Completed | ToolCallStatus::Failed
@@ -194,11 +259,13 @@ impl Completer {
         }
         let (call, started_at) = self.tools.remove(id).unwrap();
         self.completed_tools.insert(id.to_owned());
-        let closing_reason = outcome.as_ref().map(|outcome| match outcome {
-            TurnOutcome::Cancelled => ClosingReason::Interrupted,
-            TurnOutcome::Failed { .. } => ClosingReason::Failed,
-            TurnOutcome::Answered { .. } => ClosingReason::Unresolved,
-        });
+        let closing_reason = match (&outcome, unresolved) {
+            (_, true) => Some(ClosingReason::Unresolved),
+            (Some(TurnOutcome::Cancelled), false) => Some(ClosingReason::Interrupted),
+            (Some(TurnOutcome::Failed { .. }), false) => Some(ClosingReason::Failed),
+            (Some(TurnOutcome::Answered { .. }), false) => Some(ClosingReason::Unresolved),
+            (None, false) => None,
+        };
         let status = match call.status {
             ToolCallStatus::InProgress => ToolStatus::InProgress,
             ToolCallStatus::Completed => ToolStatus::Completed,
@@ -302,6 +369,8 @@ mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, MessageId, TextContent};
 
+    use jiff::SignedDuration;
+
     const NOW: Timestamp = Timestamp::constant(1_790_683_200, 0);
 
     fn chunk(id: Option<&str>, text: &str) -> ContentChunk {
@@ -356,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn open_tools_close_once_at_each_turn_boundary_and_late_updates_are_diagnostics() {
+    fn open_tools_close_once_at_a_cancelled_or_failed_boundary_and_late_updates_are_diagnostics() {
         use agent_client_protocol::schema::v1::{ToolCallUpdate, ToolCallUpdateFields};
         for (outcome, reason) in [
             (TurnOutcome::Cancelled, "interrupted"),
@@ -366,14 +435,9 @@ mod tests {
                 },
                 "failed",
             ),
-            (
-                TurnOutcome::Answered {
-                    stop_reason: "end_turn".to_owned(),
-                },
-                "unresolved",
-            ),
         ] {
             let mut completer = Completer::default();
+            completer.begin();
             let opened =
                 completer.update(SessionUpdate::ToolCall(ToolCall::new("call", "read")), NOW);
             let snapshot = serde_json::to_value(opened.state.unwrap()).unwrap();
@@ -405,6 +469,222 @@ mod tests {
             assert_eq!(late.diagnostics.len(), 1);
             assert!(!completer.produced);
         }
+    }
+
+    const QUIET: SignedDuration = SignedDuration::from_secs(30);
+
+    fn at(seconds: i64) -> Timestamp {
+        NOW + SignedDuration::from_secs(seconds)
+    }
+
+    fn answered() -> TurnOutcome {
+        TurnOutcome::Answered {
+            stop_reason: "end_turn".to_owned(),
+        }
+    }
+
+    fn settled(settling: Settling) -> Completed {
+        match settling {
+            Settling::Settled(completed) => completed,
+            Settling::Until(at) => panic!("still trailing until {at}"),
+        }
+    }
+
+    fn until(settling: Settling) -> Timestamp {
+        match settling {
+            Settling::Until(at) => at,
+            Settling::Settled(_) => panic!("settled"),
+        }
+    }
+
+    #[test]
+    fn an_answer_closes_its_text_and_leaves_open_calls_running_while_the_session_trails() {
+        let mut completer = Completer::default();
+        completer.begin();
+        completer.update(SessionUpdate::ToolCall(ToolCall::new("call", "tests")), NOW);
+        completer.update(
+            SessionUpdate::AgentMessageChunk(chunk(Some("message"), "waiting on tests")),
+            NOW,
+        );
+        let answer = completer.boundary(answered(), at(1));
+        assert_eq!(
+            answer.reports,
+            vec![Report::Said {
+                message: "waiting on tests".to_owned(),
+                completion: Completion {
+                    started_at: NOW,
+                    finished_at: at(1),
+                    turn_outcome: Some(answered()),
+                },
+            }]
+        );
+        let state = serde_json::to_value(answer.state.unwrap()).unwrap();
+        assert_eq!(state["tools"][0]["call_id"], "call");
+        assert_eq!(state["last_activity_at"], at(1).to_string());
+        assert_eq!(until(completer.settle(at(100), QUIET)), at(100) + QUIET);
+    }
+
+    #[test]
+    fn activity_restarts_the_quiet_period_and_bookkeeping_does_not() {
+        use agent_client_protocol::schema::v1::{
+            AvailableCommandsUpdate, Plan, ToolCallUpdate, ToolCallUpdateFields, UsageUpdate,
+        };
+        let mut completer = Completer::default();
+        completer.begin();
+        completer.boundary(answered(), NOW);
+        assert_eq!(until(completer.settle(at(10), QUIET)), at(30));
+        completer.update(SessionUpdate::UsageUpdate(UsageUpdate::new(1, 2)), at(20));
+        completer.update(
+            SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(Vec::new())),
+            at(25),
+        );
+        assert_eq!(until(completer.settle(at(29), QUIET)), at(30));
+
+        for activity in [
+            SessionUpdate::AgentMessageChunk(chunk(None, "said")),
+            SessionUpdate::AgentThoughtChunk(chunk(None, "thought")),
+            SessionUpdate::Plan(Plan::new(Vec::new())),
+            SessionUpdate::ToolCall(
+                ToolCall::new("call", "read").status(ToolCallStatus::Completed),
+            ),
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                "open",
+                ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+            )),
+        ] {
+            let mut completer = Completer::default();
+            completer.begin();
+            completer.update(SessionUpdate::ToolCall(ToolCall::new("open", "read")), NOW);
+            completer.boundary(answered(), NOW);
+            if !matches!(activity, SessionUpdate::ToolCallUpdate(_)) {
+                completer.update(
+                    SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                        "open",
+                        ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+                    )),
+                    NOW,
+                );
+            }
+            completer.update(activity, at(31));
+            assert_eq!(until(completer.settle(at(31), QUIET)), at(61));
+        }
+    }
+
+    #[test]
+    fn trailing_ends_once_every_open_call_has_settled_and_the_quiet_period_has_passed() {
+        use agent_client_protocol::schema::v1::{ToolCallUpdate, ToolCallUpdateFields};
+        let mut completer = Completer::default();
+        completer.begin();
+        completer.update(SessionUpdate::ToolCall(ToolCall::new("call", "tests")), NOW);
+        completer.boundary(answered(), NOW);
+        assert!(matches!(
+            completer.settle(at(600), QUIET),
+            Settling::Until(_)
+        ));
+        let done = completer.update(
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                "call",
+                ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+            )),
+            at(700),
+        );
+        let report = serde_json::to_value(&done.reports[0]).unwrap();
+        assert_eq!(report["status"], "completed");
+        assert_eq!(report["closing_reason"], serde_json::Value::Null);
+        assert_eq!(until(completer.settle(at(710), QUIET)), at(730));
+        let ended = settled(completer.settle(at(730), QUIET));
+        assert!(ended.reports.is_empty());
+        let state = serde_json::to_value(ended.state.unwrap()).unwrap();
+        assert_eq!(state["tools"], serde_json::json!([]));
+        assert_eq!(state.get("last_activity_at"), None);
+    }
+
+    #[test]
+    fn the_end_of_trailing_closes_buffered_text_as_a_boundary() {
+        let mut completer = Completer::default();
+        completer.begin();
+        completer.boundary(answered(), NOW);
+        completer.update(
+            SessionUpdate::AgentMessageChunk(chunk(Some("late"), "pushed")),
+            at(1),
+        );
+        completer.update(
+            SessionUpdate::AgentThoughtChunk(chunk(Some("musing"), "CI next")),
+            at(2),
+        );
+        let ended = settled(completer.settle(at(32), QUIET));
+        assert_eq!(
+            ended.reports,
+            vec![
+                Report::Said {
+                    message: "pushed".to_owned(),
+                    completion: Completion {
+                        started_at: at(1),
+                        finished_at: at(32),
+                        turn_outcome: None,
+                    },
+                },
+                Report::Thought {
+                    text: "CI next".to_owned(),
+                    completion: Completion {
+                        started_at: at(2),
+                        finished_at: at(32),
+                        turn_outcome: None,
+                    },
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_call_open_when_trailing_ends_closes_unresolved_once() {
+        use agent_client_protocol::schema::v1::{ToolCallUpdate, ToolCallUpdateFields};
+        let mut completer = Completer::default();
+        completer.begin();
+        completer.update(SessionUpdate::ToolCall(ToolCall::new("call", "tests")), NOW);
+        completer.boundary(answered(), NOW);
+        let lost = TurnOutcome::Failed {
+            because: "the harness exited".to_owned(),
+        };
+        let ended = completer.boundary(lost.clone(), at(5));
+        assert_eq!(ended.reports.len(), 1);
+        let report = serde_json::to_value(&ended.reports[0]).unwrap();
+        assert_eq!(report["closing_reason"], "unresolved");
+        assert!(completer.boundary(lost, at(6)).reports.is_empty());
+        let late = completer.update(
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                "call",
+                ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+            )),
+            at(7),
+        );
+        assert!(late.reports.is_empty());
+        assert_eq!(late.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn activity_after_trailing_ended_trails_again() {
+        let mut completer = Completer::default();
+        completer.begin();
+        completer.boundary(answered(), NOW);
+        settled(completer.settle(at(30), QUIET));
+        let resumed = completer.update(SessionUpdate::ToolCall(ToolCall::new("ci", "gh")), at(90));
+        let state = serde_json::to_value(resumed.state.unwrap()).unwrap();
+        assert_eq!(state["last_activity_at"], at(90).to_string());
+        assert!(matches!(
+            completer.settle(at(500), QUIET),
+            Settling::Until(_)
+        ));
+    }
+
+    #[test]
+    fn a_cancelled_turn_does_not_trail() {
+        let mut completer = Completer::default();
+        completer.begin();
+        let cancelled = completer.boundary(TurnOutcome::Cancelled, NOW);
+        let state = serde_json::to_value(cancelled.state.unwrap()).unwrap();
+        assert_eq!(state.get("last_activity_at"), None);
+        assert_eq!(until(completer.settle(at(60), QUIET)), at(60) + QUIET);
     }
 
     #[test]

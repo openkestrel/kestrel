@@ -615,6 +615,7 @@ async fn posts_after_the_brief_are_held_and_drain_into_the_next_turn() {
     assert_eq!(kestrel.turns(session.id).await.len(), 1);
 
     kestrel.report_answered(&session, 1).await;
+    kestrel.report_settled(&session, 2).await;
     let prompted = match kestrel.occupy_up_to(2).await {
         Some(Occupied::Resumed(prompted)) => prompted,
         _ => panic!("the held message should follow as the next turn"),

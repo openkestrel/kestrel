@@ -835,6 +835,9 @@ impl fmt::Display for Usage {
 pub enum SessionState {
     Queued,
     Working,
+    /// Answered, while work its agent started still runs (ADR-0040): busy like Working, so it holds
+    /// its Active-Work Slot and its Instance.
+    Trailing,
     Waiting,
     /// The first message becomes the Brief and the first Turn (ADR-0038); it holds no Active-Work
     /// Slot.
@@ -846,16 +849,20 @@ pub enum SessionState {
 }
 
 impl SessionState {
-    pub const LIVE: [SessionState; 3] = [
+    pub const LIVE: [SessionState; 4] = [
         SessionState::Working,
+        SessionState::Trailing,
         SessionState::Waiting,
         SessionState::Unbriefed,
     ];
+
+    pub const OCCUPYING: [SessionState; 2] = [SessionState::Working, SessionState::Trailing];
 
     pub const fn as_str(self) -> &'static str {
         match self {
             SessionState::Queued => "queued",
             SessionState::Working => "working",
+            SessionState::Trailing => "trailing",
             SessionState::Waiting => "waiting",
             SessionState::Unbriefed => "unbriefed",
             SessionState::Ended => "ended",
@@ -876,7 +883,7 @@ impl SessionState {
             SessionState::Working => Some(Exit::Failed {
                 because: "it was stopped mid-turn, before its agent answered".into(),
             }),
-            SessionState::Waiting => Some(Exit::Succeeded),
+            SessionState::Trailing | SessionState::Waiting => Some(Exit::Succeeded),
         }
     }
 }
@@ -888,6 +895,7 @@ impl FromStr for SessionState {
         match state {
             "queued" => Ok(SessionState::Queued),
             "working" => Ok(SessionState::Working),
+            "trailing" => Ok(SessionState::Trailing),
             "waiting" => Ok(SessionState::Waiting),
             "unbriefed" => Ok(SessionState::Unbriefed),
             "ended" => Ok(SessionState::Ended),
@@ -1068,7 +1076,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stopping_succeeds_only_a_waiting_session() {
+    fn stopping_succeeds_only_an_answered_session() {
         assert!(matches!(
             SessionState::Queued.stop_exit(),
             Some(Exit::Failed { .. })
@@ -1078,6 +1086,7 @@ mod tests {
             Some(Exit::Failed { .. })
         ));
         assert_eq!(SessionState::Waiting.stop_exit(), Some(Exit::Succeeded));
+        assert_eq!(SessionState::Trailing.stop_exit(), Some(Exit::Succeeded));
         assert_eq!(SessionState::Ended.stop_exit(), None);
         assert_eq!(SessionState::Unreachable.stop_exit(), None);
     }

@@ -327,6 +327,18 @@ mod tests {
     }
 
     #[test]
+    fn session_show_and_list_say_a_session_trails_and_when_its_agent_was_last_active() {
+        let record = json!({"state":"trailing","last_activity_at":"2026-10-02T12:00:00Z"});
+        let mut shown = Vec::new();
+        human(&mut shown, &crate::view::SESSION, &[&record], 240).unwrap();
+        let shown = String::from_utf8(shown).unwrap();
+        assert!(shown.contains("trailing"), "{shown}");
+        assert!(shown.contains("2026-10-02T12:00:00Z"), "{shown}");
+        let listed = line(&Presentation::Delimited, &crate::view::SESSIONS, &record).unwrap();
+        assert!(listed.contains("trailing"), "{listed}");
+    }
+
+    #[test]
     fn a_pipe_gets_every_field_of_every_record_joined_by_tabs() {
         let agents = json!([{ "name": "builder", "harness": "opencode", "model": null }]);
 

@@ -16,6 +16,7 @@ const IMAGE: &str = "kestrel-env:latest";
 const DEFAULT_MAX_ACTIVE_SESSIONS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 const DEFAULT_FOLLOW_LEASE: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_INTERRUPT_DEADLINE: NonZeroU64 = NonZeroU64::new(30).unwrap();
+const DEFAULT_QUIET_PERIOD: NonZeroU64 = NonZeroU64::new(30).unwrap();
 
 const ROLES: &str = "\
 Roles:
@@ -175,6 +176,17 @@ pub struct Cli {
         default_value_t = DEFAULT_INTERRUPT_DEADLINE
     )]
     interrupt_deadline: NonZeroU64,
+
+    /// How long a trailing Session's agent stays quiet, with nothing open, before the Session is
+    /// waiting, in seconds
+    #[arg(
+        long = "quiet-period",
+        env = "KESTREL_QUIET_PERIOD",
+        global = true,
+        value_name = "SECONDS",
+        default_value_t = DEFAULT_QUIET_PERIOD
+    )]
+    quiet_period: NonZeroU64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -236,6 +248,7 @@ impl Cli {
                 .cloned()
                 .collect(),
             interrupt_deadline: Duration::from_secs(self.interrupt_deadline.get()),
+            quiet_period: Duration::from_secs(self.quiet_period.get()),
         })
     }
 

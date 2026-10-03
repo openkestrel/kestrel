@@ -184,6 +184,7 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
                 message_buffering: false,
                 thought_buffering: false,
                 usage: Some(usage()),
+                last_activity_at: Some("2026-09-30T12:00:00Z".parse().unwrap()),
             },
         ),
         (Some("a-session"), None, Report::Usage { usage: usage() }),
@@ -240,9 +241,10 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
                 options: Vec::new(),
             },
         ),
+        (Some("a-session"), Some(4), Report::Settled),
         (
             Some("a-session"),
-            Some(4),
+            Some(5),
             Report::Finished {
                 exit: Exit::Succeeded,
                 usage: Some(usage()),

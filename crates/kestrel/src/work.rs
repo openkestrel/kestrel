@@ -71,6 +71,8 @@ pub enum Report {
         thought_buffering: bool,
         #[serde(default)]
         usage: Option<Usage>,
+        #[serde(default)]
+        last_activity_at: Option<Timestamp>,
     },
     /// Never a row: held in memory beside the running tools (ADR-0041).
     Usage {
@@ -103,6 +105,7 @@ pub enum Report {
         usage: Option<Usage>,
     },
     Interrupted,
+    Settled,
     Checkout {
         repositories: Vec<Observed>,
     },
@@ -133,6 +136,7 @@ impl Report {
             | Report::OptionChanged { .. }
             | Report::Answered { .. }
             | Report::Interrupted
+            | Report::Settled
             | Report::Checkout { .. }
             | Report::Finished { .. } => true,
         }
@@ -582,6 +586,11 @@ fn phase_refusal(phase: SessionState, session: &Session) -> String {
             "the session {} is working, and an option cannot change mid-turn",
             session.id
         ),
+        SessionState::Trailing => format!(
+            "the session {} is trailing its answer, and an option cannot change while its agent \
+             works",
+            session.id
+        ),
         SessionState::Ended => format!("the session {} has ended", session.id),
         SessionState::Unreachable => format!("the session {} is unreachable", session.id),
         SessionState::Unbriefed => format!(
@@ -665,6 +674,14 @@ pub async fn report(
     Ok(())
 }
 
+pub async fn stirred(store: &Store, session: &Session) -> Result<()> {
+    let mut tx = store.begin().await?;
+    if tx.workspaces().stir(session).await? {
+        info!(session = %session.id, "a waiting session's agent is working again");
+    }
+    tx.commit().await
+}
+
 /// What a Session's own report does, reached here without asking which Instance carries it.
 pub async fn report_on(
     store: &Store,
@@ -695,6 +712,17 @@ async fn reported(
             }
             Taken::Skipped => return Err(ReportRefused::SkippedSequence(seq)),
         }
+    }
+
+    if matches!(
+        report,
+        Report::Said { .. }
+            | Report::Thought { .. }
+            | Report::Plan { .. }
+            | Report::ToolCall { .. }
+    ) && tx.workspaces().stir(session).await?
+    {
+        info!(session = %session.id, "a waiting session's agent is working again");
     }
 
     match report {
@@ -865,7 +893,11 @@ async fn reported(
                 .await?;
         }
         Report::Answered { usage } => {
-            if let Some((turn, from_seq)) = tx.workspaces().answer_turn(session).await? {
+            if let Some((turn, from_seq)) = tx
+                .workspaces()
+                .answer_turn(session, SessionState::Trailing)
+                .await?
+            {
                 let workspace = tx.workspaces().get(session.workspace).await?;
                 let said = tx
                     .log()
@@ -897,7 +929,12 @@ async fn reported(
                     )
                     .await?;
             }
-            if tx.workspaces().answer_turn(session).await?.is_some() {
+            if tx
+                .workspaces()
+                .answer_turn(session, SessionState::Waiting)
+                .await?
+                .is_some()
+            {
                 tx.workspaces()
                     .record_active(session.organization, session.workspace, Timestamp::now())
                     .await?;
@@ -906,6 +943,14 @@ async fn reported(
             // Workspace never waits between the two.
             prompt_pending(tx, session).await?;
             info!(session = %session.id, "a supervisor reported its agent's turn interrupted");
+        }
+        Report::Settled => {
+            if tx.workspaces().settle(session).await? {
+                tx.workspaces()
+                    .record_active(session.organization, session.workspace, Timestamp::now())
+                    .await?;
+            }
+            info!(session = %session.id, "a supervisor reported its agent's work settled");
         }
         Report::Checkout { repositories } => {
             tx.workspaces()

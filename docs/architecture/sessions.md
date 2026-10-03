@@ -16,17 +16,24 @@ stateDiagram-v2
     Queued --> Ended: stopped, or failed before it started
     Queued --> Unreachable: a blocker failed
     Unbriefed --> Working: its first message becomes the Brief
-    Working --> Waiting: supervisor reports answered
+    Working --> Trailing: supervisor reports answered
+    Trailing --> Waiting: supervisor reports settled
+    Waiting --> Trailing: activity reported
     Waiting --> Working: held input prompts the next Turn
     Working --> Ended: finished, stopped (failed), or lease lapsed (failed)
+    Trailing --> Ended: finished, stopped (succeeded), or lease lapsed (failed)
     Unbriefed --> Ended: stopped, sealed, or replaced (succeeded), or lease lapsed (failed)
     Waiting --> Ended: stopped, sealed, or replaced (succeeded), or lease lapsed (failed)
     Ended --> [*]
     Unreachable --> [*]
 ```
 
-- **Only Working occupies an active-work slot** (`occupying_slots` counts `state = 'working'`).
-  Waiting holds its Instance and ACP conversation but no slot ([ADR-0024](../adr/0024-a-run-spans-prompt-turns.md)).
+- **Working and Trailing occupy an active-work slot** (`occupying_slots` counts
+  `SessionState::OCCUPYING`). A Trailing Session has answered while work its agent started still
+  runs ([ADR-0040](../adr/0040-a-session-trails-its-answer-while-its-work-runs.md)): it is in flight
+  for seal, the idle sweep and reclamation. It becomes Waiting on the supervisor's numbered
+  `settled`, and a Waiting Session whose agent shows activity again trails again, taking a slot
+  whatever the limit. Waiting holds its Instance and ACP conversation but no slot ([ADR-0024](../adr/0024-a-run-spans-prompt-turns.md)).
   An **Unbriefed** Session — its harness up and its conversation open, before its first message —
   holds its Instance and no slot either, and counts against the live Instance limit like a Waiting
   one ([ADR-0038](../adr/0038-a-session-may-start-before-its-brief.md)).
@@ -44,7 +51,7 @@ stateDiagram-v2
   `TurnInterrupted {session, participant}`, clears `interrupting`, closes the Turn, and prompts any
   Held Message at once on the slot the Turn held; with none held the Session becomes Waiting. An
   interrupted Turn never fails its Session and never trails.
-- **Stopping a Waiting Session succeeds** (`SessionState::stop_exit`). It has answered everything
+- **Stopping a Waiting or Trailing Session succeeds** (`SessionState::stop_exit`). It has answered everything
   it was asked; ending it mid-turn is a failure.
 - **Unreachable has no exit.** A queued Session whose blocker failed never ran, so nothing failed
   (`cascade_unreachable`, `session_dependency`).
@@ -81,7 +88,8 @@ reaches no Session already enqueued.
 
 ## The unfinished Session
 
-A Workspace has at most one **Unfinished Session**: queued, working, waiting or unbriefed. Its
+A Workspace has at most one **Unfinished Session**: queued, working, trailing, waiting or
+unbriefed. Its
 successor never shares the checkout with it: every ending sends the Session's `stop` down its
 Instance's stream, and the successor's `start` follows it ([Link](link.md#instructions)).
 
@@ -178,7 +186,8 @@ stateDiagram-v2
   Work; `seal_idle` goes through the same `seal` a person calls.
 - **A sealed Workspace is never reopened.** Work that correlates to one opens a new Workspace with
   `continues` pointing back and the sealed Workspace's branch ([Triggers](triggers.md#correlation)).
-- `workspace.last_active_at` moves on each answered Turn; the idle sweep reads it.
+- `workspace.last_active_at` moves on each answered Turn and each settled trail; the idle sweep
+  reads it.
 
 ## The first instruction
 

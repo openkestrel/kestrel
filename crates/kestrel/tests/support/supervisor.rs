@@ -73,10 +73,12 @@ impl Supervisor {
         };
         assert_eq!(instance.name(), on.instance);
         let lease = lease.map(|lease| lease.as_secs().to_string());
+        let quiet_period = super::QUIET_PERIOD.as_secs().to_string();
         let mut variables = vec![
             ("KESTREL_LINK", link),
             ("KESTREL_INSTANCE", on.instance.as_str()),
             ("KESTREL_INSTANCE_CREDENTIAL", on.credential.as_str()),
+            ("KESTREL_QUIET_PERIOD", quiet_period.as_str()),
         ];
         if let Some(lease) = lease.as_deref() {
             variables.push(("KESTREL_LEASE", lease));

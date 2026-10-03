@@ -28,7 +28,7 @@ use agent_client_protocol::{
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::completer::{Completed, Completer};
+use crate::completer::{Completed, Completer, Settling};
 use crate::link::{
     Report, SessionCommand, SessionInfo, SessionOption, SessionOptionGroup, SessionOptionKind,
     SessionOptionValue, TurnOutcome,
@@ -48,6 +48,7 @@ pub struct Harness {
     pub mode: Option<String>,
     pub thought_level: Option<String>,
     pub interrupt_deadline: Duration,
+    pub quiet_period: Duration,
     pub stderr: mpsc::UnboundedSender<String>,
 }
 
@@ -501,11 +502,27 @@ async fn living(
                     },
                 };
 
+                let quiet = jiff::SignedDuration::try_from(harness.quiet_period)
+                    .expect("a quiet period kestrel chose fits");
                 loop {
+                    let mut checking_at = jiff::Timestamp::now();
                     let prompt = match continuity.in_flight.clone() {
                         Some(prompt) => prompt,
                         None => loop {
                             tokio::select! {
+                                () = until_timestamp(checking_at) => {
+                                    let mut heard = heard.lock().expect("the observation lock");
+                                    match heard.completer.settle(jiff::Timestamp::now(), quiet) {
+                                        Settling::Settled(completed) => {
+                                            heard.emit(completed);
+                                            drop(heard);
+                                            if turns.send(ConversationEvent::Settled).is_err() {
+                                                return Ok(Ended::HungUp);
+                                            }
+                                        }
+                                        Settling::Until(at) => checking_at = at,
+                                    }
+                                }
                                 prompt = channels.prompts.recv() => match prompt {
                                     Some(prompt) => break prompt,
                                     None => return Ok(Ended::HungUp),
@@ -1103,6 +1120,11 @@ async fn until(deadline: Option<tokio::time::Instant>) {
     }
 }
 
+async fn until_timestamp(at: jiff::Timestamp) {
+    let left = at.duration_since(jiff::Timestamp::now());
+    tokio::time::sleep(left.try_into().unwrap_or_default()).await;
+}
+
 /// Why a turn that stopped for anything but ending it ends the conversation too.
 fn stopped_short(stop: StopReason) -> Option<String> {
     let because = match stop {
@@ -1121,6 +1143,7 @@ pub enum ConversationEvent {
     Report(Report),
     Worked(Worked),
     Interrupted,
+    Settled,
     State(Report),
     Ready,
 }

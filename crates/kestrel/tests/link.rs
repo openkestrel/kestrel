@@ -402,6 +402,7 @@ async fn the_link_takes_every_report_the_published_openapi_document_describes() 
         },
         "answered": {"kind": "answered", "seq": 1, "usage": {"context_used": 1_200, "context_size": 200_000, "cost": {"amount": 0.42, "currency": "USD"}}},
         "interrupted": {"kind": "interrupted", "seq": 1},
+        "settled": {"kind": "settled", "seq": 1},
         "checkout": {
             "kind": "checkout",
             "seq": 1,
@@ -425,7 +426,7 @@ async fn the_link_takes_every_report_the_published_openapi_document_describes() 
         "finished": {"kind": "finished", "seq": 1, "exit": {"status": "succeeded"}, "usage": {"context_used": 1_200, "context_size": 200_000, "cost": {"amount": 0.42, "currency": "USD"}}},        "thought": {"kind": "thought", "seq": 1, "text": "thinking", "completion": {"started_at": "2026-09-29T12:00:00Z", "finished_at": "2026-09-29T12:00:00Z", "turn_outcome": null}},
         "plan": {"kind": "plan", "seq": 1, "entries": [], "completion": {"started_at": "2026-09-29T12:00:00Z", "finished_at": "2026-09-29T12:00:00Z", "turn_outcome": null}},
         "tool_call": {"kind":"tool_call", "seq":1, "call_id":"call", "title":"read", "tool_kind":"read", "status":"completed", "input":{}, "result":[], "closing_reason":null, "completion":{"started_at":"2026-09-30T12:00:00Z", "finished_at":"2026-09-30T12:00:00Z", "turn_outcome":null}},
-        "session_state": {"kind":"session_state", "tools":[], "message_buffering":false, "thought_buffering":false, "usage": {"context_used": 1_200, "context_size": 200_000, "cost": {"amount": 0.42, "currency": "USD"}}},
+        "session_state": {"kind":"session_state", "tools":[], "message_buffering":false, "thought_buffering":false, "usage": {"context_used": 1_200, "context_size": 200_000, "cost": {"amount": 0.42, "currency": "USD"}}, "last_activity_at": "2026-09-30T12:00:00Z"},
 
 
     });
@@ -760,6 +761,7 @@ async fn completed_units_replay_once_and_filtered_pages_walk_the_global_cursor()
             message_buffering: true,
             thought_buffering: false,
             usage: None,
+            last_activity_at: None,
         },
     };
     assert!(
@@ -1050,6 +1052,7 @@ async fn a_transcript_follow_replaces_activity_and_snapshots_session_state_witho
             message_buffering: true,
             thought_buffering: false,
             usage: None,
+            last_activity_at: None,
         },
     };
     assert_eq!(

@@ -184,7 +184,7 @@ async fn a_turns_response_reaches_the_issue_before_the_session_ends() {
     );
     assert_eq!(
         kestrel.session(session.id).await.state,
-        SessionState::Waiting
+        SessionState::Trailing
     );
 
     kestrel.stop_session(session.id).await;
@@ -192,6 +192,36 @@ async fn a_turns_response_reaches_the_issue_before_the_session_ends() {
     assert_eq!(ended.exit, Some(Exit::Succeeded));
     assert_eq!(ended.outcome_message.as_deref(), Some("the first answer"));
     nothing_more_is_said(&stub, 1).await;
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_turns_response_holds_only_what_was_said_up_to_its_answer() {
+    let stub = GithubStub::start();
+    stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
+    let (session, on) = a_working_session(&kestrel, workspace.id).await;
+    let link = Link::to(&kestrel.link());
+    let said = |message: &str| Report::Said {
+        message: message.to_owned(),
+        completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
+    };
+
+    report(&link, &session, &on, 1, Report::Started).await;
+    report(&link, &session, &on, 2, said("waiting on the tests")).await;
+    report(&link, &session, &on, 3, Report::Answered { usage: None }).await;
+    report(&link, &session, &on, 4, said("the tests passed")).await;
+    report(&link, &session, &on, 5, Report::Settled).await;
+
+    let bodies = replies(&stub, 1).await;
+    assert!(bodies[0].contains("waiting on the tests"), "{}", bodies[0]);
+    assert!(
+        !bodies[0].contains("the tests passed"),
+        "the turn's response took what was said while trailing: {}",
+        bodies[0]
+    );
 
     kestrel.teardown().await;
 }
@@ -339,6 +369,7 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
     )
     .await;
     report(&link, &session, &on, 3, Report::Answered { usage: None }).await;
+    report(&link, &session, &on, 4, Report::Settled).await;
     let bodies = replies(&stub, 1).await;
     assert!(bodies[0].contains("the first answer"), "{}", bodies[0]);
 
@@ -353,14 +384,14 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
         &link,
         &session,
         &on,
-        4,
+        5,
         Report::Said {
             message: "the second answer".to_owned(),
             completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
     )
     .await;
-    report(&link, &session, &on, 5, Report::Answered { usage: None }).await;
+    report(&link, &session, &on, 6, Report::Answered { usage: None }).await;
 
     let bodies = replies(&stub, 2).await;
     assert!(bodies[1].contains("the second answer"), "{}", bodies[1]);
@@ -378,7 +409,7 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
         &link,
         &session,
         &on,
-        6,
+        7,
         Report::Said {
             message: "the first answer".to_owned(),
             completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
@@ -389,7 +420,7 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
         &link,
         &session,
         &on,
-        7,
+        8,
         Report::Finished {
             exit: Exit::Succeeded,
             usage: None,

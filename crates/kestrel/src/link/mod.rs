@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::domain::{Checkout, Session, SessionId, Workspace};
+use crate::domain::{Checkout, Session, SessionId, SessionState, Workspace};
 use crate::link::credential::Secret;
 use crate::log::{Cursor, Unreadable, Window};
 use crate::profile;
@@ -498,26 +498,31 @@ async fn report(
         message_buffering,
         thought_buffering,
         usage,
+        last_activity_at,
     } = &reported.report
     {
         let session = still_carried(&control_plane, &linked, reported.session).await?;
         control_plane.summaries.report_session(
             &instance,
-            &session.to_string(),
+            &session.id.to_string(),
             crate::live_work::SessionState {
                 tools: tools.clone(),
                 message_buffering: *message_buffering,
                 thought_buffering: *thought_buffering,
                 usage: usage.clone(),
+                last_activity_at: *last_activity_at,
             },
         );
+        if last_activity_at.is_some() && session.state == SessionState::Waiting {
+            work::stirred(&control_plane.store, &session).await?;
+        }
         return Ok(StatusCode::ACCEPTED.into_response());
     }
     if let work::Report::Usage { usage } = &reported.report {
         let session = still_carried(&control_plane, &linked, reported.session).await?;
         control_plane
             .summaries
-            .report_usage(&instance, &session.to_string(), usage.clone());
+            .report_usage(&instance, &session.id.to_string(), usage.clone());
         return Ok(StatusCode::ACCEPTED.into_response());
     }
     let connected = matches!(reported.report, work::Report::Connected { .. });
@@ -624,18 +629,17 @@ async fn still_carried(
     control_plane: &ControlPlane,
     linked: &Linked,
     session: Option<SessionId>,
-) -> Result<SessionId, Refused> {
+) -> Result<Session, Refused> {
     let session = session.ok_or(ReportRefused::MissingSession)?;
-    control_plane
+
+    Ok(control_plane
         .store
         .read()
         .await?
         .workspaces()
         .carried(&linked.instance, session)
         .await?
-        .ok_or(ReportRefused::Gone(session))?;
-
-    Ok(session)
+        .ok_or(ReportRefused::Gone(session))?)
 }
 
 fn bearer(headers: &HeaderMap) -> Option<Secret> {

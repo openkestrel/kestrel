@@ -333,6 +333,7 @@ async fn live_on_the_link(kestrel: &Kestrel) -> (Session, OnTheLink) {
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
     kestrel.start_on_the_link(&session).await;
     kestrel.report_answered(&session, 1).await;
+    kestrel.report_settled(&session, 2).await;
     kestrel
         .report_session_info(&session, &[model_option(DEFAULT_MODEL)])
         .await;
@@ -706,7 +707,7 @@ async fn changing_options_shows_while_a_change_is_pending_and_clears_when_it_set
     kestrel
         .report_option_changed(
             &session,
-            2,
+            3,
             work::Report::OptionChanged {
                 participant: "operator".to_owned(),
                 option: "model".to_owned(),
