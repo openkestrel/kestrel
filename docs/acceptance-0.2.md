@@ -339,9 +339,12 @@ declared an `acme` Organization with two live Instances, a `kestrel` Project aga
 ### Findings on main
 
 - **[#369](https://github.com/jtmthf/kestrel/issues/369): an OpenCode `auth.json` seed gives no
-  provider.** OpenCode 2.0.14 in the image ignores the seed USAGE.md recommends. Three `builder`
-  Sessions failed with "this agent does not offer the model …". Holding `OPENCODE_API_KEY` as a
-  variable works.
+  provider — resolved by dropping the seed from the docs.** OpenCode 2.0.14 in the image ignores the
+  seed USAGE.md recommends. Three `builder` Sessions failed with "this agent does not offer the model
+  …". Holding `OPENCODE_API_KEY` as a variable works. Fresh homes seeded with a dummy `api`
+  `auth.json` printed "No authenticated integrations" under opencode 2.0.14, 2.0.18 and 2.0.22;
+  opencode's legacy import runs only when an existing database upgrades past it, never on a fresh home
+  (ADR-0026). The docs now lead with `--variable OPENCODE_API_KEY` and offer no file for OpenCode.
 - **A copied Claude login races the desktop.** A Keychain copy held as a Profile file shares its
   refresh token with the operator's own Claude. When the desktop refreshed, Kestrel's copy died.
   A `claude setup-token` token does not rotate, and it is what USAGE.md already recommends.

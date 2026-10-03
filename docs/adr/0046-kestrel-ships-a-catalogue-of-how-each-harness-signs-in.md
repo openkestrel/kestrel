@@ -34,8 +34,8 @@ runs from the control plane's harness-command setting. kestrel simply cannot gui
 ## Consequences
 
 - A harness release that moves its login changes a catalogue row, not kestrel's code.
-- OpenCode's own OAuth providers (`opencode auth login`) stay out: OpenCode 2 imports an `auth.json`
-  once and refreshes only its own database (ADR-0026, #369), so kestrel could not keep such a login
-  alive.
+- OpenCode's own OAuth providers (`opencode auth login`) stay out: OpenCode 2 keeps credentials only
+  in its own database and a fresh home never imports a seeded `auth.json` (ADR-0026, #369), so kestrel
+  has no surface to supply or keep such a login alive.
 - Each sign-in is checked with one real model call when it is saved, and carries a state a reader can
   act on: signed in, expired, or not covered by the plan.
