@@ -21,15 +21,16 @@ use agent_client_protocol::schema::v1::{
     SetSessionModeResponse, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
     ToolCallUpdateFields, UnstructuredCommandInput, UsageUpdate,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo, Error, Result, Stdio};
+use agent_client_protocol::{Agent, Client, ConnectionTo, Error, Result, Stdio, UntypedMessage};
 use clap::Parser;
 use kestrel_scripted_agent::{
-    BACKGROUND, BOOKKEEPING, BURSTED_SIZE, BURSTED_USAGE, CHATTER, CHATTERED_LINES,
-    CHATTERED_MESSAGES, COMMAND, COMMAND_DESCRIPTION, COMMAND_HINT, CONFIDED, CUSTOM_CATEGORY,
-    CUSTOM_OPTION, DEFAULT_MODEL, FIRST_MEMORY, LAST_MEMORY, LOGIN, MODE_OPTION, MUTTERED,
-    OTHER_MODE, OTHER_MODEL, OTHER_THOUGHT_LEVEL, OVERLONG, REFRESHED, REPEATS, RESUMES_AFTER,
-    SAID_WHILE_TRAILING, STARTING_MODE, STARTING_THOUGHT_LEVEL, SWITCHED_MODE, Script,
-    THOUGHT_LEVEL_OPTION, TITLE, WRITTEN_WHILE_TRAILING, chattered, conversed,
+    BACKGROUND, BACKGROUND_TASK, BOOKKEEPING, BURSTED_SIZE, BURSTED_USAGE, CHATTER,
+    CHATTERED_LINES, CHATTERED_MESSAGES, COMMAND, COMMAND_DESCRIPTION, COMMAND_HINT, CONFIDED,
+    CUSTOM_CATEGORY, CUSTOM_OPTION, DEFAULT_MODEL, FIRST_MEMORY, LAST_MEMORY, LOGIN, MODE_OPTION,
+    MUTTERED, OTHER_MODE, OTHER_MODEL, OTHER_THOUGHT_LEVEL, OVERLONG, REFRESHED, REPEATS,
+    RESUMES_AFTER, SAID_WHILE_TRAILING, STARTING_MODE, STARTING_THOUGHT_LEVEL, SWITCHED_MODE,
+    Script, TASK_RUNS, THOUGHT_LEVEL_OPTION, TITLE, UNKNOWN_UPDATE, WRITTEN_WHILE_TRAILING,
+    chattered, conversed,
 };
 
 const SESSION: &str = "scripted";
@@ -55,11 +56,14 @@ struct Cli {
     /// The sequence to play
     #[arg(long, value_enum, default_value = "speaks")]
     script: Script,
+    /// Plays as an adapter that knows none of the declarations a client makes
+    #[arg(long)]
+    unaware: bool,
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    let script = Cli::parse().script;
+    let Cli { script, unaware } = Cli::parse();
     let prompted_so_far: Arc<Mutex<Vec<String>>> = Arc::default();
     let cancelled: Arc<AtomicBool> = Arc::default();
     let opened_against: Arc<Mutex<Option<PathBuf>>> = Arc::default();
@@ -96,6 +100,10 @@ async fn main() -> Result<()> {
                 if script == Script::Predates {
                     return responder.respond(InitializeResponse::new(ProtocolVersion::V0));
                 }
+                ASYNC_TASKS.store(
+                    !unaware && declares_async_tasks(&initialize),
+                    Ordering::Relaxed,
+                );
 
                 if script == Script::Demands {
                     return responder.respond(
@@ -290,6 +298,25 @@ async fn main() -> Result<()> {
 }
 
 static TURN: AtomicUsize = AtomicUsize::new(0);
+static ASYNC_TASKS: AtomicBool = AtomicBool::new(false);
+const ASYNC_TASK: &str = "task-1";
+
+/// Read as Claude's adapter reads it.
+fn declares_async_tasks(initialize: &InitializeRequest) -> bool {
+    let air = initialize
+        .client_capabilities
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.get("jetbrains"))
+        .and_then(|jetbrains| jetbrains.get("air"));
+    air.and_then(|air| air.get("version"))
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|version| version >= 1)
+        && air
+            .and_then(|air| air.get("capabilities"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|capabilities| capabilities.contains(&"asyncTasks".into()))
+}
 
 async fn play(
     script: Script,
@@ -551,6 +578,33 @@ async fn play(
         say(connection, "message-1", "answered, with more to do")?;
         return Ok(StopReason::EndTurn);
     }
+    if script == Script::AnswersWithABackgroundTask {
+        extension(
+            connection,
+            serde_json::json!({"sessionUpdate": UNKNOWN_UPDATE}),
+        )?;
+        say(
+            connection,
+            "message-1",
+            "running the tests in the background",
+        )?;
+        if earlier.is_empty() && ASYNC_TASKS.load(Ordering::Relaxed) {
+            extension(
+                connection,
+                serde_json::json!({
+                    "sessionUpdate": "async_task_spawned",
+                    "asyncTaskId": ASYNC_TASK,
+                    "name": BACKGROUND_TASK,
+                    "taskType": "local_bash",
+                    "description": BACKGROUND_TASK,
+                    "showInTranscript": false,
+                    "canStop": true,
+                }),
+            )?;
+            async_task_state(connection, "running")?;
+        }
+        return Ok(StopReason::EndTurn);
+    }
     if matches!(
         script,
         Script::AnswersWithAToolOpen | Script::AnswersWithAToolOpenThenExits
@@ -801,6 +855,10 @@ async fn trail(
             Ok(())
         }
         Script::ResumesAfterSettling => runs_in_the_background(RESUMES_AFTER).await,
+        Script::AnswersWithABackgroundTask if ASYNC_TASKS.load(Ordering::Relaxed) => {
+            tokio::time::sleep(TASK_RUNS).await;
+            async_task_state(connection, "completed")
+        }
         Script::AnswersThenWrites => {
             tokio::time::sleep(VANISHING).await;
             let directory = located.ok_or_else(Error::internal_error)?;
@@ -879,6 +937,25 @@ fn say(connection: &ConnectionTo<Client>, message: &str, said: &str) -> Result<(
 
 fn update(connection: &ConnectionTo<Client>, update: SessionUpdate) -> Result<()> {
     connection.send_notification(SessionNotification::new(SESSION, update))
+}
+
+/// A `session/update` ACP v1 has no type for.
+fn extension(connection: &ConnectionTo<Client>, update: serde_json::Value) -> Result<()> {
+    connection.send_notification(UntypedMessage::new(
+        "session/update",
+        serde_json::json!({"sessionId": SESSION, "update": update}),
+    )?)
+}
+
+fn async_task_state(connection: &ConnectionTo<Client>, state: &str) -> Result<()> {
+    extension(
+        connection,
+        serde_json::json!({
+            "sessionUpdate": "async_task_state_update",
+            "asyncTaskId": ASYNC_TASK,
+            "state": state,
+        }),
+    )
 }
 
 fn chunk(message: Option<&str>, said: &str) -> ContentChunk {

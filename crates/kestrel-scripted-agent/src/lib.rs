@@ -46,6 +46,10 @@ pub const BOOKKEEPING: std::time::Duration = std::time::Duration::from_secs(6);
 /// Longer than a test's quiet period, so the Session is waiting before its agent resumes.
 pub const RESUMES_AFTER: std::time::Duration = std::time::Duration::from_secs(4);
 pub const SAID_WHILE_TRAILING: &str = "the background tests passed";
+pub const BACKGROUND_TASK: &str = "cargo test --workspace";
+/// Longer than a test's quiet period, and silent throughout.
+pub const TASK_RUNS: std::time::Duration = std::time::Duration::from_secs(4);
+pub const UNKNOWN_UPDATE: &str = "scripted_mystery";
 pub const WRITTEN_WHILE_TRAILING: &str = "written-while-trailing.txt";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -141,6 +145,10 @@ pub enum Script {
     ResumesAfterSettling,
     /// Answers, then writes `WRITTEN_WHILE_TRAILING` into its checkout.
     AnswersThenWrites,
+    /// Sends an `UNKNOWN_UPDATE` session update, then answers having spawned Claude's async task
+    /// `BACKGROUND_TASK`, which completes `TASK_RUNS` later without another word. As Claude's
+    /// adapter does, it sends the task only to a client that declared `asyncTasks`.
+    AnswersWithABackgroundTask,
 }
 
 impl Script {
@@ -195,6 +203,7 @@ impl Script {
             Script::AnswersThenKeepsBooks => "answers-then-keeps-books",
             Script::ResumesAfterSettling => "resumes-after-settling",
             Script::AnswersThenWrites => "answers-then-writes",
+            Script::AnswersWithABackgroundTask => "answers-with-a-background-task",
         }
     }
 }

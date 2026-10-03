@@ -3428,11 +3428,12 @@
           "supervisor_version": { "type": ["string", "null"] },
           "usage": { "anyOf": [{ "$ref": "#/components/schemas/Usage" }, { "type": "null" }] },
           "tools": { "type": "array", "items": { "$ref": "#/components/schemas/RunningTool" } },
+          "units": { "type": "array", "description": "Adapter units still running, such as a Claude background task; they keep a trailing Session trailing.", "items": { "$ref": "#/components/schemas/RunningUnit" } },
           "message_buffering": { "type": "boolean" },
           "thought_buffering": { "type": "boolean" },
           "last_activity_at": { "type": ["string", "null"], "format": "date-time", "description": "When the trailing Session's agent last showed activity; null in every other state." }
         },
-        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "changing_options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "message_buffering", "thought_buffering", "last_activity_at"]
+        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "changing_options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "units", "message_buffering", "thought_buffering", "last_activity_at"]
       },
       "SessionOption": {
         "type": "object",
@@ -4509,6 +4510,12 @@
               "$ref": "#/components/schemas/RunningTool"
             }
           },
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningUnit"
+            }
+          },
           "message_buffering": {
             "type": "boolean"
           },
@@ -4535,6 +4542,7 @@
         "required": [
           "session_id",
           "tools",
+          "units",
           "message_buffering",
           "thought_buffering",
           "usage"
@@ -4895,6 +4903,35 @@
           "result",
           "closing_reason",
           "completion"
+        ]
+      },
+      "RunningUnit": {
+        "description": "Work an adapter declared it runs apart from any tool call, such as a Claude background task, open until the adapter settles it. A settled unit adds no Transcript entry.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "background_task",
+              "subagent"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "started_at"
         ]
       },
       "RunningTool": {

@@ -13,7 +13,7 @@ use crate::domain::{
 use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
 use crate::link;
-use crate::live_work::RunningTool;
+use crate::live_work::{RunningTool, RunningUnit};
 use crate::log::{ClosingReason, Completion, Entry, Message, PlanEntry, ToolStatus};
 use crate::participant;
 use crate::store::workspace::Taken;
@@ -67,6 +67,7 @@ pub enum Report {
     },
     SessionState {
         tools: Vec<RunningTool>,
+        units: Vec<RunningUnit>,
         message_buffering: bool,
         thought_buffering: bool,
         #[serde(default)]

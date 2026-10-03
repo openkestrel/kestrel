@@ -426,7 +426,7 @@ async fn the_link_takes_every_report_the_published_openapi_document_describes() 
         "finished": {"kind": "finished", "seq": 1, "exit": {"status": "succeeded"}, "usage": {"context_used": 1_200, "context_size": 200_000, "cost": {"amount": 0.42, "currency": "USD"}}},        "thought": {"kind": "thought", "seq": 1, "text": "thinking", "completion": {"started_at": "2026-09-29T12:00:00Z", "finished_at": "2026-09-29T12:00:00Z", "turn_outcome": null}},
         "plan": {"kind": "plan", "seq": 1, "entries": [], "completion": {"started_at": "2026-09-29T12:00:00Z", "finished_at": "2026-09-29T12:00:00Z", "turn_outcome": null}},
         "tool_call": {"kind":"tool_call", "seq":1, "call_id":"call", "title":"read", "tool_kind":"read", "status":"completed", "input":{}, "result":[], "closing_reason":null, "completion":{"started_at":"2026-09-30T12:00:00Z", "finished_at":"2026-09-30T12:00:00Z", "turn_outcome":null}},
-        "session_state": {"kind":"session_state", "tools":[], "message_buffering":false, "thought_buffering":false, "usage": {"context_used": 1_200, "context_size": 200_000, "cost": {"amount": 0.42, "currency": "USD"}}, "last_activity_at": "2026-09-30T12:00:00Z"},
+        "session_state": {"kind":"session_state", "tools":[], "units":[{"id":"task", "kind":"background_task", "title":"background tests", "started_at":"2026-09-30T12:00:00Z"}], "message_buffering":false, "thought_buffering":false, "usage": {"context_used": 1_200, "context_size": 200_000, "cost": {"amount": 0.42, "currency": "USD"}}, "last_activity_at": "2026-09-30T12:00:00Z"},
 
 
     });
@@ -758,6 +758,7 @@ async fn completed_units_replay_once_and_filtered_pages_walk_the_global_cursor()
         seq: None,
         report: Report::SessionState {
             tools: vec![],
+            units: vec![],
             message_buffering: true,
             thought_buffering: false,
             usage: None,
@@ -1049,6 +1050,7 @@ async fn a_transcript_follow_replaces_activity_and_snapshots_session_state_witho
                 status: "in_progress".into(),
                 started_at: "2026-09-29T12:00:00Z".parse().unwrap(),
             }],
+            units: vec![],
             message_buffering: true,
             thought_buffering: false,
             usage: None,
@@ -1481,7 +1483,7 @@ async fn a_cli_cut_after_the_final_activity_id_does_not_print_its_replacement_tw
         axum::routing::get(move |headers: axum::http::HeaderMap| {
             let request = requests.fetch_add(1, Ordering::SeqCst);
             async move {
-                let snapshot = "event: session_state\ndata: {\"session_id\":null,\"tools\":[],\"message_buffering\":false,\"thought_buffering\":false}\n\n";
+                let snapshot = "event: session_state\ndata: {\"session_id\":null,\"tools\":[],\"units\":[],\"message_buffering\":false,\"thought_buffering\":false}\n\n";
                 let summary = "id: example:4\nevent: activity\ndata: {\"first_seq\":3,\"last_seq\":4,\"counts\":{\"tool_calls\":0,\"failed_calls\":0,\"thoughts\":2,\"plans\":0,\"tombstones\":0},\"closed\":true,\"anomaly\":false}\n\n";
                 let tail = if request == 0 { "" } else {
                     assert_eq!(headers["last-event-id"], "example:4");

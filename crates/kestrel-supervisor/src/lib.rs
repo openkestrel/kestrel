@@ -175,23 +175,12 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
 
 /// Folds in the last reported usage, since the snapshot replaces what the control plane holds.
 async fn report_state(link: &Link, carrying: &Carrying) -> Result<(), link::Error> {
-    let Some(Report::SessionState {
-        tools,
-        message_buffering,
-        thought_buffering,
-        last_activity_at,
-        ..
-    }) = &carrying.state
-    else {
+    let Some(mut state) = carrying.state.clone() else {
         return Ok(());
     };
-    let state = Report::SessionState {
-        tools: tools.clone(),
-        message_buffering: *message_buffering,
-        thought_buffering: *thought_buffering,
-        usage: carrying.usage_reported.clone(),
-        last_activity_at: *last_activity_at,
-    };
+    if let Report::SessionState { usage, .. } = &mut state {
+        usage.clone_from(&carrying.usage_reported);
+    }
 
     match tokio::time::timeout(
         Duration::from_secs(1),
@@ -805,6 +794,7 @@ async fn start_carrying(
         taken: 0,
         state: Some(Report::SessionState {
             tools: Vec::new(),
+            units: Vec::new(),
             message_buffering: false,
             thought_buffering: false,
             usage: None,

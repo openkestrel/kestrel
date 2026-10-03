@@ -243,6 +243,7 @@ pub enum Report {
     },
     SessionState {
         tools: Vec<RunningTool>,
+        units: Vec<RunningUnit>,
         message_buffering: bool,
         thought_buffering: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -898,4 +899,20 @@ pub struct RunningTool {
     pub title: String,
     pub status: String,
     pub started_at: jiff::Timestamp,
+}
+
+/// Work an adapter declared it runs apart from any tool call, open until the adapter settles it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RunningUnit {
+    pub id: String,
+    pub kind: UnitKind,
+    pub title: String,
+    pub started_at: jiff::Timestamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnitKind {
+    BackgroundTask,
+    Subagent,
 }
