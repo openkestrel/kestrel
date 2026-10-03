@@ -177,6 +177,11 @@ async fn dispatching(
         if let Err(error) = archive(store, &dispatch.driver, &supervisors).await {
             warn!(%error, "an archiving pass found nothing it could do");
         }
+        if let Err(error) =
+            instance::deliver_idle_hints(store, |hint| dispatch.driver.idle_hint(hint)).await
+        {
+            warn!(%error, "an idle hint pass found nothing it could do");
+        }
         match scheduling::dispatch(
             store,
             dispatch.max_active_sessions.get(),

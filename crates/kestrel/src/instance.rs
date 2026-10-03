@@ -3,12 +3,73 @@ use std::num::NonZeroUsize;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::compute::IdleHint;
 use crate::declined::Declined;
-use crate::domain::{Workspace, WorkspaceId};
+use crate::domain::{Workspace, WorkspaceId, WorkspaceState};
 use crate::log::Entry;
 use crate::store::workspace::Kept;
 use crate::store::{Store, Tx};
 use crate::workspace;
+
+pub(crate) async fn queue_idle_hint(tx: &mut Tx<'_>, id: WorkspaceId) -> Result<()> {
+    let workspace = tx.workspaces().get(id).await?;
+    if let Some(kept) = idle_recoverable(tx, &workspace).await? {
+        tx.workspaces()
+            .queue_idle_hint(
+                &workspace,
+                &IdleHint {
+                    instance: kept.instance,
+                    idle_since: workspace.last_active_at,
+                    archive_deadline: workspace.last_active_at + workspace::IDLE,
+                },
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+async fn idle_recoverable(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Option<Kept>> {
+    if workspace.state != WorkspaceState::Open
+        || tx
+            .workspaces()
+            .unfinished_session(workspace)
+            .await?
+            .is_some()
+    {
+        return Ok(None);
+    }
+    Ok(tx
+        .workspaces()
+        .kept_instance(workspace.id)
+        .await?
+        .filter(|kept| {
+            unpublished(&workspace.checkout.repositories, kept.observed.as_deref()).is_none()
+        }))
+}
+
+pub(crate) async fn deliver_idle_hints(
+    store: &Store,
+    mut deliver: impl FnMut(&IdleHint) -> std::io::Result<()>,
+) -> Result<()> {
+    let mut tx = store.begin().await?;
+    for (id, hint) in tx.workspaces().take_idle_hints().await? {
+        let workspace = tx.workspaces().get(id).await?;
+        if workspace.last_active_at != hint.idle_since {
+            continue;
+        }
+        let Some(kept) = idle_recoverable(&mut tx, &workspace).await? else {
+            continue;
+        };
+        if kept.instance != hint.instance {
+            continue;
+        }
+        // The ending is committed; keep the write lock so no Session claims this Instance mid-hint.
+        if let Err(error) = deliver(&hint) {
+            tracing::warn!(instance = %hint.instance, %error, "an instance's idle hint could not be delivered");
+        }
+    }
+    tx.commit().await
+}
 
 pub enum Admission {
     Available,

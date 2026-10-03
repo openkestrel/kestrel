@@ -10,7 +10,16 @@ use std::process::{Child, ChildStderr, ChildStdout, ExitStatus};
 pub use docker::Docker;
 pub use local_exec::LocalExec;
 
+use jiff::Timestamp;
+
 use crate::domain::SessionId;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdleHint {
+    pub instance: String,
+    pub idle_since: Timestamp,
+    pub archive_deadline: Timestamp,
+}
 
 /// What a driver does once it has provisioned, and the whole of it. An inbound address would
 /// split the eight deployment targets, so no driver offers one.
@@ -36,6 +45,14 @@ pub enum Driver {
 }
 
 impl Driver {
+    /// Advisory only: ignoring this changes cost, never correctness (ADR-0018).
+    pub fn idle_hint(&self, hint: &IdleHint) -> io::Result<()> {
+        match self {
+            Driver::Docker(docker) => docker.idle_hint(hint),
+            Driver::LocalExec(local_exec) => local_exec.idle_hint(hint),
+        }
+    }
+
     /// What this driver names Instances under, as `<driver>/<instance>`.
     pub const fn name(&self) -> &'static str {
         match self {

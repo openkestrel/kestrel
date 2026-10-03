@@ -1121,6 +1121,7 @@ pub(crate) async fn ending(tx: &mut Tx<'_>, session: &Session, exit: Exit) -> Re
             cascade_unreachable(tx, session.id).await?;
         }
         continue_pending(tx, session.workspace).await?;
+        crate::instance::queue_idle_hint(tx, session.workspace).await?;
         exit
     } else {
         tx.workspaces()
