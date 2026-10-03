@@ -762,6 +762,7 @@ async fn a_supervisor_that_reports_its_session_failed_ends_it_failed() {
                     exit: Exit::Failed {
                         because: "the agent could not open a pull request".to_owned(),
                     },
+                    usage: None,
                 },
             },
         )

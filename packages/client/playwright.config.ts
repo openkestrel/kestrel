@@ -10,7 +10,11 @@ export default defineConfig({
 	testDir: "e2e",
 	forbidOnly: !!process.env.CI,
 	reporter: process.env.CI ? "github" : "list",
-	use: { baseURL: `http://127.0.0.1:${client}`, trace: "retain-on-failure" },
+	use: {
+		baseURL: `https://127.0.0.1:${client}`,
+		ignoreHTTPSErrors: true,
+		trace: "retain-on-failure",
+	},
 	projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 	webServer: [
 		{
@@ -27,10 +31,12 @@ export default defineConfig({
 		},
 		{
 			command: "caddy run --adapter caddyfile --config ../../images/kestrel-client/Caddyfile",
-			url: `http://127.0.0.1:${client}/`,
+			url: `https://127.0.0.1:${client}/`,
+			ignoreHTTPSErrors: true,
 			reuseExistingServer: false,
 			env: {
-				KESTREL_CLIENT_LISTEN: `127.0.0.1:${client}`,
+				XDG_DATA_HOME: mkdtempSync(join(tmpdir(), "kestrel-client-e2e-caddy-")),
+				KESTREL_CLIENT_LISTEN_PORT: String(client),
 				KESTREL_CLIENT_ROOT: resolve(import.meta.dirname, "dist/client"),
 				KESTREL_CONTROL_PLANE: `http://127.0.0.1:${operator}`,
 			},

@@ -14,6 +14,9 @@ CREATE TABLE trigger (
     on_open_workspace TEXT NOT NULL CHECK (on_open_workspace IN ('continue', 'new-session')),
     project_id TEXT NOT NULL REFERENCES project (id),
     agent_id TEXT NOT NULL REFERENCES agent (id),
+    model TEXT,
+    mode TEXT,
+    thought_level TEXT,
     state TEXT NOT NULL,
     -- An apply removes only what an apply declared, never a one-off declared by flags.
     applied INTEGER NOT NULL CHECK (applied IN (0, 1)),

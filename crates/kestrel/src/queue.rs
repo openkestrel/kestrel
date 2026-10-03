@@ -19,6 +19,7 @@ pub struct Snapshot {
     pub instances: Instances,
     pub queued: Vec<Queued>,
     pub waiting: Vec<Waiting>,
+    pub unbriefed: Vec<Unbriefed>,
 }
 
 pub struct ActiveWork {
@@ -71,6 +72,12 @@ pub struct Waiting {
     pub reasons: Vec<Reason>,
 }
 
+/// Holds an Instance and no Active-Work Slot.
+pub struct Unbriefed {
+    pub session: Session,
+    pub pending_since: Option<Timestamp>,
+}
+
 pub async fn snapshot(store: &Store, name: &str) -> Result<Snapshot> {
     let mut tx = store.read().await?;
     let organization = tx.organizations().named(name).await?;
@@ -93,6 +100,7 @@ pub async fn snapshot(store: &Store, name: &str) -> Result<Snapshot> {
     let instances = instances(&mut tx, &organization).await?;
     let queued = queued(&mut tx, &organization, &mut held).await?;
     let waiting = waiting(&mut tx, &organization, &active_work, &queued, &mut held).await?;
+    let unbriefed = unbriefed(&mut tx, &organization).await?;
 
     Ok(Snapshot {
         recorded,
@@ -100,6 +108,7 @@ pub async fn snapshot(store: &Store, name: &str) -> Result<Snapshot> {
         instances,
         queued,
         waiting,
+        unbriefed,
     })
 }
 
@@ -165,8 +174,13 @@ async fn queued(
         if let Some(blockers) = blocked.remove(&session.id) {
             reasons.push(Reason::Dependencies(blockers));
         }
-        reasons.extend(held.remove(&session.id).unwrap_or_default());
         let workspace = tx.workspaces().get(session.workspace).await?;
+        // Dispatch claims a Session with nothing to start it with without a slot and without the
+        // serialized Profile, so neither can be why it is still queued.
+        let awaiting_a_brief = work::awaiting_a_brief(tx, &workspace).await?;
+        if !awaiting_a_brief {
+            reasons.extend(held.remove(&session.id).unwrap_or_default());
+        }
         match instance::admission(tx, &workspace).await? {
             Admission::Available => {}
             Admission::Archiving(instance) => reasons.push(Reason::InstanceArchiving(instance)),
@@ -181,7 +195,7 @@ async fn queued(
             Admission::AtLimit(limit) => reasons.push(Reason::LiveInstanceLimit(limit.get())),
         }
 
-        let position = reasons.is_empty().then(|| {
+        let position = (!awaiting_a_brief && reasons.is_empty()).then(|| {
             ready += 1;
             ready
         });
@@ -193,6 +207,25 @@ async fn queued(
     }
 
     Ok(queued)
+}
+
+/// They hold their Instances, so they are counted there, and no Active-Work Slot, so they are never
+/// numbered.
+async fn unbriefed(tx: &mut Tx<'_>, organization: &Organization) -> Result<Vec<Unbriefed>> {
+    let mut unbriefed = Vec::new();
+    for session in tx
+        .workspaces()
+        .sessions_in(organization, SessionState::Unbriefed)
+        .await?
+    {
+        let pending_since = tx.workspaces().pending_since(session.workspace).await?;
+        unbriefed.push(Unbriefed {
+            session,
+            pending_since,
+        });
+    }
+
+    Ok(unbriefed)
 }
 
 /// Those with held input come first, in the order a freed slot prompts them.

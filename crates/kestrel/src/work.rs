@@ -5,12 +5,18 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::domain::{Exit, Session, SessionId, Turn, Usage, WorkspaceId};
+use crate::declined::Declined;
+use crate::domain::{
+    ChangingOption, Declared, Exit, HeldMessage, Session, SessionCommand, SessionId, SessionOption,
+    SessionState, Turn, Usage, Workspace, WorkspaceId,
+};
 use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
 use crate::link;
-use crate::log::{Completion, Entry, Message, PlanEntry};
-use crate::store::workspace::{PendingMessage, Taken};
+use crate::live_work::RunningTool;
+use crate::log::{ClosingReason, Completion, Entry, Message, PlanEntry, ToolStatus};
+use crate::participant;
+use crate::store::workspace::Taken;
 use crate::store::{Store, Tx};
 use crate::workspace;
 
@@ -32,6 +38,7 @@ pub enum Report {
     Stderr {
         lines: Vec<String>,
     },
+    Ready,
     Started,
     Model {
         model: String,
@@ -48,15 +55,61 @@ pub enum Report {
         entries: Vec<PlanEntry>,
         completion: Completion,
     },
-    Used {
+    ToolCall {
+        call_id: String,
+        title: String,
+        tool_kind: String,
+        status: ToolStatus,
+        input: serde_json::Value,
+        result: Box<serde_json::Value>,
+        closing_reason: Option<ClosingReason>,
+        completion: Completion,
+    },
+    SessionState {
+        tools: Vec<RunningTool>,
+        message_buffering: bool,
+        thought_buffering: bool,
+        #[serde(default)]
+        usage: Option<Usage>,
+    },
+    /// Never a row: held in memory beside the running tools (ADR-0041).
+    Usage {
         usage: Usage,
     },
-    Answered,
+    /// Idempotent and unnumbered, so a reconnect can say it again (ADR-0041).
+    SessionInfo {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        options: Vec<SessionOption>,
+        #[serde(default)]
+        commands: Vec<SessionCommand>,
+    },
+    OptionChanged {
+        participant: String,
+        option: String,
+        category: String,
+        #[serde(default)]
+        from: Option<String>,
+        #[serde(default)]
+        to: Option<String>,
+        #[serde(default)]
+        refused: Option<String>,
+        #[serde(default)]
+        options: Vec<SessionOption>,
+    },
+    Answered {
+        #[serde(default)]
+        usage: Option<Usage>,
+    },
+    Interrupted,
     Checkout {
         repositories: Vec<Observed>,
     },
     Finished {
         exit: Exit,
+        #[serde(default)]
+        usage: Option<Usage>,
     },
 }
 
@@ -66,14 +119,20 @@ impl Report {
             Report::Connected { .. }
             | Report::Heartbeat
             | Report::Stderr { .. }
-            | Report::Work { .. } => false,
+            | Report::Work { .. }
+            | Report::Ready
+            | Report::SessionState { .. }
+            | Report::Usage { .. }
+            | Report::SessionInfo { .. } => false,
             Report::Started
             | Report::Model { .. }
             | Report::Said { .. }
             | Report::Thought { .. }
             | Report::Plan { .. }
-            | Report::Used { .. }
-            | Report::Answered
+            | Report::ToolCall { .. }
+            | Report::OptionChanged { .. }
+            | Report::Answered { .. }
+            | Report::Interrupted
             | Report::Checkout { .. }
             | Report::Finished { .. } => true,
         }
@@ -149,7 +208,7 @@ pub async fn enqueue(
     store: &Store,
     workspace: WorkspaceId,
     agent: Option<&str>,
-    model: Option<&str>,
+    declared: Declared,
 ) -> Result<Session> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(workspace).await?;
@@ -171,18 +230,27 @@ pub async fn enqueue(
     };
     let session = tx
         .workspaces()
-        .enqueue_session(&workspace, named.as_ref(), model)
+        .enqueue_session(&workspace, named.as_ref(), declared)
         .await?;
     tx.commit().await?;
 
     Ok(session)
 }
 
+pub async fn has_had_session(store: &Store, workspace: WorkspaceId) -> Result<bool> {
+    store
+        .read()
+        .await?
+        .workspaces()
+        .has_had_session(workspace)
+        .await
+}
+
 /// A queued Session is dispatched at most once: what this hands back is already active, so a
 /// second claimant asking at the same moment is handed something else, or nothing.
 pub async fn claim(store: &Store, serialized: &[String]) -> Result<Option<Session>> {
     let mut tx = store.begin().await?;
-    let claimed = claiming(&mut tx, serialized, None).await?;
+    let claimed = claiming(&mut tx, serialized, None, false).await?;
     tx.commit().await?;
 
     Ok(claimed)
@@ -201,26 +269,83 @@ pub async fn occupy(
     serialized: &[String],
 ) -> Result<Option<Occupied>> {
     let mut tx = store.begin().await?;
-    if tx.workspaces().occupying_slots().await? >= slots {
-        return Ok(None);
-    }
-
+    let full = tx.workspaces().occupying_slots().await? >= slots;
     let held = tx.workspaces().oldest_held_input(serialized).await?;
-    let occupied =
-        match claiming(&mut tx, serialized, held.as_ref().map(|(_, since)| *since)).await? {
-            Some(claimed) => Occupied::Claimed(claimed),
-            None => {
-                let Some((session, _)) = held else {
+    let first_turn = oldest_unstarted_brief(&mut tx, serialized).await?;
+    let input_since = match (&held, &first_turn) {
+        (Some((_, held_at)), Some((_, brief_at))) => Some((*held_at).min(*brief_at)),
+        (Some((_, at)), None) | (None, Some((_, at))) => Some(*at),
+        (None, None) => None,
+    };
+    let occupied = match claiming(&mut tx, serialized, input_since, full).await? {
+        Some(claimed) => Occupied::Claimed(claimed),
+        None => {
+            // A full pool still lets an unbriefed Session provision, but leaves held input and
+            // first Turns for a slot that frees.
+            if full {
+                tx.commit().await?;
+                return Ok(None);
+            }
+            let (session, is_first_turn) = match (held, first_turn) {
+                (Some((_, held_at)), Some((first_turn, brief_at))) if brief_at < held_at => {
+                    (first_turn, true)
+                }
+                (Some((held, _)), _) => (held, false),
+                (None, Some((first_turn, _))) => (first_turn, true),
+                (None, None) => {
                     tx.commit().await?;
                     return Ok(None);
-                };
+                }
+            };
+            if is_first_turn {
+                prompt_brief(&mut tx, &session).await?;
+            } else {
                 prompt_pending(&mut tx, &session).await?;
-                Occupied::Resumed(tx.workspaces().session(session.id).await?)
             }
-        };
+            Occupied::Resumed(tx.workspaces().session(session.id).await?)
+        }
+    };
     tx.commit().await?;
 
     Ok(Some(occupied))
+}
+
+/// The serialized-Profile rule applies to a Brief here rather than at dispatch (ADR-0025).
+async fn oldest_unstarted_brief(
+    tx: &mut Tx<'_>,
+    serialized: &[String],
+) -> Result<Option<(Session, Timestamp)>> {
+    let mut waiting = Vec::new();
+    for session in tx.workspaces().unbriefed_sessions().await? {
+        if tx.workspaces().holds_profile(&session, serialized).await? {
+            continue;
+        }
+        let workspace = tx.workspaces().get(session.workspace).await?;
+        if let Some((_, written_at)) = tx.log().unfollowed_brief(&workspace).await? {
+            waiting.push((session, written_at));
+        }
+    }
+    waiting.sort_by_key(|(_, written_at)| *written_at);
+
+    Ok(waiting.into_iter().next())
+}
+
+async fn prompt_brief(tx: &mut Tx<'_>, session: &Session) -> Result<()> {
+    let workspace = tx.workspaces().get(session.workspace).await?;
+    let brief = tx
+        .log()
+        .unfollowed_brief(&workspace)
+        .await?
+        .map(|(brief, _)| brief)
+        .ok_or_else(|| anyhow::anyhow!("the session {} has no Brief to prompt", session.id))?;
+
+    link::prompt(tx, session, brief).await
+}
+
+/// Claimed without an Active-Work Slot or the serialized-Profile check, since it has no Turn to run
+/// yet (ADR-0038); the queue reads the same rule.
+pub(crate) async fn awaiting_a_brief(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<bool> {
+    Ok(crate::link::instruction(tx, workspace).await?.is_none())
 }
 
 /// A freed slot goes to whichever asked first, so a queued Session enqueued before the oldest held
@@ -233,18 +358,28 @@ async fn claiming(
     tx: &mut Tx<'_>,
     serialized: &[String],
     input_since: Option<Timestamp>,
+    full: bool,
 ) -> Result<Option<Session>> {
-    let claimable = tx.workspaces().claimable_sessions(serialized).await?;
+    let claimable = tx.workspaces().claimable_sessions().await?;
     for queued in claimable {
-        if input_since.is_some_and(|since| !goes_before_input(&queued, since)) {
-            continue;
-        }
         let workspace = tx.workspaces().get(queued.workspace).await?;
+        let unbriefed = awaiting_a_brief(tx, &workspace).await?;
+        if !unbriefed {
+            if full {
+                continue;
+            }
+            if input_since.is_some_and(|since| !goes_before_input(&queued, since)) {
+                continue;
+            }
+            if tx.workspaces().holds_profile(&queued, serialized).await? {
+                continue;
+            }
+        }
         match crate::instance::admission(tx, &workspace).await? {
             Admission::Available => {
                 if let Some(session) = tx
                     .workspaces()
-                    .claim_session(&queued, Timestamp::now() + LEASE)
+                    .claim_session(&queued, Timestamp::now() + LEASE, unbriefed)
                     .await?
                 {
                     return Ok(Some(session));
@@ -280,6 +415,202 @@ pub async fn sessions(store: &Store, workspace: WorkspaceId) -> Result<Vec<Sessi
     let workspace = tx.workspaces().get(workspace).await?;
 
     tx.workspaces().sessions(&workspace).await
+}
+
+pub enum Named<'a> {
+    Option(&'a str),
+    Category(&'a str),
+}
+
+pub enum OptionRefusal {
+    Phase(String),
+    Unacceptable { field: &'static str, why: String },
+    Missing(String),
+    Named(anyhow::Error),
+    Unavailable(anyhow::Error),
+}
+
+impl From<anyhow::Error> for OptionRefusal {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Unavailable(error)
+    }
+}
+
+pub struct OptionSet {
+    pub session: Session,
+    /// Waits on the harness (202) rather than setting a queued Session's declared value at once
+    /// (200).
+    pub live: bool,
+}
+
+pub async fn set_option(
+    store: &Store,
+    organization: &str,
+    reference: &str,
+    participant: &str,
+    named: Named<'_>,
+    value: &str,
+) -> Result<OptionSet, OptionRefusal> {
+    let mut tx = store.begin().await?;
+    let organization = tx.organizations().named(organization).await?;
+    let participant = match participant::accepted(&mut tx, &organization, participant).await {
+        Ok(name) => name,
+        Err(error) => return Err(OptionRefusal::Named(error)),
+    };
+    let session = tx
+        .workspaces()
+        .resolved_session(&organization, reference)
+        .await?;
+
+    let live = match session.state {
+        SessionState::Queued => false,
+        SessionState::Waiting => true,
+        SessionState::Unbriefed if !session.options.is_empty() => true,
+        phase => return Err(OptionRefusal::Phase(phase_refusal(phase, &session))),
+    };
+
+    if live {
+        let option = match named {
+            Named::Option(id) => session.options.iter().find(|option| option.id == id),
+            Named::Category(category) => session
+                .options
+                .iter()
+                .find(|option| option.is_category(category)),
+        };
+        let Some(option) = option else {
+            return Err(OptionRefusal::Missing(format!(
+                "the session {} offers no option {}",
+                session.id,
+                match named {
+                    Named::Option(id) => id,
+                    Named::Category(category) => category,
+                }
+            )));
+        };
+        let category = option.category.clone().unwrap_or_else(|| option.id.clone());
+        if !offers(option, value) {
+            return Err(OptionRefusal::Unacceptable {
+                field: "value",
+                why: format!("the {category} option does not offer {value}"),
+            });
+        }
+
+        let changing = ChangingOption {
+            option: option.id.clone(),
+            category,
+            value: value.to_owned(),
+            participant: participant.clone(),
+        };
+        tx.workspaces()
+            .add_changing_option(&session, &changing)
+            .await?;
+        tx.workspaces()
+            .send_instruction(
+                &session,
+                link::Instruction::SetOption {
+                    option: changing.option.clone(),
+                    value: changing.value.clone(),
+                    participant,
+                },
+            )
+            .await?
+            .ok_or_else(|| {
+                OptionRefusal::Phase(format!(
+                    "the session {} is on no instance to change",
+                    session.id
+                ))
+            })?;
+    } else {
+        let category = match named {
+            Named::Category(category) => {
+                if !declares(category) {
+                    return Err(OptionRefusal::Unacceptable {
+                        field: "category",
+                        why: format!(
+                            "a queued session declares {}, {} or {}, not {category}",
+                            SessionOption::MODEL,
+                            SessionOption::MODE,
+                            SessionOption::THOUGHT_LEVEL
+                        ),
+                    });
+                }
+                category
+            }
+            // A queued Session has reported no options, so only a category it declares is one.
+            Named::Option(option) if declares(option) => option,
+            Named::Option(option) => {
+                return Err(OptionRefusal::Missing(format!(
+                    "the queued session {} has no option {option}",
+                    session.id
+                )));
+            }
+        };
+        let from = match category {
+            SessionOption::MODEL => session.agent.declared.model.clone(),
+            SessionOption::MODE => session.agent.declared.mode.clone(),
+            _ => session.agent.declared.thought_level.clone(),
+        };
+        tx.workspaces()
+            .set_declared_option(&session, category, value)
+            .await?;
+        let workspace = tx.workspaces().get(session.workspace).await?;
+        tx.log()
+            .append(
+                &workspace,
+                Entry::OptionChanged {
+                    session: session.id,
+                    participant,
+                    option: category.to_owned(),
+                    category: category.to_owned(),
+                    from,
+                    to: Some(value.to_owned()),
+                    refused: None,
+                },
+            )
+            .await?;
+    }
+
+    let session = tx.workspaces().session(session.id).await?;
+    tx.commit().await?;
+
+    Ok(OptionSet { session, live })
+}
+
+fn phase_refusal(phase: SessionState, session: &Session) -> String {
+    match phase {
+        SessionState::Working => format!(
+            "the session {} is working, and an option cannot change mid-turn",
+            session.id
+        ),
+        SessionState::Ended => format!("the session {} has ended", session.id),
+        SessionState::Unreachable => format!("the session {} is unreachable", session.id),
+        SessionState::Unbriefed => format!(
+            "the session {} is unbriefed with no options yet",
+            session.id
+        ),
+        SessionState::Queued | SessionState::Waiting => {
+            format!("the session {} cannot change options", session.id)
+        }
+    }
+}
+
+fn declares(category: &str) -> bool {
+    matches!(
+        category,
+        SessionOption::MODEL | SessionOption::MODE | SessionOption::THOUGHT_LEVEL
+    )
+}
+
+fn offers(option: &SessionOption, value: &str) -> bool {
+    match &option.kind {
+        crate::domain::SessionOptionKind::Select { values, groups, .. } => {
+            values.iter().any(|offered| offered.value == value)
+                || groups
+                    .iter()
+                    .any(|group| group.values.iter().any(|offered| offered.value == value))
+        }
+        crate::domain::SessionOptionKind::Boolean { .. } => matches!(value, "true" | "false"),
+    }
 }
 
 /// Report acceptance and its effects share one transaction so a failed append remains replayable
@@ -373,6 +704,15 @@ async fn reported(
         | Report::Work { .. } => {
             unreachable!("a report about the instance is taken before one about its session")
         }
+        Report::Ready => {
+            if tx.workspaces().record_ready(session).await? {
+                let workspace = tx.workspaces().get(session.workspace).await?;
+                if workspace::first_held_becomes_the_brief(tx, &workspace).await? {
+                    info!(session = %session.id, "the first held message became the Brief");
+                }
+                info!(session = %session.id, "a supervisor reported its harness ready");
+            }
+        }
         Report::Started => {
             if tx.workspaces().record_started(session).await? {
                 let workspace = tx.workspaces().get(session.workspace).await?;
@@ -391,6 +731,61 @@ async fn reported(
         Report::Model { model } => {
             tx.workspaces().record_worked_model(session, &model).await?;
             info!(session = %session.id, model, "a supervisor reported the model its agent is on");
+        }
+        Report::SessionInfo {
+            title,
+            options,
+            commands,
+        } => {
+            let written = tx
+                .workspaces()
+                .record_session_info(session, title.as_deref(), &options, &commands)
+                .await?;
+            info!(
+                session = %session.id,
+                title = title.as_deref().unwrap_or_default(),
+                options = options.len(),
+                commands = commands.len(),
+                written,
+                "a supervisor reported what its session holds"
+            );
+        }
+        Report::OptionChanged {
+            participant,
+            option,
+            category,
+            from,
+            to,
+            refused,
+            options,
+        } => {
+            let taken = tx
+                .workspaces()
+                .take_changing_option(session, &option, &participant)
+                .await?;
+            if !options.is_empty() {
+                tx.workspaces().record_options(session, &options).await?;
+            }
+            let workspace = tx.workspaces().get(session.workspace).await?;
+            tx.log()
+                .append(
+                    &workspace,
+                    Entry::OptionChanged {
+                        session: session.id,
+                        participant,
+                        option,
+                        category,
+                        from,
+                        to,
+                        refused,
+                    },
+                )
+                .await?;
+            info!(
+                session = %session.id,
+                settled = taken.is_some(),
+                "a supervisor answered a session's option change"
+            );
         }
         Report::Said {
             message,
@@ -439,11 +834,37 @@ async fn reported(
                 )
                 .await?;
         }
-        Report::Used { usage } => {
-            info!(session = %session.id, %usage, "a supervisor reported what its agent used");
-            tx.workspaces().record_usage(session, &usage).await?;
+        Report::SessionState { .. } => {}
+        Report::Usage { .. } => {}
+        Report::ToolCall {
+            call_id,
+            title,
+            tool_kind,
+            status,
+            input,
+            result,
+            closing_reason,
+            completion,
+        } => {
+            let workspace = tx.workspaces().get(session.workspace).await?;
+            tx.log()
+                .append(
+                    &workspace,
+                    Entry::ToolCall {
+                        session_id: session.id,
+                        call_id,
+                        title,
+                        tool_kind,
+                        status,
+                        input,
+                        result,
+                        closing_reason,
+                        completion,
+                    },
+                )
+                .await?;
         }
-        Report::Answered => {
+        Report::Answered { usage } => {
             if let Some((turn, from_seq)) = tx.workspaces().answer_turn(session).await? {
                 let workspace = tx.workspaces().get(session.workspace).await?;
                 let said = tx
@@ -454,19 +875,51 @@ async fn reported(
                     delivery::record_turn(tx, session, &workspace, turn, &said).await?;
                 }
                 tx.workspaces()
-                    .record_active(session.workspace, Timestamp::now())
+                    .record_active(session.organization, session.workspace, Timestamp::now())
                     .await?;
+                if let Some(usage) = usage {
+                    info!(session = %session.id, %usage, "a supervisor reported what its agent used");
+                    tx.workspaces().record_usage(session, &usage).await?;
+                }
             }
             info!(session = %session.id, "a supervisor reported its agent answered a turn");
         }
+        Report::Interrupted => {
+            let workspace = tx.workspaces().get(session.workspace).await?;
+            if let Some(interrupting) = tx.workspaces().take_interrupting(session).await? {
+                tx.log()
+                    .append(
+                        &workspace,
+                        Entry::TurnInterrupted {
+                            session: session.id,
+                            participant: interrupting.participant,
+                        },
+                    )
+                    .await?;
+            }
+            if tx.workspaces().answer_turn(session).await?.is_some() {
+                tx.workspaces()
+                    .record_active(session.organization, session.workspace, Timestamp::now())
+                    .await?;
+            }
+            // The slot the interrupted Turn held goes straight to what is held for it, so the
+            // Workspace never waits between the two.
+            prompt_pending(tx, session).await?;
+            info!(session = %session.id, "a supervisor reported its agent's turn interrupted");
+        }
         Report::Checkout { repositories } => {
             tx.workspaces()
-                .record_observed(session.workspace, &repositories)
+                .record_observed(session.organization, session.workspace, &repositories)
                 .await?;
+            tx.workspaces().record_checked_out(session).await?;
             info!(session = %session.id, "a supervisor reported what its checkout holds");
         }
-        Report::Finished { exit } => {
+        Report::Finished { exit, usage } => {
             let stands = ending(tx, session, exit).await?;
+            if let Some(usage) = usage {
+                info!(session = %session.id, %usage, "a supervisor reported what its agent used");
+                tx.workspaces().record_usage(session, &usage).await?;
+            }
             info!(session = %session.id, %stands, "a supervisor reported its session finished");
         }
     }
@@ -481,7 +934,7 @@ pub async fn instance(store: &Store, workspace: WorkspaceId) -> Result<Option<St
 pub async fn executes_on(store: &Store, session: &Session, instance: &str) -> Result<()> {
     let mut tx = store.begin().await?;
     tx.workspaces()
-        .record_instance(session.workspace, Some(instance))
+        .record_instance(session.organization, session.workspace, Some(instance))
         .await?;
     tx.workspaces()
         .record_session_instance(session, instance)
@@ -498,7 +951,7 @@ pub async fn instance_lost(store: &Store, session: &Session, because: &str) -> R
         tx.workspaces().forget_supervisor(&instance).await?;
     }
     tx.workspaces()
-        .record_instance(session.workspace, None)
+        .record_instance(session.organization, session.workspace, None)
         .await?;
     let stands = ending(
         &mut tx,
@@ -544,6 +997,40 @@ pub async fn supervisor_exited(store: &Store, instance: &str, because: &str) -> 
 
 pub async fn turns(store: &Store, session: SessionId) -> Result<Vec<Turn>> {
     store.begin().await?.workspaces().turns(session).await
+}
+
+/// Anyone who can post can interrupt; a second request while one is pending sends nothing more.
+pub async fn interrupt(store: &Store, id: SessionId, participant: &str) -> Result<Session> {
+    let mut tx = store.begin().await?;
+    let session = tx.workspaces().session(id).await?;
+    let organization = tx.organizations().by_id(session.organization).await?;
+    let participant = participant::accepted(&mut tx, &organization, participant).await?;
+
+    if session.state != SessionState::Working {
+        return Err(Declined::Taken(format!(
+            "the session {id} is {}, and only a working turn can be interrupted",
+            session.state
+        ))
+        .into());
+    }
+    if tx
+        .workspaces()
+        .request_interrupt(&session, &participant)
+        .await?
+    {
+        let turn = tx
+            .workspaces()
+            .unanswered_turn(&session)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("the working session {id} has no unanswered turn"))?;
+        tx.workspaces()
+            .send_instruction(&session, link::Instruction::Interrupt { turn })
+            .await?;
+    }
+    let interrupting = tx.workspaces().session(id).await?;
+    tx.commit().await?;
+
+    Ok(interrupting)
 }
 
 /// A waiting Session has done everything asked of it, so stopping it there is how it
@@ -658,7 +1145,13 @@ async fn continue_pending(tx: &mut Tx<'_>, workspace: WorkspaceId) -> Result<Opt
     if let Some(pending) = tx.workspaces().take_pending_session(&workspace).await? {
         return Ok(Some(workspace::briefed(tx, &workspace, pending).await?));
     }
-    let pending = tx.workspaces().take_pending_messages(&workspace).await?;
+    // The Session that just ended is the last one to have reached a harness, so its commands
+    // decide which message is one; the Session about to start has none yet.
+    let commands = tx.workspaces().latest_commands(workspace.id).await?;
+    let pending = tx
+        .workspaces()
+        .take_held_messages(&workspace, &commands)
+        .await?;
     if pending.is_empty() {
         return Ok(None);
     }
@@ -671,14 +1164,17 @@ async fn continue_pending(tx: &mut Tx<'_>, workspace: WorkspaceId) -> Result<Opt
 
     Ok(Some(
         tx.workspaces()
-            .enqueue_session(&workspace, None, None)
+            .enqueue_session(&workspace, None, Declared::default())
             .await?,
     ))
 }
 
 async fn prompt_pending(tx: &mut Tx<'_>, session: &Session) -> Result<()> {
     let workspace = tx.workspaces().get(session.workspace).await?;
-    let pending = tx.workspaces().take_pending_messages(&workspace).await?;
+    let pending = tx
+        .workspaces()
+        .take_held_messages(&workspace, &session.commands)
+        .await?;
     if pending.is_empty() {
         return Ok(());
     }
@@ -706,12 +1202,11 @@ pub(crate) fn follow_up(messages: &[Message]) -> String {
     }
 }
 
-fn messages(pending: Vec<PendingMessage>) -> Vec<Message> {
-    pending
-        .into_iter()
-        .map(|pending| Message {
-            participant: pending.participant,
-            message: pending.body,
+fn messages(held: Vec<HeldMessage>) -> Vec<Message> {
+    held.into_iter()
+        .map(|held| Message {
+            participant: held.participant,
+            message: held.message,
         })
         .collect()
 }

@@ -21,7 +21,7 @@ use tracing::{info, warn};
 
 use crate::domain::{Checkout, Session, SessionId, Workspace};
 use crate::link::credential::Secret;
-use crate::log::{self, Cursor, Unreadable, Window};
+use crate::log::{Cursor, Unreadable, Window};
 use crate::profile;
 use crate::provider;
 use crate::role::serve;
@@ -50,11 +50,26 @@ const KEEP_ALIVE: Duration = Duration::from_secs(15);
 pub enum Instruction {
     Start {
         checkout: Checkout,
+        turn: i64,
         prompt: String,
         harness: Harness,
     },
+    Unbriefed {
+        checkout: Checkout,
+        harness: Harness,
+    },
     Prompt {
+        turn: i64,
         prompt: String,
+    },
+    /// Naming the Turn lets a cancel that arrives after it answered leave the next one be.
+    Interrupt {
+        turn: i64,
+    },
+    SetOption {
+        option: String,
+        value: String,
+        participant: String,
     },
     /// Ends the Session's harness; the supervisor stays on the link.
     Stop,
@@ -64,7 +79,10 @@ impl Instruction {
     pub const fn kind(&self) -> &'static str {
         match self {
             Instruction::Start { .. } => "start",
+            Instruction::Unbriefed { .. } => "unbriefed",
             Instruction::Prompt { .. } => "prompt",
+            Instruction::Interrupt { .. } => "interrupt",
+            Instruction::SetOption { .. } => "set_option",
             Instruction::Stop => "stop",
         }
     }
@@ -79,6 +97,10 @@ pub struct Harness {
     pub auth: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_level: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,6 +137,9 @@ struct Asking {
 
 #[derive(Deserialize)]
 struct Paging {
+    summaries: Option<bool>,
+    first_seq: Option<i64>,
+    last_seq: Option<i64>,
     kinds: Option<String>,
     cursor: Option<String>,
     window: Option<usize>,
@@ -133,6 +158,7 @@ struct Refreshed {
 
 #[derive(Serialize)]
 struct Entries {
+    activities: Vec<crate::log::Activity>,
     entries: Vec<Recorded>,
     cursor: Option<String>,
     more: bool,
@@ -144,7 +170,7 @@ struct Recorded {
     session_id: Option<SessionId>,
     seq: i64,
     appended_at: String,
-    entry: log::Entry,
+    entry: serde_json::Value,
 }
 
 pub fn router(
@@ -182,17 +208,40 @@ pub async fn start(store: &Store, session: &Session, harness: Harness) -> Result
             workspace.id
         )
     })?;
+    let turn = tx.workspaces().first_turn(session).await?;
     let sent = sent_on(
         &mut tx,
         session,
         Instruction::Start {
             checkout: workspace.checkout.clone(),
+            turn,
             prompt,
             harness,
         },
     )
     .await?;
-    tx.workspaces().first_turn(session).await?;
+    tx.commit().await?;
+
+    Ok(sent)
+}
+
+pub async fn unbriefed(
+    store: &Store,
+    session: &Session,
+    harness: Harness,
+) -> Result<SentInstruction> {
+    let mut tx = store.begin().await?;
+    let workspace = tx.workspaces().get(session.workspace).await?;
+    workspace.accepts("turn")?;
+    let sent = sent_on(
+        &mut tx,
+        session,
+        Instruction::Unbriefed {
+            checkout: workspace.checkout.clone(),
+            harness,
+        },
+    )
+    .await?;
     tx.commit().await?;
 
     Ok(sent)
@@ -200,9 +249,9 @@ pub async fn start(store: &Store, session: &Session, harness: Harness) -> Result
 
 /// A Brief nothing has followed, exactly as it was written; otherwise the message or messages
 /// that started this Session, with everything the Transcript held before them labeled as context
-/// ahead of them.
-async fn instruction(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Option<String>> {
-    if let Some(brief) = tx.log().unfollowed_brief(workspace).await? {
+/// ahead of them. `None` is a Workspace with nothing to start a Session with.
+pub(crate) async fn instruction(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Option<String>> {
+    if let Some((brief, _)) = tx.log().unfollowed_brief(workspace).await? {
         return Ok(Some(brief));
     }
 
@@ -229,11 +278,11 @@ async fn instruction(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Option<St
 
 /// The next turn of a waiting Session, in the same agent conversation (ADR-0024).
 pub(crate) async fn prompt(tx: &mut Tx<'_>, session: &Session, prompt: String) -> Result<()> {
-    sent_on(tx, session, Instruction::Prompt { prompt }).await?;
-    tx.workspaces()
-        .prompt_turn(session)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("the session {} is not waiting for a prompt", session.id))?;
+    let turn =
+        tx.workspaces().prompt_turn(session).await?.ok_or_else(|| {
+            anyhow::anyhow!("the session {} is not waiting for a prompt", session.id)
+        })?;
+    sent_on(tx, session, Instruction::Prompt { turn, prompt }).await?;
 
     Ok(())
 }
@@ -395,21 +444,39 @@ async fn entries(
         .transpose()
         .map_err(|error| Refused::BadRequest(error.to_string()))?
         .unwrap_or_default();
-    let page =
-        workspace::transcript(&control_plane.store, linked.workspace, from, window, &kinds).await?;
+    let mut tx = control_plane.store.read().await?;
+    let workspace = tx.workspaces().get(linked.workspace).await?;
+    let page = tx
+        .log()
+        .transcript_page(
+            &workspace,
+            from,
+            window,
+            &kinds,
+            paging.summaries.unwrap_or(true),
+            crate::log::SeqRange {
+                first_seq: paging.first_seq,
+                last_seq: paging.last_seq,
+            },
+        )
+        .await?;
 
+    let mut entries = Vec::new();
+    for entry in page.entries {
+        entries.push(Recorded {
+            kind: entry.kind,
+            session_id: entry.session_id,
+            seq: entry.seq,
+            appended_at: entry.appended_at.to_string(),
+            entry: tx
+                .log()
+                .hydrate_entry(workspace.id, entry.seq, entry.entry)
+                .await?,
+        });
+    }
     Ok(Json(Entries {
-        entries: page
-            .entries
-            .into_iter()
-            .map(|entry| Recorded {
-                kind: entry.kind,
-                session_id: entry.session_id,
-                seq: entry.seq,
-                appended_at: entry.appended_at.to_string(),
-                entry: entry.entry,
-            })
-            .collect(),
+        activities: page.activities,
+        entries,
         cursor: page.cursor.map(|cursor| cursor.to_string()),
         more: page.more,
     }))
@@ -424,6 +491,33 @@ async fn report(
     let (linked, _) = authenticated(&control_plane, &headers, &instance).await?;
     if let work::Report::Work { repositories } = reported.report {
         control_plane.summaries.report(&instance, repositories);
+        return Ok(StatusCode::ACCEPTED.into_response());
+    }
+    if let work::Report::SessionState {
+        tools,
+        message_buffering,
+        thought_buffering,
+        usage,
+    } = &reported.report
+    {
+        let session = still_carried(&control_plane, &linked, reported.session).await?;
+        control_plane.summaries.report_session(
+            &instance,
+            &session.to_string(),
+            crate::live_work::SessionState {
+                tools: tools.clone(),
+                message_buffering: *message_buffering,
+                thought_buffering: *thought_buffering,
+                usage: usage.clone(),
+            },
+        );
+        return Ok(StatusCode::ACCEPTED.into_response());
+    }
+    if let work::Report::Usage { usage } = &reported.report {
+        let session = still_carried(&control_plane, &linked, reported.session).await?;
+        control_plane
+            .summaries
+            .report_usage(&instance, &session.to_string(), usage.clone());
         return Ok(StatusCode::ACCEPTED.into_response());
     }
     let connected = matches!(reported.report, work::Report::Connected { .. });
@@ -524,6 +618,24 @@ async fn carried(
         .carried(&linked.instance, id)
         .await?
         .ok_or_else(|| Refused::Gone(ReportRefused::Gone(id).to_string()))
+}
+
+async fn still_carried(
+    control_plane: &ControlPlane,
+    linked: &Linked,
+    session: Option<SessionId>,
+) -> Result<SessionId, Refused> {
+    let session = session.ok_or(ReportRefused::MissingSession)?;
+    control_plane
+        .store
+        .read()
+        .await?
+        .workspaces()
+        .carried(&linked.instance, session)
+        .await?
+        .ok_or(ReportRefused::Gone(session))?;
+
+    Ok(session)
 }
 
 fn bearer(headers: &HeaderMap) -> Option<Secret> {

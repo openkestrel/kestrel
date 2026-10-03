@@ -12,6 +12,8 @@ fn harness() -> link::Harness {
         command: "opencode acp".to_owned(),
         auth: None,
         model: None,
+        mode: None,
+        thought_level: None,
     }
 }
 
@@ -37,15 +39,29 @@ impl Fixture {
             .await
             .unwrap();
         tx.agents()
-            .declare(&organization, "builder", "opencode", None)
+            .declare(&organization, "builder", "opencode", &Declared::default())
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        let workspace = workspace::open(&store, "acme", "kestrel", "builder", None, None, None)
+        let workspace = workspace::open_without_a_session(
+            &store, "acme", "kestrel", "builder", None, None, None,
+        )
+        .await
+        .unwrap();
+        let queued = enqueue(&store, workspace.id, None, Declared::default())
             .await
             .unwrap();
-        enqueue(&store, workspace.id, None, None).await.unwrap();
-        let session = claim(&store, &[]).await.unwrap().unwrap();
+        let session = {
+            let mut tx = store.begin().await.unwrap();
+            let session = tx
+                .workspaces()
+                .claim_session(&queued, Timestamp::now() + LEASE, false)
+                .await
+                .unwrap()
+                .expect("the fixture's session should claim");
+            tx.commit().await.unwrap();
+            session
+        };
         executes_on(&store, &session, INSTANCE).await.unwrap();
 
         Self {
@@ -114,7 +130,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         .await
         .unwrap();
     tx.agents()
-        .declare(&organization, "builder", "codex", None)
+        .declare(&organization, "builder", "codex", &Declared::default())
         .await
         .unwrap();
     tx.profiles()
@@ -123,7 +139,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         .unwrap();
     tx.commit().await.unwrap();
 
-    let first = workspace::open(
+    let first = workspace::open_without_a_session(
         &store,
         "acme",
         "kestrel",
@@ -134,7 +150,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     )
     .await
     .unwrap();
-    let second = workspace::open(
+    let second = workspace::open_without_a_session(
         &store,
         "acme",
         "kestrel",
@@ -148,6 +164,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     let first_queued = workspace::post(&store, first.id, "operator", "start please")
         .await
         .unwrap()
+        .session
         .expect("a fresh workspace's first message starts a session");
     let first_session = match occupy(&store, 1, &["codex".to_owned()]).await.unwrap() {
         Some(Occupied::Claimed(claimed)) => claimed,
@@ -170,7 +187,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         Reported {
             session: Some(first_session.id),
             seq: Some(1),
-            report: Report::Answered,
+            report: Report::Answered { usage: None },
         },
     )
     .await
@@ -180,7 +197,11 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         SessionState::Waiting
     );
 
-    let second_queued = enqueue(&store, second.id, None, None).await.unwrap();
+    let second_queued = workspace::post(&store, second.id, "operator", "start please")
+        .await
+        .unwrap()
+        .session
+        .expect("a fresh workspace's first message starts a session");
     let second_session = match occupy(&store, 1, &["codex".to_owned()]).await.unwrap() {
         Some(Occupied::Claimed(claimed)) => claimed,
         _ => panic!("the waiting session should leave its slot and profile available"),
@@ -203,7 +224,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    let alex = workspace::open(
+    let alex = workspace::open_without_a_session(
         &store,
         "acme",
         "kestrel",
@@ -217,6 +238,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     let alex_queued = workspace::post(&store, alex.id, "operator", "start please")
         .await
         .unwrap()
+        .session
         .expect("a fresh workspace's first message starts a session");
     let alex_session = match occupy(&store, 2, &["codex".to_owned()]).await.unwrap() {
         Some(Occupied::Claimed(claimed)) => claimed,
@@ -237,7 +259,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         Reported {
             session: Some(alex_session.id),
             seq: Some(1),
-            report: Report::Answered,
+            report: Report::Answered { usage: None },
         },
     )
     .await
@@ -293,14 +315,15 @@ async fn reports_record_the_session_and_its_transcript_together() {
         .await
         .unwrap();
     fixture
-        .report(Some(4), Report::Used { usage: usage() })
+        .report(None, Report::Usage { usage: usage() })
         .await
         .unwrap();
     fixture
         .report(
-            Some(5),
+            Some(4),
             Report::Finished {
                 exit: Exit::Succeeded,
+                usage: Some(usage()),
             },
         )
         .await
@@ -404,9 +427,10 @@ async fn numbered_reports_refuse_missing_and_invalid_numbers_without_effects() {
             message: "refused".to_owned(),
             completion: crate::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
-        Report::Used { usage: usage() },
+        Report::Answered { usage: None },
         Report::Finished {
             exit: Exit::Succeeded,
+            usage: None,
         },
     ] {
         assert!(matches!(
@@ -587,7 +611,13 @@ async fn a_failed_append_rolls_back_the_session_change_and_report_acceptance() {
     assert_eq!(fixture.entries().await, before);
 
     fixture
-        .report_on(Some(1), Report::Used { usage: usage() })
+        .report_on(
+            Some(1),
+            Report::Finished {
+                exit: Exit::Succeeded,
+                usage: Some(usage()),
+            },
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -612,6 +642,7 @@ async fn a_finished_report_keeps_the_exit_that_already_stands() {
             Some(1),
             Report::Finished {
                 exit: Exit::Succeeded,
+                usage: None,
             },
         )
         .await

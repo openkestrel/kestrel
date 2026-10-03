@@ -196,3 +196,31 @@ async fn a_session_whose_lease_has_passed_is_not_held_out_again() {
 
     kestrel.teardown().await;
 }
+
+#[tokio::test]
+async fn a_session_refused_on_a_heartbeat_is_let_go_without_dropping_the_link() {
+    let kestrel = Kestrel::boot_serving_alone().await;
+    let workspace = a_workspace(&kestrel).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+
+    let mut supervisor =
+        Supervisor::provision_playing(&kestrel.link(), &on, Script::ReportsThenWaits);
+    supervisor.wait_until_it_says("reported connected").await;
+    kestrel.start(&session, supervisor.harness()).await;
+    // Its last report before the turn waits forever, so from here only a heartbeat speaks of it.
+    supervisor
+        .wait_until_it_says(&format!("reported usage for {}", session.id))
+        .await;
+
+    kestrel
+        .lease_until(&session, Timestamp::now() - SignedDuration::from_secs(1))
+        .await;
+    supervisor.lets_go_of(session.id).await;
+    assert!(
+        !supervisor.said("lost the link"),
+        "a refused session took the link down with it; the supervisor said:\n{}",
+        supervisor.everything_it_said()
+    );
+
+    kestrel.teardown().await;
+}

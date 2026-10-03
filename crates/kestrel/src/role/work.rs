@@ -13,7 +13,7 @@ use tracing::{info, warn};
 
 use crate::cli::Role;
 use crate::compute::{Driver, Exited, Instance, Supervisor};
-use crate::domain::{Session, Workspace};
+use crate::domain::{Session, SessionState, Workspace};
 use crate::instance;
 use crate::link::{self, credential::Secret};
 use crate::profile;
@@ -35,6 +35,7 @@ pub struct Dispatch {
     pub auth: Option<String>,
     pub max_active_sessions: NonZeroUsize,
     pub serialized: Vec<String>,
+    pub interrupt_deadline: Duration,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,7 +191,7 @@ async fn dispatching(
                 continue;
             }
             Ok(Some(Occupied::Resumed(session))) => {
-                info!(session = %session.id, "a waiting session was prompted with what was held for it");
+                info!(session = %session.id, "a session was prompted with the input held for it");
                 continue;
             }
             Ok(None) => {}
@@ -222,7 +223,11 @@ fn warn_if_it_panicked(finished: Result<(), JoinError>) {
 async fn record(store: &Store, dispatch: &Dispatch) -> Result<()> {
     let mut tx = store.begin().await?;
     tx.queue()
-        .record(dispatch.max_active_sessions.get(), &dispatch.serialized)
+        .record(
+            dispatch.max_active_sessions.get(),
+            &dispatch.serialized,
+            dispatch.driver.name(),
+        )
         .await?;
     tx.commit().await?;
 
@@ -309,9 +314,15 @@ async fn execute(
     let harness = link::Harness {
         command: command.to_owned(),
         auth: dispatch.auth.clone().filter(|method| !method.is_empty()),
-        model: session.agent.model.clone(),
+        model: session.agent.declared.model.clone(),
+        mode: session.agent.declared.mode.clone(),
+        thought_level: session.agent.declared.thought_level.clone(),
     };
-    let started = match link::start(store, session, harness).await {
+    let opened = match session.state {
+        SessionState::Unbriefed => link::unbriefed(store, session, harness).await,
+        _ => link::start(store, session, harness).await,
+    };
+    let started = match opened {
         Ok(started) => started,
         Err(error) => {
             work::fail(
@@ -390,6 +401,7 @@ async fn supervised(
     tx.commit().await?;
 
     let lease = work::LEASE.as_secs().to_string();
+    let interrupt_deadline = dispatch.interrupt_deadline.as_secs().to_string();
     let mut supervisor = instance.supervise(&[
         ("KESTREL_LINK", dispatch.link.as_str()),
         ("KESTREL_INSTANCE", &name),
@@ -398,6 +410,7 @@ async fn supervised(
         // How long a Session's lease is held out for, so a supervisor nothing answers can let its
         // Session go once the lease has certainly lapsed.
         ("KESTREL_LEASE", &lease),
+        ("KESTREL_INTERRUPT_DEADLINE", &interrupt_deadline),
     ])?;
     let mut tx = store.begin().await?;
     tx.workspaces()

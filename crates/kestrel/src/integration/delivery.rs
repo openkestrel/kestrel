@@ -7,7 +7,9 @@ use anyhow::Result;
 use jiff::Timestamp;
 use tracing::warn;
 
-use crate::domain::{Delivery, Direction, Event, Exit, Integration, Session, SessionId, Workspace};
+use crate::domain::{
+    Delivery, Direction, Event, Exit, Integration, Session, SessionId, StartedBy, Workspace,
+};
 use crate::integration::back_off;
 use crate::integration::github::{Github, MARKER, Refused};
 use crate::store::{Store, Tx};
@@ -23,7 +25,7 @@ fn marker(session: SessionId, turn: Option<i64>) -> String {
 
 /// The surface a Workspace came in through, when it came in through one that carries outbound.
 async fn surface(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Option<(Integration, Event)>> {
-    let Some(started_by) = workspace.started_by else {
+    let Some(StartedBy::Event(started_by)) = workspace.started_by.clone() else {
         return Ok(None);
     };
 
@@ -198,8 +200,8 @@ mod tests {
 
     use super::*;
     use crate::domain::{
-        Agent, AgentId, Checkout, Organization, OrganizationId, Project, ProjectId, SessionState,
-        WorkspaceId, WorkspaceState,
+        Agent, AgentId, Checkout, Declared, Organization, OrganizationId, Project, ProjectId,
+        SessionState, WorkspaceId, WorkspaceState,
     };
 
     fn a_workspace() -> Workspace {
@@ -243,7 +245,7 @@ mod tests {
             organization,
             name: "builder".to_owned(),
             harness: "opencode".to_owned(),
-            model: None,
+            declared: Declared::default(),
         }
     }
 
@@ -255,11 +257,17 @@ mod tests {
             workspace: workspace.id,
             agent: workspace.opened_with.clone(),
             state: SessionState::Ended,
+            preparing: None,
             exit: None,
             outcome_message: None,
             instance: None,
             supervisor: None,
             worked_model: None,
+            title: None,
+            options: Vec::new(),
+            changing_options: Vec::new(),
+            commands: Vec::new(),
+            interrupting: None,
             enqueued_at: Timestamp::now(),
             started_at: None,
             ended_at: None,

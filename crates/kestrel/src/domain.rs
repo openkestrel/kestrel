@@ -67,14 +67,48 @@ pub struct Project {
     pub branch: String,
 }
 
+/// Each a Harness value id; a category named none for is the Harness's own default (ADR-0041).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Declared {
+    pub model: Option<String>,
+    pub mode: Option<String>,
+    pub thought_level: Option<String>,
+}
+
+impl Declared {
+    pub fn over(self, below: Self) -> Self {
+        Self {
+            model: self.model.or(below.model),
+            mode: self.mode.or(below.mode),
+            thought_level: self.thought_level.or(below.thought_level),
+        }
+    }
+
+    /// A value named as nothing is a value nobody named.
+    pub fn named(values: Self) -> Self {
+        fn named(value: Option<String>) -> Option<String> {
+            value.filter(|value| !value.is_empty())
+        }
+
+        Self {
+            model: named(values.model),
+            mode: named(values.mode),
+            thought_level: named(values.thought_level),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.model.is_none() && self.mode.is_none() && self.thought_level.is_none()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Agent {
     pub id: AgentId,
     pub organization: OrganizationId,
     pub name: String,
     pub harness: String,
-    /// None when the Agent names none, and the Harness's own default is the answer.
-    pub model: Option<String>,
+    pub declared: Declared,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -392,6 +426,8 @@ pub struct Trigger {
     pub templates: Templates,
     pub project: Project,
     pub agent: Agent,
+    /// Over the Agent's and under a Session's own (ADR-0041).
+    pub declared: Declared,
     pub allows: Vec<Agent>,
     pub profile: Option<SubscriptionProfile>,
     pub state: TriggerState,
@@ -606,6 +642,28 @@ pub struct Checkout {
     pub branch: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Interrupting {
+    pub participant: String,
+    pub requested_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldMessage {
+    /// The Workspace's own sequence, never reused because a taken or withdrawn row is kept.
+    pub id: i64,
+    pub participant: String,
+    pub message: String,
+    pub posted_at: Timestamp,
+    pub edited_at: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartedBy {
+    Event(EventRecordId),
+    Participant(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct Workspace {
     pub id: WorkspaceId,
@@ -622,7 +680,7 @@ pub struct Workspace {
     pub last_active_at: Timestamp,
     pub sealed_at: Option<Timestamp>,
     pub continues: Option<WorkspaceId>,
-    pub started_by: Option<EventRecordId>,
+    pub started_by: Option<StartedBy>,
 }
 
 impl Workspace {
@@ -644,12 +702,18 @@ pub struct Session {
     /// With the harness and model fixed when the Session was enqueued, never redeclared under it.
     pub agent: Agent,
     pub state: SessionState,
+    pub preparing: Option<Preparing>,
     pub exit: Option<Exit>,
     pub outcome_message: Option<String>,
     pub instance: Option<String>,
     pub supervisor: Option<String>,
     /// What the Harness reported it worked on.
     pub worked_model: Option<String>,
+    pub title: Option<String>,
+    pub options: Vec<SessionOption>,
+    pub changing_options: Vec<ChangingOption>,
+    pub commands: Vec<SessionCommand>,
+    pub interrupting: Option<Interrupting>,
     pub enqueued_at: Timestamp,
     pub started_at: Option<Timestamp>,
     pub ended_at: Option<Timestamp>,
@@ -663,6 +727,84 @@ pub struct Turn {
     pub seq: i64,
     pub prompted_at: Timestamp,
     pub answered_at: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangingOption {
+    pub option: String,
+    pub category: String,
+    pub value: String,
+    pub participant: String,
+}
+
+/// `category` is kestrel's own name for a well-known option, or the harness's own string, which may
+/// begin with `_`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOption {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(flatten)]
+    pub kind: SessionOptionKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionOptionKind {
+    Select {
+        current: String,
+        #[serde(default)]
+        values: Vec<SessionOptionValue>,
+        #[serde(default)]
+        groups: Vec<SessionOptionGroup>,
+    },
+    Boolean {
+        current: bool,
+    },
+}
+
+impl SessionOption {
+    pub const MODE: &'static str = "mode";
+    pub const MODEL: &'static str = "model";
+    pub const MODEL_CONFIG: &'static str = "model_config";
+    pub const THOUGHT_LEVEL: &'static str = "thought_level";
+
+    pub fn current_value(&self) -> Option<String> {
+        match &self.kind {
+            SessionOptionKind::Select { current, .. } => Some(current.clone()),
+            SessionOptionKind::Boolean { current } => Some(current.to_string()),
+        }
+    }
+
+    pub fn is_category(&self, category: &str) -> bool {
+        self.category.as_deref() == Some(category)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOptionValue {
+    pub value: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOptionGroup {
+    pub group: String,
+    pub name: String,
+    pub values: Vec<SessionOptionValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCommand {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub input_hint: Option<String>,
 }
 
 /// What the Harness has spent on behalf of a Session, cumulative rather than per turn.
@@ -694,6 +836,9 @@ pub enum SessionState {
     Queued,
     Working,
     Waiting,
+    /// The first message becomes the Brief and the first Turn (ADR-0038); it holds no Active-Work
+    /// Slot.
+    Unbriefed,
     Ended,
     /// Terminal like `Ended`, but with no exit status: a queued Session whose declared tolerance
     /// can no longer be met never ran, so nothing failed.
@@ -701,13 +846,18 @@ pub enum SessionState {
 }
 
 impl SessionState {
-    pub const LIVE: [SessionState; 2] = [SessionState::Working, SessionState::Waiting];
+    pub const LIVE: [SessionState; 3] = [
+        SessionState::Working,
+        SessionState::Waiting,
+        SessionState::Unbriefed,
+    ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
             SessionState::Queued => "queued",
             SessionState::Working => "working",
             SessionState::Waiting => "waiting",
+            SessionState::Unbriefed => "unbriefed",
             SessionState::Ended => "ended",
             SessionState::Unreachable => "unreachable",
         }
@@ -719,6 +869,9 @@ impl SessionState {
             SessionState::Ended | SessionState::Unreachable => None,
             SessionState::Queued => Some(Exit::Failed {
                 because: "it was stopped before it started".into(),
+            }),
+            SessionState::Unbriefed => Some(Exit::Failed {
+                because: "it was stopped before its first turn".into(),
             }),
             SessionState::Working => Some(Exit::Failed {
                 because: "it was stopped mid-turn, before its agent answered".into(),
@@ -736,9 +889,44 @@ impl FromStr for SessionState {
             "queued" => Ok(SessionState::Queued),
             "working" => Ok(SessionState::Working),
             "waiting" => Ok(SessionState::Waiting),
+            "unbriefed" => Ok(SessionState::Unbriefed),
             "ended" => Ok(SessionState::Ended),
             "unreachable" => Ok(SessionState::Unreachable),
             other => bail!("{other} is not a state a session can be in"),
+        }
+    }
+}
+
+/// Current Session state, never a Transcript entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preparing {
+    Provisioning,
+    Cloning,
+    StartingHarness,
+    HarnessReady,
+}
+
+impl Preparing {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Preparing::Provisioning => "provisioning",
+            Preparing::Cloning => "cloning",
+            Preparing::StartingHarness => "starting_harness",
+            Preparing::HarnessReady => "harness_ready",
+        }
+    }
+}
+
+impl FromStr for Preparing {
+    type Err = anyhow::Error;
+
+    fn from_str(preparing: &str) -> Result<Self> {
+        match preparing {
+            "provisioning" => Ok(Preparing::Provisioning),
+            "cloning" => Ok(Preparing::Cloning),
+            "starting_harness" => Ok(Preparing::StartingHarness),
+            "harness_ready" => Ok(Preparing::HarnessReady),
+            other => bail!("{other} is not a step a session prepares on"),
         }
     }
 }

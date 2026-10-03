@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::harness::{Conversation, Harness};
+use crate::harness::{Conversation, Harness, Turn};
 use crate::link::{Answer, AnswerBody, Checkout, Down, Exit, Instruction, Link, Read, Report};
 
 const RECONNECT_AFTER: Duration = Duration::from_millis(250);
@@ -28,8 +28,12 @@ const HEARTBEAT_EVERY: Duration = Duration::from_secs(2);
 const GIVE_UP_MARGIN: Duration = Duration::from_secs(5);
 const STDERR_LINES_PER_REPORT: usize = 64;
 const STDERR_REPORT_PATIENCE: Duration = Duration::from_secs(5);
+/// Trailing edge: a burst collapses into one report a second (ADR-0041).
+const SESSION_INFO_EVERY: Duration = Duration::from_secs(1);
+const USAGE_EVERY: Duration = Duration::from_secs(1);
 /// Long enough for the last lines of an agent that has just exited, which are often why.
 const STDERR_DRAINING: Duration = Duration::from_secs(1);
+const INTERRUPT_DEADLINE: Duration = Duration::from_secs(30);
 
 pub trait Diagnostics {
     fn info(&self, message: &str);
@@ -51,6 +55,7 @@ struct Supervising {
     carrying: Option<Carrying>,
     checkout: Option<Checkout>,
     summary: Option<Vec<link::WorkRepository>>,
+    interrupt_deadline: Duration,
 }
 
 /// One Session's part of the supervisor's life. The conversation goes on whether or not the link
@@ -58,17 +63,49 @@ struct Supervising {
 struct Carrying {
     session: String,
     checkout: Checkout,
-    prompt: String,
+    prompt: Option<Turn>,
     harness: Harness,
     conversation: Option<Conversation>,
     finished: bool,
     working: bool,
+    /// Said again after a reconnect, in case the report was lost on its way.
+    ready: bool,
     taken: i64,
+    state: Option<Report>,
     /// Handed back before anything is said, because saying the Session finished ends it and with it
     /// this Instance's right to hand anything back for it.
     refreshed: BTreeMap<String, String>,
     written: Option<login::Written>,
     saying: VecDeque<Report>,
+    info: Option<link::SessionInfo>,
+    info_due: Option<tokio::time::Instant>,
+    usage: Option<link::Usage>,
+    usage_due: Option<tokio::time::Instant>,
+    /// What the last usage report said, which a snapshot carries so that a value still inside its
+    /// window never reaches a follower ahead of the trailing edge.
+    usage_reported: Option<link::Usage>,
+}
+
+impl Carrying {
+    fn hold(&mut self, info: link::SessionInfo) {
+        if self.info.as_ref() == Some(&info) {
+            return;
+        }
+        self.info = Some(info);
+        if self.info_due.is_none() {
+            self.info_due = Some(tokio::time::Instant::now() + SESSION_INFO_EVERY);
+        }
+    }
+
+    fn hold_usage(&mut self, usage: link::Usage) {
+        if self.usage.as_ref() == Some(&usage) {
+            return;
+        }
+        self.usage = Some(usage);
+        if self.usage_due.is_none() {
+            self.usage_due = Some(tokio::time::Instant::now() + USAGE_EVERY);
+        }
+    }
 }
 
 impl Carrying {
@@ -102,6 +139,7 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
         carrying: None,
         checkout: None,
         summary: None,
+        interrupt_deadline: interrupt_deadline(variables),
     };
 
     let alive = tokio::spawn(saying_it_is_alive(Arc::clone(&link)));
@@ -130,6 +168,35 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
     }
 
     status
+}
+
+/// Folds in the last reported usage, since the snapshot replaces what the control plane holds.
+async fn report_state(link: &Link, carrying: &Carrying) -> Result<(), link::Error> {
+    let Some(Report::SessionState {
+        tools,
+        message_buffering,
+        thought_buffering,
+        ..
+    }) = &carrying.state
+    else {
+        return Ok(());
+    };
+    let state = Report::SessionState {
+        tools: tools.clone(),
+        message_buffering: *message_buffering,
+        thought_buffering: *thought_buffering,
+        usage: carrying.usage_reported.clone(),
+    };
+
+    match tokio::time::timeout(
+        Duration::from_secs(1),
+        link.report(&state, Some(&carrying.session), None),
+    )
+    .await
+    {
+        Ok(Err(error @ (link::Error::Refused(_) | link::Error::Session(_)))) => Err(error),
+        _ => Ok(()),
+    }
 }
 
 async fn saying_it_is_alive(link: Arc<Link>) {
@@ -218,7 +285,58 @@ async fn attend(
     if let Some(checkout) = link.connected().await? {
         supervising.checkout = Some(checkout);
     }
+    if let Some(carrying) = supervising.carrying.as_mut() {
+        while let Some(event) = carrying
+            .conversation
+            .as_mut()
+            .and_then(Conversation::try_next)
+        {
+            match event {
+                harness::ConversationEvent::State(state) => carrying.state = Some(state),
+                harness::ConversationEvent::Report(Report::Usage { usage }) => {
+                    carrying.hold_usage(usage)
+                }
+                harness::ConversationEvent::Report(Report::SessionInfo(info)) => {
+                    carrying.hold(info)
+                }
+                harness::ConversationEvent::Report(report) => carrying.saying.push_back(report),
+                harness::ConversationEvent::Worked(worked) => {
+                    carrying.working = false;
+                    worked_on(carrying, worked, diagnostics).await;
+                }
+                harness::ConversationEvent::Interrupted => {
+                    carrying.working = false;
+                    carrying.saying.push_back(Report::Interrupted);
+                }
+                harness::ConversationEvent::Ready => carrying.ready = true,
+            }
+        }
+    }
+    if let Some(carrying) = supervising.carrying.as_ref() {
+        let reported = report_state(link, carrying).await;
+        let_go_if_refused(reported, supervising, diagnostics).await?;
+    }
+    if let Some(carrying) = supervising.carrying.as_ref()
+        && carrying.state.is_some()
+        && carrying.prompt.is_none()
+        && carrying.ready
+    {
+        let reported = link
+            .report(&Report::Ready, Some(&carrying.session), None)
+            .await;
+        let_go_if_refused(reported, supervising, diagnostics).await?;
+    }
     report_work(link, supervising, true).await?;
+    // The bookkeeping report goes up again: a control plane that restarted under the Instance
+    // missed it.
+    if let Some(carrying) = supervising.carrying.as_mut() {
+        if carrying.info.is_some() {
+            carrying.info_due = Some(tokio::time::Instant::now());
+        }
+        if carrying.usage.is_some() {
+            carrying.usage_due = Some(tokio::time::Instant::now());
+        }
+    }
     let mut checking = tokio::time::interval_at(
         tokio::time::Instant::now() + HEARTBEAT_EVERY,
         HEARTBEAT_EVERY,
@@ -245,6 +363,14 @@ async fn attend(
         }
 
         let give_up_timer = until_given_up(link, supervising.carrying.is_some(), give_up_after);
+        let info_due = supervising
+            .carrying
+            .as_ref()
+            .and_then(|carrying| carrying.info_due);
+        let usage_due = supervising
+            .carrying
+            .as_ref()
+            .and_then(|carrying| carrying.usage_due);
         tokio::select! {
             delivered = instructions.next() => {
                 let delivered = match delivered? {
@@ -262,28 +388,65 @@ async fn attend(
                     delivered.id,
                     delivered.session
                 ));
-                let closing = matches!(&delivered.instruction, Instruction::Stop)
-                    && supervising.carrying.as_ref().is_some_and(|carrying| carrying.session == delivered.session);
+                // Any Stop, not only one for the Session still carried: a report refused since the
+                // Session ended may already have let it go.
+                let stopped = matches!(&delivered.instruction, Instruction::Stop);
                 instructed(stderr, supervising, delivered, diagnostics).await;
-                if closing {
+                if stopped {
                     report_work(link, supervising, true).await?;
                 }
             }
             event = next(&mut supervising.carrying) => {
                 if let Some(carrying) = supervising.carrying.as_mut() {
                     match event {
+                        harness::ConversationEvent::State(state) => {
+                            carrying.state = Some(state);
+                            let reported = report_state(link, carrying).await;
+                            let_go_if_refused(reported, supervising, diagnostics).await?;
+                        }
+                        harness::ConversationEvent::Report(Report::Usage { usage }) => {
+                            carrying.hold_usage(usage);
+                        }
+                        harness::ConversationEvent::Report(Report::SessionInfo(info)) => {
+                            carrying.hold(info);
+                        }
                         harness::ConversationEvent::Report(report) => carrying.saying.push_back(report),
                         harness::ConversationEvent::Worked(worked) => {
                             carrying.working = false;
                             worked_on(carrying, worked, diagnostics).await;
                             report_work(link, supervising, true).await?;
                         }
+                        harness::ConversationEvent::Interrupted => {
+                            carrying.working = false;
+                            carrying.saying.push_back(Report::Interrupted);
+                            report_work(link, supervising, true).await?;
+                        }
+                        harness::ConversationEvent::Ready => {
+                            let reported = ready(link, carrying).await;
+                            let_go_if_refused(reported, supervising, diagnostics).await?;
+                        }
                     }
                 }
             }
             _ = checking.tick() => {
+                if let Some(carrying) = &supervising.carrying {
+                    let reported = report_state(link, carrying).await;
+                    let_go_if_refused(reported, supervising, diagnostics).await?;
+                }
                 if supervising.carrying.as_ref().is_some_and(|carrying| carrying.working) {
                     report_work(link, supervising, false).await?;
+                }
+            }
+            _ = until_session_info_due(info_due) => {
+                if let Some(carrying) = supervising.carrying.as_mut() {
+                    let reported = say_session_info(link, carrying, diagnostics).await;
+                    let_go_if_refused(reported, supervising, diagnostics).await?;
+                }
+            }
+            _ = until_usage_due(usage_due) => {
+                if let Some(carrying) = supervising.carrying.as_mut() {
+                    let reported = say_usage(link, carrying, diagnostics).await;
+                    let_go_if_refused(reported, supervising, diagnostics).await?;
                 }
             }
             () = give_up_timer => {
@@ -295,6 +458,32 @@ async fn attend(
             }
         }
     }
+}
+
+async fn let_go_if_refused(
+    reported: Result<(), link::Error>,
+    supervising: &mut Supervising,
+    diagnostics: &dyn Diagnostics,
+) -> Result<(), link::Error> {
+    match reported {
+        Err(link::Error::Session(why)) => {
+            if let Some(carrying) = supervising.carrying.take() {
+                carrying.let_go(&why, diagnostics).await;
+            }
+            Ok(())
+        }
+        reported => reported,
+    }
+}
+
+async fn ready(link: &Link, carrying: &mut Carrying) -> Result<(), link::Error> {
+    if carrying.prompt.is_none() {
+        carrying.ready = true;
+        link.report(&Report::Ready, Some(&carrying.session), None)
+            .await?;
+    }
+
+    Ok(())
 }
 
 /// Answered beside whatever the Session is doing, so a read never waits on a turn.
@@ -343,6 +532,73 @@ async fn report_work(
     Ok(())
 }
 
+/// An unchanged state is still sent after a reconnect: the control plane may have missed the
+/// change.
+async fn say_session_info(
+    link: &Link,
+    carrying: &mut Carrying,
+    diagnostics: &dyn Diagnostics,
+) -> Result<(), link::Error> {
+    let Some(info) = carrying.info.clone() else {
+        return Ok(());
+    };
+    if carrying
+        .info_due
+        .is_some_and(|due| tokio::time::Instant::now() < due)
+    {
+        return Ok(());
+    }
+    link.report(&Report::SessionInfo(info), Some(&carrying.session), None)
+        .await?;
+    carrying.info_due = None;
+    diagnostics.info(&format!("reported session_info for {}", carrying.session));
+
+    Ok(())
+}
+
+async fn until_session_info_due(due: Option<tokio::time::Instant>) {
+    match due {
+        Some(due) => tokio::time::sleep_until(due).await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn say_usage(
+    link: &Link,
+    carrying: &mut Carrying,
+    diagnostics: &dyn Diagnostics,
+) -> Result<(), link::Error> {
+    let Some(usage) = carrying.usage.clone() else {
+        return Ok(());
+    };
+    if carrying
+        .usage_due
+        .is_some_and(|due| tokio::time::Instant::now() < due)
+    {
+        return Ok(());
+    }
+    link.report(
+        &Report::Usage {
+            usage: usage.clone(),
+        },
+        Some(&carrying.session),
+        None,
+    )
+    .await?;
+    carrying.usage_reported = Some(usage);
+    carrying.usage_due = None;
+    diagnostics.info(&format!("reported usage for {}", carrying.session));
+
+    Ok(())
+}
+
+async fn until_usage_due(due: Option<tokio::time::Instant>) {
+    match due {
+        Some(due) => tokio::time::sleep_until(due).await,
+        None => std::future::pending().await,
+    }
+}
+
 /// Everything left to do for the Session before waiting on the link again: `false` once it has
 /// said all it has to say about a Session that is over.
 async fn carried(
@@ -365,6 +621,8 @@ async fn carried(
         carrying.refreshed.clear();
     }
     say(link, carrying, diagnostics).await?;
+    say_session_info(link, carrying, diagnostics).await?;
+    say_usage(link, carrying, diagnostics).await?;
     if carrying.finished {
         return Ok(false);
     }
@@ -396,53 +654,42 @@ async fn instructed(
         }
         Instruction::Start {
             checkout,
+            turn,
             prompt,
             harness,
         } if !carrying_it => {
-            // A Session's start follows the last one's stop down the stream, so one still carried
-            // here is over.
-            if let Some(carrying) = supervising.carrying.take() {
-                carrying
-                    .let_go("another session started", diagnostics)
-                    .await;
-            }
-            supervising.checkout = Some(checkout.clone());
-            let mut carrying = Carrying {
-                session: delivered.session,
+            start_carrying(
+                stderr,
+                supervising,
+                diagnostics,
+                delivered.session,
                 checkout,
-                prompt,
-                harness: Harness {
-                    command: harness.command,
-                    auth: harness.auth,
-                    model: harness.model,
-                    stderr: stderr.clone(),
-                },
-                conversation: None,
-                finished: false,
-                working: true,
-                taken: 0,
-                refreshed: BTreeMap::new(),
-                written: None,
-                saying: VecDeque::new(),
-            };
-            match checkout::check_out(&carrying.checkout).await {
-                Ok(()) => carrying.saying.push_back(Report::Started),
-                Err(because) => {
-                    diagnostics.info(&because);
-                    carrying.finished = true;
-                    carrying.saying.push_back(Report::Checkout {
-                        repositories: checkout::observe(&carrying.checkout).await,
-                    });
-                    carrying.saying.push_back(Report::Finished {
-                        exit: Exit::Failed { because },
-                    });
-                }
-            }
-            supervising.carrying = Some(carrying);
+                Some(Turn { seq: turn, prompt }),
+                harness,
+            )
+            .await;
         }
-        Instruction::Prompt { prompt } if carrying_it => {
+        Instruction::Unbriefed { checkout, harness } if !carrying_it => {
+            start_carrying(
+                stderr,
+                supervising,
+                diagnostics,
+                delivered.session,
+                checkout,
+                None,
+                harness,
+            )
+            .await;
+        }
+        Instruction::Prompt { turn, prompt } if carrying_it => {
+            let prompt = Turn { seq: turn, prompt };
             if let Some(carrying) = supervising.carrying.as_mut() {
                 carrying.working = true;
+                // An unbriefed Session's first Prompt is its Brief: it has started now.
+                if carrying.prompt.is_none() {
+                    carrying.prompt = Some(prompt.clone());
+                    carrying.saying.push_back(Report::Started);
+                }
             }
             match supervising
                 .carrying
@@ -453,11 +700,138 @@ async fn instructed(
                 None => diagnostics.info("prompted before the session started"),
             }
         }
+        Instruction::Interrupt { turn } if carrying_it => match supervising.carrying.as_ref() {
+            Some(carrying) if carrying.working => match carrying.conversation.as_ref() {
+                Some(conversation) => conversation.interrupt(turn),
+                None => diagnostics.info("interrupted before the session started"),
+            },
+            _ => diagnostics.info("interrupted a session with no turn in flight"),
+        },
+        Instruction::SetOption {
+            option,
+            value,
+            participant,
+        } if carrying_it => {
+            let outcome = match supervising
+                .carrying
+                .as_mut()
+                .and_then(|carrying| carrying.conversation.as_mut())
+            {
+                Some(conversation) => conversation.set_option(option.clone(), value.clone()).await,
+                None => harness::SetOption::refused(
+                    option,
+                    String::new(),
+                    None,
+                    "the session's harness is not open".to_owned(),
+                ),
+            };
+            diagnostics.info(&format!(
+                "changed {} for {}: {}",
+                outcome.option,
+                participant,
+                outcome
+                    .refused
+                    .as_deref()
+                    .unwrap_or(outcome.to.as_deref().unwrap_or("no value"))
+            ));
+            if let Some(carrying) = supervising.carrying.as_mut() {
+                carrying.saying.push_back(Report::OptionChanged {
+                    participant,
+                    option: outcome.option,
+                    category: outcome.category,
+                    from: outcome.from,
+                    to: outcome.to,
+                    refused: outcome.refused,
+                    options: outcome.options,
+                });
+            }
+        }
         Instruction::Stop
         | Instruction::Start { .. }
+        | Instruction::Unbriefed { .. }
         | Instruction::Prompt { .. }
+        | Instruction::Interrupt { .. }
+        | Instruction::SetOption { .. }
         | Instruction::Unrecognized => {}
     }
+}
+
+async fn start_carrying(
+    stderr: &mpsc::UnboundedSender<String>,
+    supervising: &mut Supervising,
+    diagnostics: &dyn Diagnostics,
+    session: String,
+    checkout: Checkout,
+    prompt: Option<Turn>,
+    harness: link::Harness,
+) {
+    // A Session's start follows the last one's stop down the stream, so one still carried here is
+    // over.
+    if let Some(carrying) = supervising.carrying.take() {
+        carrying
+            .let_go("another session started", diagnostics)
+            .await;
+    }
+    let working = prompt.is_some();
+    supervising.checkout = Some(checkout.clone());
+    let mut carrying = Carrying {
+        session,
+        checkout,
+        prompt,
+        harness: Harness {
+            command: harness.command,
+            auth: harness.auth,
+            model: harness.model,
+            mode: harness.mode,
+            thought_level: harness.thought_level,
+            interrupt_deadline: supervising.interrupt_deadline,
+            stderr: stderr.clone(),
+        },
+        conversation: None,
+        finished: false,
+        working,
+        ready: false,
+        taken: 0,
+        state: Some(Report::SessionState {
+            tools: Vec::new(),
+            message_buffering: false,
+            thought_buffering: false,
+            usage: None,
+        }),
+        refreshed: BTreeMap::new(),
+        written: None,
+        saying: VecDeque::new(),
+        info: None,
+        info_due: None,
+        usage: None,
+        usage_due: None,
+        usage_reported: None,
+    };
+    match checkout::check_out(&carrying.checkout).await {
+        Ok(()) => {
+            if carrying.prompt.is_some() {
+                carrying.saying.push_back(Report::Started);
+            } else {
+                // The checkout is what decides whether the Instance holds unpublished work, and
+                // this Session may seal without ever running a turn.
+                carrying.saying.push_back(Report::Checkout {
+                    repositories: checkout::observe(&carrying.checkout).await,
+                });
+            }
+        }
+        Err(because) => {
+            diagnostics.info(&because);
+            carrying.finished = true;
+            carrying.saying.push_back(Report::Checkout {
+                repositories: checkout::observe(&carrying.checkout).await,
+            });
+            carrying.saying.push_back(Report::Finished {
+                exit: Exit::Failed { because },
+                usage: carrying.usage.clone(),
+            });
+        }
+    }
+    supervising.carrying = Some(carrying);
 }
 
 async fn worked_on(
@@ -536,6 +910,7 @@ async fn conversation(
             carrying.finished = true;
             carrying.saying.push_back(Report::Finished {
                 exit: Exit::Failed { because },
+                usage: carrying.usage.clone(),
             });
             Ok(None)
         }
@@ -603,14 +978,16 @@ fn everything_left_to_say(
     worked: harness::Worked,
     observed: Vec<link::Observed>,
 ) -> impl Iterator<Item = Report> {
+    let harness::Worked { failed, usage, .. } = worked;
     std::iter::once(Report::Checkout {
         repositories: observed,
     })
-    .chain(std::iter::once(match worked.failed {
+    .chain(std::iter::once(match failed {
         Some(because) => Report::Finished {
             exit: Exit::Failed { because },
+            usage,
         },
-        None => Report::Answered,
+        None => Report::Answered { usage },
     }))
 }
 
@@ -620,6 +997,12 @@ fn dialled(variables: &BTreeMap<String, String>) -> Option<Link> {
     let credential = set(variables, "KESTREL_INSTANCE_CREDENTIAL")?;
 
     Some(Link::to(base, instance, credential))
+}
+
+fn interrupt_deadline(variables: &BTreeMap<String, String>) -> Duration {
+    set(variables, "KESTREL_INTERRUPT_DEADLINE")
+        .and_then(|seconds| seconds.parse::<u64>().ok())
+        .map_or(INTERRUPT_DEADLINE, Duration::from_secs)
 }
 
 /// How long the control plane holds a Session's lease out, in seconds, as it told this Instance
@@ -742,6 +1125,22 @@ mod tests {
         assert_eq!(
             give_up_after(&variables(&[("KESTREL_LEASE", "120")])),
             Some(Duration::from_secs(120) + GIVE_UP_MARGIN)
+        );
+    }
+
+    #[test]
+    fn the_interrupt_deadline_is_thirty_seconds_unless_configuration_says_otherwise() {
+        assert_eq!(interrupt_deadline(&variables(&[])), INTERRUPT_DEADLINE);
+        assert_eq!(
+            interrupt_deadline(&variables(&[("KESTREL_INTERRUPT_DEADLINE", "1")])),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            interrupt_deadline(&variables(&[(
+                "KESTREL_INTERRUPT_DEADLINE",
+                "not a number"
+            )])),
+            INTERRUPT_DEADLINE
         );
     }
 

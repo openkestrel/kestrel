@@ -1108,7 +1108,7 @@
           "schema": { "type": "string" }
         }],
         "responses": {
-          "200": { "description": "Every Workspace, ordered by when it opened.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Workspace" } } } } },
+          "200": { "description": "Every Workspace, ordered by when it opened, with its latest Session and its place in the queue.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/WorkspaceListed" } } } } },
           "404": { "$ref": "#/components/responses/Refused" },
           "503": { "$ref": "#/components/responses/Refused" }
         }
@@ -1124,7 +1124,7 @@
         }],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkspaceDeclaration" } } } },
         "responses": {
-          "201": { "description": "The opened Workspace.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Workspace" } } } },
+          "201": { "description": "The opened Workspace and its first Session.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Opened" } } } },
           "400": { "$ref": "#/components/responses/Refused" },
           "404": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
@@ -1446,9 +1446,52 @@
         ],
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkspaceMessage" } } } },
         "responses": {
-          "200": { "description": "The Session the message started or continued, or null when it was queued behind an active turn.", "content": { "application/json": { "schema": { "anyOf": [{ "$ref": "#/components/schemas/Session" }, { "type": "null" }] } } } },
+          "200": { "description": "The Session the message reached: the one it started, woke, or wrote the first Brief for, and the Held Message it left, if it was held rather than recorded at once.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Posted" } } } },
+          "403": { "$ref": "#/components/responses/Refused" },
           "400": { "$ref": "#/components/responses/Refused" },
           "404": { "$ref": "#/components/responses/Refused" },
+          "422": { "$ref": "#/components/responses/Refused" },
+          "503": { "$ref": "#/components/responses/Refused" }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/messages/{id}": {
+      "put": {
+        "operationId": "editWorkspaceMessage",
+        "summary": "Edit a Held Message.",
+        "description": "The message is named by the id a post answered with. Only its author's name is accepted. A message a Turn already took is refused 409, and one its author withdrew is refused 409.",
+        "parameters": [
+          { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "id", "in": "path", "required": true, "description": "The id a post answered with.", "schema": { "type": "integer" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkspaceMessage" } } } },
+        "responses": {
+          "200": { "description": "The edited Held Message.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HeldMessage" } } } },
+          "400": { "$ref": "#/components/responses/Refused" },
+          "403": { "$ref": "#/components/responses/Refused" },
+          "404": { "$ref": "#/components/responses/Refused" },
+          "409": { "$ref": "#/components/responses/Refused" },
+          "422": { "$ref": "#/components/responses/Refused" },
+          "503": { "$ref": "#/components/responses/Refused" }
+        }
+      },
+      "delete": {
+        "operationId": "withdrawWorkspaceMessage",
+        "summary": "Withdraw a Held Message.",
+        "description": "The message is named by the id a post answered with. Only its author's name is accepted. A message a Turn already took is refused 409, and one already withdrawn is refused 409.",
+        "parameters": [
+          { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "workspace", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "id", "in": "path", "required": true, "description": "The id a post answered with.", "schema": { "type": "integer" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkspaceMessageWithdrawal" } } } },
+        "responses": {
+          "204": { "description": "The message is withdrawn, and no Turn will see it." },
+          "400": { "$ref": "#/components/responses/Refused" },
+          "403": { "$ref": "#/components/responses/Refused" },
+          "404": { "$ref": "#/components/responses/Refused" },
+          "409": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
           "503": { "$ref": "#/components/responses/Refused" }
         }
@@ -1537,7 +1580,8 @@
           { "name": "session", "in": "path", "required": true, "schema": { "type": "string" } }
         ],
         "responses": {
-          "200": { "description": "The Session.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
+          "200": { "description": "The Session.", "headers": { "ETag": { "description": "A strong validator over the body exactly as served. A read that changes nothing answers the same tag.", "schema": { "type": "string" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
+          "304": { "description": "The Session has not changed since the tag the request carried in `If-None-Match`.", "headers": { "ETag": { "description": "The tag the read would have served.", "schema": { "type": "string" } } } },
           "404": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
           "503": { "$ref": "#/components/responses/Refused" }
@@ -1555,6 +1599,47 @@
         ],
         "responses": {
           "200": { "description": "The ended Session: succeeded between turns, failed mid-turn or before it started.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
+          "404": { "$ref": "#/components/responses/Refused" },
+          "409": { "$ref": "#/components/responses/Refused" },
+          "422": { "$ref": "#/components/responses/Refused" },
+          "503": { "$ref": "#/components/responses/Refused" }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/sessions/{session}/interrupt": {
+      "post": {
+        "operationId": "interruptSession",
+        "summary": "Interrupt a Session's working Turn.",
+        "description": "The Turn is cancelled without ending the Session: its conversation and Instance stay, and a Held Message becomes the next Turn at once. A Session that is not working is refused 409, naming its phase. A second interrupt while one is pending answers 202 and sends nothing more.",
+        "parameters": [
+          { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "session", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SessionInterrupt" } } } },
+        "responses": {
+          "202": { "description": "The Session, with the pending interrupt on it while the request is in flight.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
+          "400": { "$ref": "#/components/responses/Refused" },
+          "404": { "$ref": "#/components/responses/Refused" },
+          "409": { "$ref": "#/components/responses/Refused" },
+          "422": { "$ref": "#/components/responses/Refused" },
+          "503": { "$ref": "#/components/responses/Refused" }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/sessions/{session}/options": {
+      "post": {
+        "operationId": "setSessionOption",
+        "summary": "Change one of a Session's options between Turns.",
+        "description": "A queued Session's declared model, mode or thought level is set at once and checked when the Session is set up (200). A live Session's change is durable and answered by the harness (202), and the Session carries `changing_options` until it settles. A change during a working Turn, on an ended or unreachable Session, or on an unbriefed Session with no options yet is refused, naming the phase.",
+        "parameters": [
+          { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "session", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OptionChange" } } } },
+        "responses": {
+          "200": { "description": "The Session whose declared value changed.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
+          "202": { "description": "The change waits on the harness, and the Session's `changing_options` carries it.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
+          "400": { "$ref": "#/components/responses/Refused" },
           "404": { "$ref": "#/components/responses/Refused" },
           "409": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
@@ -1723,8 +1808,8 @@
     "/operator/organizations/{organization}/queue": {
       "get": {
         "operationId": "showQueue",
-        "summary": "Read the Organization's queue: the limits, their occupancy, the queued Sessions in dispatch order, and the Waiting Sessions.",
-        "description": "Queued Sessions appear in the order they were enqueued. Each one ready for dispatch apart from the shared Active-Work Slot pool is numbered from 1; one that is not carries no number and names every reason that holds it, derived by the rules dispatch applies. Waiting Sessions follow, unnumbered, with any held input and why their next turn has not started. Nothing is estimated. The Active-Work Slot limit is the one the dispatching work role recorded, or no work role is dispatching; the pool belongs to the control plane and every Organization shares it, so other Organizations' occupants are counted and never named. Reading changes nothing.",
+        "summary": "Read the Organization's queue: the limits, their occupancy, the queued Sessions in dispatch order, the Waiting Sessions and the unbriefed ones.",
+        "description": "Queued Sessions appear in the order they were enqueued. Each one ready for dispatch apart from the shared Active-Work Slot pool is numbered from 1; one that is not carries no number and names every reason that holds it, derived by the rules dispatch applies. A queued Session whose Workspace has no Brief waits only on its Instance. Waiting Sessions follow, unnumbered, with any held input and why their next turn has not started. Unbriefed Sessions follow those, beside them: they hold their Instances and no Active-Work Slot, are never numbered, and carry the step they are preparing on and any message held for their Brief. Nothing is estimated. The Active-Work Slot limit and the Compute driver are the ones the dispatching work role recorded, or no work role is dispatching; the pool belongs to the control plane and every Organization shares it, so other Organizations' occupants are counted and never named. Reading changes nothing.",
         "parameters": [
           { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } }
         ],
@@ -1742,7 +1827,7 @@
       "get": {
         "operationId": "transcript",
         "summary": "Stream a Workspace's Transcript.",
-        "description": "Replays every entry after `Last-Event-ID`, in order, each as an `entry` event whose id is the cursor that resumes after it. A read that follows then stays open and delivers entries as they are appended; the stream ends with an `end` event once the Workspace is sealed, or at once for a read that does not follow. A cursor that names no position in this Transcript is refused rather than silently restarting the walk.",
+        "description": "Replays every entry after `Last-Event-ID`, in order, each as an `entry` event whose id is the cursor that resumes after it. A read that follows then stays open and delivers entries as they are appended; the stream ends with an `end` event once the Workspace is sealed, or at once for a read that does not follow. A cursor that names no position in this Transcript is refused rather than silently restarting the walk. A follow that stays open past caught-up registers a follower: it is sent one `follower` event carrying its id and lease, then a `presence` event carrying the whole current set, and a new `presence` event whenever the set changes. Presence events carry no id and never move the cursor, and a read that does not follow registers nobody.",
         "parameters": [
           {
             "name": "organization",
@@ -1772,6 +1857,15 @@
             }
           },
           {
+            "name": "as",
+            "in": "query",
+            "required": false,
+            "description": "The person this follow joins the Workspace's presence as, by the participant name rule; naming an Agent in the Organization is refused. Only a read that stays open past caught-up registers a follower.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "Last-Event-ID",
             "in": "header",
             "required": false,
@@ -1794,11 +1888,41 @@
                 "shared_state,narration,detail"
               ]
             }
+          },
+          {
+            "name": "summaries",
+            "in": "query",
+            "required": false,
+            "description": "Summarize omitted narration and detail, across every shared-state boundary even when shared state is not selected. With every kind selected there are no summaries.",
+            "schema": {
+              "type": "boolean",
+              "default": true
+            }
+          },
+          {
+            "name": "first_seq",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive first seq of an Activity expansion. Select every kind to read its entries.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "last_seq",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive last seq of an Activity expansion; must be at least first_seq. The finite range ends when caught up.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "The stream is open. Each event carries an entry or the end of the stream as its data, and its kind as its event name.",
+            "description": "The stream is open. Each event carries an entry, the end of the stream, a follower registration or the whole presence set as its data, and its name as its event name.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -1821,12 +1945,162 @@
           }
         }
       }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/followers/{id}/lease": {
+      "post": {
+        "operationId": "renewFollower",
+        "summary": "Extend a Workspace follow's presence lease.",
+        "description": "Extends the follower's lease to a full period from now. An unknown follower, or one whose lease has already passed, is refused: a lapsed follow reconnects and registers again rather than being revived.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The follower id a `follower` event carried.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The lease is extended."
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/transcript/payloads/{payload}": {
+      "get": {
+        "operationId": "transcriptPayload",
+        "summary": "Fetch a referenced Transcript payload within its owning Workspace",
+        "responses": {
+          "200": {
+            "description": "Original payload bytes",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "No payload in this Workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Refusal"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The entry expired and its payload content was removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Refusal"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "description": "The Workspace whose Transcript is read, by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "payload",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Owning workspace UUID, entry seq and field, separated by colons."
+            }
+          }
+        ]
+      }
+    },
+    "/operator/organizations/{organization}/changes": {
+      "get": {
+        "operationId": "changes",
+        "summary": "Stream the Organization's change notices.",
+        "description": "Opens with an `open` event, then sends a `change` event naming each Workspace, Session or queue that changed, at most once per resource per 250 ms. A notice says what changed, never what it changed to. No event carries an id and `Last-Event-ID` is ignored: a notice is a hint to refetch, never a cursor. A subscriber that falls behind the bounded buffer is sent `resync` instead of a silent gap.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stream is open. `open` and `resync` mean every subscribed view must be refetched; `change` names one resource.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangesEvent"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
     }
   },
   "components": {
     "responses": {
       "Refused": {
-        "description": "The control plane refused the request. 400 is a request it could not read; 404 is a name or reference that resolves to no record, or to more than one; 409 and 422 are an operation it declined; 503 is a control plane that could not answer; 504 is an Instance that did not answer a read within 10 s.",
+        "description": "The control plane refused the request. 400 is a request it could not read; 403 is a name that is not the one the change requires; 404 is a name or reference that resolves to no record, or to more than one; 409 and 422 are an operation it declined; 503 is a control plane that could not answer; 504 is an Instance that did not answer a read within 10 s.",
         "headers": {
           "Retry-After": {
             "description": "Seconds to wait before asking again. Present on a 503 only when the database was busy, which asking again can clear.",
@@ -1843,6 +2117,32 @@
       }
     },
     "schemas": {
+      "PayloadReference": {
+        "type": "object",
+        "description": "A body field exceeding 65536 bytes, fetched under its owning Workspace; message, thought and brief text use raw UTF-8, while plans, batched messages and tool input/results use compact JSON.",
+        "properties": {
+          "payload_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f-]+:[1-9][0-9]*:[a-z_]+$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 65537
+          },
+          "media_type": {
+            "enum": [
+              "text/plain; charset=utf-8",
+              "application/json"
+            ]
+          }
+        },
+        "required": [
+          "payload_id",
+          "bytes",
+          "media_type"
+        ],
+        "additionalProperties": false
+      },
       "RepositoryDiff": {
         "type": "object",
         "properties": {
@@ -2303,6 +2603,20 @@
               "null"
             ],
             "description": "The model it works with. Absent or null names none, and the Harness's own default is the answer."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The mode it works in. Absent or null names none, and the Harness's own default is the answer."
+          },
+          "thought_level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The thought level it works at. Absent or null names none, and the Harness's own default is the answer."
           }
         },
         "required": [
@@ -2328,13 +2642,27 @@
               "string",
               "null"
             ]
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thought_level": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "id",
           "name",
           "harness",
-          "model"
+          "model",
+          "mode",
+          "thought_level"
         ]
       },
       "StartPlan": {
@@ -2386,6 +2714,15 @@
           "session": { "$ref": "#/components/schemas/Session" }
         },
         "required": ["organization", "project", "agent", "workspace", "session"]
+      },
+      "Opened": {
+        "type": "object",
+        "description": "A Workspace and the first Session its open enqueued, in one transaction.",
+        "properties": {
+          "workspace": { "$ref": "#/components/schemas/Workspace" },
+          "session": { "$ref": "#/components/schemas/Session" }
+        },
+        "required": ["workspace", "session"]
       },
       "DeclarationDocument": {
         "type": "object",
@@ -2453,7 +2790,10 @@
           "project": { "type": "string", "minLength": 1 },
           "agent": { "type": "string", "minLength": 1 },
           "allows": { "type": "array", "items": { "type": "string" }, "default": [] },
-          "profile": { "type": ["string", "null"] }
+          "profile": { "type": ["string", "null"] },
+          "model": { "type": ["string", "null"], "description": "The model its Sessions run with. Omitted, the Agent's, then the Harness's default." },
+          "mode": { "type": ["string", "null"], "description": "The mode its Sessions run in. Omitted, the Agent's, then the Harness's default." },
+          "thought_level": { "type": ["string", "null"], "description": "The thought level its Sessions run at. Omitted, the Agent's, then the Harness's default." }
         },
         "required": ["name", "brief", "project", "agent"],
         "oneOf": [
@@ -2492,10 +2832,13 @@
           "agent": { "type": "string" },
           "allows": { "type": "array", "items": { "type": "string" } },
           "profile": { "type": ["string", "null"] },
+          "model": { "type": ["string", "null"], "description": "The model its Sessions run with, or null for the Agent's or Harness's default." },
+          "mode": { "type": ["string", "null"], "description": "The mode its Sessions run in, or null for the Agent's or Harness's default." },
+          "thought_level": { "type": ["string", "null"], "description": "The thought level its Sessions run at, or null for the Agent's or Harness's default." },
           "applied": { "type": "boolean", "description": "Whether a trigger file declared it, rather than flags." },
           "declared_at": { "type": "string", "format": "date-time" }
         },
-        "required": ["id", "organization", "name", "state", "disabled_because", "firing_budget", "filter", "every", "cron", "zone", "admits_outsiders", "brief", "branch", "correlation", "on_miss", "on_open_workspace", "project", "agent", "allows", "profile", "applied", "declared_at"]
+        "required": ["id", "organization", "name", "state", "disabled_because", "firing_budget", "filter", "every", "cron", "zone", "admits_outsiders", "brief", "branch", "correlation", "on_miss", "on_open_workspace", "project", "agent", "allows", "profile", "model", "mode", "thought_level", "applied", "declared_at"]
       },
       "TriggerTest": {
         "type": "object",
@@ -2548,7 +2891,10 @@
                 "project": { "type": "string" },
                 "agent": { "type": "string" },
                 "allows": { "type": "array", "items": { "type": "string" } },
-                "profile": { "type": ["string", "null"] }
+                "profile": { "type": ["string", "null"] },
+                "model": { "type": ["string", "null"], "description": "The model its Sessions run with. Omitted, the Agent's, then the Harness's default." },
+                "mode": { "type": ["string", "null"], "description": "The mode its Sessions run in. Omitted, the Agent's, then the Harness's default." },
+                "thought_level": { "type": ["string", "null"], "description": "The thought level its Sessions run at. Omitted, the Agent's, then the Harness's default." }
               },
               "required": ["filter", "brief", "project", "agent"],
               "additionalProperties": false
@@ -2622,9 +2968,13 @@
             "description": "What the dispatching work role recorded when it started, or null while no work role is dispatching.",
             "properties": {
               "active_work_slots": { "type": "integer", "minimum": 1 },
-              "serialized_harnesses": { "type": "array", "items": { "type": "string" } }
+              "serialized_harnesses": { "type": "array", "items": { "type": "string" } },
+              "driver": {
+                "type": "string",
+                "description": "The Compute driver it provisions Instances with: the Environment work is provisioned in, read-only."
+              }
             },
-            "required": ["active_work_slots", "serialized_harnesses"]
+            "required": ["active_work_slots", "serialized_harnesses", "driver"]
           },
           "active_work": { "$ref": "#/components/schemas/ActiveWork" },
           "instances": { "$ref": "#/components/schemas/QueueInstances" },
@@ -2635,9 +2985,13 @@
           "waiting": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/WaitingSession" }
+          },
+          "unbriefed": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/UnbriefedSession" }
           }
         },
-        "required": ["work_role", "active_work", "instances", "queued", "waiting"]
+        "required": ["work_role", "active_work", "instances", "queued", "waiting", "unbriefed"]
       },
       "ActiveWork": {
         "type": "object",
@@ -2727,6 +3081,27 @@
         },
         "required": ["name", "workspace", "agent", "pending_since", "reasons", "enqueued_at"]
       },
+      "UnbriefedSession": {
+        "type": "object",
+        "description": "A Session with no Brief yet. It holds an Instance and no Active-Work Slot, has no place in the numbered queue, and waits for the first message that becomes its Brief. Its preparing step is current Session state.",
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
+          "workspace": { "type": "string", "format": "uuid" },
+          "agent": { "type": "string" },
+          "preparing": {
+            "type": ["string", "null"],
+            "enum": ["provisioning", "cloning", "starting_harness", "harness_ready", null],
+            "description": "The step it is preparing on: provisioning from claim until its supervisor connects, cloning until its checkout is reported, starting_harness until the harness is up, and harness_ready once it is."
+          },
+          "pending_since": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "When the oldest message held for its Brief arrived, or null while it holds none."
+          },
+          "enqueued_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["name", "workspace", "agent", "preparing", "pending_since", "enqueued_at"]
+      },
       "QueueReason": {
         "type": "object",
         "description": "One reason a Session has not started, for a Client to phrase.",
@@ -2795,10 +3170,33 @@
           "project": { "type": "string", "minLength": 1 },
           "agent": { "type": "string", "minLength": 1 },
           "profile": { "type": ["string", "null"] },
-          "branch": { "type": ["string", "null"] },
+          "branch": {
+            "type": ["string", "null"],
+            "description": "Omitted, a branch of the Workspace's own. A continuation runs on the branch of the Workspace it continues."
+          },
           "continues": {
             "type": ["string", "null"],
             "description": "The sealed Workspace this one carries on from, by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`."
+          },
+          "model": {
+            "type": ["string", "null"],
+            "description": "The model the first Session runs on. Omitted, the Agent's, then the Harness's default."
+          },
+          "mode": {
+            "type": ["string", "null"],
+            "description": "The mode the first Session runs in. Omitted, the Agent's, then the Harness's default."
+          },
+          "thought_level": {
+            "type": ["string", "null"],
+            "description": "The thought level the first Session runs at. Omitted, the Agent's, then the Harness's default."
+          },
+          "brief": {
+            "type": ["string", "null"],
+            "description": "The Brief the Workspace starts with, handed to the agent exactly as given. Omitted, the first Session waits for its first message to become the Brief."
+          },
+          "participant": {
+            "type": ["string", "null"],
+            "description": "The name the Brief is written under. Omitted, its source is the operator and no one joins."
           }
         },
         "required": ["project", "agent"]
@@ -2814,6 +3212,35 @@
         },
         "required": ["participant", "message"]
       },
+      "WorkspaceMessageWithdrawal": {
+        "type": "object",
+        "properties": {
+          "participant": {
+            "type": "string",
+            "description": "The person who wrote the message, by declared name. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization."
+          }
+        },
+        "required": ["participant"]
+      },
+      "HeldMessage": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "description": "The Workspace's own sequence. Stable and never reused: a taken or withdrawn message keeps it." },
+          "participant": { "type": "string" },
+          "message": { "type": "string" },
+          "posted_at": { "type": "string", "format": "date-time" },
+          "edited_at": { "type": ["string", "null"], "format": "date-time" }
+        },
+        "required": ["id", "participant", "message", "posted_at", "edited_at"]
+      },
+      "Posted": {
+        "type": "object",
+        "properties": {
+          "session": { "anyOf": [{ "$ref": "#/components/schemas/Session" }, { "type": "null" }], "description": "The Session the message started or woke, if it started or woke one." },
+          "held_message": { "anyOf": [{ "$ref": "#/components/schemas/HeldMessage" }, { "type": "null" }], "description": "The Held Message the post left, if a Turn could not take it at once." }
+        },
+        "required": ["session", "held_message"]
+      },
       "Workspace": {
         "type": "object",
         "properties": {
@@ -2826,21 +3253,71 @@
           "checkout": { "$ref": "#/components/schemas/Checkout" },
           "instance": { "type": ["string", "null"], "description": "The Instance its Sessions execute on, while one is kept." },
           "held": { "type": ["string", "null"], "description": "Why its Instance is held for work that exists nowhere else, if it is." },
+          "held_messages": { "type": "array", "description": "The messages the unfinished Session cannot take yet, in arrival order.", "items": { "$ref": "#/components/schemas/HeldMessage" } },
           "correlation": { "type": ["string", "null"] },
           "state": { "type": "string", "enum": ["open", "sealed"] },
           "opened_at": { "type": "string", "format": "date-time" },
           "last_active_at": { "type": "string", "format": "date-time" },
           "sealed_at": { "type": ["string", "null"], "format": "date-time" },
           "continues": { "type": ["string", "null"], "format": "uuid" },
-          "started_by": { "type": ["string", "null"], "format": "uuid" },
+          "started_by": {
+            "type": ["string", "null"],
+            "description": "The Event a firing opened it for, or the Brief's author an operator opened it with. Null when neither names anyone."
+          },
           "continued_by": { "type": "array", "items": { "type": "string", "format": "uuid" } },
           "pull_requests": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/PullRequestAvailability" },
             "description": "One per repository fixed on the Workspace, in the checkout's order."
+          },
+          "unfinished_session": {
+            "anyOf": [{ "$ref": "#/components/schemas/UnfinishedSession" }, { "type": "null" }],
+            "description": "The one Session the Workspace has not let go of, while it has one."
           }
         },
-        "required": ["id", "name", "organization", "project", "opened_with", "profile", "checkout", "instance", "held", "correlation", "state", "opened_at", "last_active_at", "sealed_at", "continues", "started_by", "continued_by", "pull_requests"]
+        "required": ["id", "name", "organization", "project", "opened_with", "profile", "checkout", "instance", "held", "correlation", "state", "opened_at", "last_active_at", "sealed_at", "continues", "started_by", "continued_by", "held_messages", "pull_requests", "unfinished_session"]
+      },
+      "WorkspaceListed": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Workspace" },
+          {
+            "type": "object",
+            "properties": {
+              "session": {
+                "anyOf": [{ "$ref": "#/components/schemas/Session" }, { "type": "null" }],
+                "description": "The Workspace's latest Session, as the Session read answers it; null before it has one."
+              },
+              "queue": {
+                "anyOf": [{ "$ref": "#/components/schemas/QueueStanding" }, { "type": "null" }],
+                "description": "Where that Session stands in the Organization's queue; null when it is in none of the queue's lists."
+              }
+            },
+            "required": ["session", "queue"]
+          }
+        ]
+      },
+      "QueueStanding": {
+        "type": "object",
+        "description": "A Workspace's Session as the queue sees it: queued with a position or reasons, waiting with reasons and held input, or unbriefed with held input.",
+        "properties": {
+          "position": { "type": ["integer", "null"], "minimum": 1, "description": "Its place among queued Sessions; null while a reason holds it, or when it is not queued." },
+          "reasons": { "type": "array", "items": { "$ref": "#/components/schemas/QueueReason" } },
+          "pending_since": { "type": ["string", "null"], "format": "date-time", "description": "When the oldest input held for its next turn arrived." }
+        },
+        "required": ["position", "reasons", "pending_since"]
+      },
+      "UnfinishedSession": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
+          "state": { "type": "string", "enum": ["queued", "working", "waiting", "unbriefed", "ended", "unreachable"] },
+          "preparing": {
+            "type": ["string", "null"],
+            "enum": ["provisioning", "cloning", "starting_harness", "harness_ready", null]
+          }
+        },
+        "required": ["id", "name", "state", "preparing"]
       },
       "PullRequestAvailability": {
         "type": "object",
@@ -2870,7 +3347,7 @@
           "state": { "$ref": "#/components/schemas/PullRequestState" },
           "head_branch": { "type": "string" },
           "head_revision": { "type": "string" },
-          "updated_at": { "type": "string", "format": "date-time", "description": "When GitHub last changed it, as the Event said." },
+          "updated_at": { "type": "string", "format": "date-time", "description": "When GitHub last changed it, as the Event or a read back of the pull request said." },
           "event": { "type": "string", "format": "uuid", "description": "The Event the value was learned from." }
         },
         "required": ["repository", "number", "url", "title", "state", "head_branch", "head_revision", "updated_at", "event"]
@@ -2885,11 +3362,35 @@
         },
         "required": ["repositories", "base", "branch"]
       },
+      "OptionChange": {
+        "description": "One option a person changes on a Session: exactly one of `option` (the id the harness reported) or `category` (model, mode or thought_level), and the value to set.",
+        "type": "object",
+        "properties": {
+          "participant": { "type": "string", "minLength": 1, "description": "The person making the change, by the participant name rule." },
+          "option": { "type": ["string", "null"], "description": "The harness option's id. Exactly one of option or category." },
+          "category": { "type": ["string", "null"], "description": "One of model, mode or thought_level. Exactly one of option or category." },
+          "value": { "type": "string", "minLength": 1 }
+        },
+        "required": ["participant", "value"]
+      },
+      "ChangingOption": {
+        "description": "An option change a person asked for while a Session is live, held until the harness answers it (ADR-0041).",
+        "type": "object",
+        "properties": {
+          "option": { "type": "string" },
+          "category": { "type": "string" },
+          "value": { "type": "string" },
+          "participant": { "type": "string" }
+        },
+        "required": ["option", "category", "value", "participant"]
+      },
       "SessionDeclaration": {
         "type": "object",
         "properties": {
           "agent": { "type": ["string", "null"], "description": "Omitted, the Agent of the Workspace's latest Session." },
-          "model": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." }
+          "model": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." },
+          "mode": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." },
+          "thought_level": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." }
         }
       },
       "Session": {
@@ -2898,24 +3399,102 @@
           "id": { "type": "string", "format": "uuid" },
           "name": { "type": "string", "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$" },
           "workspace": { "type": "string", "format": "uuid" },
-          "state": { "type": "string", "enum": ["queued", "working", "waiting", "ended", "unreachable"] },
+          "state": { "type": "string", "enum": ["queued", "working", "waiting", "unbriefed", "ended", "unreachable"] },
+          "preparing": {
+            "type": ["string", "null"],
+            "enum": ["provisioning", "cloning", "starting_harness", "harness_ready", null],
+            "description": "The step an unbriefed Session is preparing on: provisioning from claim until its supervisor connects, cloning until its checkout is reported, starting_harness until the harness is up, and harness_ready once it is. Null in every other state."
+          },
           "exit": { "anyOf": [{ "$ref": "#/components/schemas/Exit" }, { "type": "null" }] },
           "outcome_message": { "type": ["string", "null"] },
           "instance": { "type": ["string", "null"] },
           "supervisor": { "type": ["string", "null"] },
           "agent": { "type": "string" },
           "harness": { "type": "string" },
-          "model": { "type": ["string", "null"], "description": "What the Session names, or null for its Harness's default." },
-          "worked_model": { "type": ["string", "null"] },
+          "model": { "type": ["string", "null"], "description": "What the Session names for its Harness's model, or null for its Harness's default." },
+          "mode": { "type": ["string", "null"], "description": "What the Session names for its Harness's mode, or null for its Harness's default." },
+          "thought_level": { "type": ["string", "null"], "description": "What the Session names for its Harness's thought level, or null for its Harness's default." },
+          "worked_model": { "type": ["string", "null"], "description": "The Model-category option's current value, kept current by the supervisor (ADR-0041)." },
+          "title": { "type": ["string", "null"], "description": "The harness's own name for the conversation, or null until it says one." },
+          "options": { "type": "array", "description": "The harness's whole config-option list (ADR-0041).", "items": { "$ref": "#/components/schemas/SessionOption" } },
+          "changing_options": { "type": "array", "description": "Option changes a person asked for while the Session is live, held until the harness answers each (ADR-0041).", "items": { "$ref": "#/components/schemas/ChangingOption" } },
+          "commands": { "type": "array", "description": "The commands the harness offers for this Session.", "items": { "$ref": "#/components/schemas/SessionCommand" } },
+          "interrupting": { "anyOf": [{ "$ref": "#/components/schemas/Interrupting" }, { "type": "null" }], "description": "Who asked the working Turn to stop, while the request is in flight." },
           "enqueued_at": { "type": "string", "format": "date-time" },
           "started_at": { "type": ["string", "null"], "format": "date-time" },
           "ended_at": { "type": ["string", "null"], "format": "date-time" },
           "lease_expires_at": { "type": ["string", "null"], "format": "date-time" },
           "connected_at": { "type": ["string", "null"], "format": "date-time" },
           "supervisor_version": { "type": ["string", "null"] },
-          "usage": { "anyOf": [{ "$ref": "#/components/schemas/Usage" }, { "type": "null" }] }
+          "usage": { "anyOf": [{ "$ref": "#/components/schemas/Usage" }, { "type": "null" }] },
+          "tools": { "type": "array", "items": { "$ref": "#/components/schemas/RunningTool" } },
+          "message_buffering": { "type": "boolean" },
+          "thought_buffering": { "type": "boolean" }
         },
-        "required": ["id", "name", "workspace", "state", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "worked_model", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage"]
+        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "changing_options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "message_buffering", "thought_buffering"]
+      },
+      "SessionOption": {
+        "type": "object",
+        "description": "A harness config option, whole: what it is, what it may be and what it is now.",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": ["string", "null"] },
+          "category": { "type": ["string", "null"], "description": "`mode`, `model`, `model_config`, `thought_level`, or the harness's own string, which may begin with `_`." },
+          "kind": { "type": "string", "enum": ["select", "boolean"] },
+          "current": { "anyOf": [{ "type": "string" }, { "type": "boolean" }], "description": "The current value: a value id for a select, a boolean for a toggle." },
+          "values": { "type": "array", "description": "The offered values of an ungrouped select; empty for a grouped one and for a boolean.", "items": { "$ref": "#/components/schemas/SessionOptionValue" } },
+          "groups": { "type": "array", "description": "The offered values of a grouped select; empty for an ungrouped one.", "items": { "$ref": "#/components/schemas/SessionOptionGroup" } },
+          "warns_cache": { "type": "boolean", "description": "Whether changing this option makes the next Turn re-read the context without the prompt cache. True for a Model, ThoughtLevel or ModelConfig option, except a category kestrel's per-harness table keeps the cache for; at 0.3 that is Claude's ThoughtLevel (ADR-0041)." }
+        },
+        "required": ["id", "name", "description", "category", "kind", "current", "values", "groups", "warns_cache"]
+      },
+      "SessionOptionValue": {
+        "type": "object",
+        "properties": {
+          "value": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": ["string", "null"] }
+        },
+        "required": ["value", "name", "description"]
+      },
+      "SessionOptionGroup": {
+        "type": "object",
+        "properties": {
+          "group": { "type": "string" },
+          "name": { "type": "string" },
+          "values": { "type": "array", "items": { "$ref": "#/components/schemas/SessionOptionValue" } }
+        },
+        "required": ["group", "name", "values"]
+      },
+      "SessionCommand": {
+        "type": "object",
+        "description": "A command the harness offers for the Session, as a composer lists it.",
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "input_hint": { "type": ["string", "null"] }
+        },
+        "required": ["name", "description", "input_hint"]
+      },
+      "Interrupting": {
+        "type": "object",
+        "description": "A person's request that a Session's working Turn stop.",
+        "properties": {
+          "participant": { "type": "string" },
+          "requested_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["participant", "requested_at"]
+      },
+      "SessionInterrupt": {
+        "type": "object",
+        "properties": {
+          "participant": {
+            "type": "string",
+            "description": "The person asking. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization."
+          }
+        },
+        "required": ["participant"]
       },
       "Exit": {
         "oneOf": [
@@ -3390,6 +3969,114 @@
           "data"
         ]
       },
+      "Activity": {
+        "description": "Read-time summary of omitted narration and detail between consecutive shared-state entries. first_seq identifies the whole Activity, including selected kinds, and stays stable across pages and reconnects. last_seq is the highest Activity seq examined; its SSE id advances the global cursor. A closed replacement precedes the closing shared-state entry even when no detail was added. No summary is stored.",
+        "type": "object",
+        "properties": {
+          "first_seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "last_seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "tool_calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failed_calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "thoughts": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "plans": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "tombstones": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "tool_calls",
+              "failed_calls",
+              "thoughts",
+              "plans",
+              "tombstones"
+            ]
+          },
+          "latest": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "kind": {
+                "$ref": "#/components/schemas/TranscriptKind"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "title",
+              "status"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Earliest start among omitted unexpired entries."
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Latest finish among omitted unexpired entries."
+          },
+          "anomaly": {
+            "type": "boolean",
+            "description": "An omitted call was interrupted or unresolved."
+          },
+          "closed": {
+            "type": "boolean",
+            "description": "The next shared-state boundary has been examined. Followers replace open summaries by first_seq and CLI followers print only this final replacement."
+          }
+        },
+        "required": [
+          "first_seq",
+          "last_seq",
+          "counts",
+          "latest",
+          "started_at",
+          "finished_at",
+          "anomaly",
+          "closed"
+        ]
+      },
       "Recorded": {
         "description": "One Transcript entry, and where it sits in the order.",
         "type": "object",
@@ -3425,6 +4112,25 @@
           "session_id"
         ]
       },
+      "ExpiredEntry": {
+        "description": "Narration or detail expired in place after 30 days from append, including in sealed Workspaces. The enclosing record retains its original kind, seq and appended_at, with session_id null; all content, completion metadata and payload references are removed.",
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "expired"
+          },
+          "expired_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the sweep replaced the entry."
+          }
+        },
+        "required": [
+          "type",
+          "expired_at"
+        ],
+        "additionalProperties": false
+      },
       "Entry": {
         "description": "One completed unit of the Workspace Transcript.",
         "oneOf": [
@@ -3447,6 +4153,9 @@
             "$ref": "#/components/schemas/SessionEnded"
           },
           {
+            "$ref": "#/components/schemas/TurnInterrupted"
+          },
+          {
             "$ref": "#/components/schemas/InstanceReleased"
           },
           {
@@ -3457,21 +4166,34 @@
           },
           {
             "$ref": "#/components/schemas/PullRequestEntry"
+          },
+          {
+            "$ref": "#/components/schemas/OptionChangedEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ToolCallEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ExpiredEntry"
           }
         ],
         "discriminator": {
           "propertyName": "type",
           "mapping": {
+            "expired": "#/components/schemas/ExpiredEntry",
             "participant_joined": "#/components/schemas/ParticipantJoined",
             "brief": "#/components/schemas/Brief",
             "session_started": "#/components/schemas/SessionStarted",
             "said": "#/components/schemas/Message",
             "messages": "#/components/schemas/Messages",
             "session_ended": "#/components/schemas/SessionEnded",
+            "turn_interrupted": "#/components/schemas/TurnInterrupted",
             "instance_released": "#/components/schemas/InstanceReleased",
             "thought": "#/components/schemas/ThoughtEntry",
             "plan": "#/components/schemas/PlanEntry",
-            "pull_request": "#/components/schemas/PullRequestEntry"
+            "pull_request": "#/components/schemas/PullRequestEntry",
+            "option_changed": "#/components/schemas/OptionChangedEntry",
+            "tool_call": "#/components/schemas/ToolCallEntry"
           }
         }
       },
@@ -3495,24 +4217,73 @@
         "description": "The instruction a Workspace started with, rendered by the Trigger that fired or supplied by an operator.",
         "type": "object",
         "properties": {
-          "trigger": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The Trigger that rendered it, or null for a Brief an operator supplied."
+          "source": {
+            "$ref": "#/components/schemas/BriefSource"
           },
           "brief": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
           },
           "type": {
             "const": "brief"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
           "type",
-          "trigger",
+          "source",
           "brief"
+        ]
+      },
+      "BriefSource": {
+        "description": "Who supplied a Brief: the Trigger whose firing rendered it, or an operator, under the participant name they declared if they declared one.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "trigger"
+              },
+              "trigger": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "trigger"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "operator"
+              },
+              "participant": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The participant who joined directly before the Brief, or null when the operator declared no name and no one joined."
+              }
+            },
+            "required": [
+              "kind",
+              "participant"
+            ]
+          }
         ]
       },
       "SessionStarted": {
@@ -3569,14 +4340,28 @@
         "type": "object",
         "properties": {
           "messages": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "$ref": "#/components/schemas/SpokenMessage"
-            }
+            "oneOf": [
+              {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/components/schemas/SpokenMessage"
+                }
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
           },
           "type": {
             "const": "messages"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -3592,7 +4377,21 @@
             "type": "string"
           },
           "message": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -3619,6 +4418,27 @@
           "type",
           "session",
           "exit"
+        ]
+      },
+      "TurnInterrupted": {
+        "description": "A person interrupted a working Turn without ending the Session.",
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "participant": {
+            "type": "string"
+          },
+          "type": {
+            "const": "turn_interrupted"
+          }
+        },
+        "required": [
+          "type",
+          "session",
+          "participant"
         ]
       },
       "Exit": {
@@ -3671,9 +4491,54 @@
           "because"
         ]
       },
+      "TranscriptSessionState": {
+        "description": "Transient session_state SSE snapshot on every follow connect, including empty state, then changes. Never has an event id and never enters the Transcript. session_id is null when no unfinished Session exists; usage is the latest the Harness reported, live, or null.",
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningTool"
+            }
+          },
+          "message_buffering": {
+            "type": "boolean"
+          },
+          "thought_buffering": {
+            "type": "boolean"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the Harness has spent so far, kept in memory while the Session is live; null until it reports one."
+          }
+        },
+        "required": [
+          "session_id",
+          "tools",
+          "message_buffering",
+          "thought_buffering",
+          "usage"
+        ]
+      },
       "Event": {
-        "description": "SSE names: entry (Recorded), cursor (CursorEvent), or end (End). Entry and cursor IDs advance the global Transcript cursor.",
+        "description": "SSE names: entry (Recorded), activity (Activity), session_state (TranscriptSessionState), cursor (CursorEvent), end (End), follower (FollowerEvent), or presence (Presence). Entry, Activity and cursor IDs advance the global Transcript cursor; session_state, follower and presence carry no id. Activity replacements retain first_seq, and their final closed replacement precedes the closing shared-state entry.",
         "oneOf": [
+          { "$ref": "#/components/schemas/Activity" },
+          { "$ref": "#/components/schemas/TranscriptSessionState" },
           {
             "$ref": "#/components/schemas/Recorded"
           },
@@ -3682,8 +4547,67 @@
           },
           {
             "$ref": "#/components/schemas/CursorEvent"
+          },
+          {
+            "$ref": "#/components/schemas/FollowerEvent"
+          },
+          {
+            "$ref": "#/components/schemas/Presence"
           }
         ]
+      },
+      "FollowerEvent": {
+        "description": "A follow that stayed open past caught-up registered: the id it renews by, and the lease in seconds it must renew before. Sent once per follow.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "lease_seconds": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "lease_seconds"
+        ]
+      },
+      "Presence": {
+        "description": "The whole current set of a Workspace's followers, sent when a follow registers and whenever the set changes. A named follow appears once per name, the follower's own included; unnamed follows are counted; an Agent never appears. Carries no Transcript cursor.",
+        "type": "object",
+        "properties": {
+          "named": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "anonymous": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "named",
+          "anonymous"
+        ]
+      },
+      "OptionChangedEntry": {
+        "description": "A person changed one of a Session's options between Turns (ADR-0041).",
+        "type": "object",
+        "properties": {
+          "type": { "const": "option_changed" },
+          "session": { "type": "string", "format": "uuid" },
+          "participant": { "type": "string", "description": "The person who made the change." },
+          "option": { "type": "string", "description": "The harness option's id, or the category when a queued Session's declared value changed." },
+          "category": { "type": "string" },
+          "from": { "type": ["string", "null"], "description": "What the option was set to before the change." },
+          "to": { "type": ["string", "null"], "description": "What it was set to; null when the harness refused." },
+          "refused": { "type": ["string", "null"], "description": "Why the harness refused, when it did." }
+        },
+        "required": ["type", "session", "participant", "option", "category"]
       },
       "PullRequestEntry": {
         "description": "A verified GitHub Event observed a pull request from the Workspace's declared branch in one of its repositories. Learning it starts no work.",
@@ -3826,10 +4750,24 @@
             "$ref": "#/components/schemas/Completion"
           },
           "entries": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PlanEntry"
+                }
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
+          },
+          "payload_fields": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/PlanEntry"
-            }
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -3853,7 +4791,21 @@
             "$ref": "#/components/schemas/Completion"
           },
           "text": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -3866,6 +4818,175 @@
       "CursorEvent": {
         "type": "string",
         "description": "A cursor event carries the highest examined workspace:seq as its SSE id and data, so a filtered read resumes beyond omitted entries."
+      },
+      "ToolCallEntry": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "tool_call"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tool_kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "The status the Harness last reported for the call.",
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed",
+              "failed"
+            ]
+          },
+          "input": {
+            "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+          },
+          "result": {
+            "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+          },
+          "closing_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why kestrel closed the call at a Turn boundary; null when the Harness settled it.",
+            "enum": [
+              "interrupted",
+              "failed",
+              "unresolved",
+              null
+            ]
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
+          }
+        },
+        "required": [
+          "type",
+          "session_id",
+          "call_id",
+          "title",
+          "tool_kind",
+          "status",
+          "input",
+          "result",
+          "closing_reason",
+          "completion"
+        ]
+      },
+      "RunningTool": {
+        "type": "object",
+        "properties": {
+          "call_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "call_id",
+          "title",
+          "status",
+          "started_at"
+        ]
+      },
+      "ChangesEvent": {
+        "description": "SSE names: open (Refetch) on connect and on reconnect, change (Change) for one resource that changed, and resync (Refetch) for a subscriber that fell behind the bounded buffer. No event carries an id.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Change"
+          },
+          {
+            "$ref": "#/components/schemas/Refetch"
+          }
+        ]
+      },
+      "Change": {
+        "description": "One resource that changed: a Workspace or Session by id, with the name of the Workspace it belongs to, or the Organization's queue, which carries neither. Never a copy of its state.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "resource": {
+                "const": "workspace"
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "workspace": {
+                "type": "string",
+                "description": "The name of the Workspace."
+              }
+            },
+            "required": [
+              "resource",
+              "id",
+              "workspace"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "resource": {
+                "const": "session"
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "workspace": {
+                "type": "string",
+                "description": "The name of the Workspace that holds the Session."
+              }
+            },
+            "required": [
+              "resource",
+              "id",
+              "workspace"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "resource": {
+                "const": "queue"
+              }
+            },
+            "required": [
+              "resource"
+            ]
+          }
+        ]
+      },
+      "Refetch": {
+        "description": "The event that means refetch every view the Client subscribes to. It carries no fields.",
+        "type": "object"
       }
     }
   }

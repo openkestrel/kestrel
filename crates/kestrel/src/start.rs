@@ -3,12 +3,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::declaration::{self, sharing_a_directory};
 use crate::declined::Declined;
-use crate::domain::{Session, Workspace};
-use crate::fanout::{self, Change};
-use crate::log::Entry;
+use crate::domain::{Declared, Session, Workspace};
 use crate::provider;
-use crate::store::workspace::Opening;
-use crate::store::{Declared, Store};
+use crate::store::{Declared as DeclaredRecord, Store};
+use crate::workspace;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,16 +44,12 @@ pub struct Settled {
 /// for work rather than a redeclaration.
 pub async fn start(store: &Store, plan: &Plan) -> Result<Started> {
     checked(plan)?;
-    let model = plan
-        .agent
-        .model
-        .as_deref()
-        .filter(|model| !model.is_empty());
+    let declared = plan.agent.declared();
 
     let mut tx = store.begin().await?;
     // Redeclaring an Organization would clear the live Instance limit it may carry.
     let organization = match tx.organizations().find(&plan.organization).await? {
-        Some(record) => Declared {
+        Some(record) => DeclaredRecord {
             record,
             created: false,
         },
@@ -101,14 +95,18 @@ pub async fn start(store: &Store, plan: &Plan) -> Result<Started> {
         .find(&organization.record, &plan.agent.name)
         .await?;
     if let Some(found) =
-        found.filter(|found| found.harness != plan.agent.harness || found.model.as_deref() != model)
+        found.filter(|found| found.harness != plan.agent.harness || found.declared != declared)
     {
         return Err(Declined::Taken(format!(
             "the agent {} is declared on the harness {} with the model {}, and a start changes \
              no declaration",
             found.name,
             found.harness,
-            found.model.as_deref().unwrap_or("its harness's default")
+            found
+                .declared
+                .model
+                .as_deref()
+                .unwrap_or("its harness's default")
         ))
         .into());
     }
@@ -118,46 +116,23 @@ pub async fn start(store: &Store, plan: &Plan) -> Result<Started> {
             &organization.record,
             &plan.agent.name,
             &plan.agent.harness,
-            model,
+            &declared,
         )
         .await?;
 
-    let workspace = tx
-        .workspaces()
-        .open(Opening {
-            organization: &organization.record,
-            project: &project.record,
-            agent: &agent.record,
-            profile: None,
-            branch: None,
-            correlation: None,
-            continues: None,
-            started_by: None,
-        })
-        .await?;
-    tx.log()
-        .append(
-            &workspace,
-            Entry::Brief {
-                trigger: None,
-                brief: plan.brief.clone(),
-            },
-        )
-        .await?;
-    tx.log()
-        .append(
-            &workspace,
-            Entry::ParticipantJoined {
-                participant: agent.record.name.clone(),
-            },
-        )
-        .await?;
-    let session = tx
-        .workspaces()
-        .enqueue_session(&workspace, Some(&agent.record), None)
-        .await?;
+    let resolved = workspace::Resolved {
+        project: project.record.clone(),
+        agent: agent.record.clone(),
+        profile: None,
+        continues: None,
+        branch: None,
+        declared: Declared::default(),
+        brief: Some(plan.brief.as_str()),
+        participant: None,
+    };
+    let (workspace, session) =
+        workspace::opened_in(&mut tx, &organization.record, &resolved).await?;
     tx.commit().await?;
-    fanout::publish(Change::WorkspaceOpened(&workspace));
 
     Ok(Started {
         organization: Settled {

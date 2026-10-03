@@ -107,32 +107,32 @@ fn guessed_workspace_and_session_verbs_explain_the_domain_verbs_without_running_
         (
             &["workspace", "create"][..],
             "workspace open",
-            "open, list, changes, commits, stashes, work, files, read, show, post, seal, transcript",
+            "open, list, changes, commits, stashes, work, files, read, show, post, message, seal, transcript",
         ),
         (
             &["workspace", "close"],
             "workspace seal",
-            "open, list, changes, commits, stashes, work, files, read, show, post, seal, transcript",
+            "open, list, changes, commits, stashes, work, files, read, show, post, message, seal, transcript",
         ),
         (
             &["session", "start"],
             "session enqueue",
-            "enqueue, list, show, stop",
+            "enqueue, list, show, interrupt, stop",
         ),
         (
             &["session", "enqueu"],
             "session enqueue",
-            "enqueue, list, show, stop",
+            "enqueue, list, show, interrupt, stop",
         ),
         (
             &["workspace", "opne"],
             "workspace open",
-            "open, list, changes, commits, stashes, work, files, read, show, post, seal, transcript",
+            "open, list, changes, commits, stashes, work, files, read, show, post, message, seal, transcript",
         ),
         (
             &["workspace", "sael"],
             "workspace seal",
-            "open, list, changes, commits, stashes, work, files, read, show, post, seal, transcript",
+            "open, list, changes, commits, stashes, work, files, read, show, post, message, seal, transcript",
         ),
     ] {
         let finished = ran(&nowhere(), args);

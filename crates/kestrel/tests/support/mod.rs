@@ -39,14 +39,16 @@ use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::Path;
+use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use kestrel::agent;
 use kestrel::compute::{Docker, Driver, LocalExec};
 use kestrel::domain::{
-    Agent, Correlation, CorrelationMiss, Direction, Event, EventRecordId, Exit, Fires, Integration,
-    Occurrence, OnOpenWorkspace, Organization, Project, Schedule, Session, SessionId, SessionState,
-    SubscriptionProfile, Templates, Trigger, Turn, Workspace, WorkspaceId,
+    Agent, Correlation, CorrelationMiss, Declared, Direction, Event, EventRecordId, Exit, Fires,
+    HeldMessage, Integration, Occurrence, OnOpenWorkspace, Organization, Project, Schedule,
+    Session, SessionCommand, SessionId, SessionOption, SessionState, SubscriptionProfile,
+    Templates, Trigger, Turn, Workspace, WorkspaceId,
 };
 use kestrel::instance;
 use kestrel::integration::{self, Connecting, Registration};
@@ -138,6 +140,7 @@ pub struct Kestrel {
     environment: Option<Provisions>,
     shutdown: CancellationToken,
     roles: JoinHandle<anyhow::Result<()>>,
+    follow_lease: Duration,
 }
 
 struct Cleanup {
@@ -165,12 +168,15 @@ impl Drop for Cleanup {
     }
 }
 
+pub const DEFAULT_INTERRUPT_DEADLINE: Duration = Duration::from_secs(30);
+
 /// What the work role provisions an Environment with.
 #[derive(Clone)]
 pub struct Provisions {
     driver: Driver,
     harnesses: Vec<HarnessCommand>,
     max_active_sessions: NonZeroUsize,
+    interrupt_deadline: Duration,
 }
 
 /// The harness an Agent names unless a test says otherwise, spawned as whatever the test plays.
@@ -206,7 +212,14 @@ pub fn harness_playing(script: scripted_agent::Script) -> link::Harness {
         command: scripted_agent::playing(script),
         auth: None,
         model: None,
+        mode: None,
+        thought_level: None,
     }
+}
+
+pub struct Consideration {
+    pub outcome: String,
+    pub candidates: Vec<(WorkspaceId, String)>,
 }
 
 /// Comes back on the address it was listening on, so what an Environment already dialled
@@ -216,6 +229,7 @@ pub struct Stopped {
     data_dir: TempDir,
     bound: Listen,
     environment: Option<Provisions>,
+    follow_lease: Duration,
 }
 
 impl Kestrel {
@@ -223,6 +237,10 @@ impl Kestrel {
     /// nothing and a test is the only thing dispatching the Sessions it opens.
     pub async fn boot() -> Self {
         Self::booted(None).await
+    }
+
+    pub async fn boot_with_follow_lease(follow_lease: Duration) -> Self {
+        Self::booted_with(None, follow_lease).await
     }
 
     /// Bound on every interface rather than on loopback, because what dials this one is a
@@ -236,6 +254,7 @@ impl Kestrel {
                 operator: LOOPBACK,
             },
             None,
+            kestrel::presence::LEASE,
         )
         .await
     }
@@ -249,6 +268,7 @@ impl Kestrel {
                 operator: "0.0.0.0:0".parse().expect("every interface"),
             },
             None,
+            kestrel::presence::LEASE,
         )
         .await
     }
@@ -282,6 +302,21 @@ impl Kestrel {
             driver: Driver::LocalExec(LocalExec::running(supervisor)),
             harnesses: spawning(harnesses),
             max_active_sessions: NonZeroUsize::new(maximum).expect("at least one active session"),
+            interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
+        }))
+        .await
+    }
+
+    pub async fn dispatching_with_a_quick_interrupt(
+        supervisor: &Path,
+        command: &str,
+        deadline: Duration,
+    ) -> Self {
+        Self::booted(Some(Provisions {
+            driver: Driver::LocalExec(LocalExec::running(supervisor)),
+            harnesses: spawning(&[(HARNESS, command)]),
+            max_active_sessions: NonZeroUsize::new(2).expect("at least one active session"),
+            interrupt_deadline: deadline,
         }))
         .await
     }
@@ -303,12 +338,18 @@ impl Kestrel {
                 driver: Driver::Docker(Docker::provisioning_from(image)),
                 harnesses: spawning(harnesses),
                 max_active_sessions: NonZeroUsize::new(2).unwrap(),
+                interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
             }),
+            kestrel::presence::LEASE,
         )
         .await
     }
 
     async fn booted(environment: Option<Provisions>) -> Self {
+        Self::booted_with(environment, kestrel::presence::LEASE).await
+    }
+
+    async fn booted_with(environment: Option<Provisions>, follow_lease: Duration) -> Self {
         let data_dir = TempDir::new().expect("a temporary data directory");
         Self::boot_against(
             data_dir,
@@ -317,6 +358,7 @@ impl Kestrel {
                 operator: LOOPBACK,
             },
             environment,
+            follow_lease,
         )
         .await
     }
@@ -325,12 +367,13 @@ impl Kestrel {
         data_dir: TempDir,
         listen: Listen,
         environment: Option<Provisions>,
+        follow_lease: Duration,
     ) -> Self {
         let store = Store::open(data_dir.path())
             .await
             .expect("the control plane should boot against a fresh data directory");
         let shutdown = CancellationToken::new();
-        let all_in_one = kestrel::role::bind(store.clone(), listen)
+        let all_in_one = kestrel::role::bind(store.clone(), listen, follow_lease)
             .await
             .expect("the control plane should bind its link");
         let bound = all_in_one.bound();
@@ -345,10 +388,19 @@ impl Kestrel {
             auth: None,
             max_active_sessions: provisions.max_active_sessions,
             serialized: vec![SERIALIZED.to_owned()],
+            interrupt_deadline: provisions.interrupt_deadline,
         });
         let roles = tokio::spawn(all_in_one.run(dispatch, shutdown.clone()));
 
-        Self::running(data_dir, store, bound, environment, shutdown, roles)
+        Self::running(
+            data_dir,
+            store,
+            bound,
+            environment,
+            shutdown,
+            roles,
+            follow_lease,
+        )
     }
 
     /// Serves the link with no work role behind it, so nothing sweeps a lease a test has let
@@ -366,13 +418,22 @@ impl Kestrel {
                 operator: LOOPBACK,
             },
             Wake::default(),
+            kestrel::presence::LEASE,
         )
         .await
         .expect("the control plane should bind its link");
         let bound = listening.bound();
         let roles = tokio::spawn(serve::run(listening, shutdown.clone()));
 
-        Self::running(data_dir, store, bound, None, shutdown, roles)
+        Self::running(
+            data_dir,
+            store,
+            bound,
+            None,
+            shutdown,
+            roles,
+            kestrel::presence::LEASE,
+        )
     }
 
     fn running(
@@ -382,6 +443,7 @@ impl Kestrel {
         environment: Option<Provisions>,
         shutdown: CancellationToken,
         roles: JoinHandle<anyhow::Result<()>>,
+        follow_lease: Duration,
     ) -> Self {
         let cleanup = Cleanup {
             data_dir: data_dir.path().to_path_buf(),
@@ -399,6 +461,7 @@ impl Kestrel {
             environment,
             shutdown,
             roles,
+            follow_lease,
         }
     }
 
@@ -520,6 +583,19 @@ impl Kestrel {
             .expect("the agent should declare")
     }
 
+    pub async fn declare_agent_declaring(
+        &self,
+        organization: &Organization,
+        name: &str,
+        harness: &str,
+        declared: Declared,
+    ) -> Agent {
+        agent::declare(&self.store, &organization.name, name, harness, &declared)
+            .await
+            .expect("the agent should declare")
+            .record
+    }
+
     pub async fn try_declare_agent(
         &self,
         organization: &Organization,
@@ -527,9 +603,18 @@ impl Kestrel {
         harness: &str,
         model: Option<&str>,
     ) -> anyhow::Result<Agent> {
-        agent::declare(&self.store, &organization.name, name, harness, model)
-            .await
-            .map(|declared| declared.record)
+        agent::declare(
+            &self.store,
+            &organization.name,
+            name,
+            harness,
+            &Declared {
+                model: model.map(str::to_owned),
+                ..Declared::default()
+            },
+        )
+        .await
+        .map(|declared| declared.record)
     }
 
     pub async fn set_agent_model(
@@ -656,6 +741,24 @@ impl Kestrel {
             .expect("the events should list")
     }
 
+    pub async fn consideration(&self, event: EventRecordId) -> Option<Consideration> {
+        let mut tx = self.store.read().await.expect("a read transaction");
+        let considered = tx
+            .pull_requests()
+            .considered(event)
+            .await
+            .expect("the consideration should read")?;
+
+        Some(Consideration {
+            outcome: considered.outcome,
+            candidates: considered
+                .candidates
+                .into_iter()
+                .map(|(workspace, state)| (workspace, state.as_str().to_owned()))
+                .collect(),
+        })
+    }
+
     pub async fn declare_trigger(
         &self,
         organization: &str,
@@ -673,6 +776,33 @@ impl Kestrel {
             &templates(BRIEF, None, None),
         )
         .await
+    }
+
+    pub async fn declare_trigger_declaring(
+        &self,
+        organization: &str,
+        name: &str,
+        filter: &str,
+        project: &str,
+        agent: &str,
+        declared: Declared,
+    ) -> Trigger {
+        trigger::declare(
+            &self.store,
+            Declaration {
+                organization,
+                name,
+                fires: &Fires::On(filter.parse().expect("the filter should parse")),
+                templates: &templates(BRIEF, None, None),
+                project,
+                agent,
+                declared: &declared,
+                allows: &[],
+                profile: None,
+            },
+        )
+        .await
+        .expect("the trigger should declare")
     }
 
     pub async fn declare_trigger_rendering(
@@ -751,6 +881,7 @@ impl Kestrel {
                 templates: &templates,
                 project,
                 agent,
+                declared: &Declared::default(),
                 allows: &[],
                 profile: None,
             },
@@ -781,6 +912,7 @@ impl Kestrel {
                 templates: &templates(BRIEF, None, correlation),
                 project: "kestrel",
                 agent,
+                declared: &Declared::default(),
                 allows: &allows
                     .iter()
                     .map(|&name| name.to_owned())
@@ -847,6 +979,7 @@ impl Kestrel {
                 templates: &templates,
                 project: "kestrel",
                 agent,
+                declared: &Declared::default(),
                 allows: &allows
                     .iter()
                     .map(|&name| name.to_owned())
@@ -953,6 +1086,7 @@ impl Kestrel {
                 templates,
                 project: "kestrel",
                 agent: "builder",
+                declared: &Declared::default(),
                 allows: &[],
                 profile: None,
             },
@@ -1105,7 +1239,7 @@ impl Kestrel {
         agent: &str,
         profile: &str,
     ) -> Workspace {
-        workspace::open(
+        workspace::open_without_a_session(
             &self.store,
             organization,
             project,
@@ -1136,7 +1270,7 @@ impl Kestrel {
         agent: &str,
         branch: &str,
     ) -> Workspace {
-        workspace::open(
+        workspace::open_without_a_session(
             &self.store,
             organization,
             project,
@@ -1169,7 +1303,7 @@ impl Kestrel {
         continues: Option<WorkspaceId>,
     ) -> anyhow::Result<Workspace> {
         let continues = continues.map(|sealed| sealed.to_string());
-        workspace::open(
+        workspace::open_without_a_session(
             &self.store,
             organization,
             project,
@@ -1229,6 +1363,19 @@ impl Kestrel {
         self.walk(id, None, Window::DEFAULT).await
     }
 
+    /// The default read is shared state alone; this one includes narration and detail.
+    pub async fn every_entry(&self, id: WorkspaceId) -> Vec<Entry> {
+        let kinds: kestrel::log::Kinds =
+            "shared_state,narration,detail".parse().expect("every kind");
+        workspace::transcript(&self.store, id, None, Window::DEFAULT, &kinds)
+            .await
+            .expect("the transcript should read")
+            .entries
+            .into_iter()
+            .map(|recorded| recorded.entry)
+            .collect()
+    }
+
     /// One bounded window is the only read there is, so a whole Transcript is a walk.
     pub async fn walk(
         &self,
@@ -1268,6 +1415,57 @@ impl Kestrel {
             .expect("the message should reach the transcript");
     }
 
+    pub async fn backdate_transcript(&self, workspace: WorkspaceId, at: Timestamp) {
+        let pool = database(self.data_dir()).await;
+        sqlx::query("UPDATE transcript_entry SET appended_at = ? WHERE workspace_id = ?")
+            .bind(at.to_string())
+            .bind(workspace.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    pub async fn retain_transcript(&self) -> anyhow::Result<usize> {
+        kestrel::timer::expire_transcript(&self.store).await
+    }
+
+    pub async fn refuse_retention_updates(&self, refusing: bool) {
+        let pool = database(self.data_dir()).await;
+        let statement = if refusing {
+            "CREATE TRIGGER refuse_retention BEFORE UPDATE ON transcript_entry WHEN OLD.kind = 'narration' AND json_extract(NEW.body, '$.type') = 'expired' BEGIN SELECT RAISE(ABORT, 'retention write failed'); END"
+        } else {
+            "DROP TRIGGER refuse_retention"
+        };
+        sqlx::query(statement).execute(&pool).await.unwrap();
+        pool.close().await;
+    }
+
+    pub async fn expire_payload_entry(&self, workspace: WorkspaceId, seq: i64) {
+        let at = Timestamp::now();
+        let pool = database(self.data_dir()).await;
+        sqlx::query(
+            "UPDATE transcript_entry SET appended_at = ? WHERE workspace_id = ? AND seq = ?",
+        )
+        .bind((at - SignedDuration::from_hours(31 * 24)).to_string())
+        .bind(workspace.to_string())
+        .bind(seq)
+        .execute(&pool)
+        .await
+        .expect("the targeted entry backdated");
+        pool.close().await;
+        let mut tx = self.store.begin().await.expect("an expiry transaction");
+        tx.log().expire(at).await.expect("production expiry");
+        tx.commit().await.expect("expiry should commit");
+    }
+
+    pub async fn refuse_payload_writes(&self) {
+        let pool = database(self.data_dir()).await;
+        sqlx::query("CREATE TRIGGER refuse_payload BEFORE INSERT ON transcript_payload BEGIN SELECT RAISE(ABORT, 'payload write failed'); END")
+            .execute(&pool).await.expect("a payload write fault");
+        pool.close().await;
+    }
+
     pub async fn try_said(&self, session: &Session, message: &str) -> anyhow::Result<()> {
         let mut tx = self.store.begin().await.expect("a transaction");
         let workspace = tx.workspaces().get(session.workspace).await?;
@@ -1299,15 +1497,117 @@ impl Kestrel {
         participant: &str,
         message: &str,
     ) -> Option<Session> {
+        self.posted_while_busy(id, participant, message)
+            .await
+            .session
+    }
+
+    pub async fn posted_while_busy(
+        &self,
+        id: WorkspaceId,
+        participant: &str,
+        message: &str,
+    ) -> workspace::Posted {
         workspace::post(&self.store, id, participant, message)
             .await
             .expect("the message should post")
     }
 
+    pub async fn held_messages(&self, id: WorkspaceId) -> Vec<HeldMessage> {
+        workspace::held_messages(&self.store, id)
+            .await
+            .expect("held messages should read")
+    }
+
+    pub async fn edit_message(
+        &self,
+        id: WorkspaceId,
+        message: i64,
+        participant: &str,
+        text: &str,
+    ) -> anyhow::Result<HeldMessage> {
+        workspace::edit_message(&self.store, id, message, participant, text).await
+    }
+
+    pub async fn withdraw_message(
+        &self,
+        id: WorkspaceId,
+        message: i64,
+        participant: &str,
+    ) -> anyhow::Result<()> {
+        workspace::withdraw_message(&self.store, id, message, participant).await
+    }
+
+    pub async fn record_commands(&self, session: &Session, commands: &[SessionCommand]) {
+        let mut tx = self.store.begin().await.expect("a transaction");
+        tx.workspaces()
+            .record_session_info(
+                session,
+                session.title.as_deref(),
+                &session.options,
+                commands,
+            )
+            .await
+            .expect("the commands should record");
+        tx.commit().await.expect("the commands should commit");
+    }
+
+    pub async fn hold_session(&self, id: WorkspaceId, brief: &str) {
+        let mut tx = self.store.begin().await.expect("a transaction");
+        let held = tx
+            .workspaces()
+            .get(id)
+            .await
+            .expect("the workspace should read");
+        tx.workspaces()
+            .add_pending_session(
+                &held,
+                &kestrel::store::workspace::PendingSession {
+                    agent: held.opened_with.clone(),
+                    declared: Declared::default(),
+                    trigger: "test".to_owned(),
+                    brief: brief.to_owned(),
+                },
+            )
+            .await
+            .expect("the session should be held");
+        tx.commit().await.expect("the session should commit");
+    }
+
+    /// Waits for one: a Session's instruction can be written after the state the caller was waiting
+    /// on.
+    pub async fn instruction(&self, session: &Session) -> Instruction {
+        let pool = database(self.data_dir()).await;
+        let deadline = tokio::time::Instant::now() + PATIENCE;
+
+        let body = loop {
+            let body: Option<String> = sqlx::query_scalar(
+                "SELECT body FROM link_instruction WHERE session_id = ? ORDER BY seq DESC LIMIT 1",
+            )
+            .bind(session.id.to_string())
+            .fetch_optional(&pool)
+            .await
+            .expect("instructions should read");
+
+            if let Some(body) = body {
+                break body;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the session {} was never sent an instruction",
+                session.id
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        };
+        pool.close().await;
+
+        serde_json::from_str(&body).expect("an instruction body")
+    }
+
     pub async fn has_pending_messages(&self, id: WorkspaceId) -> bool {
         let pool = database(self.data_dir()).await;
         let pending = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM pending_message WHERE workspace_id = ?)",
+            "SELECT EXISTS (SELECT 1 FROM pending_message WHERE workspace_id = ? AND state = 'held')",
         )
         .bind(id.to_string())
         .fetch_one(&pool)
@@ -1327,14 +1627,14 @@ impl Kestrel {
     /// What `session enqueue` still lets through directly, with nothing ever posted to the
     /// Workspace: a Session its first Turn has no instruction for.
     pub async fn enqueue_session_with_nothing_posted(&self, workspace: WorkspaceId) -> Session {
-        work::enqueue(&self.store, workspace, None, None)
+        work::enqueue(&self.store, workspace, None, Declared::default())
             .await
             .expect("the session should enqueue")
     }
 
     pub async fn try_enqueue_session(&self, workspace: WorkspaceId) -> anyhow::Result<Session> {
         self.instructed(workspace).await?;
-        work::enqueue(&self.store, workspace, None, None).await
+        work::enqueue(&self.store, workspace, None, Declared::default()).await
     }
 
     pub async fn enqueue_session_as(&self, workspace: WorkspaceId, agent: &str) -> Session {
@@ -1349,7 +1649,7 @@ impl Kestrel {
         agent: &str,
     ) -> anyhow::Result<Session> {
         self.instructed(workspace).await?;
-        work::enqueue(&self.store, workspace, Some(agent), None).await
+        work::enqueue(&self.store, workspace, Some(agent), Declared::default()).await
     }
 
     pub async fn enqueue_session_naming(
@@ -1368,7 +1668,29 @@ impl Kestrel {
         model: Option<&str>,
     ) -> anyhow::Result<Session> {
         self.instructed(workspace).await?;
-        work::enqueue(&self.store, workspace, None, model).await
+        work::enqueue(
+            &self.store,
+            workspace,
+            None,
+            Declared {
+                model: model.map(str::to_owned),
+                ..Declared::default()
+            },
+        )
+        .await
+    }
+
+    pub async fn enqueue_session_declaring(
+        &self,
+        workspace: WorkspaceId,
+        declared: Declared,
+    ) -> Session {
+        self.instructed(workspace)
+            .await
+            .expect("the message should post");
+        work::enqueue(&self.store, workspace, None, declared)
+            .await
+            .expect("the session should enqueue")
     }
 
     /// What a fixture calling straight into `work::enqueue` skips: the message a real operator
@@ -1462,7 +1784,7 @@ impl Kestrel {
             .await
             .expect("the workspace should read");
         tx.workspaces()
-            .record_instance(workspace, Some(instance))
+            .record_instance(record.organization.id, workspace, Some(instance))
             .await
             .expect("the instance should be recorded");
         tx.workspaces()
@@ -1508,10 +1830,10 @@ impl Kestrel {
             .expect("the occupancy should ask")
     }
 
-    pub async fn record_dispatch(&self, slots: usize) {
+    pub async fn record_dispatch(&self, slots: usize, driver: &str) {
         let mut tx = self.store.begin().await.expect("a transaction");
         tx.queue()
-            .record(slots, &[SERIALIZED.to_owned()])
+            .record(slots, &[SERIALIZED.to_owned()], driver)
             .await
             .expect("the dispatch should record");
         tx.commit().await.expect("the record should commit");
@@ -1528,11 +1850,38 @@ impl Kestrel {
         link::start(&self.store, session, harness())
             .await
             .expect("the session should start");
-        work::report_on(&self.store, session, Some(1), work::Report::Answered)
-            .await
-            .expect("the answer should be reported");
+        work::report_on(
+            &self.store,
+            session,
+            Some(1),
+            work::Report::Answered { usage: None },
+        )
+        .await
+        .expect("the answer should be reported");
 
         self.session(session.id).await
+    }
+
+    /// Enqueued and blocked in one transaction, so dispatch never sees it unblocked and starts it
+    /// unbriefed.
+    pub async fn enqueue_blocked(&self, workspace: WorkspaceId, blocker: &Session) -> Session {
+        let mut tx = self.store.begin().await.expect("a transaction");
+        let workspace = tx
+            .workspaces()
+            .get(workspace)
+            .await
+            .expect("the workspace should read");
+        let session = tx
+            .workspaces()
+            .enqueue_session(&workspace, None, Declared::default())
+            .await
+            .expect("the session should enqueue");
+        tx.workspaces()
+            .declare_blocked(&session, blocker)
+            .await
+            .expect("the session should be declared blocked");
+        tx.commit().await.expect("the enqueue should commit");
+        session
     }
 
     pub async fn block_session(&self, session: &Session, blocker: &Session) {
@@ -1672,6 +2021,50 @@ impl Kestrel {
         .expect("the checkout should be reported");
     }
 
+    pub async fn report_ready(&self, session: &Session) {
+        work::report_on(&self.store, session, None, work::Report::Ready)
+            .await
+            .expect("the ready report should be taken");
+    }
+
+    pub async fn start_on_the_link(&self, session: &Session) {
+        link::start(&self.store, session, harness())
+            .await
+            .expect("the session should start");
+    }
+
+    pub async fn report_session_info(&self, session: &Session, options: &[SessionOption]) {
+        work::report_on(
+            &self.store,
+            session,
+            None,
+            work::Report::SessionInfo {
+                title: None,
+                options: options.to_vec(),
+                commands: Vec::new(),
+            },
+        )
+        .await
+        .expect("the session info should be taken");
+    }
+
+    pub async fn report_option_changed(&self, session: &Session, seq: i64, changed: work::Report) {
+        work::report_on(&self.store, session, Some(seq), changed)
+            .await
+            .expect("the option change should be taken");
+    }
+
+    pub async fn report_answered(&self, session: &Session, seq: i64) {
+        work::report_on(
+            &self.store,
+            session,
+            Some(seq),
+            work::Report::Answered { usage: None },
+        )
+        .await
+        .expect("the answer should be taken");
+    }
+
     pub async fn instances_to_archive(&self) -> Vec<String> {
         instance::to_archive(&self.store)
             .await
@@ -1688,6 +2081,37 @@ impl Kestrel {
         work::instance(&self.store, workspace)
             .await
             .expect("the workspace's instance should read")
+    }
+
+    pub async fn interrupt(
+        &self,
+        session: SessionId,
+        participant: &str,
+    ) -> anyhow::Result<Session> {
+        work::interrupt(&self.store, session, participant).await
+    }
+
+    pub async fn instructions(&self, session: &Session) -> Vec<Instruction> {
+        let pool = database(self.data_dir()).await;
+        let bodies: Vec<String> = sqlx::query_scalar(
+            "SELECT body FROM link_instruction WHERE session_id = ? ORDER BY seq",
+        )
+        .bind(session.id.to_string())
+        .fetch_all(&pool)
+        .await
+        .expect("the session's instructions");
+        pool.close().await;
+
+        bodies
+            .into_iter()
+            .map(|body| serde_json::from_str(&body).expect("an instruction body"))
+            .collect()
+    }
+
+    pub async fn report_interrupted(&self, session: &Session) {
+        work::report_on(&self.store, session, Some(1), work::Report::Interrupted)
+            .await
+            .expect("the interruption should be reported");
     }
 
     pub async fn instruct(&self, session: &Session, instruction: Instruction) {
@@ -1734,7 +2158,7 @@ impl Kestrel {
     pub async fn last_active(&self, workspace: &Workspace, at: Timestamp) {
         let mut tx = self.store.begin().await.expect("a transaction");
         tx.workspaces()
-            .record_active(workspace.id, at)
+            .record_active(workspace.organization.id, workspace.id, at)
             .await
             .expect("the workspace should record when it was last active");
         tx.commit().await.expect("the record should commit");
@@ -1763,6 +2187,7 @@ impl Kestrel {
             data_dir: self.data_dir,
             bound: self.bound,
             environment: self.environment,
+            follow_lease: self.follow_lease,
         }
     }
 
@@ -1790,6 +2215,7 @@ impl Kestrel {
             data_dir: self.data_dir,
             bound: self.bound,
             environment: self.environment,
+            follow_lease: self.follow_lease,
         }
     }
 }
@@ -1853,7 +2279,13 @@ pub(crate) fn destroy_instances_on_drop(data_dir: std::path::PathBuf, driver: Op
 impl Stopped {
     pub async fn restart(mut self) -> Kestrel {
         self.cleanup.armed = false;
-        Kestrel::boot_against(self.data_dir, self.bound, self.environment).await
+        Kestrel::boot_against(
+            self.data_dir,
+            self.bound,
+            self.environment,
+            self.follow_lease,
+        )
+        .await
     }
 
     /// Restarted with a dispatch configuration the flags carry, which replaces whatever the
@@ -1876,7 +2308,9 @@ impl Stopped {
                 }],
                 max_active_sessions: NonZeroUsize::new(maximum)
                     .expect("at least one active session"),
+                interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
             }),
+            self.follow_lease,
         )
         .await
     }

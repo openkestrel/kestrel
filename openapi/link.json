@@ -187,6 +187,36 @@
                 "shared_state,narration,detail"
               ]
             }
+          },
+          {
+            "name": "summaries",
+            "in": "query",
+            "required": false,
+            "description": "Summarize omitted narration and detail, across every shared-state boundary even when shared state is not selected. With every kind selected there are no summaries.",
+            "schema": {
+              "type": "boolean",
+              "default": true
+            }
+          },
+          {
+            "name": "first_seq",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive first seq of an Activity expansion. Select every kind to read its entries.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "last_seq",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive last seq of an Activity expansion; must be at least first_seq. The finite range ends when caught up.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
           }
         ],
         "responses": {
@@ -575,18 +605,30 @@
             "$ref": "#/components/schemas/Start"
           },
           {
+            "$ref": "#/components/schemas/Unbriefed"
+          },
+          {
             "$ref": "#/components/schemas/Prompt"
           },
           {
+            "$ref": "#/components/schemas/SetOption"
+          },
+          {
             "$ref": "#/components/schemas/Stop"
+          },
+          {
+            "$ref": "#/components/schemas/Interrupt"
           }
         ],
         "discriminator": {
           "propertyName": "kind",
           "mapping": {
             "start": "#/components/schemas/Start",
+            "unbriefed": "#/components/schemas/Unbriefed",
             "prompt": "#/components/schemas/Prompt",
-            "stop": "#/components/schemas/Stop"
+            "set_option": "#/components/schemas/SetOption",
+            "stop": "#/components/schemas/Stop",
+            "interrupt": "#/components/schemas/Interrupt"
           }
         },
         "properties": {
@@ -610,6 +652,12 @@
           "checkout": {
             "$ref": "#/components/schemas/Checkout"
           },
+          "turn": {
+            "description": "The seq of the Turn this prompt begins, which an interrupt names.",
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
           "prompt": {
             "description": "The agent's whole prompt, sent exactly as given: the Workspace's unfollowed Brief, or the message or messages that started this Session with earlier Transcript entries as labeled context ahead of them.",
             "type": "string"
@@ -621,7 +669,28 @@
         "required": [
           "kind",
           "checkout",
+          "turn",
           "prompt",
+          "harness"
+        ]
+      },
+      "Unbriefed": {
+        "description": "Take up the Session without a Brief: check out, then open its one agent conversation and prompt nothing. The Session waits unbriefed for its first message. A checkout or spawn that fails is reported as the Session finished failed, and the Session never starts.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "unbriefed"
+          },
+          "checkout": {
+            "$ref": "#/components/schemas/Checkout"
+          },
+          "harness": {
+            "$ref": "#/components/schemas/Harness"
+          }
+        },
+        "required": [
+          "kind",
+          "checkout",
           "harness"
         ]
       },
@@ -632,6 +701,12 @@
           "kind": {
             "const": "prompt"
           },
+          "turn": {
+            "description": "The seq of the Turn this prompt begins, which an interrupt names.",
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
           "prompt": {
             "description": "The agent's whole prompt, sent exactly as given.",
             "type": "string"
@@ -639,7 +714,35 @@
         },
         "required": [
           "kind",
+          "turn",
           "prompt"
+        ]
+      },
+      "SetOption": {
+        "description": "Change one of the Session's harness options before its next prompt. Durable, so it is applied once, in order ahead of any prompt after it (ADR-0041).",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "set_option"
+          },
+          "option": {
+            "description": "The option's id as the harness reported it, or the synthesized mode's id for a harness that offers only legacy modes.",
+            "type": "string"
+          },
+          "value": {
+            "description": "The value to set, as the harness offers it.",
+            "type": "string"
+          },
+          "participant": {
+            "description": "The person making the change, by the participant name rule.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "option",
+          "value",
+          "participant"
         ]
       },
       "Read": {
@@ -826,6 +929,14 @@
           "model": {
             "description": "The model the Session named. Absent leaves the harness's default.",
             "type": "string"
+          },
+          "mode": {
+            "description": "The mode the Session named. Absent leaves the harness's default.",
+            "type": "string"
+          },
+          "thought_level": {
+            "description": "The thought level the Session named. Absent leaves the harness's default.",
+            "type": "string"
           }
         },
         "required": [
@@ -844,6 +955,25 @@
           "kind"
         ]
       },
+      "Interrupt": {
+        "description": "Cancel the Turn the Session is in without ending it: the conversation and the Instance stay, and a Turn held for it follows. A supervisor whose Turn in flight is not the one named does nothing, so a cancel that arrives after its Turn answered never reaches the next one.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "interrupt"
+          },
+          "turn": {
+            "description": "The seq of the Turn to cancel.",
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "kind",
+          "turn"
+        ]
+      },
       "Report": {
         "description": "What a supervisor tells the control plane. `connected` and `heartbeat` are about the Instance; every other report names the Session it is about, and one that belongs to its ordered account of that Session carries a seq and is taken once.",
         "oneOf": [
@@ -860,6 +990,9 @@
             "$ref": "#/components/schemas/Stderr"
           },
           {
+            "$ref": "#/components/schemas/Ready"
+          },
+          {
             "$ref": "#/components/schemas/Started"
           },
           {
@@ -869,10 +1002,19 @@
             "$ref": "#/components/schemas/Said"
           },
           {
-            "$ref": "#/components/schemas/Used"
+            "$ref": "#/components/schemas/UsageReport"
+          },
+          {
+            "$ref": "#/components/schemas/SessionInfo"
+          },
+          {
+            "$ref": "#/components/schemas/OptionChanged"
           },
           {
             "$ref": "#/components/schemas/Answered"
+          },
+          {
+            "$ref": "#/components/schemas/Interrupted"
           },
           {
             "$ref": "#/components/schemas/CheckoutObserved"
@@ -885,6 +1027,12 @@
           },
           {
             "$ref": "#/components/schemas/Plan"
+          },
+          {
+            "$ref": "#/components/schemas/ToolCall"
+          },
+          {
+            "$ref": "#/components/schemas/SessionState"
           }
         ],
         "discriminator": {
@@ -894,15 +1042,21 @@
             "heartbeat": "#/components/schemas/Heartbeat",
             "work": "#/components/schemas/Work",
             "stderr": "#/components/schemas/Stderr",
+            "ready": "#/components/schemas/Ready",
             "started": "#/components/schemas/Started",
             "model": "#/components/schemas/Model",
             "said": "#/components/schemas/Said",
-            "used": "#/components/schemas/Used",
+            "usage": "#/components/schemas/UsageReport",
+            "session_info": "#/components/schemas/SessionInfo",
+            "option_changed": "#/components/schemas/OptionChanged",
             "answered": "#/components/schemas/Answered",
+            "interrupted": "#/components/schemas/Interrupted",
             "checkout": "#/components/schemas/CheckoutObserved",
             "finished": "#/components/schemas/Finished",
             "thought": "#/components/schemas/Thought",
-            "plan": "#/components/schemas/Plan"
+            "plan": "#/components/schemas/Plan",
+            "tool_call": "#/components/schemas/ToolCall",
+            "session_state": "#/components/schemas/SessionState"
           }
         },
         "properties": {
@@ -912,6 +1066,18 @@
             "format": "uuid"
           }
         }
+      },
+      "Ready": {
+        "description": "The harness is up and its agent conversation open, with no Turn started: an unbriefed Session is ready for its first message. Not numbered.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "ready"
+          }
+        },
+        "required": [
+          "kind"
+        ]
       },
       "Connected": {
         "description": "The supervisor is on the link, and this is what is running in the Instance.",
@@ -1036,18 +1202,15 @@
           "completion"
         ]
       },
-      "Used": {
-        "description": "What the Harness has spent so far. Recorded on the Session, and never in a Transcript.",
+      "UsageReport": {
+        "description": "What the Harness has spent so far, unnumbered and transient: held in memory beside the running tools, sent at most once a second at the window's trailing edge, and never recorded (ADR-0041).",
         "type": "object",
         "properties": {
           "kind": {
-            "const": "used"
+            "const": "usage"
           },
           "usage": {
             "$ref": "#/components/schemas/Usage"
-          },
-          "seq": {
-            "$ref": "#/components/schemas/Seq"
           },
           "session": {
             "type": "string",
@@ -1057,12 +1220,66 @@
         "required": [
           "kind",
           "session",
-          "seq",
           "usage"
         ]
       },
+      "OptionChanged": {
+        "description": "The harness answered a person's option change: the whole list it left, or why it refused. Numbered, because the control plane settles the pending change and writes the entry once (ADR-0041).",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "option_changed"
+          },
+          "seq": {
+            "$ref": "#/components/schemas/Seq"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "participant": {
+            "description": "The person who asked for the change.",
+            "type": "string"
+          },
+          "option": {
+            "description": "The option's id the change named.",
+            "type": "string"
+          },
+          "category": {
+            "description": "The category the option belongs to.",
+            "type": "string"
+          },
+          "from": {
+            "description": "What the option was set to before the change.",
+            "type": "string"
+          },
+          "to": {
+            "description": "What it was set to. Absent when the harness refused.",
+            "type": "string"
+          },
+          "refused": {
+            "description": "Why the harness refused, when it did.",
+            "type": "string"
+          },
+          "options": {
+            "description": "The harness's whole option list after a change that applied; empty when it refused.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionOption"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "session",
+          "seq",
+          "participant",
+          "option",
+          "category"
+        ]
+      },
       "Answered": {
-        "description": "The agent answered the turn, and its conversation waits for another prompt. The Session goes on.",
+        "description": "The agent answered the turn, and its conversation waits for another prompt. The Session goes on. It carries what the Harness had spent when the turn ended, which is what the Session read keeps.",
         "type": "object",
         "properties": {
           "kind": {
@@ -1074,12 +1291,37 @@
           "session": {
             "type": "string",
             "format": "uuid"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage",
+            "description": "What the Harness had spent when the turn ended. Absent for a supervisor that never heard a usage update."
           }
         },
         "required": [
           "kind",
           "session",
           "seq"
+        ]
+      },
+      "Interrupted": {
+        "description": "The working turn was cancelled at kestrel's request: its open units were closed and no answer follows. The conversation and the Instance stay.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "interrupted"
+          },
+          "seq": {
+            "$ref": "#/components/schemas/Seq"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "kind",
+          "seq",
+          "session"
         ]
       },
       "CheckoutObserved": {
@@ -1194,7 +1436,7 @@
         ]
       },
       "Finished": {
-        "description": "The Session is over, and this is how it went: its conversation failed, or it never started. The supervisor lets the Session go after saying so, and stays on the link.",
+        "description": "The Session is over, and this is how it went: its conversation failed, or it never started. The supervisor lets the Session go after saying so, and stays on the link. It carries what the Harness had spent when it ended, so a Session that ends mid-turn still records it.",
         "type": "object",
         "properties": {
           "kind": {
@@ -1209,6 +1451,10 @@
           "session": {
             "type": "string",
             "format": "uuid"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage",
+            "description": "What the Harness had spent when the Session ended. Absent for a supervisor that never heard a usage update."
           }
         },
         "required": [
@@ -1295,6 +1541,7 @@
         "description": "One bounded window of a Transcript, and where the next read resumes.",
         "type": "object",
         "properties": {
+          "activities": { "type": "array", "items": { "$ref": "#/components/schemas/Activity" } },
           "entries": {
             "type": "array",
             "items": {
@@ -1314,9 +1561,118 @@
           }
         },
         "required": [
+          "activities",
           "entries",
           "cursor",
           "more"
+        ]
+      },
+      "Activity": {
+        "description": "Read-time summary of omitted narration and detail between consecutive shared-state entries. first_seq identifies the whole Activity, including selected kinds, and stays stable across pages and reconnects. last_seq is the highest Activity seq examined; its SSE id advances the global cursor. A closed replacement precedes the closing shared-state entry even when no detail was added. No summary is stored.",
+        "type": "object",
+        "properties": {
+          "first_seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "last_seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "tool_calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failed_calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "thoughts": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "plans": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "tombstones": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "tool_calls",
+              "failed_calls",
+              "thoughts",
+              "plans",
+              "tombstones"
+            ]
+          },
+          "latest": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "kind": {
+                "$ref": "#/components/schemas/TranscriptKind"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "title",
+              "status"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Earliest start among omitted unexpired entries."
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Latest finish among omitted unexpired entries."
+          },
+          "anomaly": {
+            "type": "boolean",
+            "description": "An omitted call was interrupted or unresolved."
+          },
+          "closed": {
+            "type": "boolean",
+            "description": "The next shared-state boundary has been examined. Followers replace open summaries by first_seq and CLI followers print only this final replacement."
+          }
+        },
+        "required": [
+          "first_seq",
+          "last_seq",
+          "counts",
+          "latest",
+          "started_at",
+          "finished_at",
+          "anomaly",
+          "closed"
         ]
       },
       "Recorded": {
@@ -1354,6 +1710,25 @@
           "session_id"
         ]
       },
+      "ExpiredEntry": {
+        "description": "Narration or detail expired in place after 30 days from append, including in sealed Workspaces. The enclosing record retains its original kind, seq and appended_at, with session_id null; all content, completion metadata and payload references are removed.",
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "expired"
+          },
+          "expired_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the sweep replaced the entry."
+          }
+        },
+        "required": [
+          "type",
+          "expired_at"
+        ],
+        "additionalProperties": false
+      },
       "Entry": {
         "description": "One completed unit of the Workspace Transcript.",
         "oneOf": [
@@ -1383,11 +1758,18 @@
           },
           {
             "$ref": "#/components/schemas/PlanEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ToolCallEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ExpiredEntry"
           }
         ],
         "discriminator": {
           "propertyName": "type",
           "mapping": {
+            "expired": "#/components/schemas/ExpiredEntry",
             "participant_joined": "#/components/schemas/ParticipantJoined",
             "brief": "#/components/schemas/Brief",
             "session_started": "#/components/schemas/SessionStarted",
@@ -1396,7 +1778,8 @@
             "session_ended": "#/components/schemas/SessionEnded",
             "instance_released": "#/components/schemas/InstanceReleased",
             "thought": "#/components/schemas/ThoughtEntry",
-            "plan": "#/components/schemas/PlanEntry"
+            "plan": "#/components/schemas/PlanEntry",
+            "tool_call": "#/components/schemas/ToolCallEntry"
           }
         }
       },
@@ -1417,23 +1800,76 @@
         ]
       },
       "Brief": {
-        "description": "The instruction a Workspace started with, rendered by the Trigger that fired.",
+        "description": "The instruction a Workspace started with, rendered by the Trigger that fired or supplied by an operator.",
         "type": "object",
         "properties": {
-          "trigger": {
-            "type": "string"
+          "source": {
+            "$ref": "#/components/schemas/BriefSource"
           },
           "brief": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
           },
           "type": {
             "const": "brief"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
           "type",
-          "trigger",
+          "source",
           "brief"
+        ]
+      },
+      "BriefSource": {
+        "description": "Who supplied a Brief: the Trigger whose firing rendered it, or an operator, under the participant name they declared if they declared one.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "trigger"
+              },
+              "trigger": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "trigger"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "operator"
+              },
+              "participant": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The participant who joined directly before the Brief, or null when the operator declared no name and no one joined."
+              }
+            },
+            "required": [
+              "kind",
+              "participant"
+            ]
+          }
         ]
       },
       "SessionStarted": {
@@ -1490,14 +1926,28 @@
         "type": "object",
         "properties": {
           "messages": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "$ref": "#/components/schemas/SpokenMessage"
-            }
+            "oneOf": [
+              {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/components/schemas/SpokenMessage"
+                }
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
           },
           "type": {
             "const": "messages"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -1513,7 +1963,21 @@
             "type": "string"
           },
           "message": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -1818,10 +2282,24 @@
             "$ref": "#/components/schemas/Completion"
           },
           "entries": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PlanEntry"
+                }
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
+          },
+          "payload_fields": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/PlanEntry"
-            }
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -1845,7 +2323,21 @@
             "$ref": "#/components/schemas/Completion"
           },
           "text": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/PayloadReference"
+              }
+            ]
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           }
         },
         "required": [
@@ -1915,6 +2407,384 @@
           "entries",
           "completion"
         ]
+      },
+      "ToolCallEntry": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "tool_call"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tool_kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "The status the Harness last reported for the call.",
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed",
+              "failed"
+            ]
+          },
+          "input": {
+            "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+          },
+          "result": {
+            "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+          },
+          "closing_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why kestrel closed the call at a Turn boundary; null when the Harness settled it.",
+            "enum": [
+              "interrupted",
+              "failed",
+              "unresolved",
+              null
+            ]
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
+          }
+        },
+        "required": [
+          "type",
+          "session_id",
+          "call_id",
+          "title",
+          "tool_kind",
+          "status",
+          "input",
+          "result",
+          "closing_reason",
+          "completion"
+        ]
+      },
+      "RunningTool": {
+        "type": "object",
+        "properties": {
+          "call_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "call_id",
+          "title",
+          "status",
+          "started_at"
+        ]
+      },
+      "ToolCall": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "tool_call"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tool_kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "The status the Harness last reported for the call.",
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed",
+              "failed"
+            ]
+          },
+          "input": {},
+          "result": {},
+          "closing_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why kestrel closed the call at a Turn boundary; null when the Harness settled it.",
+            "enum": [
+              "interrupted",
+              "failed",
+              "unresolved",
+              null
+            ]
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          }
+        },
+        "required": [
+          "kind",
+          "session",
+          "seq",
+          "call_id",
+          "title",
+          "tool_kind",
+          "status",
+          "input",
+          "result",
+          "closing_reason",
+          "completion"
+        ]
+      },
+      "SessionState": {
+        "description": "A whole transient Session snapshot, sent on changes and reconnect: the running tools, whether a message or thought is still buffering, and what the Harness has spent. Unnumbered; never enters the Transcript and never recorded.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "session_state"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningTool"
+            }
+          },
+          "message_buffering": {
+            "type": "boolean"
+          },
+          "thought_buffering": {
+            "type": "boolean"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage",
+            "description": "What the Harness has spent so far. Absent until it reports one."
+          }
+        },
+        "required": [
+          "kind",
+          "session",
+          "tools",
+          "message_buffering",
+          "thought_buffering"
+        ]
+      },
+      "SessionInfo": {
+        "description": "The Session's whole bookkeeping state: the harness's title for the conversation, its config options and the commands it offers (ADR-0041). Sent when any of it changes and again after a reconnect; unnumbered, because it is idempotent and the whole state goes up each time.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "session_info"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": ["string", "null"]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionOption"
+            }
+          },
+          "commands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionCommand"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "session",
+          "title",
+          "options",
+          "commands"
+        ]
+      },
+      "SessionOption": {
+        "type": "object",
+        "description": "A harness config option, whole: what it is, what it may be and what it is now. A legacy harness that offers only `modes` is reported through a synthesized option of the `mode` category.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": ["string", "null"]
+          },
+          "category": {
+            "type": ["string", "null"],
+            "description": "`mode`, `model`, `model_config`, `thought_level`, or the harness's own string, which may begin with `_`."
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["select", "boolean"]
+          },
+          "current": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              }
+            ],
+            "description": "The current value: a value id for a select, a boolean for a toggle."
+          },
+          "values": {
+            "type": "array",
+            "description": "The offered values of an ungrouped select; empty for a grouped one and for a boolean.",
+            "items": {
+              "$ref": "#/components/schemas/SessionOptionValue"
+            }
+          },
+          "groups": {
+            "type": "array",
+            "description": "The offered values of a grouped select; empty for an ungrouped one.",
+            "items": {
+              "$ref": "#/components/schemas/SessionOptionGroup"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "category",
+          "kind",
+          "current",
+          "values",
+          "groups"
+        ]
+      },
+      "SessionOptionValue": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": ["string", "null"]
+          }
+        },
+        "required": [
+          "value",
+          "name",
+          "description"
+        ]
+      },
+      "SessionOptionGroup": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionOptionValue"
+            }
+          }
+        },
+        "required": [
+          "group",
+          "name",
+          "values"
+        ]
+      },
+      "SessionCommand": {
+        "type": "object",
+        "description": "A command the harness offers for the Session, as a composer lists it.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "input_hint": {
+            "type": ["string", "null"]
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "input_hint"
+        ]
+      },
+      "PayloadReference": {
+        "type": "object",
+        "description": "A body field exceeding 65536 bytes, fetched under its owning Workspace; message, thought and brief text use raw UTF-8, while plans, batched messages and tool input/results use compact JSON.",
+        "properties": {
+          "payload_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f-]+:[1-9][0-9]*:[a-z_]+$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 65537
+          },
+          "media_type": {
+            "enum": [
+              "text/plain; charset=utf-8",
+              "application/json"
+            ]
+          }
+        },
+        "required": [
+          "payload_id",
+          "bytes",
+          "media_type"
+        ],
+        "additionalProperties": false
       }
     }
   }

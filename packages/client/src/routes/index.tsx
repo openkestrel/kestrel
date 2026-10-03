@@ -4,7 +4,9 @@ import { Refusal } from "#/components/refusal";
 import { Skeleton } from "#/components/ui/skeleton";
 import { organizationsQuery } from "#/operator/queries";
 
-export const Route = createFileRoute("/")({ component: Organizations });
+export const Route = createFileRoute("/")({
+	component: Organizations,
+});
 
 function Organizations() {
 	const organizations = useQuery(organizationsQuery);

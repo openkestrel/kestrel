@@ -1,14 +1,20 @@
 use jiff::Timestamp;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, SessionUpdate};
+use agent_client_protocol::schema::v1::{
+    ContentBlock, ContentChunk, SessionUpdate, ToolCall, ToolCallStatus,
+};
 
-use crate::link::{Completion, Cost, PlanEntry, Report, TurnOutcome, Usage};
+use crate::link::{
+    ClosingReason, Completion, Cost, PlanEntry, Report, ToolStatus, TurnOutcome, Usage,
+};
 
 #[derive(Default)]
 pub struct Completer {
     messages: Stream,
     thoughts: Stream,
+    tools: BTreeMap<String, (ToolCall, Timestamp)>,
+    completed_tools: BTreeSet<String>,
     pub produced: bool,
     ended: bool,
 }
@@ -29,6 +35,7 @@ struct Text {
 pub struct Completed {
     pub reports: Vec<Report>,
     pub diagnostics: Vec<String>,
+    pub state: Option<Report>,
 }
 
 impl Completer {
@@ -39,6 +46,7 @@ impl Completer {
 
     pub fn update(&mut self, update: SessionUpdate, now: Timestamp) -> Completed {
         let mut completed = Completed::default();
+        let before = self.snapshot();
         match update {
             SessionUpdate::AgentMessageChunk(chunk) => {
                 if self.ended {
@@ -87,8 +95,31 @@ impl Completer {
                     });
                 }
             }
-            SessionUpdate::ToolCall(_) | SessionUpdate::ToolCallUpdate(_) => self.produced = true,
-            SessionUpdate::UsageUpdate(usage) => completed.reports.push(Report::Used {
+            SessionUpdate::ToolCall(call) => {
+                let id = call.tool_call_id.0.to_string();
+                if self.ended || self.completed_tools.contains(&id) || self.tools.contains_key(&id)
+                {
+                    completed.diagnostics.push(format!(
+                        "kestrel: a late or duplicate tool start arrived for {id}"
+                    ));
+                } else {
+                    self.produced = true;
+                    self.tools.insert(id.clone(), (call, now));
+                    self.settle(&id, now, None, &mut completed);
+                }
+            }
+            SessionUpdate::ToolCallUpdate(update) => {
+                let id = update.tool_call_id.0.to_string();
+                if let Some((call, _)) = self.tools.get_mut(&id) {
+                    call.update(update.fields);
+                    self.settle(&id, now, None, &mut completed);
+                } else {
+                    completed.diagnostics.push(format!(
+                        "kestrel: an update arrived for unknown or completed tool {id}"
+                    ));
+                }
+            }
+            SessionUpdate::UsageUpdate(usage) => completed.reports.push(Report::Usage {
                 usage: Usage {
                     context_used: usage.used,
                     context_size: usage.size,
@@ -100,6 +131,10 @@ impl Completer {
             }),
             _ => {}
         }
+        let after = self.snapshot();
+        if before != after {
+            completed.state = Some(after);
+        }
         completed
     }
 
@@ -108,9 +143,86 @@ impl Completer {
         self.messages
             .close(now, false, Some(outcome.clone()), &mut completed);
         self.thoughts
-            .close(now, true, Some(outcome), &mut completed);
+            .close(now, true, Some(outcome.clone()), &mut completed);
+        for id in self.tools.keys().cloned().collect::<Vec<_>>() {
+            self.settle(&id, now, Some(outcome.clone()), &mut completed);
+        }
+        completed.state = Some(self.snapshot());
         self.ended = true;
         completed
+    }
+    pub fn snapshot(&self) -> Report {
+        Report::SessionState {
+            tools: self
+                .tools
+                .iter()
+                .map(|(id, (call, started_at))| crate::link::RunningTool {
+                    call_id: id.clone(),
+                    title: call.title.clone(),
+                    status: serde_json::to_value(call.status)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                    started_at: *started_at,
+                })
+                .collect(),
+            message_buffering: self.messages.open.is_some(),
+            thought_buffering: self.thoughts.open.is_some(),
+            // Filled in when the state goes up the link, which is what holds the latest usage.
+            usage: None,
+        }
+    }
+
+    fn settle(
+        &mut self,
+        id: &str,
+        now: Timestamp,
+        outcome: Option<TurnOutcome>,
+        completed: &mut Completed,
+    ) {
+        let Some((call, _)) = self.tools.get(id) else {
+            return;
+        };
+        if outcome.is_none()
+            && !matches!(
+                call.status,
+                ToolCallStatus::Completed | ToolCallStatus::Failed
+            )
+        {
+            return;
+        }
+        let (call, started_at) = self.tools.remove(id).unwrap();
+        self.completed_tools.insert(id.to_owned());
+        let closing_reason = outcome.as_ref().map(|outcome| match outcome {
+            TurnOutcome::Cancelled => ClosingReason::Interrupted,
+            TurnOutcome::Failed { .. } => ClosingReason::Failed,
+            TurnOutcome::Answered { .. } => ClosingReason::Unresolved,
+        });
+        let status = match call.status {
+            ToolCallStatus::InProgress => ToolStatus::InProgress,
+            ToolCallStatus::Completed => ToolStatus::Completed,
+            ToolCallStatus::Failed => ToolStatus::Failed,
+            _ => ToolStatus::Pending,
+        };
+        completed.reports.push(Report::ToolCall {
+            call_id: id.to_owned(),
+            title: call.title,
+            tool_kind: serde_json::to_value(call.kind)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            status,
+            input: call.raw_input.unwrap_or(serde_json::Value::Null),
+            result: Box::new(serde_json::json!({"content":call.content,"output":call.raw_output})),
+            closing_reason,
+            completion: Completion {
+                started_at,
+                finished_at: now,
+                turn_outcome: outcome,
+            },
+        });
     }
 }
 
@@ -198,6 +310,138 @@ mod tests {
     }
 
     #[test]
+    fn tool_updates_replace_current_state_and_preserve_call_content_until_completion() {
+        use agent_client_protocol::schema::v1::{ToolCallUpdate, ToolCallUpdateFields};
+        let mut completer = Completer::default();
+        completer.update(
+            SessionUpdate::AgentMessageChunk(chunk(Some("message"), "buffering")),
+            NOW,
+        );
+        completer.update(
+            SessionUpdate::AgentThoughtChunk(chunk(Some("thought"), "thinking")),
+            NOW,
+        );
+        completer.update(
+            SessionUpdate::ToolCall(
+                ToolCall::new("call", "pending read").raw_input(serde_json::json!({"path":"a"})),
+            ),
+            NOW,
+        );
+        let changed = completer.update(
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                "call",
+                ToolCallUpdateFields::new()
+                    .title("reading a")
+                    .status(ToolCallStatus::InProgress),
+            )),
+            NOW,
+        );
+        assert!(changed.reports.is_empty());
+        let state = serde_json::to_value(changed.state.unwrap()).unwrap();
+        assert_eq!(state["tools"][0]["title"], "reading a");
+        assert_eq!(state["tools"][0]["status"], "in_progress");
+        assert_eq!(state["message_buffering"], true);
+        assert_eq!(state["thought_buffering"], true);
+        let update = serde_json::from_value(serde_json::json!({"toolCallId":"call", "status":"failed", "content":[{"type":"content","content":{"type":"text","text":"read failed"}}]})).unwrap();
+        let settled = completer.update(SessionUpdate::ToolCallUpdate(update), NOW);
+        let report = serde_json::to_value(&settled.reports[0]).unwrap();
+        assert_eq!(report["title"], "reading a");
+        assert_eq!(report["status"], "failed");
+        assert_eq!(report["input"], serde_json::json!({"path":"a"}));
+        assert_eq!(
+            report["result"]["content"][0]["content"]["text"],
+            "read failed"
+        );
+        assert_eq!(report["closing_reason"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn open_tools_close_once_at_each_turn_boundary_and_late_updates_are_diagnostics() {
+        use agent_client_protocol::schema::v1::{ToolCallUpdate, ToolCallUpdateFields};
+        for (outcome, reason) in [
+            (TurnOutcome::Cancelled, "interrupted"),
+            (
+                TurnOutcome::Failed {
+                    because: "lost".to_owned(),
+                },
+                "failed",
+            ),
+            (
+                TurnOutcome::Answered {
+                    stop_reason: "end_turn".to_owned(),
+                },
+                "unresolved",
+            ),
+        ] {
+            let mut completer = Completer::default();
+            let opened =
+                completer.update(SessionUpdate::ToolCall(ToolCall::new("call", "read")), NOW);
+            let snapshot = serde_json::to_value(opened.state.unwrap()).unwrap();
+            assert_eq!(snapshot["tools"][0]["status"], "pending");
+            assert_eq!(snapshot["tools"][0]["started_at"], NOW.to_string());
+            let settled = completer.boundary(outcome.clone(), NOW);
+            assert_eq!(settled.reports.len(), 1);
+            let report = serde_json::to_value(&settled.reports[0]).unwrap();
+            assert_eq!(report["status"], "pending");
+            assert_eq!(report["closing_reason"], reason);
+            assert_eq!(
+                report["completion"]["turn_outcome"],
+                serde_json::to_value(&outcome).unwrap()
+            );
+            assert_eq!(
+                serde_json::to_value(settled.state.unwrap()).unwrap()["tools"],
+                serde_json::json!([])
+            );
+            assert!(completer.boundary(outcome, NOW).reports.is_empty());
+            completer.begin();
+            let late = completer.update(
+                SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                    "call",
+                    ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+                )),
+                NOW,
+            );
+            assert!(late.reports.is_empty());
+            assert_eq!(late.diagnostics.len(), 1);
+            assert!(!completer.produced);
+        }
+    }
+
+    #[test]
+    fn a_tool_settles_once_with_its_input_result_and_times() {
+        use agent_client_protocol::schema::v1::{
+            ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+        };
+        let mut completer = Completer::default();
+        let opened = completer.update(
+            SessionUpdate::ToolCall(
+                ToolCall::new("call", "read").raw_input(serde_json::json!({"path":"a"})),
+            ),
+            NOW,
+        );
+        assert!(opened.reports.is_empty());
+        let later = NOW + jiff::SignedDuration::from_secs(2);
+        let update = SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "call",
+            ToolCallUpdateFields::new()
+                .status(ToolCallStatus::Completed)
+                .raw_output(serde_json::json!({"text":"result"})),
+        ));
+        let settled = completer.update(update.clone(), later);
+        assert_eq!(settled.reports.len(), 1);
+        let entry = serde_json::to_value(&settled.reports[0]).unwrap();
+        assert_eq!(entry["kind"], "tool_call");
+        assert_eq!(entry["input"], serde_json::json!({"path":"a"}));
+        assert_eq!(
+            entry["result"]["output"],
+            serde_json::json!({"text":"result"})
+        );
+        assert_eq!(entry["completion"]["started_at"], NOW.to_string());
+        assert_eq!(entry["completion"]["finished_at"], later.to_string());
+        assert_eq!(completer.update(update, later).diagnostics.len(), 1);
+    }
+
+    #[test]
     fn an_idless_chunk_completes_immediately() {
         let mut completer = Completer::default();
         let reports = completer.update(SessionUpdate::AgentMessageChunk(chunk(None, "hello")), NOW);
@@ -252,11 +496,17 @@ mod tests {
                 .reports
                 .is_empty()
         );
-        assert!(
+        assert_eq!(
             completer
-                .update(SessionUpdate::ToolCall(ToolCall::new("tool", "read")), NOW)
+                .update(
+                    SessionUpdate::ToolCall(
+                        ToolCall::new("tool", "read").status(ToolCallStatus::Completed)
+                    ),
+                    NOW
+                )
                 .reports
-                .is_empty()
+                .len(),
+            1
         );
         assert_eq!(
             completer

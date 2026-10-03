@@ -5,11 +5,13 @@ use std::time::Duration;
 use jiff::SignedDuration;
 use kestrel::domain::{
     Connection, Direction, GithubConnection, Integration, IntegrationId, OrganizationId,
-    SessionState,
+    SessionCommand, SessionState,
 };
 use kestrel::integration::credential::Token;
 use kestrel::integration::github::Github;
+use kestrel::link::Instruction;
 use kestrel::log::{Entry, Message};
+use kestrel::store::workspace::HeldMessageRefusal;
 use kestrel_scripted_agent::{FIRST_MEMORY, LAST_MEMORY};
 use support::Kestrel;
 use support::github_stub::{self, GithubStub};
@@ -860,5 +862,466 @@ async fn a_comment_kestrel_left_is_never_heard_as_input() {
     );
     assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
 
+    kestrel.teardown().await;
+}
+
+async fn entries(kestrel: &Kestrel, workspace: kestrel::domain::WorkspaceId) -> Vec<Entry> {
+    kestrel
+        .transcript(workspace)
+        .await
+        .into_iter()
+        .map(|recorded| recorded.entry)
+        .collect()
+}
+
+async fn drained(kestrel: &Kestrel, workspace: kestrel::domain::WorkspaceId) -> Vec<Vec<Message>> {
+    entries(kestrel, workspace)
+        .await
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Entry::Messages { messages } => Some(messages),
+            _ => None,
+        })
+        .collect()
+}
+
+fn compact() -> SessionCommand {
+    SessionCommand {
+        name: "compact".to_owned(),
+        description: "Compact the conversation".to_owned(),
+        input_hint: Some("/compact".to_owned()),
+    }
+}
+
+async fn prompt(kestrel: &Kestrel, session: &kestrel::domain::Session) -> String {
+    kestrel.on_the_link(session).await;
+    kestrel.start(session, support::harness()).await;
+    let Instruction::Start { prompt, .. } = kestrel.instruction(session).await else {
+        panic!("a Session starts with a start instruction");
+    };
+
+    prompt
+}
+
+fn instruction(prompt: &str) -> &str {
+    match prompt.strip_prefix("Earlier context, oldest first:\n") {
+        Some(rest) => rest
+            .split_once("\n\n")
+            .map_or(rest, |(_, instruction)| instruction),
+        None => prompt,
+    }
+}
+
+#[tokio::test]
+async fn a_message_posted_mid_turn_is_listed_with_the_id_the_post_answered_with() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let active = kestrel.dispatch_session(workspace.id).await;
+
+    let posted = kestrel
+        .posted_while_busy(workspace.id, "alice", "one more change")
+        .await;
+    assert!(posted.session.is_none(), "{posted:?}");
+    let held = posted.held_message.expect("a mid-turn message is held");
+    assert_eq!(held.participant, "alice");
+    assert_eq!(held.message, "one more change");
+    assert!(held.edited_at.is_none());
+
+    let listed = kestrel.held_messages(workspace.id).await;
+    assert_eq!(listed, vec![held], "the post answers with the id it listed");
+    assert!(
+        kestrel.has_pending_messages(workspace.id).await,
+        "the message waits for a Turn"
+    );
+
+    kestrel.complete_session(&active).await;
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_author_edits_a_held_message_and_the_next_turn_carries_the_edited_text() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let active = kestrel.dispatch_session(workspace.id).await;
+    let held = kestrel
+        .posted_while_busy(workspace.id, "alice", "one more change")
+        .await
+        .held_message
+        .expect("a mid-turn message is held");
+    let before = entries(&kestrel, workspace.id).await;
+
+    let edited = kestrel
+        .edit_message(workspace.id, held.id, "alice", "the edited change")
+        .await
+        .expect("its author should edit it");
+    assert_eq!(edited.id, held.id, "an edit keeps the message's id");
+    assert_eq!(edited.message, "the edited change");
+    assert_eq!(edited.participant, "alice");
+    assert!(edited.edited_at.is_some(), "an edit is stamped");
+    assert_eq!(
+        entries(&kestrel, workspace.id).await,
+        before,
+        "an edit writes no Transcript entry"
+    );
+
+    kestrel.complete_session(&active).await;
+    let next = kestrel
+        .claim_session()
+        .await
+        .expect("the held message starts the next Session");
+    assert_eq!(
+        drained(&kestrel, workspace.id).await,
+        vec![vec![Message {
+            participant: "alice".to_owned(),
+            message: "the edited change".to_owned(),
+        }]]
+    );
+    assert_eq!(
+        instruction(&prompt(&kestrel, &next).await),
+        "the edited change"
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_author_withdraws_a_held_message_and_the_next_turn_never_sees_it() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let active = kestrel.dispatch_session(workspace.id).await;
+    let held = kestrel
+        .posted_while_busy(workspace.id, "alice", "never mind")
+        .await
+        .held_message
+        .expect("a mid-turn message is held");
+    let before = entries(&kestrel, workspace.id).await;
+
+    kestrel
+        .withdraw_message(workspace.id, held.id, "alice")
+        .await
+        .expect("its author should withdraw it");
+    assert!(kestrel.held_messages(workspace.id).await.is_empty());
+    assert!(
+        !kestrel.has_pending_messages(workspace.id).await,
+        "a withdrawn message is not waiting input"
+    );
+    assert_eq!(
+        entries(&kestrel, workspace.id).await,
+        before,
+        "a withdrawal writes no Transcript entry"
+    );
+
+    kestrel.complete_session(&active).await;
+    assert_eq!(
+        kestrel.sessions(workspace.id).await.len(),
+        1,
+        "a withdrawn message starts no Session"
+    );
+    assert!(drained(&kestrel, workspace.id).await.is_empty());
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_name_other_than_the_authors_may_neither_edit_nor_withdraw_a_held_message() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let active = kestrel.dispatch_session(workspace.id).await;
+    let held = kestrel
+        .posted_while_busy(workspace.id, "alice", "one more change")
+        .await
+        .held_message
+        .expect("a mid-turn message is held");
+
+    for refusal in [
+        kestrel
+            .edit_message(workspace.id, held.id, "bob", "mine now")
+            .await
+            .expect_err("another name cannot edit it"),
+        kestrel
+            .withdraw_message(workspace.id, held.id, "bob")
+            .await
+            .expect_err("another name cannot withdraw it"),
+    ] {
+        assert_eq!(
+            refusal.downcast_ref::<HeldMessageRefusal>(),
+            Some(&HeldMessageRefusal::NotTheAuthor("alice".to_owned())),
+            "{refusal}"
+        );
+    }
+    assert_eq!(
+        kestrel.held_messages(workspace.id).await,
+        vec![held],
+        "a refused change leaves the message as it was"
+    );
+
+    kestrel.complete_session(&active).await;
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_edit_after_a_turn_took_the_message_or_after_withdrawal_is_refused() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let active = kestrel.dispatch_session(workspace.id).await;
+    let first = kestrel
+        .posted_while_busy(workspace.id, "alice", "the first thing")
+        .await
+        .held_message
+        .expect("a mid-turn message is held");
+
+    kestrel.complete_session(&active).await;
+    let taken = kestrel
+        .claim_session()
+        .await
+        .expect("the held message starts a Session");
+    assert_eq!(
+        drained(&kestrel, workspace.id).await,
+        vec![vec![Message {
+            participant: "alice".to_owned(),
+            message: "the first thing".to_owned(),
+        }]],
+        "the Turn took it"
+    );
+
+    let second = kestrel
+        .posted_while_busy(workspace.id, "alice", "a later thing")
+        .await
+        .held_message
+        .expect("a message behind a working Session is held");
+    assert_ne!(second.id, first.id, "a new message gets a new id");
+
+    for refusal in [
+        kestrel
+            .edit_message(workspace.id, first.id, "alice", "changed my mind")
+            .await
+            .expect_err("a taken message cannot be edited"),
+        kestrel
+            .withdraw_message(workspace.id, first.id, "alice")
+            .await
+            .expect_err("a taken message cannot be withdrawn"),
+    ] {
+        assert_eq!(
+            refusal.downcast_ref::<HeldMessageRefusal>(),
+            Some(&HeldMessageRefusal::AlreadyTaken)
+        );
+        assert!(
+            refusal.to_string().contains("already sent to the agent"),
+            "{refusal}"
+        );
+    }
+    assert_eq!(
+        kestrel.held_messages(workspace.id).await,
+        vec![second.clone()],
+        "an edit to an old id does not touch a newer message"
+    );
+
+    kestrel
+        .withdraw_message(workspace.id, second.id, "alice")
+        .await
+        .expect("its author withdraws the newer message");
+    assert!(kestrel.held_messages(workspace.id).await.is_empty());
+    for refusal in [
+        kestrel
+            .edit_message(workspace.id, second.id, "alice", "too late")
+            .await
+            .expect_err("a withdrawn message cannot be edited"),
+        kestrel
+            .withdraw_message(workspace.id, second.id, "alice")
+            .await
+            .expect_err("a withdrawn message cannot be withdrawn again"),
+    ] {
+        assert_eq!(
+            refusal.downcast_ref::<HeldMessageRefusal>(),
+            Some(&HeldMessageRefusal::AlreadyWithdrawn)
+        );
+        assert!(
+            refusal.to_string().contains("already withdrawn"),
+            "{refusal}"
+        );
+    }
+
+    kestrel.complete_session(&taken).await;
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_message_held_behind_a_pending_firing_session_is_listed_and_drains_after_it() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let active = kestrel.dispatch_session(workspace.id).await;
+    kestrel
+        .hold_session(workspace.id, "the firing's brief")
+        .await;
+    let held = kestrel
+        .posted_while_busy(workspace.id, "alice", "after the firing")
+        .await
+        .held_message
+        .expect("a message behind a firing session is held");
+    assert_eq!(kestrel.held_messages(workspace.id).await, vec![held]);
+
+    kestrel.complete_session(&active).await;
+    let firing = kestrel.sessions(workspace.id).await;
+    assert_eq!(firing.len(), 2, "the firing Session starts first");
+    assert_eq!(firing[1].state, SessionState::Queued);
+    assert_eq!(
+        kestrel.held_messages(workspace.id).await.len(),
+        1,
+        "the message waits behind the firing Session"
+    );
+
+    let firing = kestrel
+        .claim_session()
+        .await
+        .expect("the firing Session claims");
+    assert_eq!(
+        instruction(&prompt(&kestrel, &firing).await),
+        "the firing's brief"
+    );
+    kestrel.complete_session(&firing).await;
+
+    assert!(kestrel.held_messages(workspace.id).await.is_empty());
+    assert_eq!(
+        drained(&kestrel, workspace.id).await,
+        vec![vec![Message {
+            participant: "alice".to_owned(),
+            message: "after the firing".to_owned(),
+        }]],
+        "the message drains after the firing Session"
+    );
+
+    let last = kestrel
+        .claim_session()
+        .await
+        .expect("the held message starts a Session");
+    kestrel.complete_session(&last).await;
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_command_held_between_two_messages_drains_as_three_turns_in_order() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let active = kestrel.dispatch_session(workspace.id).await;
+    kestrel.record_commands(&active, &[compact()]).await;
+    for (who, what) in [
+        ("alice", "the first thing"),
+        ("alice", "/compact"),
+        ("bob", "the last thing"),
+    ] {
+        kestrel
+            .posted_while_busy(workspace.id, who, what)
+            .await
+            .held_message
+            .expect("a mid-turn message is held");
+    }
+    assert_eq!(kestrel.held_messages(workspace.id).await.len(), 3);
+
+    kestrel.complete_session(&active).await;
+    let first = kestrel
+        .claim_session()
+        .await
+        .expect("the messages before the command start a Session");
+    assert_eq!(
+        drained(&kestrel, workspace.id).await,
+        vec![vec![Message {
+            participant: "alice".to_owned(),
+            message: "the first thing".to_owned(),
+        }]],
+        "the messages before the first command are one Turn"
+    );
+    assert_eq!(
+        kestrel.held_messages(workspace.id).await.len(),
+        2,
+        "the command and what follows it wait"
+    );
+
+    kestrel.record_commands(&first, &[compact()]).await;
+    kestrel.complete_session(&first).await;
+    let middle = kestrel
+        .claim_session()
+        .await
+        .expect("the command starts a Session of its own");
+    assert_eq!(
+        drained(&kestrel, workspace.id).await.last(),
+        Some(&vec![Message {
+            participant: "alice".to_owned(),
+            message: "/compact".to_owned(),
+        }]),
+        "the command message is taken alone"
+    );
+    assert_eq!(
+        instruction(&prompt(&kestrel, &middle).await),
+        "/compact",
+        "the command's own instruction is its whole text, unlabelled"
+    );
+
+    kestrel.record_commands(&middle, &[compact()]).await;
+    kestrel.complete_session(&middle).await;
+    let last = kestrel
+        .claim_session()
+        .await
+        .expect("what follows the command starts the third Session");
+    assert_eq!(
+        drained(&kestrel, workspace.id).await,
+        vec![
+            vec![Message {
+                participant: "alice".to_owned(),
+                message: "the first thing".to_owned(),
+            }],
+            vec![Message {
+                participant: "alice".to_owned(),
+                message: "/compact".to_owned(),
+            }],
+            vec![Message {
+                participant: "bob".to_owned(),
+                message: "the last thing".to_owned(),
+            }],
+        ]
+    );
+
+    kestrel.complete_session(&last).await;
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_slash_held_with_no_offered_command_drains_as_an_ordinary_message() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let active = kestrel.dispatch_session(workspace.id).await;
+    kestrel.record_commands(&active, &[compact()]).await;
+    for (who, what) in [("alice", "/notacommand"), ("bob", "and one more")] {
+        kestrel
+            .posted_while_busy(workspace.id, who, what)
+            .await
+            .held_message
+            .expect("a mid-turn message is held");
+    }
+
+    kestrel.complete_session(&active).await;
+    let next = kestrel
+        .claim_session()
+        .await
+        .expect("the messages start one Session");
+    assert_eq!(
+        drained(&kestrel, workspace.id).await,
+        vec![vec![
+            Message {
+                participant: "alice".to_owned(),
+                message: "/notacommand".to_owned(),
+            },
+            Message {
+                participant: "bob".to_owned(),
+                message: "and one more".to_owned(),
+            },
+        ]],
+        "an unoffered slash drains with the others"
+    );
+    assert_eq!(
+        instruction(&prompt(&kestrel, &next).await),
+        "alice: /notacommand\n\nbob: and one more"
+    );
+
+    kestrel.complete_session(&next).await;
     kestrel.teardown().await;
 }

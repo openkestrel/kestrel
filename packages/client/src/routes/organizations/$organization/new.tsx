@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { NewWorkspaceForm } from "#/components/workbench/new-workspace-form";
 import { PaneHeading, Workbench } from "#/components/workbench/workbench";
 import { WorkspacesPane } from "#/components/workbench/workspaces-pane";
 
@@ -12,7 +13,7 @@ function NewWorkspace() {
 	return (
 		<Workbench
 			workspaces={<WorkspacesPane organization={organization} />}
-			transcript={<PaneHeading>New Workspace</PaneHeading>}
+			transcript={<NewWorkspaceForm organization={organization} />}
 			work={<PaneHeading>Work</PaneHeading>}
 		/>
 	);

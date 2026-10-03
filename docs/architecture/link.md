@@ -20,7 +20,7 @@ segment:
 | `POST` | `/reports` | One report. `202` when taken, including a replay. `connected` returns the Workspace checkout declaration. |
 | `GET` | `/credentials?session=` | Provider Credentials and Subscription Profile contents for a Session the Instance carries, decrypted for this request. |
 | `PATCH` | `/credentials?session=` | Hands back profile files the harness refreshed. |
-| `GET` | `/entries` | Pages the Workspace's Transcript. The supervisor does not currently call it. |
+| `GET` | `/entries` | Pages the Workspace's Transcript with payload content hydrated for supervisor context. The supervisor does not currently call it. |
 | `POST` | `/answers/{request}` | The streamed answer to a read. `204` once the operator has taken it; `410` when nobody waits on it. |
 
 ## Live work reports
@@ -70,7 +70,7 @@ sequenceDiagram
         S->>L: GET instructions (Last-Event-ID)
         S->>L: POST connected
     end
-    L-->>S: start {session, checkout, prompt, harness}
+    L-->>S: start {session, checkout, turn, prompt, harness}
     S->>S: git clone / checkout the declared branch
     S->>L: POST started (session, seq 1)
     S->>L: GET credentials?session=
@@ -82,7 +82,7 @@ sequenceDiagram
     S->>L: POST model, said/thought/plan as units complete, used as it arrives
     S->>L: POST checkout, answered
     Note over L: Session is Waiting
-    L-->>S: prompt {session, prompt}
+    L-->>S: prompt {session, turn, prompt}
     S->>H: ACP prompt, same conversation
     S->>L: POST said/thought/plan as units complete
     S->>L: POST checkout, answered
@@ -95,11 +95,28 @@ sequenceDiagram
 `link::Instruction`, stored in `link_instruction` with a per-Instance `seq` that is the SSE event id.
 Each names the Session it is for.
 
-- `start {checkout, prompt, harness}`: take up the Session. `harness` is the command, model and ACP
+- `start {checkout, turn, prompt, harness}`: take up the Session. `turn` is the seq of the Turn the
+  prompt begins, as on `prompt`. `harness` is the command, model and ACP
   auth method to spawn, since each Session may choose its Agent. A `start` for the Session already
   carried is ignored.
-- `prompt {prompt}`: the next Turn in the same ACP conversation. Sending it moves the Session from
-  Waiting to Working in the same transaction.
+- `unbriefed {checkout, harness}`: take up the Session with no Brief. It checks out, opens the ACP
+  conversation and prompts nothing, reporting `ready`; the Session waits unbriefed and its first
+  message later arrives as an ordinary `prompt` ([ADR-0038](../adr/0038-a-session-may-start-before-its-brief.md)).
+  A checkout or spawn that fails is reported as the Session finished failed, exactly as a `start`'s
+  would be.
+- `prompt {turn, prompt}`: the next Turn, `turn` its seq, in the same ACP conversation. Sending it moves the Session from
+  Waiting to Working in the same transaction. An unbriefed Session's first `prompt` is its Brief:
+  it moves the Session from Unbriefed to Working, and the supervisor reports `started` as its
+  first Turn begins.
+- `interrupt {turn}`: cancel the Turn the Session is in without ending it. A supervisor whose Turn
+  in flight is not `turn` ignores it, so a cancel that lands after its Turn answered never cancels
+  the next one. Otherwise the supervisor sends ACP
+  `session/cancel`, answers permission requests that arrive while the cancel is in flight
+  `cancelled`, and waits for the prompt to return; a `cancelled` prompt closes its open units
+  `interrupted` and is reported as `interrupted` instead of `answered`. A prompt that returns any
+  other way ends the Turn as it would have. The supervisor counts `KESTREL_INTERRUPT_DEADLINE`
+  (30 s) from the instruction: an agent that does not answer by then has its harness ended, its open
+  units closed `unresolved`, and its Session reported finished failed, lost ACP continuity.
 - `stop`: sent whenever a Session ends, however it ends, so the next Session's `start` always follows
   the last one's `stop`. It ends the harness; the supervisor stays.
 
@@ -117,24 +134,30 @@ effects (ADR-0004).
 
 | Report | Numbered | Effect |
 | --- | --- | --- |
-| `connected {version}` | no | Records the supervisor version on the Instance and its live Sessions. |
+| `connected {version}` | no | Records the supervisor version on the Instance and its live Sessions; an unbriefed one stops provisioning. |
 | `heartbeat` | no | Records the supervisor reached the link; extends the live Sessions' leases to now + 2 min, never one already passed. |
 | `stderr {lines}` | no | Logged to the operator, never the Transcript. |
+| `ready` | no | An unbriefed Session's harness is up and its conversation open: records `harness_ready`. |
 | `started` | yes | Appends `SessionStarted`. |
 | `model {model}` | yes | Records the model the harness is actually on. |
 | `said {message, completion}` | yes | Appends shared-state `Said`, naming its Session. |
 | `thought {text, completion}` | yes | Appends narration `Thought`. |
 | `plan {entries, completion}` | yes | Appends one narration plan replacement. |
-| `used {usage}` | yes | Records cumulative context use and cost. |
-| `checkout {repositories}` | yes | Replaces the Workspace's observed git state (decides Unpublished Work). |
-| `answered` | yes | Closes the open Turn, moves the Session to Waiting, records a delivery. |
-| `finished {exit}` | yes | Ends the Session. |
+| `tool_call {call_id, title, tool_kind, status, input, result, closing_reason, completion}` | yes | Appends one completed detail entry. |
+| `session_state {tools, message_buffering, thought_buffering, usage?}` | no | Replaces the Session’s transient snapshot in serve-role memory; reconnect resends it. |
+| `usage {usage}` | no | Held in serve-role memory beside the running tools: at most one a second, at the window's trailing edge, and never recorded (ADR-0041). |
+| `session_info {title, options, commands}` | no | Records the harness's whole bookkeeping state on the Session (ADR-0041). Sent when it changes, at most once a second, and again after a reconnect. |
+| `checkout {repositories}` | yes | Replaces the Workspace's observed git state (decides Unpublished Work); an unbriefed Session moves from `cloning` to `starting_harness`. |
+| `answered {usage?}` | yes | Closes the open Turn, moves the Session to Waiting, clears any pending interrupt, records a delivery, and records the usage it carries. |
+| `interrupted` | yes | Closes the interrupted Turn, moves the Session to Waiting, and appends shared-state `TurnInterrupted` naming who asked; held messages become the next Turn at once, so the Session stays Working when there are any. Writes no delivery. |
+| `finished {exit, usage?}` | yes | Ends the Session, recording the usage it carries. |
 
 **Numbered reports are exactly-once.** The supervisor numbers each Session's reports from 1 and
 resends from the first one not acknowledged. The control plane keeps `session.reports_taken`: the
 next number is applied, an old one is acknowledged and ignored, and a gap is refused with `400`. A
-supervisor sends completed units immediately, and `model` and `used` as they arrive. It reports
-`checkout` and then `answered` or `finished` at the Turn boundary.
+supervisor sends completed units immediately, and `model` as it arrives. Usage and bookkeeping are
+transient and unnumbered; a Turn's answer and a Session's end carry the usage that stands. It
+reports `checkout` and then `answered` or `finished` at the Turn boundary.
 
 ## Authentication
 
@@ -194,8 +217,18 @@ with no branch on which harness it drives.
   (`permission.rs`). There is no policy yet.
 - The pure completer buffers messages and thoughts independently by ID, completes chunks without
   IDs immediately, and records each plan replacement. ID changes and Turn boundaries close text
-  units; late updates become operator diagnostics. Tool calls are still dropped.
+  units; late updates become operator diagnostics. Tool starts and updates maintain transient Session
+  state, and terminal updates complete one detail entry. Open tools close interrupted on cancellation,
+  failed on failure, and unresolved with the stop reason when a Turn answers.
 - A Turn in which the agent produced no message, thought, plan or tool call fails the Session.
 - `checkout.rs` clones each repository side by side under `/workspace`, cuts the declared branch
   from the base when the remote lacks it, and leaves an existing checkout as an earlier Session
   left it.
+
+The answer boundary follows [#372](https://github.com/openkestrel/kestrel/issues/372), which
+explicitly excludes Trailing Sessions and activity after the answer. It intentionally differs
+from the accepted [ADR-0034](../adr/0034-completed-harness-updates-become-transcript-entries.md)
+and [ADR-0040](../adr/0040-a-session-trails-its-answer-while-its-work-runs.md): open tools close
+unresolved, late activity becomes diagnostics, and `answered` moves the Session to Waiting.
+The [architecture map](README.md#where-the-code-lags-the-adrs) records this implementation gap;
+[#370](https://github.com/openkestrel/kestrel/issues/370) scopes the Trailing behavior.

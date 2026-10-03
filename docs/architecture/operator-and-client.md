@@ -45,6 +45,25 @@ A Workspace or Session in a path is resolved on the server (`reference.rs`): its
 UUID, any unambiguous prefix of either, or `latest` for the most recent in scope. Nothing or
 several matching is `Declined::Missing` or `Declined::Ambiguous`, naming the candidates.
 
+### Session reads
+
+`GET …/sessions/{session}` serves the Session's whole bookkeeping state — the harness's config
+options with their current and offered values, its title for the conversation, and the commands it
+offers — kept current by the supervisor for the Session's whole life ([ADR-0041](../adr/0041-a-sessions-options-are-its-harnesss-config-options.md)).
+`worked_model` is the Model-category option's current value. `usage` is what the harness has spent:
+the live figure for the Turn in flight, and otherwise what the last Turn's answer or the Session's
+end recorded. The read carries a strong `ETag` over its body and answers `304` to a matching
+`If-None-Match`, because a reconnecting Client refetches every view it subscribes to.
+
+### Interrupting a Turn
+
+`POST …/sessions/{session}/interrupt` takes `{participant}` and answers `202` with the Session,
+whose `interrupting {participant, requested_at}` stands while the request is in flight. Only a
+working Turn is interruptible: every other phase is refused `409`, naming it, and a second request
+while one is pending answers `202` and sends nothing more. The Turn is cancelled over the link
+([Link](link.md#instructions)) without ending the Session, and `kestrel session interrupt <session>
+--as-participant NAME` asks for one.
+
 ### Streaming the Transcript
 
 `GET …/workspaces/{workspace}/transcript` is SSE. Each entry is an event whose id is a cursor; the
@@ -52,10 +71,65 @@ stream ends with an `end` event when the Workspace seals or, with `follow=false`
 the last entry. A stream that closes without `end` was cut off; the Client resumes from the last
 id it received (`kestrel-client/src/transcript.rs`) and gives up after 30 s unreachable.
 
-`kinds` selects `shared_state`, `narration` or `detail`, defaulting to shared state. The CLI passes
-`workspace transcript --kinds` through to this read. Both the link page and this stream advance
-across omitted entries: the page returns the highest examined seq, and the stream sends a `cursor`
-event when omitted entries advance it beyond the last delivered entry. The cursor remains global.
+`kinds` selects `shared_state`, `narration` or `detail`, defaulting to shared state, and
+`summaries` defaults to true. An `activity` event summarizes omitted narration and detail between
+every pair of shared-state entries, including when shared state is filtered out. Its `first_seq`
+stays stable across pages and reconnects; open updates replace it, and the final `closed` replacement
+precedes the closing entry even when no detail was added. Counts and metadata are computed from the
+current Transcript at read time, so expired entries contribute only tombstones.
+
+`first_seq` and `last_seq` bound an inclusive expansion range; selecting every kind returns the
+entries behind the Activity. Both the link page and this stream advance across omitted entries:
+the page returns the highest examined seq and an `activities` array, and entry, Activity and `cursor`
+events carry global cursors. The stream sends a `cursor` event when omitted entries advance it
+beyond the last delivered entry or Activity.
+
+A follow starts every connect with a transient `session_state` snapshot, including empty state,
+then sends changes to running tools, buffering flags and the usage the harness reports — at most
+one usage change a second, at the window's trailing edge, and never a row. These events have no id
+and are never stored. The CLI passes `--kinds` and `--no-summaries` to the read, prints each closed
+Activity once across reconnects, and prints a caught-up open summary on a non-follow read.
+
+A follow that stays open past caught-up registers a follower. It is handed one `follower` event
+(`id`, `lease_seconds`) and then a `presence` event carrying the whole current set
+(`{named, anonymous}`), and another `presence` event whenever the set changes; neither carries an
+id, so presence never moves the cursor. `?as=NAME` joins under a name the participant rule
+accepts, and names an Agent only to be refused. `POST …/followers/{id}/lease` extends a live
+follower's lease and answers `404` for one unknown or lapsed; a dropped stream removes its
+follower at once, and a lease that passes removes it and closes its stream. Followers live only in
+the serve role's memory ([ADR-0035](../adr/0035-organization-change-notices-and-workspace-presence.md)).
+`workspace transcript --follow --as-participant NAME` renews a third of the way through the lease
+and prints no presence.
+
+`GET …/workspaces/{workspace}/transcript/payloads/{payload}` fetches an oversized body field as
+its original bytes and media type. The entry's `payload_fields` lists fields holding references;
+other JSON values remain inline even if they resemble a reference. A reference identifies its
+Workspace, entry seq and field. Another Workspace's reference is `404`; a reference whose entry
+expired is `410` after its content is removed. Internal prompt and delivery reads resolve references.
+
+### Held messages
+
+A post into a Workspace whose unfinished Session cannot take it leaves a Held Message. The
+Workspace read carries `held_messages` — the `held` ones in arrival order, each with `id`,
+`participant`, `message`, `posted_at` and `edited_at` — and the post answers
+`{ session, held_message }`. `PUT …/workspaces/{workspace}/messages/{id}` takes
+`{ participant, message }` and answers the Held Message; `DELETE …/workspaces/{workspace}/messages/{id}`
+takes `{ participant }` and answers `204`. Both apply the participant name rule and refuse an id the
+Workspace never held `404`, a name other than the author's `403`, and one a Turn took or its author
+withdrew `409`. Neither writes a Transcript entry. `kestrel workspace show` lists Held Messages, `workspace post` hands back the Session it reached
+(or the held id when it reached none, with `--json` projecting either from its
+`{ session, held_message }` answer), and `workspace message edit` / `workspace message withdraw`
+change one.
+
+### Change notices
+
+`GET …/changes` is SSE, per Organization. It opens with an `open` event, then a `change` event
+naming each Workspace, Session or queue that changed, coalesced to at most one per resource per
+250 ms at the window's trailing edge. No event carries an id and `Last-Event-ID` is ignored: a
+notice is a hint to refetch, never a cursor, and a subscriber that falls behind the bounded
+buffer is sent `resync`. The store transaction collects what its writes touched and the hub
+publishes after commit, so a refused or rolled-back write raises nothing, and a Transcript append
+alone raises nothing. The CLI does not consume it ([ADR-0035](../adr/0035-organization-change-notices-and-workspace-presence.md)).
 
 ### Pull requests
 
@@ -102,8 +176,13 @@ headings. Each command's `--json` returns the operator response.
 
 - `POST …/declaration` applies a whole document (Projects, Agents, Triggers) in one transaction;
   `…/declaration/preview` is the same transaction rolled back and returns the difference.
+- `POST …/workspaces` is the one open: it opens a Workspace and enqueues its first Session in one
+  transaction, with an optional Brief, declared model, mode, thought level and declared name, or
+  refuses and leaves nothing behind ([ADR-0038](../adr/0038-a-session-may-start-before-its-brief.md),
+  `workspace.rs`). A refusal names the request `field` it concerns.
 - `POST /operator/starts` backs `kestrel start`: it adds whatever is missing to run a first Session
-  and refuses to change anything that exists (`start.rs`).
+  and refuses to change anything that exists (`start.rs`). It opens through the same write.
+- `session enqueue` only continues a Workspace: it refuses one that has never had a Session.
 
 ## The Client
 
@@ -128,7 +207,9 @@ headings. Each command's `--json` returns the operator response.
 `packages/client` ([README](../../packages/client/README.md)) is a static SPA. The control plane
 does not serve it: a web server in front does, on the operator interface's origin
 ([ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md)). In compose that is
-`images/kestrel-client`, Caddy on the host's loopback at 7719, whose Caddyfile answers:
+`images/kestrel-client`, Caddy on the host's loopback at 7719, over HTTPS from its own local CA so
+the browser speaks HTTP/2 and every tab opens its own event streams
+([ADR-0044](../adr/0044-the-browser-client-is-served-over-https.md)). Its Caddyfile answers:
 
 | Path | Answer |
 | --- | --- |
@@ -139,3 +220,5 @@ does not serve it: a web server in front does, on the operator interface's origi
 The Client's types come from
 `openapi/operator.json`; its transport (`src/operator/transport.ts`) parses a refusal's `message`
 and, when present, `field` and `phase`, and reads SSE with `Last-Event-ID` as the cursor.
+`src/operator/follow.ts` holds the two live reads: an Organization route's change notices, which
+invalidate TanStack Query keys, and a Workspace route's Transcript follow.

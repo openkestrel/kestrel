@@ -15,6 +15,7 @@ pub struct Declared {
     pub templates: Templates,
     pub project: String,
     pub agent: String,
+    pub declared: crate::domain::Declared,
     pub allows: Vec<String>,
     pub profile: Option<String>,
 }
@@ -69,6 +70,9 @@ struct Entry {
     #[serde(default)]
     allows: Vec<String>,
     profile: Option<String>,
+    model: Option<String>,
+    mode: Option<String>,
+    thought_level: Option<String>,
 }
 
 pub fn parse(text: &str) -> Result<Vec<Declared>> {
@@ -106,6 +110,11 @@ fn declared(name: &str, entry: Entry) -> Result<Declared> {
         templates,
         project: entry.project,
         agent: entry.agent,
+        declared: crate::domain::Declared::named(crate::domain::Declared {
+            model: entry.model,
+            mode: entry.mode,
+            thought_level: entry.thought_level,
+        }),
         allows: entry.allows,
         profile: entry.profile,
     })
@@ -150,6 +159,7 @@ pub async fn apply(
                     &declared.templates,
                     &project,
                     &agent,
+                    &declared.declared,
                     &allows,
                     profile.as_ref(),
                     true,
@@ -172,6 +182,7 @@ pub async fn apply(
                     &declared.templates,
                     &project,
                     &agent,
+                    &declared.declared,
                     &allows,
                     profile.as_ref(),
                     true,
@@ -229,7 +240,7 @@ pub async fn apply(
     })
 }
 
-type Described = [(&'static str, Option<String>); 10];
+type Described = [(&'static str, Option<String>); 13];
 
 fn described(declared: &Declared) -> Described {
     describe(
@@ -239,6 +250,7 @@ fn described(declared: &Declared) -> Described {
         &declared.agent,
         &declared.allows,
         declared.profile.as_deref(),
+        &declared.declared,
     )
 }
 
@@ -257,6 +269,7 @@ fn described_trigger(trigger: &Trigger) -> Described {
             .profile
             .as_ref()
             .map(|profile| profile.name.as_str()),
+        &trigger.declared,
     )
 }
 
@@ -267,6 +280,7 @@ fn describe(
     agent: &str,
     allows: &[String],
     profile: Option<&str>,
+    declared: &crate::domain::Declared,
 ) -> Described {
     let mut allows = allows.to_vec();
     allows.sort();
@@ -292,6 +306,9 @@ fn describe(
             Some(templates.correlation.on_open_workspace().to_string()),
         ),
         ("brief", Some(templates.brief.to_string())),
+        ("model", declared.model.clone()),
+        ("mode", declared.mode.clone()),
+        ("thought level", declared.thought_level.clone()),
     ]
 }
 

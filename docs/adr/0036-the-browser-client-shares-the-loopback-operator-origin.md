@@ -3,6 +3,9 @@
 > **Amended by [ADR-0043](0043-a-web-server-serves-the-browser-client.md).** A web server in front of
 > the control plane serves the Client, and writes carry no `X-Kestrel-Operator` header; the shared
 > origin and the listener's Host and Origin checks stand.
+>
+> **Amended by [ADR-0044](0044-the-browser-client-is-served-over-https.md).** An `Origin` naming the
+> listener's own host and port is accepted under `http` or `https`, since TLS ends at the web server.
 
 The `0.3` browser Client is a static TanStack Start SPA with TanStack Query, built in `packages/client` and copied into the control-plane image. The control plane serves its assets from a fixed runtime directory on the operator listener; `/operator/*` remains reserved for the operator interface, and other Client routes fall back to the SPA shell. This keeps the Client on the same origin as the operator interface without another runtime process or a Client-side store. The SPA does not use Start server functions or server routes to make operator decisions.
 

@@ -2,27 +2,33 @@
 //! over the wire rather than over a shim above it, with no network and no model spend.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, AuthMethod, AuthMethodAgent, AuthMethodTerminal, AvailableCommandsUpdate,
-    ContentBlock, ContentChunk, Cost, InitializeRequest, InitializeResponse, LoadSessionRequest,
-    LoadSessionResponse, MessageId, NewSessionRequest, NewSessionResponse, PermissionOption,
-    PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, PromptCapabilities,
-    PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
-    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelect,
-    SessionConfigSelectOption, SessionConfigValueId, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, TextContent,
-    ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, UsageUpdate,
+    AgentCapabilities, AuthMethod, AuthMethodAgent, AuthMethodTerminal, AvailableCommand,
+    AvailableCommandInput, AvailableCommandsUpdate, CancelNotification, ConfigOptionUpdate,
+    ContentBlock, ContentChunk, Cost, CurrentModeUpdate, InitializeRequest, InitializeResponse,
+    LoadSessionRequest, LoadSessionResponse, MessageId, NewSessionRequest, NewSessionResponse,
+    PermissionOption, PermissionOptionKind, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus,
+    PromptCapabilities, PromptRequest, PromptResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
+    SessionConfigSelect, SessionConfigSelectOption, SessionConfigValueId, SessionInfoUpdate,
+    SessionMode, SessionModeState, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest,
+    SetSessionModeResponse, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
+    ToolCallUpdateFields, UnstructuredCommandInput, UsageUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Error, Result, Stdio};
 use clap::Parser;
 use kestrel_scripted_agent::{
-    CHATTER, CHATTERED_LINES, CHATTERED_MESSAGES, CONFIDED, DEFAULT_MODEL, FIRST_MEMORY,
-    LAST_MEMORY, LOGIN, MUTTERED, OTHER_MODEL, OVERLONG, REFRESHED, Script, chattered, conversed,
+    BURSTED_SIZE, BURSTED_USAGE, CHATTER, CHATTERED_LINES, CHATTERED_MESSAGES, COMMAND,
+    COMMAND_DESCRIPTION, COMMAND_HINT, CONFIDED, CUSTOM_CATEGORY, CUSTOM_OPTION, DEFAULT_MODEL,
+    FIRST_MEMORY, LAST_MEMORY, LOGIN, MODE_OPTION, MUTTERED, OTHER_MODE, OTHER_MODEL,
+    OTHER_THOUGHT_LEVEL, OVERLONG, REFRESHED, REPEATS, STARTING_MODE, STARTING_THOUGHT_LEVEL,
+    SWITCHED_MODE, Script, THOUGHT_LEVEL_OPTION, TITLE, chattered, conversed,
 };
 
 const SESSION: &str = "scripted";
@@ -36,6 +42,11 @@ const KEPT: &str = ".scripted-session";
 const DIED: &str = ".scripted-session-died";
 const PROMPT_SEPARATOR: char = '\u{1e}';
 const VANISHING: Duration = Duration::from_millis(100);
+const BURST_SETTLED: Duration = Duration::from_millis(1_000);
+/// Between `BurstsUsage`'s updates: the burst still fits one usage window, but is long enough that
+/// a heartbeat landing inside it would carry a value the window has not reported.
+const BURST_SPACING: Duration = Duration::from_millis(200);
+const BURST_PATIENCE: Duration = Duration::from_millis(2_500);
 
 #[derive(Debug, Parser)]
 #[command(name = "kestrel-scripted-agent", version)]
@@ -49,12 +60,29 @@ struct Cli {
 async fn main() -> Result<()> {
     let script = Cli::parse().script;
     let prompted_so_far: Arc<Mutex<Vec<String>>> = Arc::default();
+    let cancelled: Arc<AtomicBool> = Arc::default();
     let opened_against: Arc<Mutex<Option<PathBuf>>> = Arc::default();
     let located = Arc::clone(&opened_against);
+    let options: Arc<Mutex<Vec<SessionConfigOption>>> = Arc::default();
+    let offered_options = Arc::clone(&options);
+    let loaded_options = Arc::clone(&options);
+    let set_options = Arc::clone(&options);
 
     Agent
         .builder()
         .name("kestrel-scripted-agent")
+        .on_receive_notification(
+            {
+                let cancelled = Arc::clone(&cancelled);
+                async move |cancel: CancelNotification, _connection| {
+                    if cancel.session_id.0.as_ref() == SESSION {
+                        cancelled.store(true, Ordering::SeqCst);
+                    }
+                    Ok(())
+                }
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
         .on_receive_request(
             async move |initialize: InitializeRequest, responder, _connection| {
                 if initialize.protocol_version != ProtocolVersion::V1 {
@@ -111,8 +139,15 @@ async fn main() -> Result<()> {
 
                 responder.respond(match script {
                     Script::Decides => NewSessionResponse::new(SESSION),
+                    Script::LegacyModes | Script::LegacyModesKept => {
+                        NewSessionResponse::new(SESSION).modes(legacy_modes())
+                    }
                     _ => {
-                        NewSessionResponse::new(SESSION).config_options(vec![models(DEFAULT_MODEL)])
+                        let offered = offered(DEFAULT_MODEL);
+                        *offered_options
+                            .lock()
+                            .expect("the offered options should not be poisoned") = offered.clone();
+                        NewSessionResponse::new(SESSION).config_options(offered)
                     }
                 })
             },
@@ -138,28 +173,76 @@ async fn main() -> Result<()> {
                         &conversed(turn + 1, &kept[..turn]),
                     )?;
                 }
-                responder
-                    .respond(LoadSessionResponse::new().config_options(vec![models(DEFAULT_MODEL)]))
+                let offered = offered(DEFAULT_MODEL);
+                *loaded_options
+                    .lock()
+                    .expect("the offered options should not be poisoned") = offered.clone();
+                responder.respond(LoadSessionResponse::new().config_options(offered))
             },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
             async move |set: SetSessionConfigOptionRequest, responder, _connection| {
+                if script == Script::RefusesOptions {
+                    return responder.respond_with_error(
+                        Error::internal_error()
+                            .data("this scripted agent will not change its options"),
+                    );
+                }
                 let Some(selected) = set.value.as_value_id() else {
                     return responder.respond_with_error(
-                        Error::invalid_params().data("this agent's model is a selection"),
+                        Error::invalid_params().data("this agent's options are selections"),
                     );
                 };
 
-                responder.respond(SetSessionConfigOptionResponse::new(vec![models(
-                    selected.clone(),
-                )]))
+                {
+                    let mut offered = set_options
+                        .lock()
+                        .expect("the offered options should not be poisoned");
+                    let Some(option) = offered.iter_mut().find(|option| option.id == set.config_id)
+                    else {
+                        return responder.respond_with_error(
+                            Error::invalid_params()
+                                .data(format!("this agent offers no option {}", set.config_id.0)),
+                        );
+                    };
+                    match &mut option.kind {
+                        SessionConfigKind::Select(select) => {
+                            select.current_value = selected.clone();
+                        }
+                        SessionConfigKind::Boolean(boolean) => {
+                            boolean.current_value = selected.0.as_ref() == "true";
+                        }
+                        _ => {}
+                    }
+                }
+
+                responder.respond(SetSessionConfigOptionResponse::new(
+                    set_options
+                        .lock()
+                        .expect("the offered options should not be poisoned")
+                        .clone(),
+                ))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |set: SetSessionModeRequest, responder, connection| {
+                update(
+                    &connection,
+                    SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(set.mode_id)),
+                )?;
+                responder.respond(SetSessionModeResponse::new())
             },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
             async move |prompt: PromptRequest, responder, connection| {
                 let prompted_so_far = Arc::clone(&prompted_so_far);
+                let cancelled = Arc::clone(&cancelled);
+                // A cancel that arrived between turns belongs to the turn it was asked of, not
+                // this one.
+                cancelled.store(false, Ordering::SeqCst);
                 let located = located
                     .lock()
                     .expect("where the session was opened should not be poisoned")
@@ -183,7 +266,15 @@ async fn main() -> Result<()> {
                         so_far.push(prompted.clone());
                         earlier
                     };
-                    let stop = play(script, &prompted, &earlier, located, &connection).await?;
+                    let stop = play(
+                        script,
+                        &prompted,
+                        &earlier,
+                        located,
+                        &connection,
+                        &cancelled,
+                    )
+                    .await?;
                     responder.respond(PromptResponse::new(stop))
                 })
             },
@@ -201,8 +292,45 @@ async fn play(
     earlier: &[String],
     located: Option<PathBuf>,
     connection: &ConnectionTo<Client>,
+    cancelled: &AtomicBool,
 ) -> Result<StopReason> {
     TURN.store(earlier.len(), Ordering::Relaxed);
+    let works_until_cancelled = match script {
+        Script::WorksUntilCancelled => earlier.is_empty(),
+        Script::AnswersThenWorksUntilCancelled => earlier.len() == 1,
+        _ => false,
+    };
+    if works_until_cancelled {
+        say(connection, "working", "working on it")?;
+        // A second message closes the first, so the control plane has it on the record before
+        // the cancel arrives.
+        say(connection, "working-still", "still on it")?;
+        update(
+            connection,
+            SessionUpdate::ToolCall(
+                ToolCall::new(format!("{TOOL_CALL}-{}", earlier.len() + 1), "a long read")
+                    .status(ToolCallStatus::InProgress),
+            ),
+        )?;
+        while !cancelled.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        permission_cancelled(connection).await?;
+
+        return Ok(StopReason::Cancelled);
+    }
+    if script == Script::IgnoresCancel {
+        say(connection, "ignoring", "ignoring the cancel")?;
+        say(connection, "ignoring-still", "still ignoring it")?;
+        update(
+            connection,
+            SessionUpdate::ToolCall(
+                ToolCall::new(format!("{TOOL_CALL}-ignored"), "a read nobody will answer")
+                    .status(ToolCallStatus::InProgress),
+            ),
+        )?;
+        return std::future::pending().await;
+    }
     if script == Script::ReportsThenWaits {
         say(connection, "first", "first message")?;
         update(
@@ -216,6 +344,26 @@ async fn play(
             SessionUpdate::UsageUpdate(UsageUpdate::new(12, 100)),
         )?;
         std::future::pending::<()>().await;
+    }
+    if script == Script::BurstsUsage {
+        // Long enough that the notices the Session's start raised have settled first.
+        tokio::time::sleep(BURST_SETTLED).await;
+        for used in [
+            BURSTED_USAGE / 4,
+            BURSTED_USAGE / 2,
+            BURSTED_USAGE * 3 / 4,
+            BURSTED_USAGE,
+        ] {
+            update(
+                connection,
+                SessionUpdate::UsageUpdate(UsageUpdate::new(used, BURSTED_SIZE)),
+            )?;
+            tokio::time::sleep(BURST_SPACING).await;
+        }
+        // Long enough for the trailing-edge usage report to go up, and to watch for notices.
+        tokio::time::sleep(BURST_PATIENCE).await;
+        say(connection, "message-1", "spent")?;
+        return Ok(StopReason::EndTurn);
     }
     if matches!(script, Script::CancelledText | Script::FailedText) {
         say(connection, "message", "observed message")?;
@@ -334,6 +482,91 @@ async fn play(
             connection,
             SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(Vec::new())),
         )?;
+        update(
+            connection,
+            SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title("silent")),
+        )?;
+        update(
+            connection,
+            SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(offered(DEFAULT_MODEL))),
+        )?;
+        return Ok(StopReason::EndTurn);
+    }
+    if script == Script::OversizedTool {
+        update(
+            connection,
+            SessionUpdate::ToolCall(
+                ToolCall::new(TOOL_CALL, "large read")
+                    .raw_input(serde_json::json!({"path":"large.txt"})),
+            ),
+        )?;
+        update(
+            connection,
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                TOOL_CALL,
+                ToolCallUpdateFields::new()
+                    .status(ToolCallStatus::Completed)
+                    .raw_output(serde_json::json!({"text":"x".repeat(70 * 1024)})),
+            )),
+        )?;
+        return Ok(StopReason::EndTurn);
+    }
+    if script == Script::ReconnectingTools {
+        for id in ["settles-offline", "still-running"] {
+            update(
+                connection,
+                SessionUpdate::ToolCall(ToolCall::new(id, id).status(ToolCallStatus::InProgress)),
+            )?;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        update(
+            connection,
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                "settles-offline",
+                ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+            )),
+        )?;
+        tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+        update(
+            connection,
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                "still-running",
+                ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+            )),
+        )?;
+        return Ok(StopReason::EndTurn);
+    }
+    if matches!(
+        script,
+        Script::SlowTool
+            | Script::OpenToolAnswered
+            | Script::OpenToolCancelled
+            | Script::OpenToolFailed
+    ) {
+        update(
+            connection,
+            SessionUpdate::ToolCall(
+                ToolCall::new(TOOL_CALL, "slow read")
+                    .status(ToolCallStatus::InProgress)
+                    .raw_input(serde_json::json!({"path":"README.md"})),
+            ),
+        )?;
+        match script {
+            Script::OpenToolAnswered => return Ok(StopReason::EndTurn),
+            Script::OpenToolCancelled => return Ok(StopReason::Cancelled),
+            Script::OpenToolFailed => return Ok(StopReason::MaxTokens),
+            _ => {}
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        update(
+            connection,
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                TOOL_CALL,
+                ToolCallUpdateFields::new()
+                    .status(ToolCallStatus::Completed)
+                    .raw_output(serde_json::json!({"text":"read result"})),
+            )),
+        )?;
         return Ok(StopReason::EndTurn);
     }
     if script == Script::Works {
@@ -357,6 +590,57 @@ async fn play(
         }
         keep(prompted)?;
         say(connection, "message-1", &conversed(kept.len() + 1, &kept))?;
+        return Ok(StopReason::EndTurn);
+    }
+    if script == Script::Announces {
+        // Long enough that a test can take the link down while the harness still has this to say.
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        update(
+            connection,
+            SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(TITLE)),
+        )?;
+        update(
+            connection,
+            SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(vec![
+                AvailableCommand::new(COMMAND, COMMAND_DESCRIPTION).input(
+                    AvailableCommandInput::Unstructured(UnstructuredCommandInput::new(
+                        COMMAND_HINT,
+                    )),
+                ),
+                AvailableCommand::new("init", "Initialize the workspace"),
+            ])),
+        )?;
+        update(
+            connection,
+            SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(SWITCHED_MODE)),
+        )?;
+        say(connection, "message-1", "announced")?;
+        return Ok(StopReason::EndTurn);
+    }
+    if script == Script::Repeats {
+        for _ in 0..REPEATS {
+            update(
+                connection,
+                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(offered(DEFAULT_MODEL))),
+            )?;
+        }
+        say(connection, "message-1", "repeated")?;
+        return Ok(StopReason::EndTurn);
+    }
+    if script == Script::SwitchesModel {
+        update(
+            connection,
+            SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(offered(OTHER_MODEL))),
+        )?;
+        say(connection, "message-1", "switched")?;
+        return Ok(StopReason::EndTurn);
+    }
+    if script == Script::LegacyModes {
+        update(
+            connection,
+            SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(SWITCHED_MODE)),
+        )?;
+        say(connection, "message-1", "switched a legacy mode")?;
         return Ok(StopReason::EndTurn);
     }
     if script == Script::Vanishes {
@@ -513,6 +797,57 @@ fn models(current: impl Into<SessionConfigValueId>) -> SessionConfigOption {
     .category(SessionConfigOptionCategory::Model)
 }
 
+fn offered(current: impl Into<SessionConfigValueId>) -> Vec<SessionConfigOption> {
+    vec![
+        models(current),
+        SessionConfigOption::new(
+            MODE_OPTION,
+            "Mode",
+            SessionConfigKind::Select(SessionConfigSelect::new(
+                STARTING_MODE,
+                vec![
+                    SessionConfigSelectOption::new(STARTING_MODE, "Build"),
+                    SessionConfigSelectOption::new(SWITCHED_MODE, "Plan"),
+                ],
+            )),
+        )
+        .category(SessionConfigOptionCategory::Mode),
+        SessionConfigOption::new(
+            THOUGHT_LEVEL_OPTION,
+            "Thinking",
+            SessionConfigKind::Select(SessionConfigSelect::new(
+                STARTING_THOUGHT_LEVEL,
+                vec![
+                    SessionConfigSelectOption::new(STARTING_THOUGHT_LEVEL, "Low"),
+                    SessionConfigSelectOption::new(OTHER_THOUGHT_LEVEL, "High"),
+                ],
+            )),
+        )
+        .category(SessionConfigOptionCategory::ThoughtLevel),
+        SessionConfigOption::new(
+            CUSTOM_OPTION,
+            "Verbose",
+            SessionConfigKind::Boolean(
+                agent_client_protocol::schema::v1::SessionConfigBoolean::new(false),
+            ),
+        )
+        .category(SessionConfigOptionCategory::Other(
+            CUSTOM_CATEGORY.to_owned(),
+        )),
+    ]
+}
+
+fn legacy_modes() -> SessionModeState {
+    SessionModeState::new(
+        STARTING_MODE,
+        vec![
+            SessionMode::new(STARTING_MODE, "Build"),
+            SessionMode::new(SWITCHED_MODE, "Plan"),
+            SessionMode::new(OTHER_MODE, "Review"),
+        ],
+    )
+}
+
 /// Refuses to go on unless the client allows the call once, which is what makes a Session that
 /// succeeded evidence that the round-trip completed.
 async fn permission_to_use_a_tool(connection: &ConnectionTo<Client>) -> Result<()> {
@@ -535,6 +870,26 @@ async fn permission_to_use_a_tool(connection: &ConnectionTo<Client>) -> Result<(
             "the scripted agent offered {ALLOW_ONCE} and was answered {}",
             selected.option_id.0
         )));
+    }
+
+    Ok(())
+}
+
+/// Refuses to go on unless the client answers `cancelled`, which is not a denial.
+async fn permission_cancelled(connection: &ConnectionTo<Client>) -> Result<()> {
+    let outcome = connection
+        .send_request(RequestPermissionRequest::new(
+            SESSION,
+            ToolCallUpdate::new(TOOL_CALL, ToolCallUpdateFields::new()),
+            vec![allow_once(), reject_once()],
+        ))
+        .block_task()
+        .await?
+        .outcome;
+
+    if !matches!(outcome, RequestPermissionOutcome::Cancelled) {
+        return Err(Error::internal_error()
+            .data("a permission request on an interrupted turn was not answered cancelled"));
     }
 
     Ok(())

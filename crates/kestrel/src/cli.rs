@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -13,6 +14,8 @@ use crate::role::work::{Dispatch, HarnessCommand};
 const SUPERVISOR: &str = "kestrel-supervisor";
 const IMAGE: &str = "kestrel-env:latest";
 const DEFAULT_MAX_ACTIVE_SESSIONS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+const DEFAULT_FOLLOW_LEASE: NonZeroU64 = NonZeroU64::new(60).unwrap();
+const DEFAULT_INTERRUPT_DEADLINE: NonZeroU64 = NonZeroU64::new(30).unwrap();
 
 const ROLES: &str = "\
 Roles:
@@ -151,6 +154,27 @@ pub struct Cli {
         default_value = "codex"
     )]
     serialized_harnesses: Vec<String>,
+
+    /// How long a Workspace follow's presence lease lasts, in seconds; a Client renews before
+    /// it passes
+    #[arg(
+        long = "follow-lease",
+        env = "KESTREL_FOLLOW_LEASE",
+        global = true,
+        value_name = "SECONDS",
+        default_value_t = DEFAULT_FOLLOW_LEASE
+    )]
+    follow_lease: NonZeroU64,
+
+    /// How long a supervisor gives an interrupted turn to answer its cancel, in seconds
+    #[arg(
+        long = "interrupt-deadline",
+        env = "KESTREL_INTERRUPT_DEADLINE",
+        global = true,
+        value_name = "SECONDS",
+        default_value_t = DEFAULT_INTERRUPT_DEADLINE
+    )]
+    interrupt_deadline: NonZeroU64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -176,6 +200,10 @@ impl Cli {
             link: self.listen,
             operator: self.operator_listen,
         }
+    }
+
+    pub fn follow_lease(&self) -> Duration {
+        Duration::from_secs(self.follow_lease.get())
     }
 
     /// The one choice between the two `Compute` drivers, made here from configuration so that
@@ -207,6 +235,7 @@ impl Cli {
                 .filter(|harness| !harness.is_empty())
                 .cloned()
                 .collect(),
+            interrupt_deadline: Duration::from_secs(self.interrupt_deadline.get()),
         })
     }
 
@@ -372,6 +401,15 @@ mod tests {
     #[test]
     fn the_operator_boundary_listens_on_loopback_unless_configuration_says_otherwise() {
         assert!(parsed(&[]).listen().operator.ip().is_loopback());
+    }
+
+    #[test]
+    fn a_follow_lease_lasts_a_minute_unless_configuration_says_otherwise() {
+        assert_eq!(parsed(&[]).follow_lease(), Duration::from_secs(60));
+        assert_eq!(
+            parsed(&["--follow-lease", "3"]).follow_lease(),
+            Duration::from_secs(3)
+        );
     }
 
     #[test]

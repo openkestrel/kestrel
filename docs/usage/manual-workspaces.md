@@ -22,7 +22,7 @@ The default harness is OpenCode. `--harness codex` and `--harness claude` are al
 kestrel agent model builder --model anthropic/claude-opus-4-5
 ```
 
-A session keeps the harness and model selected when it was queued. If its harness cannot provide the requested model, the session fails at model selection. The control plane's `KESTREL_HARNESS_COMMANDS` setting or repeated `--harness-command NAME=COMMAND` arguments can replace the default command table.
+An Agent, a Trigger, `workspace open` and `session enqueue` each declare a model, a mode and a thought level, each a harness value id. Each category resolves on its own: the Session's own value over its Trigger's over its Agent's, and a category none of them names stays at the harness's default. `workspace open` and `session enqueue` take `--model`, `--mode` and `--thought-level`; Agent and Trigger declaration files take `model`, `mode` and `thought_level`. A session keeps the harness and options selected when it was queued. If its harness cannot provide a declared value — no way to set that category, or one that does not offer the value — the session fails at setup naming the category and the value. The control plane's `KESTREL_HARNESS_COMMANDS` setting or repeated `--harness-command NAME=COMMAND` arguments can replace the default command table.
 
 An organization can limit live instances with `--max-live-instances N`. When that limit is reached, Kestrel archives clean idle instances oldest first. Work waits if every idle instance may hold unpublished changes. Follow-up work in an existing workspace continues to use its instance.
 
@@ -43,9 +43,10 @@ The workspace identifier, any unique prefix of it, its generated name, or `lates
 ```sh
 kestrel session list --workspace latest
 kestrel workspace transcript latest --follow
+kestrel workspace transcript latest --follow --as-participant Ada
 ```
 
-A transcript without `--follow` ends with a cursor on stderr. Pass it to `--cursor` to get only later entries. With `--follow`, the CLI reconnects and resumes after the last printed entry if the control plane drops. Harness stderr goes to `docker compose logs -f kestrel`, labeled by session, and stays out of the transcript.
+A transcript without `--follow` ends with a cursor on stderr. Pass it to `--cursor` to get only later entries. With `--follow`, the CLI reconnects and resumes after the last printed entry if the control plane drops. `--as-participant NAME` joins the workspace's presence under that name while following, and renews its one-minute lease every 20 seconds; presence is never printed. Harness stderr goes to `docker compose logs -f kestrel`, labeled by session, and stays out of the transcript.
 
 The CLI renders readable columns at a terminal and tab-delimited records when piped. `--json id,state` selects fields for scripts; use exit codes rather than parsing diagnostic text. `kestrel exit-codes` lists them.
 

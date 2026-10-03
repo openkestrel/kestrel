@@ -1,5 +1,10 @@
 # Organization changes are hints; Workspace follows carry presence
 
+> **Amended by [ADR-0044](0044-the-browser-client-is-served-over-https.md).** The Client is served
+> over HTTPS, so each tab opens its own notice stream and Transcript follow; the third paragraph's
+> sharing across tabs, four-stream cap and polling are gone. The stream opens beside the initial
+> reads rather than before them, since its open refetches them.
+
 The browser needs prompt changes to Workspace, Session and queue views, but their current values already belong to operator reads. An Organization-level SSE stream sends change notices with the affected resource type and identifier, never a second copy of current state. A Client opens the stream before its initial reads and refetches affected views on a notice; on every open or reconnect it refetches all subscribed views. The notice stream has no durable cursor. The Workspace Transcript keeps its own durable cursor, so losing a notice cannot lose recorded work.
 
 Presence travels on a Workspace Transcript follow as a current snapshot followed by transient updates. Opening a browser or CLI follow registers that follower, and a clean disconnect removes it immediately. A follower that disappears without closing is removed when its one-minute lease expires; the browser or CLI renews the lease with an operator POST while its follow is open. Presence updates carry no Transcript cursor and never enter the Transcript. A reconnect replaces the presence snapshot, while Transcript entries resume from their cursor. Multiple follows under one declared name display once; unnamed follows contribute to an anonymous count. Presence never gates a turn, question or approval.

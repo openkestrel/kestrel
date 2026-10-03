@@ -142,11 +142,11 @@ async fn operator_entries(
 }
 
 #[tokio::test]
-async fn an_agents_plan_and_reasoning_reach_narration_while_tool_calls_stay_out() {
+async fn an_agents_plan_reasoning_and_tools_reach_their_transcript_kinds() {
     let (kestrel, workspace, session) = worked(Script::Speaks).await;
     let shared = operator_entries(&kestrel, &workspace, None).await;
     assert!(shared.iter().all(|record| record["kind"] == "shared_state"));
-    let all = operator_entries(&kestrel, &workspace, Some("narration,shared_state")).await;
+    let all = operator_entries(&kestrel, &workspace, Some("detail,narration,shared_state")).await;
     let narration: Vec<_> = all
         .iter()
         .filter(|record| record["kind"] == "narration")
@@ -173,7 +173,15 @@ async fn an_agents_plan_and_reasoning_reach_narration_while_tool_calls_stay_out(
         all.windows(2)
             .all(|pair| pair[0]["seq"].as_i64() < pair[1]["seq"].as_i64())
     );
-    assert!(!serde_json::to_string(&all).unwrap().contains("call-1"));
+    let tools: Vec<_> = all
+        .iter()
+        .filter(|record| record["kind"] == "detail")
+        .collect();
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["entry"]["type"], "tool_call");
+    assert_eq!(tools[0]["entry"]["call_id"], "call-1");
+    assert_eq!(tools[0]["entry"]["title"], "read README.md");
+    assert_eq!(tools[0]["entry"]["status"], "completed");
     kestrel.teardown().await;
 }
 
@@ -429,7 +437,7 @@ async fn the_supervisor_sets_the_model_it_was_given() {
 async fn a_session_without_a_model_uses_its_agents_model() {
     let (kestrel, _, session) = worked_naming(Script::Speaks, Some(OTHER_MODEL)).await;
 
-    assert_eq!(session.agent.model.as_deref(), Some(OTHER_MODEL));
+    assert_eq!(session.agent.declared.model.as_deref(), Some(OTHER_MODEL));
     assert_eq!(session.worked_model.as_deref(), Some(OTHER_MODEL));
 
     kestrel.teardown().await;
@@ -485,8 +493,11 @@ async fn two_sessions_in_one_workspace_can_drive_different_models() {
     };
     let reviewed = kestrel.after_one_turn(reviewed.id).await;
 
-    assert_eq!(built.agent.model.as_deref(), Some(OTHER_MODEL));
-    assert_eq!(reviewed.agent.model.as_deref(), Some(DEFAULT_MODEL));
+    assert_eq!(built.agent.declared.model.as_deref(), Some(OTHER_MODEL));
+    assert_eq!(
+        reviewed.agent.declared.model.as_deref(),
+        Some(DEFAULT_MODEL)
+    );
     assert_eq!(built.worked_model.as_deref(), Some(OTHER_MODEL));
     assert_eq!(reviewed.worked_model.as_deref(), Some(DEFAULT_MODEL));
 
@@ -543,7 +554,7 @@ async fn an_agent_that_lets_no_client_choose_a_model_fails_a_session_that_named_
         .await;
     let session = kestrel.after_one_turn(session.id).await;
 
-    assert_eq!(session.agent.model.as_deref(), Some(OTHER_MODEL));
+    assert_eq!(session.agent.declared.model.as_deref(), Some(OTHER_MODEL));
 
     let Some(Exit::Failed { because }) = &session.exit else {
         panic!(
@@ -637,15 +648,29 @@ async fn a_completed_message_is_readable_before_a_slow_turn_answers() {
     }
     let all = operator_entries(&kestrel, &workspace, Some("shared_state,narration")).await;
     assert!(!serde_json::to_string(&all).unwrap().contains("late text"));
-    assert_eq!(
-        kestrel
-            .session(session.id)
+    let path = kestrel::operator::SESSION
+        .replace("{organization}", "acme")
+        .replace("{session}", &session.id.to_string());
+    // The usage report is a transient one at the window's trailing edge, so it is waited for.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let shown: serde_json::Value = reqwest::Client::new()
+            .get(format!("{}{path}", kestrel.operator()))
+            .send()
             .await
-            .usage
-            .unwrap()
-            .context_used,
-        12
-    );
+            .expect("the operator boundary should answer")
+            .json()
+            .await
+            .expect("the session as JSON");
+        if shown["usage"]["context_used"] == 12 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the late usage update did not reach the read: {shown}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     kestrel.teardown().await;
 }
 
@@ -673,4 +698,278 @@ async fn failed_and_cancelled_turns_keep_the_text_observed_before_the_boundary()
         }
         kestrel.teardown().await;
     }
+}
+
+#[tokio::test]
+async fn a_running_tool_is_session_state_until_it_settles_into_detail() {
+    let kestrel = Kestrel::dispatching_to(
+        supervisor::binary(),
+        &scripted_agent::playing(Script::SlowTool),
+    )
+    .await;
+    let workspace = a_workspace(&kestrel).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+    let url = format!(
+        "{}/operator/organizations/acme/sessions/{}",
+        kestrel.operator(),
+        session.id
+    );
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    loop {
+        let record: serde_json::Value = reqwest::get(&url).await.unwrap().json().await.unwrap();
+        if record["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty())
+        {
+            assert_eq!(record["tools"][0]["title"], "slow read");
+            assert_eq!(record["tools"][0]["status"], "in_progress");
+            assert!(
+                record["tools"][0]["started_at"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<jiff::Timestamp>()
+                    .is_ok()
+            );
+            assert!(
+                operator_entries(&kestrel, &workspace, Some("detail"))
+                    .await
+                    .is_empty()
+            );
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "tool never appeared on its Session"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    kestrel.after_one_turn(session.id).await;
+    let record: serde_json::Value = reqwest::get(&url).await.unwrap().json().await.unwrap();
+    assert_eq!(record["tools"], serde_json::json!([]));
+    let detail = operator_entries(&kestrel, &workspace, Some("detail")).await;
+    assert_eq!(detail.len(), 1);
+    assert_eq!(
+        detail[0]["entry"]["input"],
+        serde_json::json!({"path":"README.md"})
+    );
+    assert_eq!(
+        detail[0]["entry"]["result"]["output"],
+        serde_json::json!({"text":"read result"})
+    );
+    assert_eq!(detail[0]["entry"]["status"], "completed");
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn open_calls_close_at_answer_cancel_and_failure_once() {
+    for (script, reason) in [
+        (Script::OpenToolAnswered, "unresolved"),
+        (Script::OpenToolCancelled, "interrupted"),
+        (Script::OpenToolFailed, "failed"),
+    ] {
+        let (kestrel, workspace, _) = worked(script).await;
+        let detail = operator_entries(&kestrel, &workspace, Some("detail")).await;
+        assert_eq!(
+            detail.len(),
+            1,
+            "{script:?}: {}",
+            serde_json::to_string(
+                &operator_entries(&kestrel, &workspace, Some("shared_state,narration,detail"))
+                    .await
+            )
+            .unwrap()
+        );
+        assert_eq!(detail[0]["entry"]["status"], "in_progress");
+        assert_eq!(detail[0]["entry"]["closing_reason"], reason);
+        let narration = reqwest::get(format!(
+            "{}/operator/organizations/acme/workspaces/{}/transcript?follow=false&kinds=narration",
+            kestrel.operator(),
+            workspace.id
+        ))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+        let activity: serde_json::Value = serde_json::from_str(
+            narration
+                .split("event: activity\n")
+                .nth(1)
+                .and_then(|frame| frame.lines().find_map(|line| line.strip_prefix("data: ")))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(activity["counts"]["tool_calls"], 1, "{script:?}");
+        assert_eq!(activity["counts"]["failed_calls"], 0, "{script:?}");
+        kestrel.teardown().await;
+    }
+}
+
+async fn session_tools(kestrel: &Kestrel, session: SessionId) -> serde_json::Value {
+    reqwest::get(format!(
+        "{}/operator/organizations/acme/sessions/{session}",
+        kestrel.operator()
+    ))
+    .await
+    .unwrap()
+    .json::<serde_json::Value>()
+    .await
+    .unwrap()["tools"]
+        .clone()
+}
+
+#[tokio::test]
+async fn reconnect_restores_running_tools_and_omits_tools_that_settled_offline() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let mut supervisor =
+        Supervisor::provision_playing(&kestrel.link(), &on, Script::ReconnectingTools);
+    kestrel.start(&session, supervisor.harness()).await;
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while session_tools(&kestrel, session.id)
+        .await
+        .as_array()
+        .unwrap()
+        .len()
+        != 2
+    {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let kestrel = kestrel.kill_and_restart().await;
+    while session_tools(&kestrel, session.id)
+        .await
+        .as_array()
+        .unwrap()
+        .len()
+        != 2
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "running snapshot was not restored"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let stopped = kestrel.kill().await;
+    supervisor.wait_until_it_says("lost the link").await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let kestrel = stopped.restart().await;
+    loop {
+        let tools = session_tools(&kestrel, session.id).await;
+        if tools.as_array().unwrap().len() == 1 {
+            assert_eq!(tools[0]["call_id"], "still-running");
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "offline completion left stale tool state"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    kestrel.after_one_turn(session.id).await;
+    assert_eq!(
+        session_tools(&kestrel, session.id).await,
+        serde_json::json!([])
+    );
+    let detail = operator_entries(&kestrel, &workspace, Some("detail")).await;
+    assert_eq!(detail.len(), 2);
+    assert!(
+        detail
+            .iter()
+            .all(|entry| entry["entry"]["status"] == "completed")
+    );
+    supervisor.destroy();
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_ended_session_never_shows_its_stale_running_tools() {
+    let kestrel = Kestrel::dispatching_to(
+        supervisor::binary(),
+        &scripted_agent::playing(Script::SlowTool),
+    )
+    .await;
+    let workspace = a_workspace(&kestrel).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while session_tools(&kestrel, session.id)
+        .await
+        .as_array()
+        .unwrap()
+        .is_empty()
+    {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{}/operator/organizations/acme/sessions/{}/stop",
+            kestrel.operator(),
+            session.id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    assert_eq!(
+        session_tools(&kestrel, session.id).await,
+        serde_json::json!([])
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_oversized_scripted_tool_result_is_referenced_and_fetchable() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let supervisor = Supervisor::provision_playing(&kestrel.link(), &on, Script::OversizedTool);
+    kestrel.start(&session, supervisor.harness()).await;
+    kestrel.after_one_turn(session.id).await;
+    let detail = operator_entries(&kestrel, &workspace, Some("detail")).await;
+    assert_eq!(detail.len(), 1);
+    assert_eq!(
+        detail[0]["entry"]["input"],
+        serde_json::json!({"path":"large.txt"})
+    );
+    let result = &detail[0]["entry"]["result"];
+    assert!(result["bytes"].as_u64().unwrap() > 64 * 1024);
+    assert_eq!(result["media_type"], "application/json");
+    let linked: serde_json::Value = reqwest::Client::new()
+        .get(format!(
+            "{}/link/instances/{}/entries?kinds=detail",
+            kestrel.link(),
+            on.instance.replace('/', "%2F")
+        ))
+        .bearer_auth(on.credential.as_str())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        linked["entries"][0]["entry"]["result"]["output"]["text"],
+        "x".repeat(70 * 1024)
+    );
+    assert_eq!(
+        linked["entries"][0]["entry"]["result"]["content"],
+        serde_json::json!([])
+    );
+    assert!(linked["entries"][0]["entry"]["payload_fields"].is_null());
+    let payload = result["payload_id"].as_str().unwrap();
+    let response = reqwest::get(format!(
+        "{}/operator/organizations/acme/workspaces/{}/transcript/payloads/{payload}",
+        kestrel.operator(),
+        workspace.id
+    ))
+    .await
+    .unwrap();
+    assert!(response.status().is_success());
+    let fetched: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(fetched["output"]["text"], "x".repeat(70 * 1024));
+    assert_eq!(fetched["content"], serde_json::json!([]));
+    supervisor.destroy();
+    kestrel.teardown().await;
 }

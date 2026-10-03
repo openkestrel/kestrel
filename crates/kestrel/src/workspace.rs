@@ -1,12 +1,13 @@
 use anyhow::{Result, bail};
 use jiff::{SignedDuration, Timestamp};
 
+use crate::declined::{Declined, FieldRefusal, Kind};
 use crate::domain::{
-    Exit, Organization, Session, SessionId, SessionState, Workspace, WorkspaceId, WorkspaceState,
+    Agent, Declared, Exit, HeldMessage, Organization, Preparing, Project, Session, SessionId,
+    SessionState, StartedBy, SubscriptionProfile, Workspace, WorkspaceId, WorkspaceState,
 };
-use crate::fanout::{self, Change};
 use crate::instance;
-use crate::log::{Cursor, Entry, Message, Page, Unreadable, Window};
+use crate::log::{BriefSource, Cursor, Entry, Message, Page, Unreadable, Window};
 use crate::participant;
 use crate::store::workspace::{Opening, PendingSession, Unfinished};
 use crate::store::{Store, Tx};
@@ -16,7 +17,45 @@ use crate::work;
 /// standing in for presence.
 const IDLE: SignedDuration = SignedDuration::from_hours(24);
 
+pub struct Open<'a> {
+    pub project: &'a str,
+    pub agent: &'a str,
+    pub profile: Option<&'a str>,
+    pub branch: Option<&'a str>,
+    pub continues: Option<&'a str>,
+    pub declared: Declared,
+    pub brief: Option<&'a str>,
+    pub participant: Option<&'a str>,
+}
+
+pub(crate) struct Resolved<'a> {
+    pub project: Project,
+    pub agent: Agent,
+    pub profile: Option<SubscriptionProfile>,
+    pub continues: Option<Workspace>,
+    pub branch: Option<&'a str>,
+    pub declared: Declared,
+    pub brief: Option<&'a str>,
+    pub participant: Option<String>,
+}
+
+/// One write, or nothing left behind (ADR-0038).
 pub async fn open(
+    store: &Store,
+    organization: &str,
+    open: Open<'_>,
+) -> Result<(Workspace, Session)> {
+    let mut tx = store.begin().await?;
+    let organization = tx.organizations().named(organization).await?;
+    let resolved = resolved(&mut tx, &organization, open).await?;
+    let (workspace, session) = opened_in(&mut tx, &organization, &resolved).await?;
+    tx.commit().await?;
+
+    Ok((workspace, session))
+}
+
+/// No operator path opens a Workspace without a Session; fixtures that need that state call this.
+pub async fn open_without_a_session(
     store: &Store,
     organization: &str,
     project: &str,
@@ -26,45 +65,191 @@ pub async fn open(
     continues: Option<&str>,
 ) -> Result<Workspace> {
     let mut tx = store.begin().await?;
-
     let organization = tx.organizations().named(organization).await?;
-    let project = tx.projects().named(&organization, project).await?;
-    let agent = tx.agents().named(&organization, agent).await?;
-    let profile = match profile {
-        Some(profile) => Some(tx.profiles().named(&organization, profile).await?),
-        None => None,
-    };
-    let continues = match continues {
-        Some(reference) => Some(continued(&mut tx, &organization, reference).await?),
-        None => None,
-    };
-
+    let resolved = resolved(
+        &mut tx,
+        &organization,
+        Open {
+            project,
+            agent,
+            profile,
+            branch,
+            continues,
+            declared: Declared::default(),
+            brief: None,
+            participant: None,
+        },
+    )
+    .await?;
     let workspace = tx
         .workspaces()
         .open(Opening {
             organization: &organization,
-            project: &project,
-            agent: &agent,
-            profile: profile.as_ref(),
-            branch,
+            project: &resolved.project,
+            agent: &resolved.agent,
+            profile: resolved.profile.as_ref(),
+            branch: resolved.branch,
             correlation: None,
-            continues: continues.as_ref(),
+            continues: resolved.continues.as_ref(),
             started_by: None,
         })
         .await?;
-    tx.log()
-        .append(
-            &workspace,
-            Entry::ParticipantJoined {
-                participant: workspace.opened_with.name.clone(),
-            },
-        )
-        .await?;
-
+    ensure_joined(&mut tx, &workspace, &resolved.agent.name).await?;
     tx.commit().await?;
-    fanout::publish(Change::WorkspaceOpened(&workspace));
 
     Ok(workspace)
+}
+
+/// Shared by open and start, so the same inputs give the same Transcript.
+pub(crate) async fn opened_in(
+    tx: &mut Tx<'_>,
+    organization: &Organization,
+    resolved: &Resolved<'_>,
+) -> Result<(Workspace, Session)> {
+    let workspace = tx
+        .workspaces()
+        .open(Opening {
+            organization,
+            project: &resolved.project,
+            agent: &resolved.agent,
+            profile: resolved.profile.as_ref(),
+            branch: resolved.branch,
+            correlation: None,
+            continues: resolved.continues.as_ref(),
+            started_by: resolved
+                .participant
+                .as_ref()
+                .map(|participant| StartedBy::Participant(participant.clone())),
+        })
+        .await?;
+    ensure_joined(tx, &workspace, &resolved.agent.name).await?;
+    if let Some(participant) = &resolved.participant {
+        ensure_joined(tx, &workspace, participant).await?;
+    }
+    if let Some(brief) = resolved.brief {
+        tx.log()
+            .append(
+                &workspace,
+                Entry::Brief {
+                    source: BriefSource::Operator {
+                        participant: resolved.participant.clone(),
+                    },
+                    brief: brief.to_owned(),
+                },
+            )
+            .await?;
+    }
+    let session = tx
+        .workspaces()
+        .enqueue_session(&workspace, Some(&resolved.agent), resolved.declared.clone())
+        .await?;
+
+    Ok((workspace, session))
+}
+
+async fn resolved<'a>(
+    tx: &mut Tx<'_>,
+    organization: &Organization,
+    open: Open<'a>,
+) -> Result<Resolved<'a>> {
+    let project = named(
+        "project",
+        tx.projects().named(organization, open.project).await,
+    )?;
+    let agent = named("agent", tx.agents().named(organization, open.agent).await)?;
+    let profile = match open.profile {
+        Some(profile) => Some(named(
+            "profile",
+            tx.profiles().named(organization, profile).await,
+        )?),
+        None => None,
+    };
+    let continues = match open.continues {
+        Some(reference) => Some(named(
+            "continues",
+            continued(tx, organization, reference).await,
+        )?),
+        None => None,
+    };
+
+    if open.branch.is_some_and(|branch| branch.trim().is_empty()) {
+        return Err(FieldRefusal::unacceptable(
+            "branch",
+            "a branch cannot be empty; omit it for the branch the workspace declares",
+        )
+        .into());
+    }
+    if open.branch.is_some() && continues.is_some() {
+        return Err(FieldRefusal::unacceptable(
+            "branch",
+            "a continuation runs on the branch of the workspace it continues, and names none of its own",
+        )
+        .into());
+    }
+    for (field, value) in [
+        ("model", &open.declared.model),
+        ("mode", &open.declared.mode),
+        ("thought_level", &open.declared.thought_level),
+    ] {
+        if value.as_ref().is_some_and(|value| value.trim().is_empty()) {
+            return Err(FieldRefusal::unacceptable(
+                field,
+                format!("a {field} cannot be empty; omit it for the Agent's"),
+            )
+            .into());
+        }
+    }
+    if open.brief.is_some_and(|brief| brief.trim().is_empty()) {
+        return Err(FieldRefusal::unacceptable(
+            "brief",
+            "a brief cannot be empty; omit it to open without one",
+        )
+        .into());
+    }
+    let participant = match (open.participant, open.brief) {
+        (Some(participant), Some(_)) => {
+            Some(participant::accepted(tx, organization, participant).await?)
+        }
+        (Some(_), None) => {
+            return Err(FieldRefusal::unacceptable(
+                "participant",
+                "a participant names the author of a brief, and this open carries none",
+            )
+            .into());
+        }
+        (None, _) => None,
+    };
+
+    Ok(Resolved {
+        project,
+        agent,
+        profile,
+        continues,
+        branch: open.branch,
+        declared: Declared::named(open.declared),
+        brief: open.brief,
+        participant,
+    })
+}
+
+fn named<T>(field: &'static str, named: Result<T>) -> Result<T> {
+    named.map_err(|error| match error.downcast::<Declined>() {
+        Ok(declined) => {
+            let kind = match &declined {
+                Declined::Unacceptable(_) => Kind::Unacceptable,
+                Declined::Missing(_) => Kind::Missing,
+                Declined::Ambiguous(_) => Kind::Ambiguous,
+                Declined::Taken(_) => Kind::Taken,
+            };
+            FieldRefusal {
+                field,
+                message: declined.to_string(),
+                kind,
+            }
+            .into()
+        }
+        Err(error) => error,
+    })
 }
 
 pub async fn seal(store: &Store, id: WorkspaceId) -> Result<Workspace> {
@@ -87,7 +272,6 @@ pub async fn seal(store: &Store, id: WorkspaceId) -> Result<Workspace> {
         sealed_at: Some(sealed_at),
         ..workspace
     };
-    fanout::publish(Change::WorkspaceSealed(&sealed));
 
     Ok(sealed)
 }
@@ -150,31 +334,42 @@ pub(crate) async fn unfinished_session(
 
 pub(crate) enum PostDestination<'a> {
     Start,
-    Brief,
+    Brief(&'a Session),
     Held,
     Wake(&'a Session),
+    Unbriefed(&'a Session),
 }
 
 impl UnfinishedSession {
-    /// A waiting Session is not in flight: sealing (ADR-0024) or archiving its Instance ends it.
+    /// A waiting or unbriefed Session is not in flight: sealing (ADR-0024) or archiving its
+    /// Instance ends it.
     pub fn in_flight(&self) -> Option<SessionId> {
         self.session.as_ref().and_then(|session| {
-            (!matches!(session.state, SessionState::Ended | SessionState::Waiting)
-                || self.held_input)
+            (!matches!(
+                session.state,
+                SessionState::Ended | SessionState::Waiting | SessionState::Unbriefed
+            ) || self.held_input)
                 .then_some(session.id)
         })
     }
 
-    pub fn waiting(&self) -> Option<Session> {
+    /// A Session between turns, or one waiting for its Brief: its Instance can be taken without
+    /// anything failing.
+    pub fn yielding(&self) -> Option<Session> {
         self.session
             .as_ref()
-            .filter(|session| session.state == SessionState::Waiting)
+            .filter(|session| {
+                matches!(
+                    session.state,
+                    SessionState::Waiting | SessionState::Unbriefed
+                )
+            })
             .cloned()
     }
 
     pub async fn end_waiting(&self, tx: &mut Tx<'_>) -> Result<()> {
-        if let Some(waiting) = self.waiting() {
-            work::ending(tx, &waiting, Exit::Succeeded).await?;
+        if let Some(yielding) = self.yielding() {
+            work::ending(tx, &yielding, Exit::Succeeded).await?;
         }
 
         Ok(())
@@ -183,9 +378,14 @@ impl UnfinishedSession {
     pub fn post_destination(&self) -> PostDestination<'_> {
         match &self.session {
             None => PostDestination::Start,
-            Some(session) if session.state == SessionState::Queued => PostDestination::Brief,
+            Some(session) if session.state == SessionState::Queued => {
+                PostDestination::Brief(session)
+            }
             Some(session) if session.state == SessionState::Waiting => {
                 PostDestination::Wake(session)
+            }
+            Some(session) if session.state == SessionState::Unbriefed => {
+                PostDestination::Unbriefed(session)
             }
             Some(_) => PostDestination::Held,
         }
@@ -204,6 +404,13 @@ pub async fn show(store: &Store, id: WorkspaceId) -> Result<Workspace> {
     store.begin().await?.workspaces().get(id).await
 }
 
+pub async fn unfinished(store: &Store, id: WorkspaceId) -> Result<Option<Session>> {
+    let mut tx = store.begin().await?;
+    let workspace = tx.workspaces().get(id).await?;
+
+    Ok(unfinished_session(&mut tx, &workspace).await?.session)
+}
+
 pub async fn workspaces(store: &Store, organization: &str) -> Result<Vec<Workspace>> {
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
@@ -215,18 +422,24 @@ pub async fn continuations(store: &Store, id: WorkspaceId) -> Result<Vec<Workspa
     store.begin().await?.workspaces().continuations(id).await
 }
 
+#[derive(Debug)]
+pub struct Posted {
+    pub session: Option<Session>,
+    pub held_message: Option<HeldMessage>,
+}
+
 pub async fn post(
     store: &Store,
     id: WorkspaceId,
     participant: &str,
     message: &str,
-) -> Result<Option<Session>> {
+) -> Result<Posted> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(id).await?;
-    let session = post_in(&mut tx, &workspace, participant, message).await?;
+    let posted = post_in(&mut tx, &workspace, participant, message).await?;
     tx.commit().await?;
 
-    Ok(session)
+    Ok(posted)
 }
 
 pub(crate) async fn post_in(
@@ -234,7 +447,7 @@ pub(crate) async fn post_in(
     workspace: &Workspace,
     participant: &str,
     message: &str,
-) -> Result<Option<Session>> {
+) -> Result<Posted> {
     let participant = participant::accepted(tx, &workspace.organization, participant).await?;
 
     post_as(tx, workspace, &participant, message).await
@@ -245,38 +458,184 @@ pub(crate) async fn post_as(
     workspace: &Workspace,
     participant: &str,
     message: &str,
-) -> Result<Option<Session>> {
+) -> Result<Posted> {
     workspace.accepts("message")?;
     let unfinished = unfinished_session(tx, workspace).await?;
     match unfinished.post_destination() {
         PostDestination::Start => {
             ensure_joined(tx, workspace, participant).await?;
             said(tx, workspace, participant, message).await?;
-            Ok(Some(
-                tx.workspaces()
-                    .enqueue_session(workspace, None, None)
-                    .await?,
-            ))
+            let session = tx
+                .workspaces()
+                .enqueue_session(workspace, None, Declared::default())
+                .await?;
+            Ok(Posted {
+                session: Some(session),
+                held_message: None,
+            })
         }
-        PostDestination::Brief => {
-            ensure_joined(tx, workspace, participant).await?;
-            said(tx, workspace, participant, message).await?;
-            Ok(None)
+        PostDestination::Brief(queued) => {
+            if work::awaiting_a_brief(tx, workspace).await? {
+                brief(tx, workspace, participant, message).await?;
+            } else {
+                ensure_joined(tx, workspace, participant).await?;
+                said(tx, workspace, participant, message).await?;
+            }
+            Ok(Posted {
+                session: Some(queued.clone()),
+                held_message: None,
+            })
         }
         PostDestination::Held => {
-            tx.workspaces()
+            let held_message = tx
+                .workspaces()
                 .add_pending_message(workspace, participant, message)
                 .await?;
-            Ok(None)
+            Ok(Posted {
+                session: None,
+                held_message: Some(held_message),
+            })
         }
         // Held even for a waiting Session: its next turn waits for an active-work slot.
         PostDestination::Wake(waiting) => {
-            tx.workspaces()
+            let held_message = tx
+                .workspaces()
                 .add_pending_message(workspace, participant, message)
                 .await?;
-            Ok(Some(waiting.clone()))
+            Ok(Posted {
+                session: Some(waiting.clone()),
+                held_message: Some(held_message),
+            })
+        }
+        PostDestination::Unbriefed(unbriefed) => {
+            let held_message = if unbriefed.preparing == Some(Preparing::HarnessReady) {
+                brief_or_hold(tx, workspace, participant, message).await?
+            } else {
+                Some(
+                    tx.workspaces()
+                        .add_pending_message(workspace, participant, message)
+                        .await?,
+                )
+            };
+
+            Ok(Posted {
+                session: Some(unbriefed.clone()),
+                held_message,
+            })
         }
     }
+}
+
+/// An author replaces a Held Message's text, in place rather than on the record.
+pub async fn edit_message(
+    store: &Store,
+    workspace: WorkspaceId,
+    id: i64,
+    participant: &str,
+    message: &str,
+) -> Result<HeldMessage> {
+    let mut tx = store.begin().await?;
+    let workspace = tx.workspaces().get(workspace).await?;
+    let participant = participant::accepted(&mut tx, &workspace.organization, participant).await?;
+    let edited = tx
+        .workspaces()
+        .edit_held_message(&workspace, id, &participant, message)
+        .await?;
+    tx.commit().await?;
+
+    Ok(edited)
+}
+
+/// An author takes a Held Message back, so no Turn sees it. Withdrawing records nothing.
+pub async fn withdraw_message(
+    store: &Store,
+    workspace: WorkspaceId,
+    id: i64,
+    participant: &str,
+) -> Result<()> {
+    let mut tx = store.begin().await?;
+    let workspace = tx.workspaces().get(workspace).await?;
+    let participant = participant::accepted(&mut tx, &workspace.organization, participant).await?;
+    tx.workspaces()
+        .withdraw_held_message(&workspace, id, &participant)
+        .await?;
+    tx.commit().await?;
+
+    Ok(())
+}
+
+pub async fn held_messages(store: &Store, id: WorkspaceId) -> Result<Vec<HeldMessage>> {
+    store.begin().await?.workspaces().held_messages(id).await
+}
+
+/// A held message is handed back so its author can still edit or withdraw it.
+async fn brief_or_hold(
+    tx: &mut Tx<'_>,
+    workspace: &Workspace,
+    participant: &str,
+    message: &str,
+) -> Result<Option<HeldMessage>> {
+    if work::awaiting_a_brief(tx, workspace).await? {
+        brief(tx, workspace, participant, message).await?;
+        Ok(None)
+    } else {
+        tx.workspaces()
+            .add_pending_message(workspace, participant, message)
+            .await
+            .map(Some)
+    }
+}
+
+async fn brief(
+    tx: &mut Tx<'_>,
+    workspace: &Workspace,
+    participant: &str,
+    message: &str,
+) -> Result<()> {
+    ensure_joined(tx, workspace, participant).await?;
+    tx.log()
+        .append(
+            workspace,
+            Entry::Brief {
+                source: BriefSource::Operator {
+                    participant: Some(participant.to_owned()),
+                },
+                brief: message.to_owned(),
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+pub(crate) async fn first_held_becomes_the_brief(
+    tx: &mut Tx<'_>,
+    workspace: &Workspace,
+) -> Result<bool> {
+    if !work::awaiting_a_brief(tx, workspace).await? {
+        return Ok(false);
+    }
+    let Some(pending) = tx
+        .workspaces()
+        .take_oldest_pending_message(workspace)
+        .await?
+    else {
+        return Ok(false);
+    };
+    ensure_joined(tx, workspace, &pending.participant).await?;
+    tx.log()
+        .append(
+            workspace,
+            Entry::Brief {
+                source: BriefSource::Operator {
+                    participant: Some(pending.participant),
+                },
+                brief: pending.message,
+            },
+        )
+        .await?;
+
+    Ok(true)
 }
 
 async fn ensure_joined(tx: &mut Tx<'_>, workspace: &Workspace, participant: &str) -> Result<()> {
@@ -340,14 +699,16 @@ pub(crate) async fn briefed(
         .append(
             workspace,
             Entry::Brief {
-                trigger: Some(pending.trigger),
+                source: BriefSource::Trigger {
+                    trigger: pending.trigger,
+                },
                 brief: pending.brief,
             },
         )
         .await?;
 
     tx.workspaces()
-        .enqueue_session(workspace, Some(&pending.agent), None)
+        .enqueue_session(workspace, Some(&pending.agent), pending.declared)
         .await
 }
 
@@ -401,10 +762,10 @@ async fn continued(
     let sealed = tx.workspaces().resolved(organization, reference).await?;
 
     if sealed.state != WorkspaceState::Sealed {
-        bail!(
+        bail!(Declined::Unacceptable(format!(
             "the workspace {} is open, and work continues in it rather than after it",
             sealed.id
-        );
+        )));
     }
 
     Ok(sealed)
@@ -427,14 +788,20 @@ mod tests {
                 organization,
                 name: "builder".into(),
                 harness: "opencode".into(),
-                model: None,
+                declared: Declared::default(),
             },
             state,
+            preparing: None,
             exit: None,
             outcome_message: None,
             instance: None,
             supervisor: None,
             worked_model: None,
+            title: None,
+            options: Vec::new(),
+            changing_options: Vec::new(),
+            commands: Vec::new(),
+            interrupting: None,
             enqueued_at: Timestamp::now(),
             started_at: None,
             ended_at: None,
@@ -453,10 +820,12 @@ mod tests {
 
     #[test]
     fn unfinished_session_rules_cover_every_phase_with_and_without_held_input() {
-        use SessionState::{Ended, Queued, Unreachable, Waiting, Working};
-        let brief: fn(&PostDestination) -> bool = |post| matches!(post, PostDestination::Brief);
+        use SessionState::{Ended, Queued, Unbriefed, Unreachable, Waiting, Working};
+        let brief: fn(&PostDestination) -> bool = |post| matches!(post, PostDestination::Brief(_));
         let held: fn(&PostDestination) -> bool = |post| matches!(post, PostDestination::Held);
         let wake: fn(&PostDestination) -> bool = |post| matches!(post, PostDestination::Wake(_));
+        let unbriefed: fn(&PostDestination) -> bool =
+            |post| matches!(post, PostDestination::Unbriefed(_));
         #[rustfmt::skip]
         let cases = [
             Case { state: Queued,      held_input: false, in_flight: true,  post: brief },
@@ -465,6 +834,8 @@ mod tests {
             Case { state: Working,     held_input: true,  in_flight: true,  post: held },
             Case { state: Waiting,     held_input: false, in_flight: false, post: wake },
             Case { state: Waiting,     held_input: true,  in_flight: true,  post: wake },
+            Case { state: Unbriefed,   held_input: false, in_flight: false, post: unbriefed },
+            Case { state: Unbriefed,   held_input: true,  in_flight: true,  post: unbriefed },
             Case { state: Ended,       held_input: false, in_flight: false, post: held },
             Case { state: Ended,       held_input: true,  in_flight: true,  post: held },
             Case { state: Unreachable, held_input: false, in_flight: true,  post: held },
@@ -482,8 +853,8 @@ mod tests {
             assert!((case.post)(&unfinished.post_destination()), "{label}");
             assert_eq!(unfinished.refuses_enqueue(), Some(session.id), "{label}");
             assert_eq!(
-                unfinished.waiting().is_some(),
-                case.state == Waiting,
+                unfinished.yielding().is_some(),
+                matches!(case.state, Waiting | Unbriefed),
                 "{label}"
             );
         }

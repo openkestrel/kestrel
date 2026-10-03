@@ -9,13 +9,12 @@ use jiff::{SignedDuration, Timestamp};
 pub mod apply;
 
 use crate::domain::{
-    Agent, CorrelationMiss, DisableReason, Event, EventRecordId, Fires, Firing, FiringBudget,
-    Integration, Occurrence, OnOpenWorkspace, Organization, Schedule, SessionId, Templates,
-    Trigger, TriggerId, TriggerState, Workspace, WorkspaceId,
+    Agent, CorrelationMiss, Declared, DisableReason, Event, EventRecordId, Fires, Firing,
+    FiringBudget, Integration, Occurrence, OnOpenWorkspace, Organization, Schedule, SessionId,
+    StartedBy, Templates, Trigger, TriggerId, TriggerState, Workspace, WorkspaceId,
 };
-use crate::fanout::{self, Change};
 use crate::integration::github::{self, EventData, Github};
-use crate::log::Entry;
+use crate::log::{BriefSource, Entry};
 use crate::readiness::{Decision, Readiness, Request};
 use crate::store::integration::Recorded;
 use crate::store::workspace::{Opening, PendingSession};
@@ -80,6 +79,7 @@ pub struct Declaration<'a> {
     pub templates: &'a Templates,
     pub project: &'a str,
     pub agent: &'a str,
+    pub declared: &'a Declared,
     pub allows: &'a [String],
     pub profile: Option<&'a str>,
 }
@@ -200,6 +200,7 @@ pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trig
                 declaration.templates,
                 &project,
                 &agent,
+                declaration.declared,
                 &allows,
                 profile.as_ref(),
                 false,
@@ -215,6 +216,7 @@ pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trig
                     declaration.templates,
                     &project,
                     &agent,
+                    declaration.declared,
                     &allows,
                     profile.as_ref(),
                     false,
@@ -230,6 +232,7 @@ pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trig
                     declaration.templates,
                     &project,
                     &agent,
+                    declaration.declared,
                     &allows,
                     profile.as_ref(),
                     false,
@@ -252,6 +255,7 @@ fn same_declaration(
     templates: &Templates,
     project: &crate::domain::Project,
     agent: &Agent,
+    declared: &Declared,
     allows: &[Agent],
     profile: Option<&crate::domain::SubscriptionProfile>,
     applied: bool,
@@ -270,6 +274,7 @@ fn same_declaration(
         && trigger.templates == *templates
         && trigger.project.id == project.id
         && trigger.agent.id == agent.id
+        && trigger.declared == *declared
         && names(&trigger.allows) == names(allows)
         && trigger.profile.as_ref().map(|profile| profile.id) == profile.map(|profile| profile.id)
         && trigger.applied == applied
@@ -390,6 +395,7 @@ pub async fn test_declared(
             name: declared.name.clone(),
             fires: Fires::On(declared.filter.clone()),
             templates: declared.templates.clone(),
+            declared: declared.declared.clone(),
             state: TriggerState::Enabled,
             disabled_because: None,
             firing_budget: FiringBudget::default(),
@@ -863,7 +869,7 @@ async fn firing(
                 .or(rendered.branch.as_deref()),
             correlation: rendered.correlation.as_deref(),
             continues: continues.as_deref(),
-            started_by: Some(event),
+            started_by: Some(StartedBy::Event(event.record_id)),
         })
         .await?;
 
@@ -871,7 +877,9 @@ async fn firing(
         .append(
             &workspace,
             Entry::Brief {
-                trigger: Some(trigger.name.clone()),
+                source: BriefSource::Trigger {
+                    trigger: trigger.name.clone(),
+                },
                 brief: rendered.brief,
             },
         )
@@ -887,7 +895,7 @@ async fn firing(
 
     let session = tx
         .workspaces()
-        .enqueue_session(&workspace, Some(agent), None)
+        .enqueue_session(&workspace, Some(agent), trigger.declared.clone())
         .await?;
     tx.triggers()
         .record_opened_firing(trigger, event, &workspace, worked_ahead.as_deref())
@@ -898,7 +906,6 @@ async fn firing(
             .await?;
     }
     tx.commit().await?;
-    fanout::publish(Change::WorkspaceOpened(&workspace));
 
     Ok(Fired::Opened {
         event: event.record_id,
@@ -916,7 +923,7 @@ async fn fed(
 ) -> Result<Fired> {
     let workspace = tx.workspaces().get(holding).await?;
     // A Trigger's name is not a person's, so it is not held to the participant name rule.
-    let session = workspace::post_as(&mut tx, &workspace, &trigger.name, &rendered.brief).await?;
+    let posted = workspace::post_as(&mut tx, &workspace, &trigger.name, &rendered.brief).await?;
     tx.triggers()
         .record_fed_firing(trigger, event, &workspace)
         .await?;
@@ -925,7 +932,7 @@ async fn fed(
     Ok(Fired::Fed {
         event: event.record_id,
         workspace: workspace.id,
-        session: session.map(|session| session.id),
+        session: posted.session.map(|session| session.id),
     })
 }
 
@@ -948,6 +955,7 @@ async fn started(
         &workspace,
         PendingSession {
             agent,
+            declared: trigger.declared.clone(),
             trigger: trigger.name.clone(),
             brief: rendered.brief,
         },

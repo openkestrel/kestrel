@@ -7,26 +7,32 @@ use std::str::FromStr as _;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, AuthMethod, AuthenticateRequest, ContentBlock, ErrorCode, InitializeRequest,
-    InitializeResponse, LoadSessionRequest, NewSessionRequest, PromptRequest,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigId, SessionConfigKind,
-    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOptions,
-    SessionConfigValueId, SessionId, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, StopReason, TextContent,
+    AgentCapabilities, AuthMethod, AuthenticateRequest, AvailableCommand, AvailableCommandInput,
+    CancelNotification, ContentBlock, ErrorCode, InitializeRequest, InitializeResponse,
+    LoadSessionRequest, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
+    SelectedPermissionOutcome, SessionConfigId, SessionConfigKind, SessionConfigOption,
+    SessionConfigOptionCategory, SessionConfigSelect, SessionConfigSelectOption,
+    SessionConfigSelectOptions, SessionConfigValueId, SessionId, SessionModeId, SessionModeState,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
+    StopReason, TextContent,
 };
 use agent_client_protocol::{
     AcpAgent, AcpAgentConfig, Client, ConnectionTo, Error, LineDirection,
     is_incoming_transport_closed,
 };
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::completer::{Completed, Completer};
-use crate::link::{Report, TurnOutcome};
+use crate::link::{
+    Report, SessionCommand, SessionInfo, SessionOption, SessionOptionGroup, SessionOptionKind,
+    SessionOptionValue, TurnOutcome,
+};
 use crate::permission::{self, Subject};
 
 /// What this Environment was configured to drive, what the Session asks of it, and where what the
@@ -39,6 +45,9 @@ pub struct Harness {
     pub auth: Option<String>,
     /// The model the Session named, if it named one.
     pub model: Option<String>,
+    pub mode: Option<String>,
+    pub thought_level: Option<String>,
+    pub interrupt_deadline: Duration,
     pub stderr: mpsc::UnboundedSender<String>,
 }
 
@@ -52,6 +61,7 @@ pub struct Worked {
     pub allowed: Vec<Subject>,
     pub on: Option<On>,
     pub failed: Option<String>,
+    pub usage: Option<crate::link::Usage>,
 }
 
 /// Which model the agent works the turn on — the one its Session named, or the one the harness
@@ -60,22 +70,91 @@ pub struct On {
     pub model: String,
 }
 
-/// What to ask the agent to set, and what it is on once it has. Nothing is set for a Session
-/// that named no model: the agent is already on the default it advertised.
-struct Selects {
-    id: Option<SessionConfigId>,
-    on: On,
+#[derive(Debug, Default, Clone, Copy)]
+struct Declared<'a> {
+    model: Option<&'a str>,
+    mode: Option<&'a str>,
+    thought_level: Option<&'a str>,
+}
+
+impl Harness {
+    fn declared(&self) -> Declared<'_> {
+        Declared {
+            model: self.model.as_deref(),
+            mode: self.mode.as_deref(),
+            thought_level: self.thought_level.as_deref(),
+        }
+    }
+}
+
+struct Planned {
+    choices: Vec<Choice>,
+    on: Option<On>,
+}
+
+enum Choice {
+    Option { id: SessionConfigId, value: String },
+    Mode(String),
 }
 
 /// Long enough for an agent between turns to see its connection close; one mid-turn is cut off.
 const CLOSING: Duration = Duration::from_millis(500);
 
+struct Channels {
+    prompts: mpsc::UnboundedReceiver<Turn>,
+    interrupts: mpsc::UnboundedReceiver<i64>,
+    commands: mpsc::UnboundedReceiver<Command>,
+}
+
 /// One ACP conversation for the whole Session, held apart from the link so that losing the link
 /// loses nothing of it (ADR-0024). Dropping it kills the agent.
 pub struct Conversation {
-    prompts: mpsc::UnboundedSender<String>,
+    prompts: mpsc::UnboundedSender<Turn>,
+    interrupts: mpsc::UnboundedSender<i64>,
+    commands: mpsc::UnboundedSender<Command>,
     turns: mpsc::UnboundedReceiver<ConversationEvent>,
     task: JoinHandle<()>,
+}
+
+#[derive(Clone)]
+pub struct Turn {
+    pub seq: i64,
+    pub prompt: String,
+}
+
+enum Command {
+    SetOption {
+        option: String,
+        value: String,
+        answered: oneshot::Sender<SetOption>,
+    },
+}
+
+pub struct SetOption {
+    pub option: String,
+    pub category: String,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub refused: Option<String>,
+    pub options: Vec<crate::link::SessionOption>,
+}
+
+impl SetOption {
+    pub(crate) fn refused(
+        option: String,
+        category: String,
+        from: Option<String>,
+        why: String,
+    ) -> Self {
+        Self {
+            option,
+            category,
+            from,
+            to: None,
+            refused: Some(why),
+            options: Vec::new(),
+        }
+    }
 }
 
 impl Conversation {
@@ -84,32 +163,77 @@ impl Conversation {
     pub fn open(
         harness: &Harness,
         provider: BTreeMap<String, String>,
-        first: String,
+        first: Option<Turn>,
         root: PathBuf,
     ) -> Self {
         let (prompts, prompted) = mpsc::unbounded_channel();
+        let (interrupts, interrupted) = mpsc::unbounded_channel();
+        let (commands, commanded) = mpsc::unbounded_channel();
         let (answered, turns) = mpsc::unbounded_channel();
-        prompts
-            .send(first)
-            .expect("the conversation has not started, so nothing has hung up on it");
+        if let Some(first) = first {
+            prompts
+                .send(first)
+                .expect("the conversation has not started, so nothing has hung up on it");
+        }
         let task = tokio::spawn(conversing(
             harness.clone(),
             provider,
             root,
-            prompted,
+            Channels {
+                prompts: prompted,
+                interrupts: interrupted,
+                commands: commanded,
+            },
             answered,
         ));
 
         Self {
             prompts,
+            interrupts,
+            commands,
             turns,
             task,
         }
     }
 
-    pub fn prompt(&self, prompt: String) {
+    pub fn prompt(&self, prompt: Turn) {
         // A conversation that is over says so as its last turn, which is where that is heard.
         let _ = self.prompts.send(prompt);
+    }
+
+    pub fn interrupt(&self, seq: i64) {
+        let _ = self.interrupts.send(seq);
+    }
+
+    /// Awaited, so a change is ordered ahead of any prompt after it (ADR-0041).
+    pub async fn set_option(&self, option: String, value: String) -> SetOption {
+        let (answered, outcome) = oneshot::channel();
+        let sent = self.commands.send(Command::SetOption {
+            option: option.clone(),
+            value,
+            answered,
+        });
+        if sent.is_err() {
+            return SetOption::refused(
+                option,
+                String::new(),
+                None,
+                "the agent conversation is over".to_owned(),
+            );
+        }
+
+        outcome.await.unwrap_or_else(|_| {
+            SetOption::refused(
+                option,
+                String::new(),
+                None,
+                "the agent conversation ended before the change was applied".to_owned(),
+            )
+        })
+    }
+
+    pub fn try_next(&mut self) -> Option<ConversationEvent> {
+        self.turns.try_recv().ok()
     }
 
     /// Cancel-safe, so a caller may stop waiting on it and come back.
@@ -119,6 +243,7 @@ impl Conversation {
                 allowed: Vec::new(),
                 on: None,
                 failed: Some("the agent conversation ended unannounced".to_owned()),
+                usage: None,
             })
         })
     }
@@ -162,7 +287,7 @@ impl Recovery {
 struct Continuity {
     conversed: Option<SessionId>,
     recovery: Option<Recovery>,
-    in_flight: Option<String>,
+    in_flight: Option<Turn>,
     /// Cleared by an answered turn, so an agent that dies as soon as it is brought back is not
     /// brought back forever.
     recovered: bool,
@@ -214,16 +339,20 @@ async fn conversing(
     harness: Harness,
     provider: BTreeMap<String, String>,
     root: PathBuf,
-    mut prompts: mpsc::UnboundedReceiver<String>,
+    mut channels: Channels,
     turns: mpsc::UnboundedSender<ConversationEvent>,
 ) {
     let heard = Arc::new(Mutex::new(Hearing {
         completer: Completer::default(),
         allowed: Vec::new(),
         on: None,
+        usage: None,
+        interrupting: false,
         reports: turns.clone(),
         diagnostics: harness.stderr.clone(),
         replaying: false,
+        info: Held::default(),
+        announced: None,
     }));
     let mut continuity = Continuity::default();
 
@@ -232,7 +361,7 @@ async fn conversing(
             &harness,
             &provider,
             &root,
-            &mut prompts,
+            &mut channels,
             &turns,
             &heard,
             &mut continuity,
@@ -267,7 +396,7 @@ async fn living(
     harness: &Harness,
     provider: &BTreeMap<String, String>,
     root: &Path,
-    prompts: &mut mpsc::UnboundedReceiver<String>,
+    channels: &mut Channels,
     turns: &mpsc::UnboundedSender<ConversationEvent>,
     heard: &Arc<Mutex<Hearing>>,
     continuity: &mut Continuity,
@@ -328,14 +457,19 @@ async fn living(
                         .lock()
                         .expect("what the agent said should not be poisoned");
                     heard.completer.produced = true;
-                    let outcome = match permission::allow_once(&request.options) {
-                        Some(option) => {
-                            heard.allowed.push(Subject::from(&request));
-                            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-                                option,
-                            ))
+                    // Answered `cancelled`, not denied: the agent is stopping anyway.
+                    let outcome = if heard.interrupting {
+                        RequestPermissionOutcome::Cancelled
+                    } else {
+                        match permission::allow_once(&request.options) {
+                            Some(option) => {
+                                heard.allowed.push(Subject::from(&request));
+                                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                                    option,
+                                ))
+                            }
+                            None => RequestPermissionOutcome::Cancelled,
                         }
-                        None => RequestPermissionOutcome::Cancelled,
                     };
                     drop(heard);
 
@@ -354,11 +488,13 @@ async fn living(
                         {
                             return Ok(ended(&error));
                         }
+                        let _ = turns.send(ConversationEvent::Ready);
                         conversed
                     }
                     _ => match set_up(&connection, harness, root, heard).await {
                         Ok((conversed, recovery)) => {
                             continuity.opened(conversed.clone(), recovery);
+                            let _ = turns.send(ConversationEvent::Ready);
                             conversed
                         }
                         Err(error) => return Ok(ended(&error)),
@@ -368,32 +504,80 @@ async fn living(
                 loop {
                     let prompt = match continuity.in_flight.clone() {
                         Some(prompt) => prompt,
-                        None => tokio::select! {
-                            prompt = prompts.recv() => match prompt {
-                                Some(prompt) => prompt,
-                                None => return Ok(Ended::HungUp),
-                            },
-                            () = connection.incoming_closed() => {
-                                return Ok(Ended::Lost(
-                                    "it closed its connection between turns".to_owned(),
-                                ));
+                        None => loop {
+                            tokio::select! {
+                                prompt = channels.prompts.recv() => match prompt {
+                                    Some(prompt) => break prompt,
+                                    None => return Ok(Ended::HungUp),
+                                },
+                                command = channels.commands.recv() => match command {
+                                    Some(Command::SetOption { option, value, answered }) => {
+                                        let outcome = applying(&connection, heard, &conversed, option, value).await;
+                                        let _ = answered.send(outcome);
+                                    }
+                                    None => return Ok(Ended::HungUp),
+                                },
+                                () = connection.incoming_closed() => {
+                                    return Ok(Ended::Lost(
+                                        "it closed its connection between turns".to_owned(),
+                                    ));
+                                }
                             }
                         },
                     };
                     continuity.in_flight = Some(prompt.clone());
+                    let turn = prompt.seq;
                     heard
                         .lock()
                         .expect("the observation lock")
                         .completer
                         .begin();
-                    let answered = match connection
-                        .send_request(PromptRequest::new(
-                            conversed.clone(),
-                            vec![ContentBlock::Text(TextContent::new(prompt))],
-                        ))
-                        .block_task()
-                        .await
-                    {
+                    let mut prompting = Box::pin(
+                        connection
+                            .send_request(PromptRequest::new(
+                                conversed.clone(),
+                                vec![ContentBlock::Text(TextContent::new(prompt.prompt))],
+                            ))
+                            .block_task(),
+                    );
+                    let mut cancelled = false;
+                    let mut give_up_at = None;
+                    let answered = loop {
+                        tokio::select! {
+                            answered = prompting.as_mut() => break answered,
+                            Some(seq) = channels.interrupts.recv(), if !cancelled => {
+                                if seq != turn {
+                                    continue;
+                                }
+                                connection
+                                    .send_notification(CancelNotification::new(conversed.clone()))?;
+                                heard.lock().expect("the observation lock").interrupting = true;
+                                cancelled = true;
+                                give_up_at = Some(tokio::time::Instant::now() + harness.interrupt_deadline);
+                            }
+                            () = until(give_up_at) => {
+                                let mut heard = heard.lock().expect("the observation lock");
+                                heard.interrupting = false;
+                                // `Answered` is the boundary that closes open units
+                                // `unresolved`; the exit below says why the Turn never came back.
+                                let completed = heard.completer.boundary(
+                                    TurnOutcome::Answered {
+                                        stop_reason: "cancelled".to_owned(),
+                                    },
+                                    jiff::Timestamp::now(),
+                                );
+                                heard.emit(completed);
+                                drop(heard);
+                                return Ok(Ended::Over(format!(
+                                    "the agent did not answer the interrupt within {:?}, and its ACP \
+                                     continuity is lost",
+                                    harness.interrupt_deadline
+                                )));
+                            }
+                        }
+                    };
+                    heard.lock().expect("the observation lock").interrupting = false;
+                    let answered = match answered {
                         Ok(answered) => answered,
                         Err(error) => return Ok(ended(&error)),
                     };
@@ -406,6 +590,13 @@ async fn living(
                                 .completer
                                 .boundary(TurnOutcome::Cancelled, jiff::Timestamp::now());
                             heard.emit(completed);
+                            if cancelled {
+                                drop(heard);
+                                // kestrel asked for this cancel, so the conversation stays open and
+                                // the Turn is reported interrupted.
+                                let _ = turns.send(ConversationEvent::Interrupted);
+                                continue;
+                            }
                         }
                         return Ok(Ended::Over(because));
                     }
@@ -427,6 +618,106 @@ fn ended(error: &Error) -> Ended {
     match is_incoming_transport_closed(error) {
         true => Ended::Lost(described(error)),
         false => Ended::Over(error.to_string()),
+    }
+}
+
+async fn applying(
+    connection: &ConnectionTo<agent_client_protocol::Agent>,
+    heard: &Arc<Mutex<Hearing>>,
+    conversed: &SessionId,
+    option: String,
+    value: String,
+) -> SetOption {
+    let (category, from, real) = {
+        let heard = heard.lock().expect("the observation lock");
+        let Some(held) = heard
+            .info
+            .snapshot()
+            .options
+            .into_iter()
+            .find(|held| held.id == option)
+        else {
+            return SetOption::refused(
+                option.clone(),
+                String::new(),
+                None,
+                format!("this agent offers no option {option}"),
+            );
+        };
+        let category = held.category.clone().unwrap_or_else(|| held.id.clone());
+        let offered = match &held.kind {
+            SessionOptionKind::Select { values, groups, .. } => {
+                values.iter().any(|offered| offered.value == value)
+                    || groups
+                        .iter()
+                        .any(|group| group.values.iter().any(|offered| offered.value == value))
+            }
+            SessionOptionKind::Boolean { .. } => matches!(value.as_str(), "true" | "false"),
+        };
+        if !offered {
+            let why = format!("this agent does not offer the {category} {value}");
+            return SetOption::refused(option, category, held.current_value(), why);
+        }
+        // A synthesized mode has no config option of its own to set, so it goes through
+        // `session/set_mode`.
+        let real = heard
+            .info
+            .options
+            .iter()
+            .any(|real| real.id.0.as_ref() == option);
+
+        (category, held.current_value(), real)
+    };
+
+    if real {
+        let sent = connection
+            .send_request(SetSessionConfigOptionRequest::new(
+                conversed.clone(),
+                SessionConfigId::new(option.clone()),
+                SessionConfigValueId::new(value.clone()),
+            ))
+            .block_task()
+            .await;
+        match sent {
+            Ok(answered) => {
+                let mut heard = heard.lock().expect("the observation lock");
+                heard.hold(Some(answered.config_options), None);
+                let options = heard.info.snapshot().options;
+                SetOption {
+                    option,
+                    category,
+                    from,
+                    to: Some(value),
+                    refused: None,
+                    options,
+                }
+            }
+            Err(error) => SetOption::refused(option, category, from, described(&error)),
+        }
+    } else {
+        let sent = connection
+            .send_request(SetSessionModeRequest::new(
+                conversed.clone(),
+                SessionModeId::new(value.clone()),
+            ))
+            .block_task()
+            .await;
+        match sent {
+            Ok(_) => {
+                let mut heard = heard.lock().expect("the observation lock");
+                heard.mode(Some(SessionModeId::new(value.clone())));
+                let options = heard.info.snapshot().options;
+                SetOption {
+                    option,
+                    category,
+                    from,
+                    to: Some(value),
+                    refused: None,
+                    options,
+                }
+            }
+            Err(error) => SetOption::refused(option, category, from, described(&error)),
+        }
     }
 }
 
@@ -496,14 +787,18 @@ async fn set_up(
         .await
         .map_err(|error| unlogged_in(error, &initialized.auth_methods))?;
 
-    let on = select(
+    let selected = select(
         connection,
         &set_up.session_id,
         set_up.config_options.as_deref(),
-        harness.model.as_deref(),
+        set_up.modes.as_ref(),
+        &harness.declared(),
     )
     .await?;
-    heard.lock().expect("the observation lock").model(on);
+    let mut heard = heard.lock().expect("the observation lock");
+    heard.hold(selected.options.or(set_up.config_options), set_up.modes);
+    heard.model(selected.on);
+    heard.mode(selected.mode);
 
     Ok((
         set_up.session_id,
@@ -533,20 +828,20 @@ async fn recover(
         heard.replaying = true;
     }
 
-    let config_options = match recovery {
+    let (config_options, modes) = match recovery {
         Recovery::Resume => {
-            connection
+            let resumed = connection
                 .send_request(ResumeSessionRequest::new(conversed.clone(), root))
                 .block_task()
-                .await?
-                .config_options
+                .await?;
+            (resumed.config_options, resumed.modes)
         }
         Recovery::Load => {
-            connection
+            let loaded = connection
                 .send_request(LoadSessionRequest::new(conversed.clone(), root))
                 .block_task()
-                .await?
-                .config_options
+                .await?;
+            (loaded.config_options, loaded.modes)
         }
     };
     {
@@ -556,38 +851,184 @@ async fn recover(
         heard.replaying = false;
     }
 
-    select(
+    let selected = select(
         connection,
         conversed,
         config_options.as_deref(),
-        harness.model.as_deref(),
+        modes.as_ref(),
+        &harness.declared(),
     )
     .await?;
+    let mut heard = heard.lock().expect("the observation lock");
+    heard.hold(selected.options.or(config_options), modes);
+    heard.mode(selected.mode);
 
     Ok(())
+}
+
+struct Selected {
+    on: Option<On>,
+    options: Option<Vec<SessionConfigOption>>,
+    mode: Option<SessionModeId>,
 }
 
 async fn select(
     connection: &ConnectionTo<agent_client_protocol::Agent>,
     conversed: &SessionId,
     offered: Option<&[SessionConfigOption]>,
-    model: Option<&str>,
-) -> Result<Option<On>, Error> {
-    let Some(selects) = selects_the_model(offered.unwrap_or_default(), model)? else {
-        return Ok(None);
-    };
-    if let Some(id) = selects.id {
-        connection
-            .send_request(SetSessionConfigOptionRequest::new(
-                conversed.clone(),
-                id,
-                SessionConfigValueId::new(selects.on.model.clone()),
-            ))
-            .block_task()
-            .await?;
+    modes: Option<&SessionModeState>,
+    declared: &Declared<'_>,
+) -> Result<Selected, Error> {
+    let planned = planned(offered.unwrap_or_default(), modes, declared)?;
+    let mut options = None;
+    let mut mode = None;
+
+    for choice in planned.choices {
+        match choice {
+            Choice::Option { id, value, .. } => {
+                let answered = connection
+                    .send_request(SetSessionConfigOptionRequest::new(
+                        conversed.clone(),
+                        id,
+                        SessionConfigValueId::new(value),
+                    ))
+                    .block_task()
+                    .await?;
+                options = Some(answered.config_options);
+            }
+            Choice::Mode(value) => {
+                connection
+                    .send_request(SetSessionModeRequest::new(
+                        conversed.clone(),
+                        SessionModeId::new(value.clone()),
+                    ))
+                    .block_task()
+                    .await?;
+                mode = Some(SessionModeId::new(value));
+            }
+        }
     }
 
-    Ok(Some(selects.on))
+    Ok(Selected {
+        on: planned.on,
+        options,
+        mode,
+    })
+}
+
+fn planned(
+    offered: &[SessionConfigOption],
+    modes: Option<&SessionModeState>,
+    declared: &Declared<'_>,
+) -> Result<Planned, Error> {
+    let mut choices = Vec::new();
+
+    let mut on = None;
+    if let Some((id, select)) = selectable(offered, "model") {
+        on = Some(On {
+            model: select.current_value.0.to_string(),
+        });
+        if let Some(named) = declared.model {
+            check_offered("model", named, &select.options)?;
+            if select.current_value.0.as_ref() != named {
+                on = Some(On {
+                    model: named.to_owned(),
+                });
+                choices.push(Choice::Option {
+                    id: id.clone(),
+                    value: named.to_owned(),
+                });
+            }
+        }
+    } else if let Some(named) = declared.model {
+        return Err(no_option("model", named));
+    }
+
+    for (category, named) in [
+        ("mode", declared.mode),
+        ("thought_level", declared.thought_level),
+    ] {
+        let Some(named) = named else {
+            continue;
+        };
+        if let Some((id, select)) = selectable(offered, category) {
+            check_offered(category, named, &select.options)?;
+            if select.current_value.0.as_ref() != named {
+                choices.push(Choice::Option {
+                    id: id.clone(),
+                    value: named.to_owned(),
+                });
+            }
+        } else if category == "mode" {
+            if modes.is_some_and(|modes| {
+                modes
+                    .available_modes
+                    .iter()
+                    .any(|mode| mode.id.0.as_ref() == named)
+            }) {
+                choices.push(Choice::Mode(named.to_owned()));
+            } else {
+                return Err(no_option(category, named));
+            }
+        } else {
+            return Err(no_option(category, named));
+        }
+    }
+
+    Ok(Planned { choices, on })
+}
+
+fn selectable<'o>(
+    offered: &'o [SessionConfigOption],
+    category: &str,
+) -> Option<(&'o SessionConfigId, &'o SessionConfigSelect)> {
+    offered
+        .iter()
+        .find(|option| {
+            option
+                .category
+                .as_ref()
+                .and_then(category_of)
+                .is_some_and(|categorized| categorized == category)
+        })
+        .and_then(|option| match &option.kind {
+            SessionConfigKind::Select(select) => Some((&option.id, select)),
+            _ => None,
+        })
+}
+
+fn category_of(category: &SessionConfigOptionCategory) -> Option<&'static str> {
+    match category {
+        SessionConfigOptionCategory::Model => Some("model"),
+        SessionConfigOptionCategory::Mode => Some(MODE),
+        SessionConfigOptionCategory::ThoughtLevel => Some("thought_level"),
+        _ => None,
+    }
+}
+
+/// A harness may offer no way to set a category (ADR-0007); a Session that named a value for it
+/// fails rather than quietly running on something else.
+fn no_option(category: &str, named: &str) -> Error {
+    Error::internal_error().data(format!(
+        "this agent lets no client select a {category}, and this session named {named}"
+    ))
+}
+
+fn check_offered(
+    category: &str,
+    named: &str,
+    options: &SessionConfigSelectOptions,
+) -> Result<(), Error> {
+    let offered: Vec<String> = selectable_values(options)
+        .map(|value| value.to_string())
+        .collect();
+    if offered.iter().any(|value| value == named) {
+        return Ok(());
+    }
+
+    Err(Error::internal_error().data(format!(
+        "this agent does not offer the {category} {named}, which this session named"
+    )))
 }
 
 /// ACP's `terminal` method launches an interactive process for someone to log in at, so an
@@ -627,55 +1068,6 @@ fn offered(methods: &[AuthMethod]) -> String {
         .join(", ")
 }
 
-/// Config options are optional and every agent ships a default (ADR-0007), so an agent may
-/// offer no model to select. One whose Session named a model then fails rather than quietly
-/// running on something else; one whose Session named none runs on a model nobody can name.
-fn selects_the_model(
-    offered: &[SessionConfigOption],
-    named: Option<&str>,
-) -> Result<Option<Selects>, Error> {
-    let selectable = offered
-        .iter()
-        .find(|option| option.category == Some(SessionConfigOptionCategory::Model))
-        .and_then(|option| match &option.kind {
-            SessionConfigKind::Select(select) => Some((&option.id, select)),
-            _ => None,
-        });
-
-    let Some((id, select)) = selectable else {
-        return match named {
-            Some(model) => Err(Error::internal_error().data(format!(
-                "this agent lets no client select a model, and this session named {model}"
-            ))),
-            None => Ok(None),
-        };
-    };
-    let offered: Vec<String> = selectable_values(&select.options)
-        .map(|value| value.to_string())
-        .collect();
-
-    let Some(model) = named else {
-        return Ok(Some(Selects {
-            id: None,
-            on: On {
-                model: select.current_value.0.to_string(),
-            },
-        }));
-    };
-    if !offered.iter().any(|value| value == model) {
-        return Err(Error::internal_error().data(format!(
-            "this agent does not offer the model {model}, which this session named"
-        )));
-    }
-
-    Ok(Some(Selects {
-        id: Some(id.clone()),
-        on: On {
-            model: model.to_owned(),
-        },
-    }))
-}
-
 fn selectable_values(options: &SessionConfigSelectOptions) -> impl Iterator<Item = Arc<str>> {
     let values: Vec<Arc<str>> = match options {
         SessionConfigSelectOptions::Ungrouped(options) => options
@@ -704,6 +1096,13 @@ fn bounded(line: &str) -> String {
     format!("{}… [truncated]", &line[..end])
 }
 
+async fn until(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
+    }
+}
+
 /// Why a turn that stopped for anything but ending it ends the conversation too.
 fn stopped_short(stop: StopReason) -> Option<String> {
     let because = match stop {
@@ -721,19 +1120,178 @@ fn stopped_short(stop: StopReason) -> Option<String> {
 pub enum ConversationEvent {
     Report(Report),
     Worked(Worked),
+    Interrupted,
+    State(Report),
+    Ready,
 }
 
 struct Hearing {
     completer: Completer,
     allowed: Vec<Subject>,
     on: Option<On>,
+    usage: Option<crate::link::Usage>,
+    interrupting: bool,
     reports: mpsc::UnboundedSender<ConversationEvent>,
     diagnostics: mpsc::UnboundedSender<String>,
     replaying: bool,
+    info: Held,
+    announced: Option<SessionInfo>,
+}
+
+#[derive(Default)]
+struct Held {
+    title: Option<String>,
+    options: Vec<SessionConfigOption>,
+    modes: Option<SessionModeState>,
+    current_mode: Option<SessionModeId>,
+    commands: Vec<AvailableCommand>,
+}
+
+impl Held {
+    /// Synthesizes a Mode option from legacy `modes` for a harness that offers none (ADR-0041).
+    fn snapshot(&self) -> SessionInfo {
+        let mut options: Vec<SessionOption> = self.options.iter().map(option).collect();
+        let mode = self.current_mode.clone().or_else(|| {
+            self.modes
+                .as_ref()
+                .map(|modes| modes.current_mode_id.clone())
+        });
+        match options.iter_mut().find(|option| option.is_category(MODE)) {
+            Some(option) => set_current(option, mode),
+            None => {
+                if let Some(current) = mode {
+                    options.push(synthesized_mode(&current, self.modes.as_ref()));
+                }
+            }
+        }
+
+        SessionInfo {
+            title: self.title.clone(),
+            options,
+            commands: self.commands.iter().map(command).collect(),
+        }
+    }
+}
+
+const MODE: &str = "mode";
+
+fn option(option: &SessionConfigOption) -> SessionOption {
+    SessionOption {
+        id: option.id.0.to_string(),
+        name: option.name.clone(),
+        description: option.description.clone(),
+        category: option.category.as_ref().map(category),
+        kind: match &option.kind {
+            SessionConfigKind::Select(select) => SessionOptionKind::Select {
+                current: select.current_value.0.to_string(),
+                values: values(&select.options),
+                groups: groups(&select.options),
+            },
+            SessionConfigKind::Boolean(boolean) => SessionOptionKind::Boolean {
+                current: boolean.current_value,
+            },
+            _ => SessionOptionKind::Select {
+                current: "unknown".to_owned(),
+                values: Vec::new(),
+                groups: Vec::new(),
+            },
+        },
+    }
+}
+
+/// A select's flat offered values, empty when the harness grouped them instead.
+fn values(options: &SessionConfigSelectOptions) -> Vec<SessionOptionValue> {
+    match options {
+        SessionConfigSelectOptions::Ungrouped(options) => options.iter().map(value).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn value(value: &SessionConfigSelectOption) -> SessionOptionValue {
+    SessionOptionValue {
+        value: value.value.0.to_string(),
+        name: value.name.clone(),
+        description: value.description.clone(),
+    }
+}
+
+fn groups(options: &SessionConfigSelectOptions) -> Vec<SessionOptionGroup> {
+    match options {
+        SessionConfigSelectOptions::Grouped(groups) => groups
+            .iter()
+            .map(|group| SessionOptionGroup {
+                group: group.group.0.to_string(),
+                name: group.name.clone(),
+                values: group.options.iter().map(value).collect(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn category(category: &SessionConfigOptionCategory) -> String {
+    match category {
+        SessionConfigOptionCategory::Mode => "mode".to_owned(),
+        SessionConfigOptionCategory::Model => "model".to_owned(),
+        SessionConfigOptionCategory::ModelConfig => "model_config".to_owned(),
+        SessionConfigOptionCategory::ThoughtLevel => "thought_level".to_owned(),
+        SessionConfigOptionCategory::Other(other) => other.clone(),
+        _ => "unknown".to_owned(),
+    }
+}
+
+fn set_current(option: &mut SessionOption, current: Option<SessionModeId>) {
+    let (Some(current), SessionOptionKind::Select { current: held, .. }) =
+        (current, &mut option.kind)
+    else {
+        return;
+    };
+
+    *held = current.0.to_string();
+}
+
+fn synthesized_mode(current: &SessionModeId, modes: Option<&SessionModeState>) -> SessionOption {
+    SessionOption {
+        id: MODE.to_owned(),
+        name: "Mode".to_owned(),
+        description: None,
+        category: Some(MODE.to_owned()),
+        kind: SessionOptionKind::Select {
+            current: current.0.to_string(),
+            values: modes
+                .map(|modes| {
+                    modes
+                        .available_modes
+                        .iter()
+                        .map(|mode| SessionOptionValue {
+                            value: mode.id.0.to_string(),
+                            name: mode.name.clone(),
+                            description: mode.description.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            groups: Vec::new(),
+        },
+    }
+}
+
+fn command(command: &AvailableCommand) -> SessionCommand {
+    SessionCommand {
+        name: command.name.clone(),
+        description: command.description.clone(),
+        input_hint: match &command.input {
+            Some(AvailableCommandInput::Unstructured(input)) => Some(input.hint.clone()),
+            _ => None,
+        },
+    }
 }
 
 impl Hearing {
     fn emit(&self, completed: Completed) {
+        if let Some(state) = completed.state {
+            let _ = self.reports.send(ConversationEvent::State(state));
+        }
         for report in completed.reports {
             let _ = self.reports.send(ConversationEvent::Report(report));
         }
@@ -749,11 +1307,59 @@ impl Hearing {
         }
         self.on = on;
     }
+    fn mode(&mut self, mode: Option<SessionModeId>) {
+        if let Some(mode) = mode {
+            self.info.current_mode = Some(mode);
+            self.announce();
+        }
+    }
+    fn hold(&mut self, options: Option<Vec<SessionConfigOption>>, modes: Option<SessionModeState>) {
+        if let Some(options) = options {
+            self.info.options = options;
+        }
+        if let Some(modes) = modes {
+            self.info.modes = Some(modes);
+        }
+        self.announce();
+    }
+    fn announce(&mut self) {
+        let info = self.info.snapshot();
+        if self.announced.as_ref() == Some(&info) {
+            return;
+        }
+        self.announced = Some(info.clone());
+        let _ = self
+            .reports
+            .send(ConversationEvent::Report(Report::SessionInfo(info)));
+    }
     fn update(&mut self, update: SessionUpdate) {
         if self.replaying {
             return;
         }
+        match &update {
+            SessionUpdate::ConfigOptionUpdate(update) => {
+                self.info.options = update.config_options.clone();
+            }
+            SessionUpdate::SessionInfoUpdate(update) => match &update.title {
+                MaybeUndefined::Value(title) => self.info.title = Some(title.clone()),
+                MaybeUndefined::Null => self.info.title = None,
+                MaybeUndefined::Undefined => {}
+            },
+            SessionUpdate::AvailableCommandsUpdate(update) => {
+                self.info.commands = update.available_commands.clone();
+            }
+            SessionUpdate::CurrentModeUpdate(update) => {
+                self.info.current_mode = Some(update.current_mode_id.clone());
+            }
+            _ => {}
+        }
+        self.announce();
         let completed = self.completer.update(update, jiff::Timestamp::now());
+        for report in &completed.reports {
+            if let crate::link::Report::Usage { usage } = report {
+                self.usage = Some(usage.clone());
+            }
+        }
         self.emit(completed);
     }
     fn worked(&mut self, failed: Option<String>) -> Worked {
@@ -771,6 +1377,7 @@ impl Hearing {
             allowed: std::mem::take(&mut self.allowed),
             on: self.on.take(),
             failed,
+            usage: self.usage.clone(),
         }
     }
 }
@@ -778,8 +1385,9 @@ impl Hearing {
 #[cfg(test)]
 mod tests {
     use agent_client_protocol::schema::v1::{
-        AuthMethodAgent, AuthMethodTerminal, SessionCapabilities, SessionConfigSelect,
-        SessionConfigSelectGroup, SessionConfigSelectOption, SessionResumeCapabilities,
+        AuthMethodAgent, AuthMethodTerminal, ConfigOptionUpdate, CurrentModeUpdate,
+        SessionCapabilities, SessionConfigSelect, SessionConfigSelectGroup,
+        SessionConfigSelectOption, SessionInfoUpdate, SessionMode, SessionResumeCapabilities,
     };
 
     use super::*;
@@ -829,31 +1437,254 @@ mod tests {
         ]
     }
 
+    fn a_mode_option(current: &str) -> SessionConfigOption {
+        SessionConfigOption::new(
+            "mode",
+            "Mode",
+            SessionConfigKind::Select(SessionConfigSelect::new(
+                current.to_owned(),
+                vec![
+                    SessionConfigSelectOption::new("build", "Build"),
+                    SessionConfigSelectOption::new("plan", "Plan"),
+                ],
+            )),
+        )
+        .category(SessionConfigOptionCategory::Mode)
+    }
+
+    fn hearing() -> (Hearing, mpsc::UnboundedReceiver<ConversationEvent>) {
+        let (reports, heard) = mpsc::unbounded_channel();
+        (
+            Hearing {
+                completer: Completer::default(),
+                allowed: Vec::new(),
+                on: None,
+                usage: None,
+                interrupting: false,
+                reports,
+                diagnostics: mpsc::unbounded_channel().0,
+                replaying: false,
+                info: Held::default(),
+                announced: None,
+            },
+            heard,
+        )
+    }
+
+    fn session_infos(heard: &mut mpsc::UnboundedReceiver<ConversationEvent>) -> Vec<SessionInfo> {
+        let mut infos = Vec::new();
+        while let Ok(event) = heard.try_recv() {
+            if let ConversationEvent::Report(Report::SessionInfo(info)) = event {
+                infos.push(info);
+            }
+        }
+
+        infos
+    }
+
+    #[test]
+    fn twenty_identical_config_option_updates_are_announced_once() {
+        let (mut hearing, mut heard) = hearing();
+        let offered = models(&["fast", "thorough"]);
+
+        for _ in 0..20 {
+            hearing.update(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(
+                offered.clone(),
+            )));
+        }
+
+        assert_eq!(session_infos(&mut heard).len(), 1);
+        assert!(!hearing.completer.produced);
+    }
+
+    #[test]
+    fn an_option_list_that_changes_is_announced_again() {
+        let (mut hearing, mut heard) = hearing();
+
+        hearing.update(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(
+            models(&["fast"]),
+        )));
+        hearing.update(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(
+            models(&["thorough"]),
+        )));
+
+        let said = session_infos(&mut heard);
+        assert_eq!(said.len(), 2);
+        assert!(said[1].options[1].is_category("model"));
+    }
+
+    #[test]
+    fn a_harness_offering_only_legacy_modes_reports_a_synthesized_mode_option() {
+        let (mut hearing, _) = hearing();
+
+        hearing.hold(
+            None,
+            Some(SessionModeState::new(
+                "build",
+                vec![
+                    SessionMode::new("build", "Build"),
+                    SessionMode::new("plan", "Plan"),
+                ],
+            )),
+        );
+
+        let mode = hearing
+            .info
+            .snapshot()
+            .options
+            .into_iter()
+            .find(|option| option.is_category("mode"))
+            .expect("a synthesized mode option");
+        assert_eq!(mode.id, "mode");
+        assert_eq!(mode.name, "Mode");
+        match mode.kind {
+            SessionOptionKind::Select {
+                current, values, ..
+            } => {
+                assert_eq!(current, "build");
+                assert_eq!(
+                    values
+                        .iter()
+                        .map(|value| value.value.as_str())
+                        .collect::<Vec<_>>(),
+                    ["build", "plan"]
+                );
+            }
+            other => panic!("a mode option is a select, not {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_current_mode_update_sets_the_mode_options_current_value() {
+        let (mut hearing, _) = hearing();
+        hearing.hold(Some(vec![a_mode_option("build")]), None);
+
+        hearing.update(SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(
+            "plan",
+        )));
+
+        let mode = hearing
+            .info
+            .snapshot()
+            .options
+            .into_iter()
+            .find(|option| option.is_category("mode"))
+            .expect("the mode option");
+        assert!(matches!(
+            mode.kind,
+            SessionOptionKind::Select { current, .. } if current == "plan"
+        ));
+    }
+
+    #[test]
+    fn a_title_is_set_and_cleared_by_session_info_updates() {
+        let (mut hearing, _) = hearing();
+
+        hearing.update(SessionUpdate::SessionInfoUpdate(
+            SessionInfoUpdate::new().title("a conversation"),
+        ));
+        assert_eq!(
+            hearing.info.snapshot().title.as_deref(),
+            Some("a conversation")
+        );
+
+        hearing.update(SessionUpdate::SessionInfoUpdate(
+            SessionInfoUpdate::new().title(None::<String>),
+        ));
+        assert!(hearing.info.snapshot().title.is_none());
+    }
+
+    #[test]
+    fn a_grouped_select_is_reported_with_its_groups() {
+        let offered = vec![
+            SessionConfigOption::new(
+                "model",
+                "Model",
+                SessionConfigKind::Select(SessionConfigSelect::new(
+                    "fast",
+                    vec![SessionConfigSelectGroup::new(
+                        "theirs",
+                        "Theirs",
+                        vec![SessionConfigSelectOption::new("fast", "Fast")],
+                    )],
+                )),
+            )
+            .category(SessionConfigOptionCategory::Model),
+        ];
+        let (mut hearing, _) = hearing();
+
+        hearing.hold(Some(offered), None);
+
+        let model = &hearing.info.snapshot().options[0];
+        match &model.kind {
+            SessionOptionKind::Select { values, groups, .. } => {
+                assert!(values.is_empty());
+                assert_eq!(groups[0].group, "theirs");
+                assert_eq!(groups[0].values[0].value, "fast");
+            }
+            other => panic!("a model option is a select, not {other:?}"),
+        }
+    }
+
     #[test]
     fn the_model_a_session_named_is_set_through_the_option_the_agent_categorized_as_one() {
-        let selects = selects_the_model(&models(&["fast", "thorough"]), Some("thorough"))
-            .expect("the model should be selectable")
-            .expect("an agent that offers a model");
+        let planned = planned(
+            &models(&["fast", "thorough"]),
+            None,
+            &Declared {
+                model: Some("thorough"),
+                ..Declared::default()
+            },
+        )
+        .expect("the model should be selectable");
 
-        assert_eq!(selects.id.expect("a model to set").0.as_ref(), "model");
-        assert_eq!(selects.on.model, "thorough");
+        match planned.choices.as_slice() {
+            [Choice::Option { id, value }] => {
+                assert_eq!(id.0.as_ref(), "model");
+                assert_eq!(value, "thorough");
+            }
+            other => panic!("expected one option to set, got {}", other.len()),
+        }
+        assert_eq!(planned.on.expect("the model it is on").model, "thorough");
     }
 
     #[test]
     fn a_session_that_named_no_model_sets_nothing_and_is_on_what_the_agent_already_was() {
-        let selects = selects_the_model(&models(&["fast", "thorough"]), None)
-            .expect("naming no model should not fail")
-            .expect("an agent that offers a model");
+        let planned = planned(&models(&["fast", "thorough"]), None, &Declared::default())
+            .expect("naming no model should not fail");
 
-        assert!(selects.id.is_none());
-        assert_eq!(selects.on.model, "fast");
+        assert!(planned.choices.is_empty());
+        assert_eq!(planned.on.expect("the model it is on").model, "fast");
+    }
+
+    #[test]
+    fn a_category_already_at_the_declared_value_is_not_set() {
+        let planned = planned(
+            &models(&["fast", "thorough"]),
+            None,
+            &Declared {
+                model: Some("fast"),
+                ..Declared::default()
+            },
+        )
+        .expect("the model should be selectable");
+
+        assert!(planned.choices.is_empty());
+        assert_eq!(planned.on.expect("the model it is on").model, "fast");
     }
 
     #[test]
     fn a_model_an_agent_does_not_offer_is_refused_rather_than_swapped_for_one_it_does() {
-        let refused = selects_the_model(&models(&["fast"]), Some("thorough"))
-            .err()
-            .expect("a model the agent does not offer");
+        let refused = planned(
+            &models(&["fast"]),
+            None,
+            &Declared {
+                model: Some("thorough"),
+                ..Declared::default()
+            },
+        )
+        .err()
+        .expect("a model the agent does not offer");
 
         assert!(
             refused
@@ -864,9 +1695,16 @@ mod tests {
 
     #[test]
     fn an_agent_that_lets_no_client_select_a_model_fails_a_session_that_named_one() {
-        let refused = selects_the_model(&[], Some("thorough"))
-            .err()
-            .expect("an agent with no model to select");
+        let refused = planned(
+            &[],
+            None,
+            &Declared {
+                model: Some("thorough"),
+                ..Declared::default()
+            },
+        )
+        .err()
+        .expect("an agent with no model to select");
 
         assert!(
             refused
@@ -878,10 +1716,143 @@ mod tests {
     #[test]
     fn an_agent_that_lets_no_client_select_a_model_works_a_session_that_named_none() {
         assert!(
-            selects_the_model(&[], None)
+            planned(&[], None, &Declared::default())
                 .expect("naming no model should not fail")
-                .is_none()
+                .choices
+                .is_empty()
         );
+    }
+
+    #[test]
+    fn a_declared_mode_is_set_through_the_option_the_agent_categorized_as_one() {
+        let planned = planned(
+            &[a_mode_option("build")],
+            None,
+            &Declared {
+                mode: Some("plan"),
+                ..Declared::default()
+            },
+        )
+        .expect("the mode should be selectable");
+
+        match planned.choices.as_slice() {
+            [Choice::Option { id, value }] => {
+                assert_eq!(id.0.as_ref(), "mode");
+                assert_eq!(value, "plan");
+            }
+            other => panic!("expected one option to set, got {}", other.len()),
+        }
+    }
+
+    #[test]
+    fn a_declared_mode_matching_a_legacy_mode_is_set_through_session_set_mode() {
+        let legacy = SessionModeState::new(
+            "build",
+            vec![
+                SessionMode::new("build", "Build"),
+                SessionMode::new("plan", "Plan"),
+            ],
+        );
+        let planned = planned(
+            &[],
+            Some(&legacy),
+            &Declared {
+                mode: Some("plan"),
+                ..Declared::default()
+            },
+        )
+        .expect("a legacy mode the harness offers");
+
+        match planned.choices.as_slice() {
+            [Choice::Mode(value)] => assert_eq!(value, "plan"),
+            other => panic!("expected one mode to set, got {}", other.len()),
+        }
+    }
+
+    #[test]
+    fn a_mode_a_harness_offers_no_way_to_set_fails_naming_the_category_and_the_value() {
+        let refused = planned(
+            &[],
+            None,
+            &Declared {
+                mode: Some("plan"),
+                ..Declared::default()
+            },
+        )
+        .err()
+        .expect("a mode the harness offers no way to set");
+
+        let why = refused.data.expect("a reason").to_string();
+        assert!(why.contains("mode"), "{why}");
+        assert!(why.contains("plan"), "{why}");
+
+        let refused = planned(
+            &[a_mode_option("build")],
+            None,
+            &Declared {
+                mode: Some("review"),
+                ..Declared::default()
+            },
+        )
+        .err()
+        .expect("a mode the harness does not offer");
+
+        let why = refused.data.expect("a reason").to_string();
+        assert!(why.contains("mode"), "{why}");
+        assert!(why.contains("review"), "{why}");
+    }
+
+    #[test]
+    fn a_thought_level_the_harness_does_not_offer_fails_naming_the_category_and_the_value() {
+        let refused = planned(
+            &models(&["fast"]),
+            None,
+            &Declared {
+                thought_level: Some("high"),
+                ..Declared::default()
+            },
+        )
+        .err()
+        .expect("a thought level the harness does not offer");
+
+        let why = refused.data.expect("a reason").to_string();
+        assert!(why.contains("thought_level"), "{why}");
+        assert!(why.contains("high"), "{why}");
+    }
+
+    #[test]
+    fn a_declared_thought_level_the_harness_offers_is_set() {
+        let offered = vec![
+            SessionConfigOption::new(
+                "thinking",
+                "Thinking",
+                SessionConfigKind::Select(SessionConfigSelect::new(
+                    "low",
+                    vec![
+                        SessionConfigSelectOption::new("low", "Low"),
+                        SessionConfigSelectOption::new("high", "High"),
+                    ],
+                )),
+            )
+            .category(SessionConfigOptionCategory::ThoughtLevel),
+        ];
+        let planned = planned(
+            &offered,
+            None,
+            &Declared {
+                thought_level: Some("high"),
+                ..Declared::default()
+            },
+        )
+        .expect("a thought level the harness offers");
+
+        match planned.choices.as_slice() {
+            [Choice::Option { id, value }] => {
+                assert_eq!(id.0.as_ref(), "thinking");
+                assert_eq!(value, "high");
+            }
+            other => panic!("expected one option to set, got {}", other.len()),
+        }
     }
 
     #[test]
@@ -902,7 +1873,17 @@ mod tests {
             .category(SessionConfigOptionCategory::Model),
         ];
 
-        assert!(selects_the_model(&grouped, Some("thorough")).is_ok());
+        assert!(
+            planned(
+                &grouped,
+                None,
+                &Declared {
+                    model: Some("thorough"),
+                    ..Declared::default()
+                },
+            )
+            .is_ok()
+        );
     }
 
     #[test]

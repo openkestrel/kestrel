@@ -3,29 +3,35 @@ use jiff::Timestamp;
 use sqlx::{Row, SqliteConnection};
 
 use crate::domain::{Exit, Organization, SessionId, SessionState};
+use crate::fanout::Touched;
 use crate::store::workspace::{UNSATISFIED_BLOCKER, held_input, live, profile_held};
 
 /// What a work role that can dispatch recorded on start: the Active-Work Slot limit it
-/// enforces and the harnesses it dispatches one Session at a time. A restart with new flags
-/// replaces it.
+/// enforces, the harnesses it dispatches one Session at a time, and the Compute driver it
+/// provisions with. A restart with new flags replaces it.
 pub struct Recorded {
     pub active_work_slots: usize,
     pub serialized_harnesses: Vec<String>,
+    pub driver: String,
 }
 
 pub struct Queue<'a> {
     connection: &'a mut SqliteConnection,
+    touched: &'a mut Touched,
 }
 
 impl<'a> Queue<'a> {
-    pub(crate) fn over(connection: &'a mut SqliteConnection) -> Self {
-        Self { connection }
+    pub(crate) fn over(connection: &'a mut SqliteConnection, touched: &'a mut Touched) -> Self {
+        Self {
+            connection,
+            touched,
+        }
     }
 
     /// `None` says no work role is dispatching.
     pub async fn recorded(&mut self) -> Result<Option<Recorded>> {
         let Some(row) =
-            sqlx::query("SELECT active_work_slots, serialized_harnesses FROM work_role")
+            sqlx::query("SELECT active_work_slots, serialized_harnesses, driver FROM work_role")
                 .fetch_optional(&mut *self.connection)
                 .await
                 .context("reading what the work role recorded")?
@@ -38,10 +44,16 @@ impl<'a> Queue<'a> {
             serialized_harnesses: serde_json::from_str(
                 &row.get::<String, _>("serialized_harnesses"),
             )?,
+            driver: row.get("driver"),
         }))
     }
 
-    pub async fn record(&mut self, slots: usize, serialized: &[String]) -> Result<()> {
+    pub async fn record(
+        &mut self,
+        slots: usize,
+        serialized: &[String],
+        driver: &str,
+    ) -> Result<()> {
         let serialized = serde_json::to_string(serialized)?;
 
         sqlx::query("DELETE FROM work_role")
@@ -49,13 +61,19 @@ impl<'a> Queue<'a> {
             .await
             .context("forgetting what a work role recorded")?;
         sqlx::query(
-            "INSERT INTO work_role (active_work_slots, serialized_harnesses) VALUES (?, ?)",
+            "INSERT INTO work_role (active_work_slots, serialized_harnesses, driver)
+             VALUES (?, ?, ?)",
         )
         .bind(slots as i64)
         .bind(&serialized)
+        .bind(driver)
         .execute(&mut *self.connection)
         .await
-        .with_context(|| format!("recording a work role that dispatches {slots} slots"))?;
+        .with_context(|| {
+            format!("recording a work role that dispatches {slots} slots in {driver}")
+        })?;
+
+        self.touched.every_queue();
 
         Ok(())
     }

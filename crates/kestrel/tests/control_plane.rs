@@ -202,7 +202,7 @@ fn a_workspace(operator: &str) -> String {
         &["agent", "declare", "builder", "--model", "claude-opus-5"],
     );
 
-    ran(
+    let opened = client::ran(
         operator,
         &[
             "workspace",
@@ -211,6 +211,15 @@ fn a_workspace(operator: &str) -> String {
             "kestrel",
             "--agent",
             "builder",
+            "--json",
+            "workspace_id",
         ],
     )
+    .records()
+    .remove(0);
+
+    opened["workspace_id"]
+        .as_str()
+        .expect("the opened workspace's identifier")
+        .to_owned()
 }

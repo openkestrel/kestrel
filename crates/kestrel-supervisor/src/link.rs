@@ -26,12 +26,26 @@ const SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
 pub enum Instruction {
     Start {
         checkout: Checkout,
+        turn: i64,
         prompt: String,
+        harness: Harness,
+    },
+    Unbriefed {
+        checkout: Checkout,
         harness: Harness,
     },
     /// The next turn, in the conversation the Session's first one opened.
     Prompt {
+        turn: i64,
         prompt: String,
+    },
+    Interrupt {
+        turn: i64,
+    },
+    SetOption {
+        option: String,
+        value: String,
+        participant: String,
     },
     Stop,
     /// A control plane kestrel upgraded under a live Environment (ADR-0002) may send an
@@ -44,7 +58,10 @@ impl Instruction {
     pub const fn kind(&self) -> &'static str {
         match self {
             Instruction::Start { .. } => "start",
+            Instruction::Unbriefed { .. } => "unbriefed",
             Instruction::Prompt { .. } => "prompt",
+            Instruction::Interrupt { .. } => "interrupt",
+            Instruction::SetOption { .. } => "set_option",
             Instruction::Stop => "stop",
             Instruction::Unrecognized => "unrecognized",
         }
@@ -164,7 +181,6 @@ pub enum AnswerBody {
     Raw(reqwest::Body),
 }
 
-/// What to spawn for the Session, which may be another Agent's than the last Session's.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Harness {
     pub command: String,
@@ -172,6 +188,10 @@ pub struct Harness {
     pub auth: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub thought_level: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -194,6 +214,7 @@ pub enum Report {
     Stderr {
         lines: Vec<String>,
     },
+    Ready,
     Started,
     Model {
         model: String,
@@ -210,15 +231,54 @@ pub enum Report {
         entries: Vec<PlanEntry>,
         completion: Completion,
     },
-    Used {
+    ToolCall {
+        call_id: String,
+        title: String,
+        tool_kind: String,
+        status: ToolStatus,
+        input: serde_json::Value,
+        result: Box<serde_json::Value>,
+        closing_reason: Option<ClosingReason>,
+        completion: Completion,
+    },
+    SessionState {
+        tools: Vec<RunningTool>,
+        message_buffering: bool,
+        thought_buffering: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
+    },
+    /// Unnumbered and idempotent, and never a row (ADR-0041).
+    Usage {
         usage: Usage,
     },
-    Answered,
+    /// Unnumbered and idempotent: the whole state is said again after a reconnect (ADR-0041).
+    SessionInfo(SessionInfo),
+    OptionChanged {
+        participant: String,
+        option: String,
+        category: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refused: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<SessionOption>,
+    },
+    Answered {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
+    },
+    Interrupted,
     Checkout {
         repositories: Vec<Observed>,
     },
     Finished {
         exit: Exit,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<Usage>,
     },
 }
 
@@ -229,13 +289,19 @@ impl Report {
             Report::Heartbeat => "heartbeat",
             Report::Work { .. } => "work",
             Report::Stderr { .. } => "stderr",
+            Report::Ready => "ready",
             Report::Started => "started",
             Report::Model { .. } => "model",
             Report::Said { .. } => "said",
             Report::Thought { .. } => "thought",
             Report::Plan { .. } => "plan",
-            Report::Used { .. } => "used",
-            Report::Answered => "answered",
+            Report::ToolCall { .. } => "tool_call",
+            Report::SessionState { .. } => "session_state",
+            Report::Usage { .. } => "usage",
+            Report::SessionInfo { .. } => "session_info",
+            Report::OptionChanged { .. } => "option_changed",
+            Report::Answered { .. } => "answered",
+            Report::Interrupted => "interrupted",
             Report::Checkout { .. } => "checkout",
             Report::Finished { .. } => "finished",
         }
@@ -335,6 +401,81 @@ pub struct Usage {
 pub struct Cost {
     pub amount: f64,
     pub currency: String,
+}
+
+/// A legacy harness that offers only `modes` is reported through a synthesized `mode`-category
+/// option, so a reader sees one shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionInfo {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub options: Vec<SessionOption>,
+    #[serde(default)]
+    pub commands: Vec<SessionCommand>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOption {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(flatten)]
+    pub kind: SessionOptionKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionOptionKind {
+    Select {
+        current: String,
+        #[serde(default)]
+        values: Vec<SessionOptionValue>,
+        #[serde(default)]
+        groups: Vec<SessionOptionGroup>,
+    },
+    Boolean {
+        current: bool,
+    },
+}
+
+impl SessionOption {
+    pub fn is_category(&self, category: &str) -> bool {
+        self.category.as_deref() == Some(category)
+    }
+
+    pub fn current_value(&self) -> Option<String> {
+        match &self.kind {
+            SessionOptionKind::Select { current, .. } => Some(current.clone()),
+            SessionOptionKind::Boolean { current } => Some(current.to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOptionValue {
+    pub value: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOptionGroup {
+    pub group: String,
+    pub name: String,
+    pub values: Vec<SessionOptionValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCommand {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub input_hint: Option<String>,
 }
 
 /// What the Harness is spawned with to reach a model: variables for its environment, and
@@ -698,6 +839,23 @@ async fn refuse_if_declined(response: Response) -> Result<Response, Error> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClosingReason {
+    Interrupted,
+    Failed,
+    Unresolved,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Completion {
     pub started_at: jiff::Timestamp,
@@ -728,4 +886,12 @@ impl Completion {
             turn_outcome: None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RunningTool {
+    pub call_id: String,
+    pub title: String,
+    pub status: String,
+    pub started_at: jiff::Timestamp,
 }

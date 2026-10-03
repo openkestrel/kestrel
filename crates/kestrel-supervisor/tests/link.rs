@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use kestrel_supervisor::link::{
     self, Down, Error, Exit, Git, INSTRUCTIONS, Instruction, Link, Observed, REPORTS, Read, Report,
-    Reported,
+    Reported, ToolStatus,
 };
 
 mod support;
@@ -176,6 +176,32 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
                 lines: vec!["level=INFO message=init".to_owned()],
             },
         ),
+        (
+            Some("a-session"),
+            None,
+            Report::SessionState {
+                tools: vec![],
+                message_buffering: false,
+                thought_buffering: false,
+                usage: Some(usage()),
+            },
+        ),
+        (Some("a-session"), None, Report::Usage { usage: usage() }),
+        (Some("a-session"), None, Report::Ready),
+        (
+            Some("a-session"),
+            Some(1),
+            Report::ToolCall {
+                call_id: "call".to_owned(),
+                title: "read".to_owned(),
+                tool_kind: "read".to_owned(),
+                status: ToolStatus::Completed,
+                input: serde_json::json!({"path":"a"}),
+                result: Box::new(serde_json::json!({"output":"read"})),
+                closing_reason: None,
+                completion: link::Completion::at("2026-09-30T12:00:00Z".parse().unwrap()),
+            },
+        ),
         (Some("a-session"), Some(1), Report::Started),
         (
             Some("a-session"),
@@ -204,11 +230,33 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
         (
             Some("a-session"),
             Some(3),
+            Report::OptionChanged {
+                participant: "operator".to_owned(),
+                option: "model".to_owned(),
+                category: "model".to_owned(),
+                from: Some("scripted-mini".to_owned()),
+                to: Some("scripted-max".to_owned()),
+                refused: None,
+                options: Vec::new(),
+            },
+        ),
+        (
+            Some("a-session"),
+            Some(4),
             Report::Finished {
                 exit: Exit::Succeeded,
+                usage: Some(usage()),
             },
         ),
     ]
+}
+
+fn usage() -> link::Usage {
+    link::Usage {
+        context_used: 1_200,
+        context_size: 200_000,
+        cost: None,
+    }
 }
 
 #[tokio::test]
@@ -486,10 +534,23 @@ fn the_client_recognises_every_instruction_the_published_document_declares() {
             "start" => serde_json::json!({
                 "kind": kind,
                 "checkout": {"repositories": [], "base": "main", "branch": "main"},
+                "turn": 1,
                 "prompt": "do the work",
                 "harness": {"command": "opencode acp"},
             }),
-            "prompt" => serde_json::json!({"kind": kind, "prompt": "and the tests"}),
+            "unbriefed" => serde_json::json!({
+                "kind": kind,
+                "checkout": {"repositories": [], "base": "main", "branch": "main"},
+                "harness": {"command": "opencode acp"},
+            }),
+            "prompt" => serde_json::json!({"kind": kind, "turn": 2, "prompt": "and the tests"}),
+            "interrupt" => serde_json::json!({"kind": kind, "turn": 2}),
+            "set_option" => serde_json::json!({
+                "kind": kind,
+                "option": "model",
+                "value": "scripted-max",
+                "participant": "operator",
+            }),
             _ => serde_json::json!({"kind": kind}),
         };
         let instruction: Instruction = serde_json::from_value(sent).expect("an instruction");

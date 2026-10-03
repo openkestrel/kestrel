@@ -1670,6 +1670,7 @@ version = "0.0.0"
 dependencies = [
  "agent-client-protocol",
  "clap",
+ "serde_json",
  "tokio",
 ]
 

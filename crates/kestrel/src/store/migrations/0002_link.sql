@@ -9,6 +9,16 @@ CREATE TABLE session (
     ended_at TEXT,
     connected_at TEXT,
     supervisor_version TEXT,
+    -- Resolved at enqueue: the Session's own over the Trigger's over the Agent's (ADR-0041).
+    mode TEXT,
+    thought_level TEXT,
+    title TEXT,
+    config_options TEXT,
+    commands TEXT,
+    preparing TEXT,
+    changing_options TEXT,
+    interrupting_participant TEXT,
+    interrupting_at TEXT,
     UNIQUE (organization_id, name)
 ) STRICT;
 

@@ -12,11 +12,14 @@ holds an Instance and seals. Code: `work.rs`, `workspace.rs`, `instance.rs`, `ro
 stateDiagram-v2
     [*] --> Queued: enqueued by a firing, a post, or an operator
     Queued --> Working: claimed (slot free, Instance admitted)
+    Queued --> Unbriefed: claimed with no Brief and nothing posted (no slot)
     Queued --> Ended: stopped, or failed before it started
     Queued --> Unreachable: a blocker failed
+    Unbriefed --> Working: its first message becomes the Brief
     Working --> Waiting: supervisor reports answered
     Waiting --> Working: held input prompts the next Turn
     Working --> Ended: finished, stopped (failed), or lease lapsed (failed)
+    Unbriefed --> Ended: stopped, sealed, or replaced (succeeded), or lease lapsed (failed)
     Waiting --> Ended: stopped, sealed, or replaced (succeeded), or lease lapsed (failed)
     Ended --> [*]
     Unreachable --> [*]
@@ -24,10 +27,23 @@ stateDiagram-v2
 
 - **Only Working occupies an active-work slot** (`occupying_slots` counts `state = 'working'`).
   Waiting holds its Instance and ACP conversation but no slot ([ADR-0024](../adr/0024-a-run-spans-prompt-turns.md)).
+  An **Unbriefed** Session — its harness up and its conversation open, before its first message —
+  holds its Instance and no slot either, and counts against the live Instance limit like a Waiting
+  one ([ADR-0038](../adr/0038-a-session-may-start-before-its-brief.md)).
+- **An Unbriefed Session carries a preparing step** (`session.preparing`): `provisioning` from claim
+  until its supervisor connects, `cloning` until its checkout is reported, `starting_harness` until
+  the supervisor reports the harness up, and `harness_ready` once it does. It is current state, never a Transcript entry.
 - **A Session ends once.** `work::ending` is the single path; whoever reaches it first (the
   supervisor's `finished`, a stop, the lease sweep, the claimant failing) sets the exit, and later
   callers get the exit that stands. Ending appends `SessionEnded`, invalidates the link
   credential, records the Outcome delivery, and cascades Unreachable to dependents of a failure.
+- **A working Turn can be interrupted without ending the Session.** `work::interrupt` records
+  `interrupting {participant, requested_at}` on the Session and sends the link an `interrupt`
+  instruction; only a working Turn is interruptible, so every other phase is refused naming itself.
+  On the supervisor's `interrupted` report the control plane writes shared-state
+  `TurnInterrupted {session, participant}`, clears `interrupting`, closes the Turn, and prompts any
+  Held Message at once on the slot the Turn held; with none held the Session becomes Waiting. An
+  interrupted Turn never fails its Session and never trails.
 - **Stopping a Waiting Session succeeds** (`SessionState::stop_exit`). It has answered everything
   it was asked; ending it mid-turn is a failure.
 - **Unreachable has no exit.** A queued Session whose blocker failed never ran, so nothing failed
@@ -42,12 +58,32 @@ stateDiagram-v2
   Working as the only slot occupant, `held_input!` ordering and `work::goes_before_input`. A rule
   changed in one place changes both: unless older held input is prompted first, a free slot
   claims position 1.
+- **The snapshot also lists the unbriefed Sessions**, beside the Waiting ones and never numbered:
+  they hold their Instances and no slot, so they count against the live Instance limit alone. Each
+  carries its preparing step and any message held for its Brief. A queued Session whose Workspace
+  has no Brief shows only its Instance reasons and takes no position.
+- **The work role's record carries the Environment.** `work_role` holds the Active-Work Slot limit,
+  the serialized harnesses and the Compute driver (`Driver::name`), so the snapshot can say which
+  Environment work is provisioned in; with no record, no work role is dispatching.
+
+## Declared options
+
+A Session starts with the harness options its declaration named: `model`, `mode` and
+`thought_level`, each a harness value id, resolved per category — the Session's own over its
+Trigger's over its Agent's, a category named none staying at the harness's default (ADR-0041).
+The resolved values are frozen onto the Session at enqueue (`session.model`, `session.mode`,
+`session.thought_level`) and travel to the supervisor in the `start` instruction's `harness`.
+The supervisor checks each declared category against what the harness offers at setup and fails
+the Session naming the category and the value when there is no way to set it or the value is not
+offered; a declared mode a harness offers only as a legacy `modes` entry is set through
+`session/set_mode`. Recovery applies the declared values again. `PUT …/agents/{agent}/model`
+reaches no Session already enqueued.
 
 ## The unfinished Session
 
-A Workspace has at most one **Unfinished Session**: queued, working or waiting. Its successor never
-shares the checkout with it: every ending sends the Session's `stop` down its Instance's stream, and
-the successor's `start` follows it ([Link](link.md#instructions)).
+A Workspace has at most one **Unfinished Session**: queued, working, waiting or unbriefed. Its
+successor never shares the checkout with it: every ending sends the Session's `stop` down its
+Instance's stream, and the successor's `start` follows it ([Link](link.md#instructions)).
 
 What arrives while one exists is held, never interleaved:
 
@@ -60,6 +96,23 @@ What arrives while one exists is held, never interleaved:
 Session wins over pending messages. Several held messages reach the agent as one attributed prompt
 (`work::follow_up`); a lone one reaches it verbatim so a leading skill invocation still works.
 
+A Held Message is read by everyone, and its author may edit it (`edited_at` is stamped) or withdraw
+it, until a Turn takes it: a Turn marks the ones it takes `taken` in the same transaction as the
+`Messages` entry rather than deleting them, so ids are stable and never reused, and a sealed or
+drained Workspace can still be asked what it held. Neither an edit nor a withdrawal reaches the
+Transcript. A message whose text starts with `/` followed by a name in the Session's current
+`commands` (ADR-0041) is a command message, decided as it drains: the messages before the first one
+drain as one Turn as they always did, a command message at the front drains alone as its own Turn
+prompted with its whole text, and a `/` the harness offers no command for is an ordinary message.
+
+A message to a Session that has not started its first Turn is different: it becomes the Brief. That
+is immediate for a queued Session and for one already `harness_ready`, and happens the moment the
+supervisor reports ready when the Session is still preparing. The message is taken out of the held
+queue and written down with its author's join directly before it. Later posts are held, and the
+first Turn's prompt is the Brief alone, verbatim; held messages follow it as the next Turn once a
+slot frees. The first Turn competes by when the Brief was written against held input and queued
+Sessions, and the serialized-Profile rule applies to it then, not at dispatch.
+
 ## Execution
 
 `role/work.rs::dispatching` loops every 100 ms:
@@ -68,8 +121,13 @@ Session wins over pending messages. Several held messages reach the agent as one
    that supervisor so the next Session starts another.
 2. Stop the supervisor of, and destroy, each Instance queued in `instance_archive` (`archive`).
 3. `work::occupy`: if a slot is free, claim the oldest claimable queued Session, or, if held input
-   for a Waiting Session is older, prompt that instead. Claiming sets Working and starts a 2-minute
-   lease in one guarded update, so a Session is dispatched at most once.
+   for a Waiting Session or an unbriefed Session's first Turn asked earlier, prompt that instead.
+   A queued Session whose Workspace has no Brief and nothing posted is claimed whether or not a
+   slot is free, and without the serialized Profile check: it has no Turn to run, so it provisions
+   as Unbriefed while the person writes. `work::awaiting_a_brief` is the one rule the dispatcher
+   and the queue share. Claiming sets Working or Unbriefed and starts a 2-minute lease in one
+   guarded update, so a Session is dispatched at most once. Prompting an unbriefed Session's Brief
+   moves it to Working and starts its first Turn.
 4. For a claim, `execute` in its own task:
    - Fail early if nothing can reach a model (no Provider Credential, Subscription Profile, or
      configured ACP login), or the work role has no command for the Agent's harness.

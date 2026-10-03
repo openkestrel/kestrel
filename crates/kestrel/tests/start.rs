@@ -1,7 +1,7 @@
 mod support;
 
 use kestrel::domain::{Exit, SessionId, WorkspaceId};
-use kestrel::log::Entry;
+use kestrel::log::{BriefSource, Entry};
 use serde_json::Value;
 use support::client::{Finished, Invocation, Shown, ran_by, ran_on_a_terminal_by};
 use support::scripted_agent::{self, Script};
@@ -67,7 +67,7 @@ async fn declared(kestrel: &Kestrel) -> Vec<String> {
         for agent in kestrel.agents(&organization).await {
             declared.push(format!(
                 "agent {} {} {:?}",
-                agent.name, agent.harness, agent.model
+                agent.name, agent.harness, agent.declared.model
             ));
         }
         for held in kestrel.provider_credentials_held(&organization).await {
@@ -125,8 +125,14 @@ async fn one_command_takes_a_fresh_clone_and_an_empty_control_plane_to_a_session
     let transcript = kestrel.transcript(workspace).await;
     assert_eq!(
         transcript[0].entry,
+        Entry::ParticipantJoined {
+            participant: "opencode".to_owned(),
+        }
+    );
+    assert_eq!(
+        transcript[1].entry,
         Entry::Brief {
-            trigger: None,
+            source: BriefSource::Operator { participant: None },
             brief: BRIEF.to_owned(),
         }
     );

@@ -122,7 +122,7 @@ real implementation exists ([ADR-0022](../adr/0022-store-repository-traits-and-e
 | --- | --- | --- |
 | `Store` | `store/` | SQLite via sqlx. One repository module per aggregate, reached through `Tx`. |
 | `Log` | `log.rs` | The Transcript. Same database and transaction as `Store` ([ADR-0004](../adr/0004-store-and-log-are-one-transactional-domain.md)). |
-| `Fanout` | `fanout.rs` | A named no-op. Everything that would subscribe polls `Store` instead. |
+| `Fanout` | `fanout.rs` | The in-process hub a committed transaction hands its touched resources to; only the Organization change stream subscribes. Everything else polls `Store`. |
 | `Timer` | `timer.rs` | In-process sweeps; every due time lives in `Store`, so a restart loses none. |
 | `Work` | `work.rs` | Enqueue, claim, lease, reports, ending a Session. |
 | `Compute` | `compute/` | `Driver` enum over `Docker` and `LocalExec`, chosen once by `KESTREL_COMPUTE`. |
@@ -143,7 +143,7 @@ The rest of `crates/kestrel/src`, grouped by the page that covers them:
 
 | Boundary | Who is on the other side | What protects it |
 | --- | --- | --- |
-| Operator (7718) | A Client | A loopback bind, plus a loopback `Host` and same-origin `Origin` check ([ADR-0036](../adr/0036-the-browser-client-shares-the-loopback-operator-origin.md), [ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md)). |
+| Operator (7718) | A Client | A loopback bind, plus a loopback `Host` and same-origin `Origin` check ([ADR-0036](../adr/0036-the-browser-client-shares-the-loopback-operator-origin.md), [ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md), [ADR-0044](../adr/0044-the-browser-client-is-served-over-https.md)). |
 | Link (7717) | A supervisor | A per-Instance bearer credential, and a live lease for anything about a Session ([Link](link.md#authentication)). |
 | Webhooks (7717) | Any producer | The Integration's HMAC signing secret or shared secret. A refusal becomes no Event; the last one is kept on the Integration. |
 | Docker daemon | The control plane | socket-proxy's allowlist, on an internal network. |
@@ -157,14 +157,17 @@ supervisor ([ADR-0026](../adr/0026-kestrel-carries-named-credentials-never-a-run
 
 An accepted ADR is a decision, not a description. These are decided and not yet built:
 
-- **Transcript kinds** ([ADR-0020](../adr/0020-the-transcript-records-what-the-runtime-emits-in-kinds.md),
-  [ADR-0033](../adr/0033-expire-transcript-detail-in-place.md)): `log::Entry` holds shared state and narration.
-  Messages, thoughts and plans are recorded as completed units; tool calls and retention remain unbuilt.
+- **Trailing Sessions** ([ADR-0034](../adr/0034-completed-harness-updates-become-transcript-entries.md),
+  [ADR-0040](../adr/0040-a-session-trails-its-answer-while-its-work-runs.md)): the
+  [#372 implementation contract](https://github.com/openkestrel/kestrel/issues/372) intentionally
+  closes open tools unresolved at the answer and treats late activity updates as diagnostics.
+  The Session moves to Waiting and releases its active-work slot at the answer; the accepted
+  Trailing behavior remains unbuilt, scoped separately by [#370](https://github.com/openkestrel/kestrel/issues/370).
 - **Integration identity** ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)): there
   is no GitHub App. The Integration and the agent's `gh` both use tokens an operator supplies.
 - **Pull request state** ([ADR-0032](../adr/0032-a-pull-request-event-updates-workspace-state-without-a-firing.md)):
-  only `opened` is learned. Reopened, closed, merged and head-moved Events, ordering ties and the
-  sealed case are unbuilt.
+  opened, reopened, closed (including merges) and head-moved Events are learned. The Audit Record
+  that explains unattended attachment verdicts remains `0.4` work.
 - **Split roles**: `serve` and `work` parse separately but run correctly only in one process.
 - **Policy, Approvals, Questions, Workflows, Campaigns** exist in `GLOSSARY.md` and
   [`ROADMAP.md`](../../ROADMAP.md), not in code. `session_dependency` and the Unreachable state are

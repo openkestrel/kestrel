@@ -5,7 +5,7 @@ use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 
 use crate::cron::Cron;
 use crate::domain::{
-    Agent, Correlation, DisableReason, Event, EventRecordId, Fires, Firing, FiringBudget,
+    Agent, Correlation, Declared, DisableReason, Event, EventRecordId, Fires, Firing, FiringBudget,
     Organization, Project, Schedule, SubscriptionProfile, Templates, Trigger, TriggerId,
     TriggerState, Workspace, WorkspaceId,
 };
@@ -16,7 +16,7 @@ macro_rules! triggers_where {
     ($tail:literal) => {
         concat!(
             "SELECT id, organization_id, name, filter, every_ms, cron, zone, due_at, brief, branch, correlation, on_miss, on_open_workspace, project_id,
-                    agent_id, subscription_profile_id, state, applied, declared_at
+                    agent_id, subscription_profile_id, model, mode, thought_level, state, applied, declared_at
              FROM trigger
              WHERE ",
             $tail
@@ -45,6 +45,7 @@ impl<'a> Triggers<'a> {
         templates: &Templates,
         project: &Project,
         agent: &Agent,
+        declared: &Declared,
         allows: &[Agent],
         profile: Option<&SubscriptionProfile>,
         applied: bool,
@@ -57,6 +58,7 @@ impl<'a> Triggers<'a> {
             templates: templates.clone(),
             project: project.clone(),
             agent: agent.clone(),
+            declared: declared.clone(),
             allows: allows.to_vec(),
             profile: profile.cloned(),
             state: TriggerState::Enabled,
@@ -72,8 +74,9 @@ impl<'a> Triggers<'a> {
             "INSERT INTO trigger
                  (id, organization_id, name, filter, every_ms, cron, zone, due_at, brief, branch,
                   correlation, on_miss, on_open_workspace, project_id, agent_id,
-                  subscription_profile_id, state, applied, enabled_at, declared_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  subscription_profile_id, model, mode, thought_level, state, applied, enabled_at,
+                  declared_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(trigger.id.to_string())
         .bind(organization.id.to_string())
@@ -91,6 +94,9 @@ impl<'a> Triggers<'a> {
         .bind(project.id.to_string())
         .bind(agent.id.to_string())
         .bind(profile.map(|profile| profile.id.to_string()))
+        .bind(&trigger.declared.model)
+        .bind(&trigger.declared.mode)
+        .bind(&trigger.declared.thought_level)
         .bind(trigger.state.as_str())
         .bind(applied)
         .bind(trigger.declared_at.to_string())
@@ -116,6 +122,7 @@ impl<'a> Triggers<'a> {
         templates: &Templates,
         project: &Project,
         agent: &Agent,
+        declared: &Declared,
         allows: &[Agent],
         profile: Option<&SubscriptionProfile>,
         applied: bool,
@@ -127,8 +134,8 @@ impl<'a> Triggers<'a> {
             "UPDATE trigger
                 SET filter = ?, every_ms = ?, cron = ?, zone = ?, due_at = ?, brief = ?,
                     branch = ?, correlation = ?, on_miss = ?, on_open_workspace = ?,
-                    project_id = ?, agent_id = ?, subscription_profile_id = ?, applied = ?,
-                    declared_at = ?
+                    project_id = ?, agent_id = ?, subscription_profile_id = ?, model = ?,
+                    mode = ?, thought_level = ?, applied = ?, declared_at = ?
               WHERE id = ?",
         )
         .bind(columns.filter)
@@ -144,6 +151,9 @@ impl<'a> Triggers<'a> {
         .bind(project.id.to_string())
         .bind(agent.id.to_string())
         .bind(profile.map(|profile| profile.id.to_string()))
+        .bind(&declared.model)
+        .bind(&declared.mode)
+        .bind(&declared.thought_level)
         .bind(applied)
         .bind(declared_at.to_string())
         .bind(trigger.id.to_string())
@@ -157,6 +167,7 @@ impl<'a> Triggers<'a> {
             templates: templates.clone(),
             project: project.clone(),
             agent: agent.clone(),
+            declared: declared.clone(),
             allows: allows.to_vec(),
             profile: profile.cloned(),
             applied,
@@ -1002,6 +1013,11 @@ async fn trigger(connection: &mut SqliteConnection, row: &SqliteRow) -> Result<T
         },
         project,
         agent,
+        declared: Declared {
+            model: row.get("model"),
+            mode: row.get("mode"),
+            thought_level: row.get("thought_level"),
+        },
         allows,
         profile,
         state: state.clone(),

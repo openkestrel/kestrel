@@ -4,10 +4,10 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::time::Duration;
 
-use kestrel::domain::{EventRecordId, Exit, SessionId, WorkspaceId};
+use kestrel::domain::{EventRecordId, Exit, Preparing, SessionId, SessionState, WorkspaceId};
 use kestrel::instance::{Git, Observed};
 use kestrel::link;
-use kestrel::log::{Entry, Message};
+use kestrel::log::{BriefSource, Entry, Message, ToolStatus};
 use kestrel::operator;
 use kestrel::work;
 use reqwest::StatusCode;
@@ -151,6 +151,7 @@ const INTEGRATION: &str = "id,kind,repository,carries,polled_every,webhook_path,
 const EVENT: &str = "record,integration,event";
 const TRIGGER: &str = "id,name,state,brief";
 const WORKSPACE: &str = "id,name,state,continues";
+const OPENED: &str = "workspace,workspace_id,session,session_id";
 const SESSION: &str = "id,name,workspace,state,model";
 const ENTRY: &str = "seq,entry";
 
@@ -283,6 +284,13 @@ fn workspace_messages_at(organization: &str, workspace: &str) -> String {
     operator::WORKSPACE_MESSAGES
         .replace("{organization}", organization)
         .replace("{workspace}", workspace)
+}
+
+fn workspace_message_at(organization: &str, workspace: &str, message: i64) -> String {
+    operator::WORKSPACE_MESSAGE
+        .replace("{organization}", organization)
+        .replace("{workspace}", workspace)
+        .replace("{id}", &message.to_string())
 }
 
 fn workspace_seal_at(organization: &str, workspace: &str) -> String {
@@ -871,13 +879,23 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
                 "--agent",
                 "builder",
                 "--json",
-                WORKSPACE,
+                OPENED,
             ],
         )
         .await,
     );
-    let workspace = opened[0]["id"].as_str().expect("a workspace id").to_owned();
-    let workspace_name = generated_name(&opened[0]).to_owned();
+    let workspace = opened[0]["workspace_id"]
+        .as_str()
+        .expect("a workspace id")
+        .to_owned();
+    let workspace_name = opened[0]["workspace"]
+        .as_str()
+        .expect("a workspace name")
+        .to_owned();
+    let session = opened[0]["session_id"]
+        .as_str()
+        .expect("a session id")
+        .to_owned();
 
     let listed = recorded(
         &client(
@@ -893,7 +911,10 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
         )
         .await,
     );
-    assert_eq!(listed, opened);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["id"], workspace);
+    assert_eq!(listed[0]["name"], workspace_name);
+    generated_name(&listed[0]);
     let shown = recorded(
         &client(
             &kestrel,
@@ -901,51 +922,66 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
         )
         .await,
     );
-    assert_eq!(shown, opened);
-    assert_eq!(shown[0]["name"], workspace_name);
+    assert_eq!(shown, listed);
 
-    let posted = recorded(
+    let queued = recorded(
         &client(
             &kestrel,
             &[
-                "workspace",
-                "post",
-                &workspace,
-                "--as-participant",
-                "operator",
-                "start with the operator boundary",
+                "session",
+                "show",
+                &session,
+                "--organization",
+                "acme",
                 "--json",
                 SESSION,
             ],
         )
         .await,
     );
-    let session = posted[0]["id"].as_str().expect("a session id");
-    let first_session_name = generated_name(&posted[0]).to_owned();
-    assert_eq!(posted[0]["workspace"], workspace);
-    assert_eq!(posted[0]["state"], "queued");
+    assert_eq!(queued[0]["workspace"], workspace);
+    assert_eq!(queued[0]["state"], "queued");
+    let first_session_name = generated_name(&queued[0]).to_owned();
+    let refused = client(
+        &kestrel,
+        &[
+            "session",
+            "enqueue",
+            "--workspace",
+            &workspace,
+            "--json",
+            SESSION,
+        ],
+    )
+    .await;
+    assert!(
+        !refused.status.success(),
+        "a queued session holds the workspace"
+    );
+
+    let posted = client(
+        &kestrel,
+        &[
+            "workspace",
+            "post",
+            &workspace,
+            "--as-participant",
+            "operator",
+            "start with the operator boundary",
+        ],
+    )
+    .await;
+    succeeded(&posted);
     assert_eq!(
-        recorded(
-            &client(
-                &kestrel,
-                &[
-                    "session",
-                    "list",
-                    "--workspace",
-                    &workspace,
-                    "--json",
-                    SESSION
-                ]
-            )
-            .await
-        ),
-        posted
+        posted.out,
+        vec![session.clone()],
+        "a post to a queued session becomes its Brief and hands back the session"
     );
 
     let completed = kestrel
         .claim_session()
         .await
-        .expect("the posted session should wait for the worker");
+        .expect("the queued session should wait for the worker");
     assert_eq!(completed.id.to_string(), session);
     kestrel.complete_session(&completed).await;
     let sealed = recorded(
@@ -972,14 +1008,36 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
                 "--continues",
                 &workspace,
                 "--json",
-                WORKSPACE,
+                OPENED,
             ],
         )
         .await,
     );
-    let continuing = continued[0]["id"].as_str().expect("a continuing workspace");
-    assert_ne!(generated_name(&continued[0]), workspace_name);
-    assert_eq!(continued[0]["continues"], workspace);
+    let continuing = continued[0]["workspace_id"]
+        .as_str()
+        .expect("a continuing workspace")
+        .to_owned();
+    assert_ne!(continued[0]["workspace"], workspace_name);
+    let continuing_shown = recorded(
+        &client(
+            &kestrel,
+            &["workspace", "show", &continuing, "--json", WORKSPACE],
+        )
+        .await,
+    );
+    assert_eq!(continuing_shown[0]["continues"], workspace);
+
+    let continuing_session = continued[0]["session_id"]
+        .as_str()
+        .expect("a session id")
+        .to_owned();
+    let completed = kestrel
+        .claim_session()
+        .await
+        .expect("the continuation's session should claim");
+    assert_eq!(completed.id.to_string(), continuing_session);
+    kestrel.complete_session(&completed).await;
+
     let enqueued = recorded(
         &client(
             &kestrel,
@@ -987,7 +1045,7 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
                 "session",
                 "enqueue",
                 "--workspace",
-                continuing,
+                &continuing,
                 "--model",
                 "claude-opus-5",
                 "--json",
@@ -999,22 +1057,25 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
     assert_ne!(generated_name(&enqueued[0]), first_session_name);
     assert_eq!(enqueued[0]["workspace"], continuing);
     assert_eq!(enqueued[0]["model"], "claude-opus-5");
-    assert_eq!(
-        recorded(
-            &client(
-                &kestrel,
-                &[
-                    "session",
-                    "list",
-                    "--workspace",
-                    continuing,
-                    "--json",
-                    SESSION
-                ]
-            )
-            .await
-        ),
-        enqueued
+    let listed_sessions = recorded(
+        &client(
+            &kestrel,
+            &[
+                "session",
+                "list",
+                "--workspace",
+                &continuing,
+                "--json",
+                SESSION,
+            ],
+        )
+        .await,
+    );
+    assert!(
+        listed_sessions
+            .iter()
+            .any(|session| session["id"] == enqueued[0]["id"]),
+        "{listed_sessions:?}"
     );
 
     kestrel.teardown().await;
@@ -1040,21 +1101,40 @@ async fn a_client_enqueues_a_session_naming_its_agent_and_shows_what_it_runs_on(
     kestrel
         .declare_agent(&organization, "reviewer", "claude", Some("claude-opus-5"))
         .await;
-    let workspace = kestrel
-        .open_workspace("acme", "kestrel", "builder")
-        .await
-        .id
-        .to_string();
+    let opened = recorded(
+        &client(
+            &kestrel,
+            &[
+                "workspace",
+                "open",
+                "--organization",
+                "acme",
+                "--project",
+                "kestrel",
+                "--agent",
+                "builder",
+                "--json",
+                OPENED,
+            ],
+        )
+        .await,
+    );
+    let workspace = opened[0]["workspace_id"]
+        .as_str()
+        .expect("a workspace id")
+        .to_owned();
     const RUNS_ON: &str = "id,agent,harness,model";
 
+    let first = opened[0]["session_id"].as_str().expect("a session id");
     let built = recorded(
         &client(
             &kestrel,
             &[
                 "session",
-                "enqueue",
-                "--workspace",
-                &workspace,
+                "show",
+                first,
+                "--organization",
+                "acme",
                 "--json",
                 RUNS_ON,
             ],
@@ -1062,7 +1142,7 @@ async fn a_client_enqueues_a_session_naming_its_agent_and_shows_what_it_runs_on(
         .await,
     );
     kestrel
-        .complete_session(&kestrel.sessions(workspace.parse().expect("an id")).await[0])
+        .complete_session(&kestrel.session(first.parse().expect("an id")).await)
         .await;
     let reviewed = recorded(
         &client(
@@ -1123,7 +1203,42 @@ async fn a_client_naming_an_agent_the_organization_never_declared_enqueues_nothi
     kestrel
         .declare_agent(&organization, "builder", "opencode", None)
         .await;
-    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let opened = recorded(
+        &client(
+            &kestrel,
+            &[
+                "workspace",
+                "open",
+                "--organization",
+                "acme",
+                "--project",
+                "kestrel",
+                "--agent",
+                "builder",
+                "--json",
+                OPENED,
+            ],
+        )
+        .await,
+    );
+    let workspace: WorkspaceId = opened[0]["workspace_id"]
+        .as_str()
+        .expect("a workspace id")
+        .parse()
+        .expect("a workspace identifier");
+    kestrel
+        .complete_session(
+            &kestrel
+                .session(
+                    opened[0]["session_id"]
+                        .as_str()
+                        .expect("a session id")
+                        .parse()
+                        .expect("a session identifier"),
+                )
+                .await,
+        )
+        .await;
 
     let refused = client(
         &kestrel,
@@ -1131,7 +1246,7 @@ async fn a_client_naming_an_agent_the_organization_never_declared_enqueues_nothi
             "session",
             "enqueue",
             "--workspace",
-            &workspace.id.to_string(),
+            &workspace.to_string(),
             "--agent",
             "reviewer",
         ],
@@ -1144,7 +1259,7 @@ async fn a_client_naming_an_agent_the_organization_never_declared_enqueues_nothi
         failed(&refused)
     );
     assert_eq!(refused.status.code(), Some(3));
-    assert!(kestrel.sessions(workspace.id).await.is_empty());
+    assert_eq!(kestrel.sessions(workspace).await.len(), 1);
 
     kestrel.teardown().await;
 }
@@ -1821,13 +1936,14 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
 
     let (status, _) = got(&kestrel, &workspaces).await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _) = declared(
+    let (status, refused) = declared(
         &kestrel,
         &workspaces,
         &json!({ "project": "nowhere", "agent": "builder" }),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(refused["field"], "project");
     let (status, opened) = declared(
         &kestrel,
         &workspaces,
@@ -1835,13 +1951,28 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
-    let workspace = opened["id"].as_str().expect("a workspace id");
+    let workspace = opened["workspace"]["id"].as_str().expect("a workspace id");
+    let session_id = opened["session"]["id"].as_str().expect("a session id");
+    let session_name = opened["session"]["name"]
+        .as_str()
+        .expect("a generated session name");
+    assert_eq!(opened["session"]["state"], "queued");
+    let (status, listed) = got(&kestrel, &workspaces).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed[0]["session"]["id"], session_id, "{listed}");
+    assert!(listed[0]["queue"]["reasons"].is_array(), "{listed}");
     let shown = workspace_at("acme", workspace);
     let messages = workspace_messages_at("acme", workspace);
     let sessions = sessions_of("acme", workspace);
 
     let (status, _) = got(&kestrel, &shown).await;
     assert_eq!(status, StatusCode::OK);
+    let (status, listed_sessions) = got(&kestrel, &sessions).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed_sessions.as_array().expect("sessions").len(), 1);
+    let (status, refused) = declared(&kestrel, &sessions, &json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+
     let (status, posted) = declared(
         &kestrel,
         &messages,
@@ -1849,14 +1980,9 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(posted["workspace"], workspace);
-    let (status, _) = got(&kestrel, &sessions).await;
-    assert_eq!(status, StatusCode::OK);
-    let (status, _) = declared(&kestrel, &sessions, &json!({})).await;
-    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(posted["session"]["id"], session_id, "{posted}");
+    assert!(posted["held_message"].is_null(), "{posted}");
 
-    let session_id = posted["id"].as_str().expect("a session id");
-    let session_name = posted["name"].as_str().expect("a generated session name");
     let (status, shown_session) = got(&kestrel, &session_at("acme", session_id)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(shown_session["workspace"], workspace);
@@ -1867,7 +1993,7 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     let session = kestrel
         .claim_session()
         .await
-        .expect("the posted session should wait for the worker");
+        .expect("the queued session should wait for the worker");
     kestrel.complete_session(&session).await;
     let seal = workspace_seal_at("acme", workspace);
     let (status, _) = declared(&kestrel, &seal, &json!({})).await;
@@ -1881,7 +2007,9 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
-    let workspace_name = opened["name"].as_str().expect("a generated workspace name");
+    let workspace_name = opened["workspace"]["name"]
+        .as_str()
+        .expect("a generated workspace name");
     let (status, _) = declared(
         &kestrel,
         &workspaces,
@@ -1893,6 +2021,627 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     let nowhere = workspace_at("acme", "01a0a2d8-baf8-7c02-99fa-7280f174c14a");
     let (status, _) = got(&kestrel, &nowhere).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+
+    kestrel.teardown().await;
+}
+
+async fn ready_to_open(kestrel: &Kestrel) -> kestrel::domain::Organization {
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    kestrel
+        .declare_agent(&organization, "reviewer", "opencode", None)
+        .await;
+    kestrel
+        .declare_profile("acme", "jack", "Jack")
+        .await
+        .expect("the profile should declare");
+
+    organization
+}
+
+fn workspace_of(record: &Value) -> WorkspaceId {
+    record["id"]
+        .as_str()
+        .expect("a workspace id")
+        .parse()
+        .expect("a workspace identifier")
+}
+
+#[tokio::test]
+async fn an_open_carries_its_brief_and_its_author_and_answers_with_both_records() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+
+    let (status, opened) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({
+            "project": "kestrel",
+            "agent": "builder",
+            "model": "claude-opus-5",
+            "brief": "Fix the flaky test",
+            "participant": "alice",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    assert_eq!(opened["session"]["state"], "queued");
+    assert_eq!(opened["session"]["model"], "claude-opus-5");
+    assert_eq!(opened["workspace"]["started_by"], "alice");
+    let workspace = workspace_of(&opened["workspace"]);
+    let transcript = kestrel.transcript(workspace).await;
+    assert_eq!(
+        transcript[0].entry,
+        Entry::ParticipantJoined {
+            participant: "builder".to_owned(),
+        }
+    );
+    assert_eq!(
+        transcript[1].entry,
+        Entry::ParticipantJoined {
+            participant: "alice".to_owned(),
+        }
+    );
+    assert_eq!(
+        transcript[2].entry,
+        Entry::Brief {
+            source: BriefSource::Operator {
+                participant: Some("alice".to_owned()),
+            },
+            brief: "Fix the flaky test".to_owned(),
+        }
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_open_without_a_brief_queues_a_session_a_message_becomes_its_brief() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+
+    let (status, opened) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({ "project": "kestrel", "agent": "builder" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    assert_eq!(opened["session"]["state"], "queued");
+    assert!(opened["workspace"]["started_by"].is_null(), "{opened}");
+    let workspace = workspace_of(&opened["workspace"]);
+    let transcript = kestrel.transcript(workspace).await;
+    assert_eq!(transcript.len(), 1);
+    assert_eq!(
+        transcript[0].entry,
+        Entry::ParticipantJoined {
+            participant: "builder".to_owned(),
+        }
+    );
+
+    let (status, posted) = declared(
+        &kestrel,
+        &workspace_messages_at("acme", &workspace.to_string()),
+        &json!({ "participant": "alice", "message": "what I want" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(posted["session"]["id"], opened["session"]["id"], "{posted}");
+    assert!(posted["held_message"].is_null(), "{posted}");
+    let transcript = kestrel.transcript(workspace).await;
+    assert_eq!(
+        transcript[1].entry,
+        Entry::ParticipantJoined {
+            participant: "alice".to_owned(),
+        }
+    );
+    assert_eq!(
+        transcript[2].entry,
+        Entry::Brief {
+            source: BriefSource::Operator {
+                participant: Some("alice".to_owned()),
+            },
+            brief: "what I want".to_owned(),
+        }
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_brief_without_a_participant_records_the_operator_and_joins_no_one() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+
+    let (status, opened) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({
+            "project": "kestrel",
+            "agent": "builder",
+            "brief": "Do the work",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    assert!(opened["workspace"]["started_by"].is_null(), "{opened}");
+    let transcript = kestrel.transcript(workspace_of(&opened["workspace"])).await;
+    assert_eq!(
+        transcript
+            .iter()
+            .map(|entry| &entry.entry)
+            .collect::<Vec<_>>(),
+        [
+            &Entry::ParticipantJoined {
+                participant: "builder".to_owned(),
+            },
+            &Entry::Brief {
+                source: BriefSource::Operator { participant: None },
+                brief: "Do the work".to_owned(),
+            },
+        ]
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_refused_open_names_its_field_and_leaves_the_organization_empty() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+
+    for (body, status, field) in [
+        (
+            json!({ "project": "nowhere", "agent": "builder" }),
+            StatusCode::NOT_FOUND,
+            "project",
+        ),
+        (
+            json!({ "project": "kestrel", "agent": "nowhere" }),
+            StatusCode::NOT_FOUND,
+            "agent",
+        ),
+        (
+            json!({ "project": "kestrel", "agent": "builder", "profile": "nowhere" }),
+            StatusCode::NOT_FOUND,
+            "profile",
+        ),
+        (
+            json!({ "project": "kestrel", "agent": "builder", "continues": "nowhere" }),
+            StatusCode::NOT_FOUND,
+            "continues",
+        ),
+        (
+            json!({ "project": "kestrel", "agent": "builder", "branch": "  " }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "branch",
+        ),
+        (
+            json!({ "project": "kestrel", "agent": "builder", "model": "" }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "model",
+        ),
+        (
+            json!({ "project": "kestrel", "agent": "builder", "brief": "  " }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "brief",
+        ),
+        (
+            json!({ "project": "kestrel", "agent": "builder", "participant": "alice" }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "participant",
+        ),
+    ] {
+        let (answered, refusal) = declared(&kestrel, &workspaces, &body).await;
+
+        assert_eq!(answered, status, "{body}: {refusal}");
+        assert_eq!(refusal["field"], field, "{body}: {refusal}");
+        assert!(
+            listed_nothing(&kestrel, &workspaces).await,
+            "{body} left a workspace behind"
+        );
+        assert_eq!(listed(&kestrel, &projects_of("acme")).await.len(), 1);
+        assert_eq!(listed(&kestrel, &agents_of("acme")).await.len(), 2);
+    }
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_brief_written_under_an_agents_name_is_refused_on_participant() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+
+    let (status, refusal) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({
+            "project": "kestrel",
+            "agent": "builder",
+            "brief": "Fix the flaky test",
+            "participant": "reviewer",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(refusal["field"], "participant", "{refusal}");
+    assert!(listed_nothing(&kestrel, &workspaces).await);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_continuation_that_is_open_or_names_a_branch_is_refused_and_leaves_nothing_behind() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+
+    let (status, opened) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({ "project": "kestrel", "agent": "builder" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let open = workspace_of(&opened["workspace"]);
+    let (status, refusal) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({
+            "project": "kestrel",
+            "agent": "builder",
+            "continues": open.to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(refusal["field"], "continues", "{refusal}");
+
+    let opened = kestrel
+        .claim_session()
+        .await
+        .expect("the open's session should claim");
+    assert_eq!(opened.workspace, open);
+    kestrel.complete_session(&opened).await;
+    let sealed = {
+        let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+        let session = kestrel.dispatch_session(workspace.id).await;
+        kestrel.complete_session(&session).await;
+        kestrel.seal_workspace(workspace.id).await
+    };
+    let held = listed(&kestrel, &workspaces).await.len();
+    let (status, refusal) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({
+            "project": "kestrel",
+            "agent": "builder",
+            "continues": sealed.id.to_string(),
+            "branch": "topic",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(refusal["field"], "branch", "{refusal}");
+    assert_eq!(listed(&kestrel, &workspaces).await.len(), held);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_start_and_an_operator_open_reach_the_same_transcript() {
+    let kestrel = Kestrel::boot().await;
+
+    let (status, started) = declared(
+        &kestrel,
+        operator::STARTS,
+        &a_start("acme", "opencode", "Fix the flaky test"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{started}");
+    let started = kestrel
+        .transcript(workspace_of(&started["workspace"]))
+        .await;
+
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+    let (status, opened) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({
+            "project": "kestrel",
+            "agent": "builder",
+            "brief": "Fix the flaky test",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let opened = kestrel.transcript(workspace_of(&opened["workspace"])).await;
+
+    assert_eq!(
+        started.iter().map(|entry| &entry.entry).collect::<Vec<_>>(),
+        opened.iter().map(|entry| &entry.entry).collect::<Vec<_>>(),
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_client_opens_a_workspace_with_a_brief_a_model_and_a_participant() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+
+    let opened = recorded(
+        &client::ran_by(
+            &kestrel,
+            &[
+                "workspace",
+                "open",
+                "--organization",
+                "acme",
+                "--project",
+                "kestrel",
+                "--agent",
+                "builder",
+                "--brief",
+                "@notes.md",
+                "--model",
+                "claude-opus-5",
+                "--as-participant",
+                "alice",
+                "--json",
+                OPENED,
+            ],
+            client::Invocation::default().file("notes.md", "Fix the flaky test"),
+        )
+        .await,
+    );
+    let workspace = workspace_of(&json!({ "id": opened[0]["workspace_id"] }));
+    let shown = recorded(
+        &client(
+            &kestrel,
+            &[
+                "workspace",
+                "show",
+                &workspace.to_string(),
+                "--json",
+                "id,started_by",
+            ],
+        )
+        .await,
+    );
+    assert_eq!(shown[0]["started_by"], "alice");
+    let transcript = kestrel.transcript(workspace).await;
+    assert_eq!(
+        transcript[2].entry,
+        Entry::Brief {
+            source: BriefSource::Operator {
+                participant: Some("alice".to_owned()),
+            },
+            brief: "Fix the flaky test".to_owned(),
+        }
+    );
+
+    let piped = recorded(
+        &client_given(
+            &kestrel,
+            &[
+                "workspace",
+                "open",
+                "--organization",
+                "acme",
+                "--project",
+                "kestrel",
+                "--agent",
+                "builder",
+                "--brief",
+                "-",
+                "--json",
+                OPENED,
+            ],
+            Some("From standard input"),
+        )
+        .await,
+    );
+    let piped = workspace_of(&json!({ "id": piped[0]["workspace_id"] }));
+    assert_eq!(
+        kestrel.transcript(piped).await[1].entry,
+        Entry::Brief {
+            source: BriefSource::Operator { participant: None },
+            brief: "From standard input".to_owned(),
+        }
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_later_session_enqueue_refuses_a_workspace_that_never_had_a_session() {
+    let kestrel = Kestrel::boot().await;
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+
+    let refused = client(
+        &kestrel,
+        &[
+            "session",
+            "enqueue",
+            "--workspace",
+            &workspace.id.to_string(),
+        ],
+    )
+    .await;
+
+    assert!(
+        failed(&refused).contains("has never had a session"),
+        "{}",
+        failed(&refused)
+    );
+    assert_eq!(refused.status.code(), Some(4));
+    assert!(kestrel.sessions(workspace.id).await.is_empty());
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_unbriefed_session_shows_its_state_and_preparing_step_everywhere() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+
+    let (status, opened) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({ "project": "kestrel", "agent": "builder" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let workspace = workspace_of(&opened["workspace"]).to_string();
+    let session = opened["session"]["id"]
+        .as_str()
+        .expect("a session id")
+        .to_owned();
+
+    let queued = recorded(
+        &client(
+            &kestrel,
+            &[
+                "session",
+                "show",
+                &session,
+                "--organization",
+                "acme",
+                "--json",
+                "state,preparing",
+            ],
+        )
+        .await,
+    );
+    assert_eq!(queued[0], json!({ "state": "queued", "preparing": null }));
+
+    let claimed = kestrel
+        .claim_session()
+        .await
+        .expect("the queued session should claim");
+    assert_eq!(claimed.state, SessionState::Unbriefed);
+    assert_eq!(claimed.preparing, Some(Preparing::Provisioning));
+
+    let provisioning = recorded(
+        &client(
+            &kestrel,
+            &[
+                "session",
+                "show",
+                &session,
+                "--organization",
+                "acme",
+                "--json",
+                "state,preparing",
+            ],
+        )
+        .await,
+    );
+    assert_eq!(
+        provisioning[0],
+        json!({ "state": "unbriefed", "preparing": "provisioning" })
+    );
+
+    kestrel.report_ready(&claimed).await;
+    let ready = recorded(
+        &client(
+            &kestrel,
+            &[
+                "session",
+                "show",
+                &session,
+                "--organization",
+                "acme",
+                "--json",
+                "state,preparing",
+            ],
+        )
+        .await,
+    );
+    assert_eq!(
+        ready[0],
+        json!({ "state": "unbriefed", "preparing": "harness_ready" })
+    );
+
+    let listed = recorded(
+        &client(
+            &kestrel,
+            &[
+                "session",
+                "list",
+                "--workspace",
+                &workspace,
+                "--json",
+                "state,preparing",
+            ],
+        )
+        .await,
+    );
+    assert_eq!(
+        listed,
+        vec![json!({ "state": "unbriefed", "preparing": "harness_ready" })]
+    );
+
+    let shown = recorded(
+        &client(
+            &kestrel,
+            &[
+                "workspace",
+                "show",
+                &workspace,
+                "--json",
+                "unfinished_session",
+            ],
+        )
+        .await,
+    );
+    assert_eq!(shown[0]["unfinished_session"]["state"], "unbriefed");
+    assert_eq!(shown[0]["unfinished_session"]["preparing"], "harness_ready");
+
+    let (status, read) = got(&kestrel, &session_at("acme", &session)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(read["state"], "unbriefed");
+    assert_eq!(read["preparing"], "harness_ready");
+    let (status, read) = got(&kestrel, &workspace_at("acme", &workspace)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(read["unfinished_session"]["state"], "unbriefed");
+    assert_eq!(read["unfinished_session"]["preparing"], "harness_ready");
 
     kestrel.teardown().await;
 }
@@ -1938,6 +2687,175 @@ async fn a_post_names_its_participant_and_refuses_an_agents_name() {
             "{body}: {refusal}"
         );
         assert_eq!(refusal["field"], "participant", "{body}: {refusal}");
+    }
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn held_messages_are_listed_edited_and_withdrawn_over_the_boundary() {
+    let kestrel = Kestrel::boot().await;
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let active = kestrel.dispatch_session(workspace.id).await;
+    let messages = workspace_messages_at("acme", &workspace.id.to_string());
+    let shown = workspace_at("acme", &workspace.id.to_string());
+
+    let (status, posted) = declared(
+        &kestrel,
+        &messages,
+        &json!({ "participant": "alice", "message": "one more change" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(posted["session"].is_null(), "{posted}");
+    let id = posted["held_message"]["id"]
+        .as_i64()
+        .unwrap_or_else(|| panic!("the post answers with the held id: {posted}"));
+    assert_eq!(posted["held_message"]["participant"], "alice");
+    assert_eq!(posted["held_message"]["message"], "one more change");
+    assert!(posted["held_message"]["edited_at"].is_null());
+    let at = workspace_message_at("acme", &workspace.id.to_string(), id);
+
+    let (status, shown_workspace) = got(&kestrel, &shown).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(shown_workspace["held_messages"][0]["id"], id);
+    assert_eq!(
+        shown_workspace["held_messages"][0]["message"],
+        "one more change"
+    );
+
+    let before = payload_entries(&kestrel, &workspace.id.to_string()).await;
+    let (status, edited) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &at,
+        Some(&json!({ "participant": "alice", "message": "the edited change" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["id"], id);
+    assert_eq!(edited["message"], "the edited change");
+    assert!(!edited["edited_at"].is_null(), "an edit is stamped");
+    assert_eq!(
+        payload_entries(&kestrel, &workspace.id.to_string()).await,
+        before,
+        "an edit writes no Transcript entry"
+    );
+
+    let (status, refusal) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &at,
+        Some(&json!({ "participant": "bob", "message": "mine now" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refusal}");
+    let (status, refusal) = requested(
+        &kestrel,
+        reqwest::Method::DELETE,
+        &at,
+        Some(&json!({ "participant": "bob" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refusal}");
+    let (status, refusal) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &at,
+        Some(&json!({ "participant": "builder", "message": "mine now" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(refusal["field"], "participant", "{refusal}");
+
+    let (status, withdrawal) = requested(
+        &kestrel,
+        reqwest::Method::DELETE,
+        &at,
+        Some(&json!({ "participant": "alice" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{withdrawal}");
+    assert!(withdrawal.is_null(), "{withdrawal}");
+    assert_eq!(
+        payload_entries(&kestrel, &workspace.id.to_string()).await,
+        before,
+        "a withdrawal writes no Transcript entry"
+    );
+
+    let (status, refusal) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &at,
+        Some(&json!({ "participant": "alice", "message": "changed my mind" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert!(
+        refusal["message"]
+            .as_str()
+            .is_some_and(|why| why.contains("already withdrawn")),
+        "{refusal}"
+    );
+
+    let (status, posted) = declared(
+        &kestrel,
+        &messages,
+        &json!({ "participant": "alice", "message": "a later thing" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let later = posted["held_message"]["id"]
+        .as_i64()
+        .expect("the later message's id");
+    assert_ne!(
+        later, id,
+        "a message posted after one drained gets a new id"
+    );
+    kestrel.complete_session(&active).await;
+    kestrel
+        .claim_session()
+        .await
+        .expect("the later message starts a Session");
+    let (status, refusal) = requested(
+        &kestrel,
+        reqwest::Method::DELETE,
+        &workspace_message_at("acme", &workspace.id.to_string(), later),
+        Some(&json!({ "participant": "alice" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert!(
+        refusal["message"]
+            .as_str()
+            .is_some_and(|why| why.contains("already sent to the agent")),
+        "{refusal}"
+    );
+
+    for id in ["424242", "not-a-number"] {
+        let (status, refusal) = requested(
+            &kestrel,
+            reqwest::Method::PUT,
+            &operator::WORKSPACE_MESSAGE
+                .replace("{organization}", "acme")
+                .replace("{workspace}", &workspace.id.to_string())
+                .replace("{id}", id),
+            Some(&json!({ "participant": "alice", "message": "nowhere" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{refusal}");
     }
 
     kestrel.teardown().await;
@@ -2156,10 +3074,17 @@ async fn a_start_declares_its_setup_and_reaches_a_session_carrying_its_brief() {
         .expect("a workspace id")
         .parse()
         .expect("a workspace identifier");
+    let transcript = kestrel.transcript(workspace).await;
     assert_eq!(
-        kestrel.transcript(workspace).await[0].entry,
+        transcript[0].entry,
+        Entry::ParticipantJoined {
+            participant: "builder".to_owned(),
+        }
+    );
+    assert_eq!(
+        transcript[1].entry,
         Entry::Brief {
-            trigger: None,
+            source: BriefSource::Operator { participant: None },
             brief: "Fix the flaky test".to_owned(),
         }
     );
@@ -3471,7 +4396,11 @@ async fn the_queue_reads_the_recorded_dispatch_which_a_restart_with_new_flags_re
     let first = recorded(&kestrel, 3).await;
     assert_eq!(
         first["work_role"],
-        json!({ "active_work_slots": 3, "serialized_harnesses": ["codex"] }),
+        json!({
+            "active_work_slots": 3,
+            "serialized_harnesses": ["codex"],
+            "driver": "local-exec",
+        }),
     );
 
     let restarted = kestrel
@@ -3482,7 +4411,11 @@ async fn the_queue_reads_the_recorded_dispatch_which_a_restart_with_new_flags_re
     let replaced = recorded(&restarted, 5).await;
     assert_eq!(
         replaced["work_role"],
-        json!({ "active_work_slots": 5, "serialized_harnesses": ["codex"] }),
+        json!({
+            "active_work_slots": 5,
+            "serialized_harnesses": ["codex"],
+            "driver": "local-exec",
+        }),
     );
 
     // The queue is read for acme whatever workspaces it has or does not have.
@@ -3631,6 +4564,12 @@ async fn a_terminal_reads_the_kestrel_queue_with_the_limits_said_first() {
         said.contains("live instances     unbounded; 0 counted"),
         "{said}"
     );
+    assert!(
+        said.lines()
+            .any(|line| line.starts_with("environment")
+                && line.contains("no work role is dispatching")),
+        "the environment is not said first: {said}"
+    );
     // The table's own labels and the enqueued times are truncated on a terminal this wide.
     assert!(
         said.contains("position  name"),
@@ -3754,7 +4693,7 @@ async fn sharing_a_serialized_profile(kestrel: &Kestrel, maximum: Option<usize>,
         .declare_profile("acme", "jack", "Jack")
         .await
         .expect("the profile should declare");
-    kestrel.record_dispatch(slots).await;
+    kestrel.record_dispatch(slots, "local-exec").await;
 }
 
 async fn jacks_workspace(kestrel: &Kestrel) -> WorkspaceId {
@@ -3978,6 +4917,175 @@ fn waiting_row<'a>(queue: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no waiting Session {name}: {queue}"))
 }
 
+fn unbriefed_row<'a>(queue: &'a Value, name: &str) -> &'a Value {
+    queue["unbriefed"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the snapshot's unbriefed Sessions: {queue}"))
+        .iter()
+        .find(|row| row["name"] == name)
+        .unwrap_or_else(|| panic!("no unbriefed Session {name}: {queue}"))
+}
+
+/// Its harness is not up yet, so a message posted to it is held.
+async fn an_unbriefed_session(
+    kestrel: &Kestrel,
+    organization: &str,
+    project: &str,
+    instance: &str,
+) -> (WorkspaceId, kestrel::domain::Session) {
+    let workspace = a_queued_workspace_in(kestrel, organization, project).await;
+    let queued = kestrel.enqueue_session_with_nothing_posted(workspace).await;
+    let session = kestrel
+        .claim_session()
+        .await
+        .expect("the unbriefed session should claim");
+    assert_eq!(session.id, queued.id);
+    kestrel.executes_on(&session, instance).await;
+
+    (workspace, session)
+}
+
+#[tokio::test]
+async fn an_unbriefed_session_stands_beside_the_waiting_ones_without_a_slot_of_its_own() {
+    let kestrel = Kestrel::boot().await;
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+
+    let waiting = a_waiting_session(
+        &kestrel,
+        a_queued_workspace_in(&kestrel, "acme", "kestrel").await,
+    )
+    .await;
+    let holding = kestrel
+        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    kestrel.executes_on(&holding, "docker/holding").await;
+    let (getting_ready, unbriefed) =
+        an_unbriefed_session(&kestrel, "acme", "kestrel", "docker/getting-ready").await;
+    let also_queued = kestrel
+        .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+
+    let queue = queue_read(&kestrel).await;
+    assert_eq!(
+        waiting_row(&queue, &waiting.name)["pending_since"],
+        Value::Null
+    );
+    let row = unbriefed_row(&queue, &unbriefed.name);
+    assert_eq!(row["preparing"], "provisioning");
+    assert_eq!(row["pending_since"], Value::Null);
+    assert_eq!(
+        numbered(&queue)
+            .iter()
+            .map(|row| row["name"].clone())
+            .collect::<Vec<_>>(),
+        [json!(also_queued.name)],
+        "an unbriefed Session was numbered in the queue"
+    );
+    assert_eq!(
+        queue["active_work"]["occupied"], 1,
+        "only the Working Session holds an Active-Work Slot"
+    );
+    assert_eq!(
+        queue["instances"]["count"], 3,
+        "the unbriefed Session's Instance counts against the live limit"
+    );
+    assert!(
+        queue["instances"]["counted"]
+            .as_array()
+            .expect("the counted Instances")
+            .contains(&json!("docker/getting-ready"))
+    );
+
+    kestrel
+        .post_while_busy(getting_ready, "alice", "what I want")
+        .await;
+    assert!(kestrel.has_pending_messages(getting_ready).await);
+    let queue = queue_read(&kestrel).await;
+    assert!(unbriefed_row(&queue, &unbriefed.name)["pending_since"].is_string());
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_queued_session_with_no_brief_waits_only_on_its_instance_and_is_never_numbered() {
+    let kestrel = Kestrel::boot().await;
+    let organization = kestrel.declare_limited_organization("acme", 1).await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    let holding = kestrel
+        .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
+        .await;
+    kestrel.executes_on(&holding, "docker/holding").await;
+
+    let queued = kestrel
+        .enqueue_session_with_nothing_posted(
+            a_queued_workspace_in(&kestrel, "acme", "kestrel").await,
+        )
+        .await;
+
+    let queue = queue_read(&kestrel).await;
+    let row = numbered(&queue)
+        .into_iter()
+        .find(|row| row["name"] == queued.name)
+        .expect("the queued Session");
+    assert_eq!(row["position"], Value::Null);
+    assert_eq!(
+        row["reasons"],
+        json!([{ "kind": "live_instance_limit", "limit": 1 }]),
+        "a queued Session with no Brief waits only on its Instance"
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn the_queue_names_the_compute_driver_the_work_role_recorded() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+
+    let (status, queue) = got(&kestrel, &queue_of("acme")).await;
+    assert_eq!(status, StatusCode::OK, "{queue}");
+    assert_eq!(
+        queue["work_role"],
+        Value::Null,
+        "no work role is dispatching"
+    );
+
+    kestrel.record_dispatch(2, "docker").await;
+    let (status, queue) = got(&kestrel, &queue_of("acme")).await;
+    assert_eq!(status, StatusCode::OK, "{queue}");
+    assert_eq!(
+        queue["work_role"],
+        json!({
+            "active_work_slots": 2,
+            "serialized_harnesses": ["codex"],
+            "driver": "docker",
+        }),
+    );
+
+    kestrel.teardown().await;
+}
+
 #[tokio::test]
 async fn a_waiting_session_with_held_input_says_why_its_next_turn_has_not_started() {
     let kestrel = Kestrel::boot().await;
@@ -4122,14 +5230,13 @@ async fn a_session_that_failed_to_dispatch_shows_as_ended_and_not_as_waiting() {
     kestrel.teardown().await;
 }
 
-/// A ready Session, one blocked on the Working holder of a serialized profile, and a Waiting
-/// Session the profile holds back with input beside one only waiting for a turn.
 struct EveryKind {
     holding: kestrel::domain::Session,
     ready: kestrel::domain::Session,
     blocked: kestrel::domain::Session,
     prompted: kestrel::domain::Session,
     waiting: kestrel::domain::Session,
+    unbriefed: kestrel::domain::Session,
 }
 
 async fn a_queue_of_every_kind(kestrel: &Kestrel) -> EveryKind {
@@ -4147,6 +5254,15 @@ async fn a_queue_of_every_kind(kestrel: &Kestrel) -> EveryKind {
     kestrel
         .post_while_busy(jacks, "jack", "one more thing")
         .await;
+    let (getting_ready, unbriefed) =
+        an_unbriefed_session(kestrel, "acme", "kestrel", "docker/getting-ready").await;
+    kestrel.report_ready(&unbriefed).await;
+    kestrel
+        .post_while_busy(getting_ready, "alice", "the brief")
+        .await;
+    kestrel
+        .post_while_busy(getting_ready, "alice", "one more thing")
+        .await;
     let ready = kestrel
         .enqueue_session(a_queued_workspace_in(kestrel, "acme", "kestrel").await)
         .await;
@@ -4161,6 +5277,7 @@ async fn a_queue_of_every_kind(kestrel: &Kestrel) -> EveryKind {
         blocked,
         prompted,
         waiting,
+        unbriefed,
     }
 }
 
@@ -4187,7 +5304,8 @@ async fn kestrel_queue_says_each_reason_in_words_with_the_waiting_sessions_after
     assert!(
         line_of(&every.ready.name) < line_of(&every.blocked.name)
             && line_of(&every.blocked.name) < line_of(&every.prompted.name)
-            && line_of(&every.prompted.name) < line_of(&every.waiting.name),
+            && line_of(&every.prompted.name) < line_of(&every.waiting.name)
+            && line_of(&every.waiting.name) < line_of(&every.unbriefed.name),
         "{}",
         shown.said
     );
@@ -4202,11 +5320,13 @@ async fn kestrel_queue_says_each_reason_in_words_with_the_waiting_sessions_after
             ),
         ),
         (&every.waiting, "waiting for a turn".to_owned()),
+        (&every.unbriefed, "harness ready".to_owned()),
     ] {
         let line = lines[line_of(&session.name)];
         assert!(line.contains(&said), "{line} does not say {said}");
     }
     assert!(lines[line_of(&every.prompted.name)].contains("input since "));
+    assert!(lines[line_of(&every.unbriefed.name)].contains("input since "));
 
     kestrel.teardown().await;
 }
@@ -4225,7 +5345,7 @@ async fn kestrel_queue_json_agrees_with_the_operator_read() {
                 "--organization",
                 "acme",
                 "--json",
-                "name,state,position,reasons,pending_since",
+                "name,state,position,reasons,pending_since,preparing",
             ],
         )
         .await,
@@ -4239,6 +5359,7 @@ async fn kestrel_queue_json_agrees_with_the_operator_read() {
             "position": row["position"],
             "reasons": row["reasons"],
             "pending_since": null,
+            "preparing": null,
         }));
     }
     for row in queue["waiting"].as_array().expect("the waiting Sessions") {
@@ -4248,6 +5369,20 @@ async fn kestrel_queue_json_agrees_with_the_operator_read() {
             "position": null,
             "reasons": row["reasons"],
             "pending_since": row["pending_since"],
+            "preparing": null,
+        }));
+    }
+    for row in queue["unbriefed"]
+        .as_array()
+        .expect("the unbriefed Sessions")
+    {
+        read.push(json!({
+            "name": row["name"],
+            "state": "unbriefed",
+            "position": null,
+            "reasons": [],
+            "pending_since": row["pending_since"],
+            "preparing": row["preparing"],
         }));
     }
     assert_eq!(rows, read);
@@ -4311,12 +5446,16 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::WORKSPACE_FILES, "get"),
         (operator::WORKSPACE_FILE, "get"),
         (operator::WORKSPACE_MESSAGES, "post"),
+        (operator::WORKSPACE_MESSAGE, "put"),
+        (operator::WORKSPACE_MESSAGE, "delete"),
         (operator::WORKSPACE_SEAL, "post"),
         (operator::WORKSPACE_INSTANCE_RELEASE, "post"),
         (operator::SESSIONS, "get"),
         (operator::SESSIONS, "post"),
         (operator::SESSION, "get"),
         (operator::SESSION_STOP, "post"),
+        (operator::SESSION_INTERRUPT, "post"),
+        (operator::SESSION_OPTIONS, "post"),
         (operator::TRIGGERS, "get"),
         (operator::TRIGGERS, "post"),
         (operator::TRIGGER, "get"),
@@ -4329,6 +5468,9 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::INSTANCES, "get"),
         (operator::QUEUE, "get"),
         (operator::TRANSCRIPT, "get"),
+        (operator::FOLLOWER_LEASE, "post"),
+        (operator::TRANSCRIPT_PAYLOAD, "get"),
+        (operator::CHANGES, "get"),
     ];
     assert_eq!(
         described,
@@ -4347,11 +5489,16 @@ fn the_published_operator_document_describes_every_transcript_entry() {
         .expect("an object of entry kinds");
 
     let served = [
+        Entry::Expired {
+            expired_at: "2026-09-30T00:00:00Z".parse().unwrap(),
+        },
         Entry::ParticipantJoined {
             participant: "builder".to_owned(),
         },
         Entry::Brief {
-            trigger: Some("sweep".to_owned()),
+            source: BriefSource::Trigger {
+                trigger: "sweep".to_owned(),
+            },
             brief: "Sweep the backlog".to_owned(),
         },
         Entry::SessionStarted {
@@ -4373,6 +5520,10 @@ fn the_published_operator_document_describes_every_transcript_entry() {
         Entry::SessionEnded {
             session: SessionId::generate(),
             exit: Exit::Succeeded,
+        },
+        Entry::TurnInterrupted {
+            session: SessionId::generate(),
+            participant: "operator".to_owned(),
         },
         Entry::InstanceReleased {
             participant: "operator".to_owned(),
@@ -4397,6 +5548,26 @@ fn the_published_operator_document_describes_every_transcript_entry() {
             title: "Learn pull requests".to_owned(),
             action: "opened".to_owned(),
             state: kestrel::domain::PullRequestState::Open,
+        },
+        Entry::OptionChanged {
+            session: SessionId::generate(),
+            participant: "operator".to_owned(),
+            option: "model".to_owned(),
+            category: "model".to_owned(),
+            from: Some("scripted-mini".to_owned()),
+            to: Some("scripted-max".to_owned()),
+            refused: None,
+        },
+        Entry::ToolCall {
+            session_id: SessionId::generate(),
+            call_id: "call".to_owned(),
+            title: "read".to_owned(),
+            tool_kind: "read".to_owned(),
+            status: ToolStatus::Completed,
+            input: serde_json::json!({}),
+            result: Box::new(serde_json::json!([])),
+            closing_reason: None,
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
     ];
 
@@ -4476,6 +5647,12 @@ fn requires(document: &Value, schema: &Value, body: &Value) {
         requires(document, option, body);
         return;
     }
+    if let Some(parts) = schema["allOf"].as_array() {
+        for part in parts {
+            requires(document, part, body);
+        }
+        return;
+    }
     if schema["type"] == "array" {
         for item in body.as_array().expect("an array, as documented") {
             requires(document, &schema["items"], item);
@@ -4483,10 +5660,10 @@ fn requires(document: &Value, schema: &Value, body: &Value) {
         return;
     }
 
-    for field in schema["required"]
-        .as_array()
-        .expect("an array of required fields")
-    {
+    let Some(required) = schema["required"].as_array() else {
+        return;
+    };
+    for field in required {
         let field = field.as_str().expect("a named field");
         assert!(
             body.get(field).is_some(),
@@ -4510,4 +5687,563 @@ fn resolve<'a>(document: &'a Value, reference: &str) -> &'a Value {
         .trim_start_matches("#/")
         .split('/')
         .fold(document, |document, step| &document[step])
+}
+
+async fn payload_entries(kestrel: &Kestrel, workspace: &str) -> Vec<Value> {
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}{}?follow=false&kinds=shared_state,narration,detail",
+            kestrel.operator(),
+            transcript_of("acme", workspace)
+        ))
+        .send()
+        .await
+        .expect("the transcript should answer");
+    assert_eq!(response.status(), StatusCode::OK);
+    response
+        .text()
+        .await
+        .expect("the transcript should finish")
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|record| record.get("entry").is_some())
+        .collect()
+}
+
+#[tokio::test]
+async fn transcript_payloads_above_64_kib_are_references_fetched_byte_for_byte() {
+    let kestrel = Kestrel::boot().await;
+    let (workspace, session) = an_open_workspace(&kestrel, 0).await;
+    let inline = "é".repeat(32768);
+    let large = format!("{inline}!");
+    kestrel.said(&session, &inline).await;
+    kestrel.said(&session, &large).await;
+    let entries = payload_entries(&kestrel, &workspace).await;
+    let said: Vec<_> = entries
+        .iter()
+        .filter(|record| {
+            record["entry"]["type"] == "said" && record["entry"]["participant"] == "builder"
+        })
+        .collect();
+    assert_eq!(said[0]["entry"]["message"], inline);
+    assert_eq!(said[1]["entry"]["payload_fields"], json!(["message"]));
+    let reference = &said[1]["entry"]["message"];
+    assert_eq!(reference["bytes"], 65537);
+    assert_eq!(reference["media_type"], "text/plain; charset=utf-8");
+    let payload = reference["payload_id"]
+        .as_str()
+        .expect("a payload reference");
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}{}/payloads/{payload}",
+            kestrel.operator(),
+            transcript_of("acme", &workspace)
+        ))
+        .send()
+        .await
+        .expect("the payload should answer");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.bytes().await.expect("payload bytes").as_ref(),
+        large.as_bytes()
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn transcript_payloads_cannot_be_fetched_through_another_workspace() {
+    let kestrel = Kestrel::boot().await;
+    let (workspace, session) = an_open_workspace(&kestrel, 0).await;
+    kestrel.said(&session, &"x".repeat(65537)).await;
+    let entries = payload_entries(&kestrel, &workspace).await;
+    let payload = entries
+        .iter()
+        .find_map(|record| record["entry"]["message"]["payload_id"].as_str())
+        .expect("a reference");
+    let other = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}{}/payloads/{payload}",
+            kestrel.operator(),
+            transcript_of("acme", &other.id.to_string())
+        ))
+        .send()
+        .await
+        .expect("the operator should refuse");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn transcript_payloads_and_their_entry_roll_back_when_the_payload_write_fails() {
+    let kestrel = Kestrel::boot().await;
+    let (workspace, session) = an_open_workspace(&kestrel, 0).await;
+    let on = kestrel.on_the_link(&session).await;
+    let link = support::link_client::Link::to(&kestrel.link());
+    let started = link
+        .report_body(
+            &on.instance,
+            Some(&on.credential),
+            &json!({"session": session.id, "seq": 1, "kind": "started"}),
+        )
+        .await;
+    assert_eq!(started.status(), StatusCode::ACCEPTED);
+    let before = payload_entries(&kestrel, &workspace).await;
+    kestrel.refuse_payload_writes().await;
+    let response = link.report_body(&on.instance, Some(&on.credential), &json!({"session":session.id, "seq":2, "kind":"said", "message":"x".repeat(65537), "completion":{"started_at":"2026-09-29T12:00:00Z", "finished_at":"2026-09-29T12:01:00Z", "turn_outcome":null}})).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(payload_entries(&kestrel, &workspace).await, before);
+    let next = before.last().unwrap()["seq"].as_i64().unwrap() + 1;
+    let reference = format!("{workspace}:{next}:message");
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}{}/payloads/{reference}",
+            kestrel.operator(),
+            transcript_of("acme", &workspace)
+        ))
+        .send()
+        .await
+        .expect("the payload lookup should answer");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn transcript_payloads_keep_json_plans_and_completion_metadata() {
+    let kestrel = Kestrel::boot().await;
+    let (workspace, session) = an_open_workspace(&kestrel, 0).await;
+    let on = kestrel.on_the_link(&session).await;
+    let link = support::link_client::Link::to(&kestrel.link());
+    let entries = json!([{"content": "🦅".repeat(16384), "priority": "high", "status": "pending"}]);
+    let completion = json!({"started_at":"2026-09-29T12:00:00Z", "finished_at":"2026-09-29T12:01:00Z", "turn_outcome":null});
+    for report in [
+        json!({"session":session.id, "seq":1, "kind":"started"}),
+        json!({"session":session.id, "seq":2, "kind":"plan", "entries":entries, "completion":completion}),
+    ] {
+        let response = link
+            .report_body(&on.instance, Some(&on.credential), &report)
+            .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+    let records = payload_entries(&kestrel, &workspace).await;
+    let plan = records
+        .iter()
+        .find(|record| record["entry"]["type"] == "plan")
+        .expect("a plan");
+    assert_eq!(plan["entry"]["completion"], completion);
+    assert_eq!(plan["session_id"], session.id.to_string());
+    assert_eq!(plan["kind"], "narration");
+    let payload = plan["entry"]["entries"]["payload_id"]
+        .as_str()
+        .expect("a reference");
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}{}/payloads/{payload}",
+            kestrel.operator(),
+            transcript_of("acme", &workspace)
+        ))
+        .send()
+        .await
+        .expect("payload response");
+    assert_eq!(response.headers()["content-type"], "application/json");
+    assert_eq!(
+        response.bytes().await.unwrap().as_ref(),
+        serde_json::to_vec(&entries).unwrap()
+    );
+    kestrel
+        .expire_payload_entry(session.workspace, plan["seq"].as_i64().unwrap())
+        .await;
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}{}/payloads/{payload}",
+            kestrel.operator(),
+            transcript_of("acme", &workspace)
+        ))
+        .send()
+        .await
+        .expect("expired payload response");
+    assert_eq!(response.status(), StatusCode::GONE);
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn transcript_payloads_are_hydrated_for_the_supervisor_context() {
+    let kestrel = Kestrel::boot().await;
+    let (workspace, session) = an_open_workspace(&kestrel, 0).await;
+    let on = kestrel.on_the_link(&session).await;
+    let message = "x".repeat(65537);
+    kestrel.said(&session, &message).await;
+    let response = support::link_client::Link::to(&kestrel.link())
+        .entries(&on.instance, Some(&on.credential), None, None)
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let read: Value = response.json().await.expect("supervisor context");
+    assert!(
+        read["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|record| record["entry"]["message"] == message)
+    );
+    assert!(
+        payload_entries(&kestrel, &workspace)
+            .await
+            .iter()
+            .any(|record| record["entry"]["message"]["payload_id"].is_string())
+    );
+    kestrel.teardown().await;
+}
+
+async fn retention_stream(kestrel: &Kestrel, workspace: &str, query: &str) -> String {
+    reqwest::Client::new()
+        .get(format!(
+            "{}{}?follow=false&{query}",
+            kestrel.operator(),
+            transcript_of("acme", workspace)
+        ))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .text()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn retention_expires_sealed_workspace_content_and_preserves_positions_and_shared_state() {
+    let kestrel = Kestrel::boot_serving_alone().await;
+    let (workspace, session) = an_open_workspace(&kestrel, 0).await;
+    let on = kestrel.on_the_link(&session).await;
+    let link = support::link_client::Link::to(&kestrel.link());
+    let completion = json!({"started_at":"2020-01-01T00:00:00Z", "finished_at":"2020-01-01T00:01:00Z", "turn_outcome":null});
+    for (seq, mut report) in [
+        json!({"kind":"thought","text":"private reasoning","completion":completion}),
+        json!({"kind":"tool_call","call_id":"one","title":"private title","tool_kind":"read","status":"failed","input":{},"result":"x".repeat(65537),"closing_reason":"interrupted","completion":completion}),
+        json!({"kind":"said","message":"public narrative".repeat(6000),"completion":completion}),
+    ].into_iter().enumerate() {
+        report["session"] = json!(session.id);
+        report["seq"] = json!(seq + 1);
+        assert_eq!(link.report_body(&on.instance, Some(&on.credential), &report).await.status(), StatusCode::ACCEPTED);
+    }
+    kestrel.stop_session(session.id).await;
+    kestrel.release_instance(session.workspace).await;
+    kestrel.seal_workspace(session.workspace).await;
+    let old = "2020-02-01T00:00:00Z";
+    kestrel
+        .backdate_transcript(session.workspace, old.parse().unwrap())
+        .await;
+    let before = payload_entries(&kestrel, &workspace).await;
+    let work: Vec<_> = before
+        .iter()
+        .filter(|r| r["kind"] != "shared_state")
+        .collect();
+    assert_eq!(work.len(), 2);
+    let payload = work[1]["entry"]["result"]["payload_id"].as_str().unwrap();
+    assert_eq!(kestrel.retain_transcript().await.unwrap(), 2);
+    let after = payload_entries(&kestrel, &workspace).await;
+    assert_eq!(after.len(), before.len());
+    for (before, after) in before.iter().zip(&after) {
+        if before["kind"] == "shared_state" {
+            assert_eq!(before, after);
+            continue;
+        }
+        assert_eq!(after["seq"], before["seq"]);
+        assert_eq!(after["kind"], before["kind"]);
+        assert_eq!(after["appended_at"], old);
+        assert_eq!(after["session_id"], Value::Null);
+        assert_eq!(after["entry"].as_object().unwrap().len(), 2);
+        assert_eq!(after["entry"]["type"], "expired");
+        assert!(
+            after["entry"]["expired_at"]
+                .as_str()
+                .unwrap()
+                .parse::<jiff::Timestamp>()
+                .unwrap()
+                <= jiff::Timestamp::now()
+        );
+    }
+    let detail = retention_stream(&kestrel, &workspace, "kinds=detail&summaries=false").await;
+    let detail: Vec<Value> = detail
+        .lines()
+        .filter_map(|l| l.strip_prefix("data: "))
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|r| r.get("entry").is_some())
+        .collect();
+    assert_eq!(
+        detail,
+        vec![
+            after
+                .iter()
+                .find(|r| r["kind"] == "detail")
+                .unwrap()
+                .clone()
+        ]
+    );
+    let default = retention_stream(&kestrel, &workspace, "").await;
+    assert!(!default.contains("\"type\":\"expired\""));
+    let activity: Value = default
+        .split("event: activity\n")
+        .nth(1)
+        .unwrap()
+        .lines()
+        .find_map(|l| l.strip_prefix("data: "))
+        .map(|l| serde_json::from_str(l).unwrap())
+        .unwrap();
+    assert_eq!(
+        activity["counts"],
+        json!({"tool_calls":0,"failed_calls":0,"thoughts":0,"plans":0,"tombstones":2})
+    );
+    assert_eq!(
+        activity["latest"],
+        json!({"kind":"detail","title":null,"status":null})
+    );
+    assert_eq!(activity["started_at"], Value::Null);
+    assert_eq!(activity["finished_at"], Value::Null);
+    assert_eq!(activity["anomaly"], false);
+    let resumed = reqwest::Client::new()
+        .get(format!(
+            "{}{}?follow=false&kinds=detail&summaries=false",
+            kestrel.operator(),
+            transcript_of("acme", &workspace)
+        ))
+        .header("Last-Event-ID", format!("{workspace}:{}", work[0]["seq"]))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(resumed.contains("\"type\":\"expired\""));
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}{}/payloads/{payload}",
+            kestrel.operator(),
+            transcript_of("acme", &workspace)
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::GONE);
+    let shared_payload = before
+        .iter()
+        .find_map(|r| r["entry"]["message"]["payload_id"].as_str())
+        .unwrap();
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}{}/payloads/{shared_payload}",
+            kestrel.operator(),
+            transcript_of("acme", &workspace)
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.text().await.unwrap(),
+        "public narrative".repeat(6000)
+    );
+    assert_eq!(kestrel.retain_transcript().await.unwrap(), 0);
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn retention_rolls_back_payload_deletion_and_every_tombstone_on_failure() {
+    let kestrel = Kestrel::boot_serving_alone().await;
+    let (workspace, session) = an_open_workspace(&kestrel, 0).await;
+    let on = kestrel.on_the_link(&session).await;
+    let link = support::link_client::Link::to(&kestrel.link());
+    let completion = json!({"started_at":"2020-01-01T00:00:00Z", "finished_at":"2020-01-01T00:01:00Z", "turn_outcome":null});
+    let content = "x".repeat(65537);
+    for (seq, mut report) in [
+        json!({"kind":"tool_call","call_id":"one","title":"read","tool_kind":"read","status":"completed","input":{},"result":content,"closing_reason":null,"completion":completion}),
+        json!({"kind":"thought","text":content,"completion":completion}),
+    ].into_iter().enumerate() {
+        report["session"] = json!(session.id);
+        report["seq"] = json!(seq + 1);
+        assert_eq!(link.report_body(&on.instance, Some(&on.credential), &report).await.status(), StatusCode::ACCEPTED);
+    }
+    kestrel
+        .backdate_transcript(session.workspace, "2020-02-01T00:00:00Z".parse().unwrap())
+        .await;
+    let before = payload_entries(&kestrel, &workspace).await;
+    kestrel.refuse_retention_updates(true).await;
+    assert!(kestrel.retain_transcript().await.is_err());
+    assert_eq!(payload_entries(&kestrel, &workspace).await, before);
+    for record in before.iter().filter(|r| r["kind"] != "shared_state") {
+        let field = if record["kind"] == "detail" {
+            "result"
+        } else {
+            "text"
+        };
+        let payload = record["entry"][field]["payload_id"].as_str().unwrap();
+        let response = reqwest::Client::new()
+            .get(format!(
+                "{}{}/payloads/{payload}",
+                kestrel.operator(),
+                transcript_of("acme", &workspace)
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let expected = if field == "result" {
+            serde_json::to_vec(&content).unwrap()
+        } else {
+            content.as_bytes().to_vec()
+        };
+        assert_eq!(response.bytes().await.unwrap().as_ref(), expected);
+    }
+    kestrel.refuse_retention_updates(false).await;
+    assert_eq!(kestrel.retain_transcript().await.unwrap(), 2);
+    assert_eq!(
+        payload_entries(&kestrel, &workspace)
+            .await
+            .iter()
+            .filter(|r| r["entry"]["type"] == "expired")
+            .count(),
+        2
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn retention_continues_bounded_batches_and_uses_append_time() {
+    let kestrel = Kestrel::boot_serving_alone().await;
+    let (workspace, session) = an_open_workspace(&kestrel, 0).await;
+    let on = kestrel.on_the_link(&session).await;
+    let link = support::link_client::Link::to(&kestrel.link());
+    let completion = json!({"started_at":"2020-01-01T00:00:00Z", "finished_at":"2020-01-01T00:01:00Z", "turn_outcome":null});
+    for seq in 1..=1001 {
+        let report = json!({"session":session.id,"seq":seq,"kind":"thought","text":format!("thought {seq}"),"completion":completion});
+        assert_eq!(
+            link.report_body(&on.instance, Some(&on.credential), &report)
+                .await
+                .status(),
+            StatusCode::ACCEPTED
+        );
+    }
+    kestrel
+        .backdate_transcript(
+            session.workspace,
+            jiff::Timestamp::now() - jiff::SignedDuration::from_hours(29 * 24),
+        )
+        .await;
+    assert_eq!(kestrel.retain_transcript().await.unwrap(), 0);
+    kestrel
+        .backdate_transcript(
+            session.workspace,
+            jiff::Timestamp::now() - jiff::SignedDuration::from_hours(31 * 24),
+        )
+        .await;
+    let fresh = json!({"session":session.id,"seq":1002,"kind":"thought","text":"appended recently despite ancient completion","completion":completion});
+    assert_eq!(
+        link.report_body(&on.instance, Some(&on.credential), &fresh)
+            .await
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(kestrel.retain_transcript().await.unwrap(), 1000);
+    let first = payload_entries(&kestrel, &workspace).await;
+    assert_eq!(
+        first
+            .iter()
+            .filter(|r| r["entry"]["type"] == "expired")
+            .count(),
+        1000
+    );
+    assert_eq!(
+        first
+            .iter()
+            .filter(|r| r["entry"]["type"] == "thought")
+            .count(),
+        2
+    );
+    assert_eq!(kestrel.retain_transcript().await.unwrap(), 1);
+    let second = payload_entries(&kestrel, &workspace).await;
+    assert_eq!(
+        second
+            .iter()
+            .filter(|r| r["entry"]["type"] == "expired")
+            .count(),
+        1001
+    );
+    let fresh: Vec<_> = second
+        .iter()
+        .filter(|r| r["entry"]["type"] == "thought")
+        .collect();
+    assert_eq!(fresh.len(), 1);
+    assert_eq!(
+        fresh[0]["entry"]["text"],
+        "appended recently despite ancient completion"
+    );
+    assert_eq!(
+        first.iter().map(|r| &r["seq"]).collect::<Vec<_>>(),
+        second.iter().map(|r| &r["seq"]).collect::<Vec<_>>()
+    );
+    assert_eq!(kestrel.retain_transcript().await.unwrap(), 0);
+    let page: Value = reqwest::Client::new()
+        .get(format!(
+            "{}/link/instances/{}/entries?kinds=narration&summaries=false",
+            kestrel.link(),
+            on.instance.replace('/', "%2F")
+        ))
+        .bearer_auth(on.credential.as_str())
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        page["entries"][0]["entry"],
+        second
+            .iter()
+            .find(|r| r["entry"]["type"] == "expired")
+            .unwrap()["entry"]
+    );
+    let typed: Entry = serde_json::from_value(page["entries"][0]["entry"].clone())
+        .expect("typed readers must accept tombstones");
+    assert!(matches!(typed, Entry::Expired { .. }));
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn retention_work_role_finds_due_entries_on_startup() {
+    let kestrel = Kestrel::boot_serving_alone().await;
+    let (workspace, session) = an_open_workspace(&kestrel, 0).await;
+    let on = kestrel.on_the_link(&session).await;
+    let link = support::link_client::Link::to(&kestrel.link());
+    let report = json!({"session":session.id,"seq":1,"kind":"thought","text":"old reasoning","completion":{"started_at":"2020-01-01T00:00:00Z","finished_at":"2020-01-01T00:01:00Z","turn_outcome":null}});
+    assert_eq!(
+        link.report_body(&on.instance, Some(&on.credential), &report)
+            .await
+            .status(),
+        StatusCode::ACCEPTED
+    );
+    kestrel
+        .backdate_transcript(session.workspace, "2020-02-01T00:00:00Z".parse().unwrap())
+        .await;
+    let kestrel = kestrel.kill_and_restart().await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if payload_entries(&kestrel, &workspace)
+                .await
+                .iter()
+                .any(|r| r["entry"]["type"] == "expired")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("the work role should expire due entries on startup");
+    kestrel.teardown().await;
 }

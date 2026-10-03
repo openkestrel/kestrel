@@ -75,7 +75,7 @@ firing a Trigger twice.
 
 `trigger::render` fills the brief, branch and correlation from the Event with minijinja in strict
 mode, bounded by fuel, recursion and output size (`template.rs`). The Agent, Project, Subscription
-Profile and model never render from an Event ([ADR-0013](../adr/0013-an-event-supplies-data-never-authority.md)).
+Profile and declared model, mode and thought level never render from an Event ([ADR-0013](../adr/0013-an-event-supplies-data-never-authority.md)).
 A render failure fails the firing and starts nothing.
 
 ### Choosing the Agent
@@ -145,17 +145,23 @@ Triggers:
 `pull_request.rs` learns pull requests as Workspace state, independent of Triggers
 ([ADR-0032](../adr/0032-a-pull-request-event-updates-workspace-state-without-a-firing.md)):
 
-- It reads only a GitHub Integration's `com.github.pull_request.opened` Events; a generic webhook
-  may name any type and proves nothing about GitHub.
+- It reads only a signed GitHub Integration's `opened`, `reopened`, `closed` and `synchronize`
+  Events; other actions stay Organization Events and a generic webhook may name any type, so it
+  proves nothing about GitHub.
 - The payload's head repository and head branch must name exactly one open Workspace in the
   Event's Organization: one whose declared branch is the head branch and which fixes the head
-  repository among its repositories. A fork is its own repository. Zero or several candidates
-  leave the Event unattached.
-- An attached Event appends a `pull_request` shared-state entry and updates the Workspace's current
-  value for that repository and number. It creates no Firing and prompts no Session, and a Trigger
-  declared for the same Event fires as it would anyway.
-- `pull_request_attachment` records every Event considered and what it matched, so each is
-  considered once.
+  repository among its repositories. A fork is its own repository. Zero or several open candidates
+  leave the Event unattached; one matching only sealed Workspaces is recorded as sealed and
+  changes nothing.
+- An attached Event appends a `pull_request` shared-state entry for each distinct observation — a
+  delivery repeating one already held appends nothing — and updates the Workspace's current value
+  for that repository and number. A value older at its source (`updated_at`) than the one held
+  cannot roll it back; a conflicting tie on source freshness is settled by reading the pull request
+  back from the Integration's repository, never by arrival order. It creates no Firing and prompts
+  no Session, and a Trigger declared for the same Event fires as it would anyway.
+- `pull_request_attachment` records every Event considered and its verdict, and
+  `pull_request_candidate` every Workspace it matched with the state that Workspace was in, so each
+  is considered once and the `0.4` Audit Record can explain the verdict.
 
 ## Delivery
 

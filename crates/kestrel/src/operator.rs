@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, Request, State};
-use axum::http::header::{HOST, ORIGIN};
+use axum::http::header::{CONTENT_TYPE, ETAG, HOST, IF_NONE_MATCH, ORIGIN};
 use axum::http::uri::Authority;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
@@ -17,28 +17,32 @@ use axum::{BoxError, Json, Router};
 use futures_core::Stream;
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
+use sha2::Digest as _;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::agent;
 use crate::cron::Cron;
 use crate::declaration;
-use crate::declined::{Declined, FieldRefusal};
+use crate::declined::{Declined, FieldRefusal, Kind};
 use crate::domain::{
-    self, Agent, Connection, Correlation, Direction, EventRecordId, EventRefusal, Fires, Firing,
-    Integration, Occurrence, Organization, Project, Schedule, Session, SubscriptionProfile,
-    Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
+    self, Agent, Connection, Correlation, Declared, Direction, EventRecordId, EventRefusal, Fires,
+    Firing, HeldMessage, Integration, Occurrence, Organization, Project, Schedule, Session,
+    StartedBy, SubscriptionProfile, Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
 };
+use crate::fanout;
 use crate::filter::Filter;
 use crate::integration::github::{self, Github};
 use crate::integration::{self, Connecting, Registration};
-use crate::log::{self, Cursor, Page, Unreadable, Window};
+use crate::log::{self, Cursor, Unreadable, Window};
+use crate::participant;
 use crate::profile::{self, Entry};
 use crate::provider::{self, Held};
 use crate::queue;
 use crate::role::serve;
 use crate::store::organization::NoSuchOrganization;
-use crate::store::{self, Declared, Store};
+use crate::store::workspace::HeldMessageRefusal;
+use crate::store::{self, Declared as DeclaredRecord, Store};
 use crate::template::Template;
 use crate::trigger::{self, apply};
 use crate::{instance, pull_request, start, work, workspace};
@@ -91,15 +95,26 @@ pub const WORKSPACE_FILE: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/file";
 pub const WORKSPACE_MESSAGES: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/messages";
+pub const WORKSPACE_MESSAGE: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/messages/{id}";
 pub const WORKSPACE_SEAL: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/seal";
 pub const WORKSPACE_INSTANCE_RELEASE: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/instance/release";
 pub const SESSIONS: &str = "/operator/organizations/{organization}/workspaces/{workspace}/sessions";
 pub const SESSION: &str = "/operator/organizations/{organization}/sessions/{session}";
+pub const SESSION_INTERRUPT: &str =
+    "/operator/organizations/{organization}/sessions/{session}/interrupt";
 pub const SESSION_STOP: &str = "/operator/organizations/{organization}/sessions/{session}/stop";
+pub const SESSION_OPTIONS: &str =
+    "/operator/organizations/{organization}/sessions/{session}/options";
 pub const TRANSCRIPT: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/transcript";
+pub const TRANSCRIPT_PAYLOAD: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/transcript/payloads/{payload}";
+pub const FOLLOWER_LEASE: &str =
+    "/operator/organizations/{organization}/workspaces/{workspace}/followers/{id}/lease";
+pub const CHANGES: &str = "/operator/organizations/{organization}/changes";
 /// One read of a Workspace's queue: the limits, their occupancy, and the queued Sessions in
 /// dispatch order.
 pub const QUEUE: &str = "/operator/organizations/{organization}/queue";
@@ -115,6 +130,7 @@ struct ControlPlane {
     shutdown: CancellationToken,
     summaries: crate::live_work::Summaries,
     reads: crate::live_read::Reads,
+    followers: crate::presence::Followers,
 }
 
 #[derive(Deserialize)]
@@ -131,8 +147,13 @@ struct Reading {
 
 #[derive(Deserialize)]
 struct Following {
+    summaries: Option<bool>,
+    first_seq: Option<i64>,
+    last_seq: Option<i64>,
     follow: Option<bool>,
     kinds: Option<String>,
+    #[serde(rename = "as")]
+    as_name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -141,7 +162,7 @@ struct Recorded {
     session_id: Option<crate::domain::SessionId>,
     seq: i64,
     appended_at: String,
-    entry: log::Entry,
+    entry: serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -156,9 +177,61 @@ enum Because {
     Sealed,
 }
 
+#[derive(Serialize)]
+struct FollowerEvent {
+    id: crate::presence::FollowerId,
+    lease_seconds: u64,
+}
+
+#[derive(Serialize)]
+struct Refetch {}
+
+// The Workspace's name, because a Client addresses every read by it.
+#[derive(Serialize)]
+#[serde(tag = "resource", rename_all = "snake_case")]
+enum Changed {
+    Workspace {
+        id: WorkspaceId,
+        workspace: String,
+    },
+    Session {
+        id: crate::domain::SessionId,
+        workspace: String,
+    },
+    Queue,
+}
+
+impl Changed {
+    async fn named(store: &Store, resource: fanout::Resource) -> anyhow::Result<Self> {
+        let mut tx = store.read().await?;
+        Ok(match resource {
+            fanout::Resource::Workspace(id) => Self::Workspace {
+                id,
+                workspace: tx.workspaces().get(id).await?.name,
+            },
+            fanout::Resource::Session(id) => {
+                let session = tx.workspaces().session(id).await?;
+                Self::Session {
+                    id,
+                    workspace: tx.workspaces().get(session.workspace).await?.name,
+                }
+            }
+            fanout::Resource::Queue => Self::Queue,
+        })
+    }
+}
+
 struct Read {
-    page: Page,
+    page: log::TranscriptPage,
+    session_state: TranscriptSessionState,
     sealed: bool,
+}
+
+#[derive(Clone, PartialEq, Serialize)]
+struct TranscriptSessionState {
+    session_id: Option<domain::SessionId>,
+    #[serde(flatten)]
+    state: crate::live_work::SessionState,
 }
 
 pub fn router(
@@ -166,6 +239,7 @@ pub fn router(
     shutdown: CancellationToken,
     summaries: crate::live_work::Summaries,
     reads: crate::live_read::Reads,
+    followers: crate::presence::Followers,
 ) -> Router {
     Router::new()
         .route(ORGANIZATIONS, get(organizations).post(declare_organization))
@@ -209,17 +283,27 @@ pub fn router(
         .route(WORKSPACE_COMMITS, get(workspace_commits))
         .route(WORKSPACE_STASHES, get(workspace_stashes))
         .route(WORKSPACE_MESSAGES, post(post_to_workspace))
+        .route(
+            WORKSPACE_MESSAGE,
+            put(edit_workspace_message).delete(withdraw_workspace_message),
+        )
         .route(WORKSPACE_SEAL, post(seal_workspace))
         .route(WORKSPACE_INSTANCE_RELEASE, post(release_instance))
         .route(SESSIONS, get(sessions).post(enqueue_session))
         .route(SESSION, get(show_session))
+        .route(SESSION_INTERRUPT, post(interrupt_session))
         .route(SESSION_STOP, post(stop_session))
+        .route(SESSION_OPTIONS, post(set_session_option))
         .route(TRANSCRIPT, get(transcript))
+        .route(TRANSCRIPT_PAYLOAD, get(transcript_payload))
+        .route(FOLLOWER_LEASE, post(renew_follower))
+        .route(CHANGES, get(changes))
         .with_state(ControlPlane {
             store,
             shutdown,
             summaries,
             reads,
+            followers,
         })
         .layer(middleware::from_fn(addressed_here))
 }
@@ -244,7 +328,14 @@ fn addressed_from_here(request: &Request) -> Result<(), Refused> {
 
     match request.headers().get(ORIGIN).map(|origin| origin.to_str()) {
         None => Ok(()),
-        Some(Ok(origin)) if origin.eq_ignore_ascii_case(&format!("http://{host}")) => Ok(()),
+        // Either scheme, because the web server in front terminates TLS and forwards plain HTTP.
+        Some(Ok(origin))
+            if ["http", "https"]
+                .iter()
+                .any(|scheme| origin.eq_ignore_ascii_case(&format!("{scheme}://{host}"))) =>
+        {
+            Ok(())
+        }
         Some(_) => Err(Refused::Forbidden(
             "the request comes from an origin other than this control plane".to_owned(),
         )),
@@ -288,6 +379,18 @@ struct AgentDeclaration {
     name: String,
     harness: String,
     model: Option<String>,
+    mode: Option<String>,
+    thought_level: Option<String>,
+}
+
+impl AgentDeclaration {
+    fn declared(&self) -> Declared {
+        Declared::named(Declared {
+            model: self.model.clone(),
+            mode: self.mode.clone(),
+            thought_level: self.thought_level.clone(),
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -297,6 +400,21 @@ struct WorkspaceDeclaration {
     profile: Option<String>,
     branch: Option<String>,
     continues: Option<String>,
+    model: Option<String>,
+    mode: Option<String>,
+    thought_level: Option<String>,
+    brief: Option<String>,
+    participant: Option<String>,
+}
+
+impl WorkspaceDeclaration {
+    fn declared(&self) -> Declared {
+        Declared {
+            model: self.model.clone(),
+            mode: self.mode.clone(),
+            thought_level: self.thought_level.clone(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -306,9 +424,39 @@ struct WorkspaceMessage {
 }
 
 #[derive(Deserialize)]
+struct WorkspaceMessageWithdrawal {
+    participant: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct SessionDeclaration {
     agent: Option<String>,
     model: Option<String>,
+    mode: Option<String>,
+    thought_level: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SessionInterrupt {
+    participant: Option<String>,
+}
+
+impl SessionDeclaration {
+    fn declared(&self) -> Declared {
+        Declared {
+            model: self.model.clone(),
+            mode: self.mode.clone(),
+            thought_level: self.thought_level.clone(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct OptionChange {
+    participant: String,
+    option: Option<String>,
+    category: Option<String>,
+    value: String,
 }
 
 #[derive(Deserialize)]
@@ -328,6 +476,19 @@ struct TriggerDeclaration {
     #[serde(default)]
     allows: Vec<String>,
     profile: Option<String>,
+    model: Option<String>,
+    mode: Option<String>,
+    thought_level: Option<String>,
+}
+
+impl TriggerDeclaration {
+    fn declared(&self) -> Declared {
+        Declared::named(Declared {
+            model: self.model.clone(),
+            mode: self.mode.clone(),
+            thought_level: self.thought_level.clone(),
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -384,6 +545,8 @@ struct AgentRecord {
     name: String,
     harness: String,
     model: Option<String>,
+    mode: Option<String>,
+    thought_level: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -405,7 +568,74 @@ struct WorkspaceRecord {
     continues: Option<String>,
     started_by: Option<String>,
     continued_by: Vec<String>,
+    held_messages: Vec<HeldMessage>,
     pull_requests: Vec<PullRequestAvailabilityRecord>,
+    unfinished_session: Option<UnfinishedSessionRecord>,
+}
+
+#[derive(Serialize)]
+struct WorkspaceListedRecord {
+    #[serde(flatten)]
+    workspace: WorkspaceRecord,
+    session: Option<SessionRecord>,
+    queue: Option<QueueStandingRecord>,
+}
+
+#[derive(Serialize)]
+struct QueueStandingRecord {
+    position: Option<usize>,
+    reasons: Vec<ReasonRecord>,
+    pending_since: Option<Timestamp>,
+}
+
+impl QueueStandingRecord {
+    fn of(snapshot: &queue::Snapshot, workspace: WorkspaceId) -> Option<Self> {
+        if let Some(queued) = snapshot
+            .queued
+            .iter()
+            .find(|queued| queued.session.workspace == workspace)
+        {
+            return Some(Self {
+                position: queued.position,
+                reasons: reasons(queued.reasons.clone()),
+                pending_since: None,
+            });
+        }
+        if let Some(waiting) = snapshot
+            .waiting
+            .iter()
+            .find(|waiting| waiting.session.workspace == workspace)
+        {
+            return Some(Self {
+                position: None,
+                reasons: reasons(waiting.reasons.clone()),
+                pending_since: waiting.pending_since,
+            });
+        }
+        snapshot
+            .unbriefed
+            .iter()
+            .find(|unbriefed| unbriefed.session.workspace == workspace)
+            .map(|unbriefed| Self {
+                position: None,
+                reasons: Vec::new(),
+                pending_since: unbriefed.pending_since,
+            })
+    }
+}
+
+#[derive(Serialize)]
+struct UnfinishedSessionRecord {
+    id: String,
+    name: String,
+    state: String,
+    preparing: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PostedRecord {
+    session: Option<SessionRecord>,
+    held_message: Option<HeldMessage>,
 }
 
 #[derive(Serialize)]
@@ -462,6 +692,7 @@ struct SessionRecord {
     name: String,
     workspace: String,
     state: String,
+    preparing: Option<String>,
     exit: Option<domain::Exit>,
     outcome_message: Option<String>,
     instance: Option<String>,
@@ -469,7 +700,14 @@ struct SessionRecord {
     agent: String,
     harness: String,
     model: Option<String>,
+    mode: Option<String>,
+    thought_level: Option<String>,
     worked_model: Option<String>,
+    title: Option<String>,
+    options: Vec<SessionOptionRecord>,
+    changing_options: Vec<domain::ChangingOption>,
+    commands: Vec<domain::SessionCommand>,
+    interrupting: Option<domain::Interrupting>,
     enqueued_at: Timestamp,
     started_at: Option<Timestamp>,
     ended_at: Option<Timestamp>,
@@ -477,6 +715,36 @@ struct SessionRecord {
     connected_at: Option<Timestamp>,
     supervisor_version: Option<String>,
     usage: Option<domain::Usage>,
+    tools: Vec<crate::live_work::RunningTool>,
+    message_buffering: bool,
+    thought_buffering: bool,
+}
+
+#[derive(Serialize)]
+struct SessionOptionRecord {
+    #[serde(flatten)]
+    option: domain::SessionOption,
+    warns_cache: bool,
+}
+
+/// ADR-0041: no adapter reports which option categories keep the prompt cache, so kestrel lists
+/// them per harness.
+const CACHE_KEPT_ACROSS: &[(&str, &str)] = &[("claude", domain::SessionOption::THOUGHT_LEVEL)];
+
+fn warns_cache(harness: &str, category: Option<&str>) -> bool {
+    let Some(category) = category else {
+        return false;
+    };
+    if !matches!(
+        category,
+        domain::SessionOption::MODEL
+            | domain::SessionOption::THOUGHT_LEVEL
+            | domain::SessionOption::MODEL_CONFIG
+    ) {
+        return false;
+    }
+
+    !CACHE_KEPT_ACROSS.contains(&(harness, category))
 }
 
 #[derive(Serialize)]
@@ -501,6 +769,9 @@ struct TriggerRecord {
     agent: String,
     allows: Vec<String>,
     profile: Option<String>,
+    model: Option<String>,
+    mode: Option<String>,
+    thought_level: Option<String>,
     applied: bool,
     declared_at: Timestamp,
 }
@@ -549,7 +820,9 @@ impl From<Agent> for AgentRecord {
             id: agent.id.to_string(),
             name: agent.name,
             harness: agent.harness,
-            model: agent.model,
+            model: agent.declared.model,
+            mode: agent.declared.mode,
+            thought_level: agent.declared.thought_level,
         }
     }
 }
@@ -570,6 +843,17 @@ impl WorkspaceRecord {
             .into_iter()
             .map(PullRequestAvailabilityRecord::from)
             .collect();
+        let unfinished_session = workspace::unfinished(store, workspace.id)
+            .await?
+            .map(|session| UnfinishedSessionRecord {
+                id: session.id.to_string(),
+                name: session.name,
+                state: session.state.as_str().to_owned(),
+                preparing: session
+                    .preparing
+                    .map(|preparing| preparing.as_str().to_owned()),
+            });
+        let held_messages = workspace::held_messages(store, workspace.id).await?;
 
         Ok(Self {
             id: workspace.id.to_string(),
@@ -587,28 +871,52 @@ impl WorkspaceRecord {
             last_active_at: workspace.last_active_at,
             sealed_at: workspace.sealed_at,
             continues: workspace.continues.map(|workspace| workspace.to_string()),
-            started_by: workspace.started_by.map(|event| event.to_string()),
+            started_by: workspace.started_by.map(|started| match started {
+                StartedBy::Event(event) => event.to_string(),
+                StartedBy::Participant(participant) => participant,
+            }),
             continued_by,
+            held_messages,
             pull_requests,
+            unfinished_session,
         })
     }
 }
 
 impl SessionRecord {
     fn read(session: Session) -> Self {
+        let harness = session.agent.harness.clone();
+        let options = session
+            .options
+            .into_iter()
+            .map(|option| SessionOptionRecord {
+                warns_cache: warns_cache(&harness, option.category.as_deref()),
+                option,
+            })
+            .collect();
         Self {
             id: session.id.to_string(),
             name: session.name,
             workspace: session.workspace.to_string(),
             state: session.state.as_str().to_owned(),
+            preparing: session
+                .preparing
+                .map(|preparing| preparing.as_str().to_owned()),
             exit: session.exit,
             outcome_message: session.outcome_message,
             instance: session.instance,
             supervisor: session.supervisor,
             agent: session.agent.name,
-            harness: session.agent.harness,
-            model: session.agent.model,
+            harness,
+            model: session.agent.declared.model,
+            mode: session.agent.declared.mode,
+            thought_level: session.agent.declared.thought_level,
             worked_model: session.worked_model,
+            title: session.title,
+            options,
+            changing_options: session.changing_options,
+            commands: session.commands,
+            interrupting: session.interrupting,
             enqueued_at: session.enqueued_at,
             started_at: session.started_at,
             ended_at: session.ended_at,
@@ -616,11 +924,21 @@ impl SessionRecord {
             connected_at: session.connected.as_ref().map(|connected| connected.at),
             supervisor_version: session.connected.map(|connected| connected.version),
             usage: session.usage,
+            tools: Vec::new(),
+            message_buffering: false,
+            thought_buffering: false,
         }
     }
 
-    fn all(sessions: Vec<Session>) -> Vec<Self> {
-        sessions.into_iter().map(Self::read).collect()
+    fn live(session: Session, summaries: &crate::live_work::Summaries) -> Self {
+        let state = summaries.current_session(&session);
+        let mut record = Self::read(session);
+        // The live figure is the Turn in flight; the recorded one is the last Turn answered.
+        record.usage = state.usage.or(record.usage);
+        record.tools = state.tools;
+        record.message_buffering = state.message_buffering;
+        record.thought_buffering = state.thought_buffering;
+        record
     }
 }
 
@@ -680,6 +998,9 @@ impl From<Trigger> for TriggerRecord {
             agent: trigger.agent.name,
             allows: trigger.allows.into_iter().map(|agent| agent.name).collect(),
             profile: trigger.profile.map(|profile| profile.name),
+            model: trigger.declared.model,
+            mode: trigger.declared.mode,
+            thought_level: trigger.declared.thought_level,
             applied: trigger.applied,
             declared_at: trigger.declared_at,
         }
@@ -691,6 +1012,12 @@ struct StartedRecord {
     organization: start::Settled,
     project: start::Settled,
     agent: start::Settled,
+    workspace: WorkspaceRecord,
+    session: SessionRecord,
+}
+
+#[derive(Serialize)]
+struct OpenedRecord {
     workspace: WorkspaceRecord,
     session: SessionRecord,
 }
@@ -833,7 +1160,7 @@ async fn declare_agent(
         &organization,
         &declaration.name,
         &declaration.harness,
-        declaration.model.as_deref(),
+        &declaration.declared(),
     )
     .await?;
 
@@ -1313,6 +1640,7 @@ async fn declare_trigger(
             templates: &templates,
             project: &declaration.project,
             agent: &declaration.agent,
+            declared: &declaration.declared(),
             allows: &declaration.allows,
             profile: declaration.profile.as_deref(),
         },
@@ -1689,6 +2017,7 @@ struct ReleasedRecord {
 struct WorkRoleRecord {
     active_work_slots: usize,
     serialized_harnesses: Vec<String>,
+    driver: String,
 }
 
 #[derive(Serialize)]
@@ -1757,12 +2086,23 @@ struct WaitingSessionRecord {
 }
 
 #[derive(Serialize)]
+struct UnbriefedSessionRecord {
+    name: String,
+    workspace: String,
+    agent: String,
+    preparing: Option<String>,
+    pending_since: Option<Timestamp>,
+    enqueued_at: Timestamp,
+}
+
+#[derive(Serialize)]
 struct QueueRecord {
     work_role: Option<WorkRoleRecord>,
     active_work: ActiveWorkRecord,
     instances: InstancesRecord,
     queued: Vec<QueuedSessionRecord>,
     waiting: Vec<WaitingSessionRecord>,
+    unbriefed: Vec<UnbriefedSessionRecord>,
 }
 
 impl QueueRecord {
@@ -1770,6 +2110,7 @@ impl QueueRecord {
         let recorded = snapshot.recorded.map(|recorded| WorkRoleRecord {
             active_work_slots: recorded.active_work_slots,
             serialized_harnesses: recorded.serialized_harnesses,
+            driver: recorded.driver,
         });
 
         Self {
@@ -1809,6 +2150,21 @@ impl QueueRecord {
                     enqueued_at: waiting.session.enqueued_at,
                 })
                 .collect(),
+            unbriefed: snapshot
+                .unbriefed
+                .into_iter()
+                .map(|unbriefed| UnbriefedSessionRecord {
+                    name: unbriefed.session.name,
+                    workspace: unbriefed.session.workspace.to_string(),
+                    agent: unbriefed.session.agent.name,
+                    preparing: unbriefed
+                        .session
+                        .preparing
+                        .map(|preparing| preparing.as_str().to_owned()),
+                    pending_since: unbriefed.pending_since,
+                    enqueued_at: unbriefed.session.enqueued_at,
+                })
+                .collect(),
         }
     }
 }
@@ -1842,11 +2198,22 @@ async fn release_instance(
 async fn workspaces(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<WorkspaceRecord>>, Refused> {
+) -> Result<Json<Vec<WorkspaceListedRecord>>, Refused> {
     let workspaces = workspace::workspaces(&control_plane.store, &organization).await?;
+    let snapshot = queue::snapshot(&control_plane.store, &organization).await?;
     let mut records = Vec::with_capacity(workspaces.len());
     for workspace in workspaces {
-        records.push(WorkspaceRecord::read(&control_plane.store, workspace).await?);
+        let id = workspace.id;
+        let session = work::sessions(&control_plane.store, id)
+            .await
+            .map_err(workspace_refusal)?
+            .pop()
+            .map(|session| SessionRecord::live(session, &control_plane.summaries));
+        records.push(WorkspaceListedRecord {
+            workspace: WorkspaceRecord::read(&control_plane.store, workspace).await?,
+            session,
+            queue: QueueStandingRecord::of(&snapshot, id),
+        });
     }
 
     Ok(Json(records))
@@ -1856,23 +2223,31 @@ async fn open_workspace(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
     declaration: Result<Json<WorkspaceDeclaration>, JsonRejection>,
-) -> Result<(StatusCode, Json<WorkspaceRecord>), Refused> {
+) -> Result<(StatusCode, Json<OpenedRecord>), Refused> {
     let Json(declaration) = declaration?;
-    let workspace = workspace::open(
+    let (workspace, session) = workspace::open(
         &control_plane.store,
         &organization,
-        &declaration.project,
-        &declaration.agent,
-        declaration.profile.as_deref(),
-        declaration.branch.as_deref(),
-        declaration.continues.as_deref(),
+        workspace::Open {
+            project: &declaration.project,
+            agent: &declaration.agent,
+            profile: declaration.profile.as_deref(),
+            branch: declaration.branch.as_deref(),
+            continues: declaration.continues.as_deref(),
+            declared: declaration.declared(),
+            brief: declaration.brief.as_deref(),
+            participant: declaration.participant.as_deref(),
+        },
     )
     .await
     .map_err(workspace_refusal)?;
 
     Ok((
         StatusCode::CREATED,
-        Json(WorkspaceRecord::read(&control_plane.store, workspace).await?),
+        Json(OpenedRecord {
+            workspace: WorkspaceRecord::read(&control_plane.store, workspace).await?,
+            session: SessionRecord::read(session),
+        }),
     ))
 }
 
@@ -2007,10 +2382,10 @@ async fn post_to_workspace(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
     message: Result<Json<WorkspaceMessage>, JsonRejection>,
-) -> Result<Json<Option<SessionRecord>>, Refused> {
+) -> Result<Json<PostedRecord>, Refused> {
     let Json(message) = message?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
-    let session = workspace::post(
+    let posted = workspace::post(
         &control_plane.store,
         workspace.id,
         message.participant.as_deref().unwrap_or_default(),
@@ -2018,9 +2393,59 @@ async fn post_to_workspace(
     )
     .await
     .map_err(workspace_refusal)?;
-    let session = session.map(SessionRecord::read);
 
-    Ok(Json(session))
+    Ok(Json(PostedRecord {
+        session: posted.session.map(SessionRecord::read),
+        held_message: posted.held_message,
+    }))
+}
+
+async fn edit_workspace_message(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, workspace, id)): Path<(String, String, String)>,
+    edit: Result<Json<WorkspaceMessage>, JsonRejection>,
+) -> Result<Json<HeldMessage>, Refused> {
+    let Json(edit) = edit?;
+    let workspace = resolved(&control_plane, &organization, &workspace).await?;
+    let edited = workspace::edit_message(
+        &control_plane.store,
+        workspace.id,
+        held_id(&id)?,
+        edit.participant.as_deref().unwrap_or_default(),
+        &edit.message,
+    )
+    .await
+    .map_err(workspace_refusal)?;
+
+    Ok(Json(edited))
+}
+
+async fn withdraw_workspace_message(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, workspace, id)): Path<(String, String, String)>,
+    withdrawal: Result<Json<WorkspaceMessageWithdrawal>, JsonRejection>,
+) -> Result<StatusCode, Refused> {
+    let Json(withdrawal) = withdrawal?;
+    let workspace = resolved(&control_plane, &organization, &workspace).await?;
+    workspace::withdraw_message(
+        &control_plane.store,
+        workspace.id,
+        held_id(&id)?,
+        withdrawal.participant.as_deref().unwrap_or_default(),
+    )
+    .await
+    .map_err(workspace_refusal)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// An id the Workspace never held answers `404` like one it did and no longer can change.
+fn held_id(id: &str) -> Result<i64, Refused> {
+    id.parse().map_err(|_| {
+        Refused::NotFound(format!(
+            "the workspace never held a message with the id {id}"
+        ))
+    })
 }
 
 async fn seal_workspace(
@@ -2046,7 +2471,12 @@ async fn sessions(
         .await
         .map_err(workspace_refusal)?;
 
-    Ok(Json(SessionRecord::all(sessions)))
+    Ok(Json(
+        sessions
+            .into_iter()
+            .map(|session| SessionRecord::live(session, &control_plane.summaries))
+            .collect(),
+    ))
 }
 
 async fn enqueue_session(
@@ -2056,11 +2486,18 @@ async fn enqueue_session(
 ) -> Result<(StatusCode, Json<SessionRecord>), Refused> {
     let Json(declaration) = declaration?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
+    if !work::has_had_session(&control_plane.store, workspace.id).await? {
+        return Err(Refused::Conflict(format!(
+            "the workspace {} has never had a session, and a workspace's first session starts \
+             with its open",
+            workspace.id
+        )));
+    }
     let session = work::enqueue(
         &control_plane.store,
         workspace.id,
         declaration.agent.as_deref(),
-        declaration.model.as_deref(),
+        declaration.declared(),
     )
     .await
     .map_err(workspace_refusal)?;
@@ -2071,10 +2508,61 @@ async fn enqueue_session(
 async fn show_session(
     State(control_plane): State<ControlPlane>,
     Path((organization, session)): Path<(String, String)>,
-) -> Result<Json<SessionRecord>, Refused> {
+    headers: HeaderMap,
+) -> Result<Response, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
+    let record = SessionRecord::live(session, &control_plane.summaries);
+    let body = serde_json::to_string(&record).map_err(anyhow::Error::from)?;
+    let tag = strong_etag(&body);
 
-    Ok(Json(SessionRecord::read(session)))
+    if headers
+        .get(IF_NONE_MATCH)
+        .and_then(|asked| asked.to_str().ok())
+        .is_some_and(|asked| matches_etag(asked, &tag))
+    {
+        return Ok((StatusCode::NOT_MODIFIED, [(ETAG, tag)]).into_response());
+    }
+
+    Ok((
+        [(CONTENT_TYPE, "application/json".to_owned()), (ETAG, tag)],
+        body,
+    )
+        .into_response())
+}
+
+fn strong_etag(body: &str) -> String {
+    let digest = sha2::Sha256::digest(body.as_bytes());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+
+    format!("\"{hex}\"")
+}
+
+/// RFC 9110's If-None-Match comparison: weak tags match weak, and `*` matches any.
+fn matches_etag(asked: &str, tag: &str) -> bool {
+    asked.split(',').any(|candidate| {
+        let candidate = candidate.trim();
+        candidate == "*" || candidate.strip_prefix("W/").unwrap_or(candidate) == tag
+    })
+}
+
+async fn interrupt_session(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, session)): Path<(String, String)>,
+    interrupt: Result<Json<SessionInterrupt>, JsonRejection>,
+) -> Result<(StatusCode, Json<SessionRecord>), Refused> {
+    let Json(interrupt) = interrupt?;
+    let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
+    let interrupting = work::interrupt(
+        &control_plane.store,
+        session.id,
+        interrupt.participant.as_deref().unwrap_or_default(),
+    )
+    .await?;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(SessionRecord::read(interrupting)),
+    ))
 }
 
 async fn stop_session(
@@ -2093,6 +2581,66 @@ async fn stop_session(
     Ok(Json(SessionRecord::read(session)))
 }
 
+async fn set_session_option(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, session)): Path<(String, String)>,
+    change: Result<Json<OptionChange>, JsonRejection>,
+) -> Result<(StatusCode, Json<SessionRecord>), Refused> {
+    let Json(change) = change?;
+    let named = match (change.option.as_deref(), change.category.as_deref()) {
+        (Some(option), None) => work::Named::Option(option),
+        (None, Some(category)) => work::Named::Category(category),
+        (Some(_), Some(_)) => {
+            return Err(Refused::Named {
+                status: StatusCode::BAD_REQUEST,
+                field: "option",
+                why: "an option change names an option or a category, not both".to_owned(),
+            });
+        }
+        (None, None) => {
+            return Err(Refused::Named {
+                status: StatusCode::BAD_REQUEST,
+                field: "option",
+                why: "an option change names an option or a category".to_owned(),
+            });
+        }
+    };
+    let written = work::set_option(
+        &control_plane.store,
+        &organization,
+        &session,
+        &change.participant,
+        named,
+        &change.value,
+    )
+    .await
+    .map_err(option_refusal)?;
+
+    Ok((
+        if written.live {
+            StatusCode::ACCEPTED
+        } else {
+            StatusCode::OK
+        },
+        Json(SessionRecord::read(written.session)),
+    ))
+}
+
+fn option_refusal(refused: work::OptionRefusal) -> Refused {
+    match refused {
+        work::OptionRefusal::Phase(why) => Refused::Conflict(why),
+        work::OptionRefusal::Unacceptable { field, why } => Refused::Named {
+            status: StatusCode::BAD_REQUEST,
+            field,
+            why,
+        },
+        work::OptionRefusal::Missing(why) => Refused::NotFound(why),
+        work::OptionRefusal::Named(error) | work::OptionRefusal::Unavailable(error) => {
+            Refused::from(error)
+        }
+    }
+}
+
 async fn resolved(
     control_plane: &ControlPlane,
     organization: &str,
@@ -2104,6 +2652,11 @@ async fn resolved(
 }
 
 fn workspace_refusal(error: anyhow::Error) -> Refused {
+    if error.downcast_ref::<FieldRefusal>().is_some()
+        || error.downcast_ref::<HeldMessageRefusal>().is_some()
+    {
+        return error.into();
+    }
     let message = error.to_string();
     if message.starts_with("no workspace ")
         || message.starts_with("no project named ")
@@ -2152,7 +2705,7 @@ fn named(name: &str) -> Result<(), Refused> {
     Ok(())
 }
 
-fn answered<T, R>(declared: Declared<T>) -> Response
+fn answered<T, R>(declared: DeclaredRecord<T>) -> Response
 where
     R: From<T> + Serialize,
 {
@@ -2165,8 +2718,33 @@ where
     (status, Json(R::from(declared.record))).into_response()
 }
 
+async fn transcript_payload(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, workspace, payload)): Path<(String, String, String)>,
+) -> Result<Response, Refused> {
+    let workspace = resolved(&control_plane, &organization, &workspace).await?;
+    let mut tx = control_plane.store.read().await?;
+    let payload = match tx.log().payload(&workspace, &payload).await? {
+        log::PayloadRead::Available(payload) => payload,
+        log::PayloadRead::Gone => {
+            return Err(Refused::Gone(
+                "the Transcript payload has expired".to_owned(),
+            ));
+        }
+        log::PayloadRead::Missing => {
+            return Err(Refused::NotFound("no payload in this Workspace".to_owned()));
+        }
+    };
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, payload.media_type)],
+        payload.content,
+    )
+        .into_response())
+}
+
 /// A stream that closes without an `end` event was cut off, and the reader resumes it from
-/// the last id it was handed.
+/// the last id it was handed. A read that stays open past caught-up registers its follower and
+/// carries who is following, transiently (ADR-0035).
 async fn transcript(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
@@ -2174,6 +2752,13 @@ async fn transcript(
     headers: HeaderMap,
 ) -> Result<Sse<impl Stream<Item = Result<Event, BoxError>>>, Refused> {
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
+    let name = match following.as_name.as_deref() {
+        Some(name) => {
+            let mut tx = control_plane.store.read().await?;
+            Some(participant::accepted(&mut tx, &workspace.organization, name).await?)
+        }
+        None => None,
+    };
     let workspace = workspace.id;
     let follow = following.follow.unwrap_or(true);
     let kinds = following
@@ -2184,12 +2769,33 @@ async fn transcript(
         .map_err(|error| Refused::BadRequest(error.to_string()))?
         .unwrap_or_default();
     let from = last_event_id(&headers)?;
-    let mut read = reading(&control_plane.store, workspace, from, &kinds).await?;
+    let summaries = following.summaries.unwrap_or(true);
+    let range = log::SeqRange {
+        first_seq: following.first_seq,
+        last_seq: following.last_seq,
+    };
+    range.validate()?;
+    let mut read = reading(&control_plane, workspace, from, &kinds, summaries, range).await?;
 
     let stream = async_stream::try_stream! {
+        let mut joined: Option<crate::presence::Joined> = None;
         let mut delivered = from;
+        let mut session_state = read.session_state.clone();
+        if follow {
+            yield Event::default().event("session_state").json_data(&session_state)?;
+        }
         loop {
+            if follow && read.session_state != session_state {
+                session_state = read.session_state.clone();
+                yield Event::default().event("session_state").json_data(&session_state)?;
+            }
+            let mut activities = read.page.activities.into_iter().peekable();
             for entry in read.page.entries {
+                while activities.peek().is_some_and(|activity| activity.last_seq < entry.seq) {
+                    let activity = activities.next().unwrap();
+                    delivered = Some(Cursor::at(workspace, activity.last_seq));
+                    yield Event::default().id(delivered.unwrap().to_string()).event("activity").json_data(activity)?;
+                }
                 delivered = Some(Cursor::at(workspace, entry.seq));
                 yield Event::default()
                     .id(Cursor::at(workspace, entry.seq).to_string())
@@ -2202,6 +2808,10 @@ async fn transcript(
                         entry: entry.entry,
                     })?;
             }
+            for activity in activities {
+                delivered = Some(Cursor::at(workspace, activity.last_seq));
+                yield Event::default().id(delivered.unwrap().to_string()).event("activity").json_data(activity)?;
+            }
             if let Some(cursor) = read.page.cursor && delivered != Some(cursor) {
                 delivered = Some(cursor);
                 yield Event::default().event("cursor").id(cursor.to_string()).json_data(cursor.to_string())?;
@@ -2210,11 +2820,30 @@ async fn transcript(
                 let because = match (read.sealed, follow) {
                     (true, _) => Some(Because::Sealed),
                     (false, false) => Some(Because::CaughtUp),
+                    (false, true) if range.last_seq.is_some() => Some(Because::CaughtUp),
                     (false, true) => None,
                 };
                 if let Some(because) = because {
                     yield Event::default().event("end").json_data(End { because })?;
                     break;
+                }
+
+                if joined.is_none() {
+                    let mut follower = control_plane.followers.join(workspace, name.clone());
+                    yield Event::default().event("follower").json_data(FollowerEvent {
+                        id: follower.id,
+                        lease_seconds: follower.lease.as_secs(),
+                    })?;
+                    yield Event::default().event("presence").json_data(follower.snapshot())?;
+                    joined = Some(follower);
+                }
+
+                let follower = joined.as_mut().expect("registered just above");
+                if *follower.expiration.borrow() {
+                    break;
+                }
+                if follower.presence.has_changed().unwrap_or(false) {
+                    yield Event::default().event("presence").json_data(follower.snapshot())?;
                 }
 
                 tokio::select! {
@@ -2223,9 +2852,64 @@ async fn transcript(
                 }
             }
 
-            read = reading(&control_plane.store, workspace, read.page.cursor, &kinds)
+            read = reading(&control_plane, workspace, read.page.cursor, &kinds, summaries, range)
                 .await
                 .map_err(Refused::into_error)?;
+        }
+    };
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(KEEP_ALIVE)))
+}
+
+/// An unknown or expired follower is a 404, never a fresh registration.
+async fn renew_follower(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, workspace, id)): Path<(String, String, String)>,
+) -> Result<StatusCode, Refused> {
+    let workspace = resolved(&control_plane, &organization, &workspace).await?;
+    let id = id
+        .parse::<crate::presence::FollowerId>()
+        .map_err(|_| Refused::NotFound("no such follower".to_owned()))?;
+
+    if control_plane.followers.renew(workspace.id, id) {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(Refused::NotFound(
+            "no such follower, or its lease has passed".to_owned(),
+        ))
+    }
+}
+
+/// Every subscriber is told to refetch everything on connect, and again if it fell behind the
+/// hub's buffer: a notice is a hint, so a missed one must never look like a quiet stream.
+async fn changes(
+    State(control_plane): State<ControlPlane>,
+    Path(organization): Path<String>,
+) -> Result<Sse<impl Stream<Item = Result<Event, BoxError>>>, Refused> {
+    let mut tx = control_plane.store.read().await?;
+    let organization = tx.organizations().named(&organization).await?;
+    let mut subscription = control_plane.store.notices().subscribe(organization.id);
+    drop(tx);
+
+    let stream = async_stream::try_stream! {
+        yield Event::default().event("open").json_data(Refetch {})?;
+        loop {
+            let watch = tokio::select! {
+                () = control_plane.shutdown.cancelled() => break,
+                watch = subscription.recv() => watch,
+            };
+            match watch {
+                Some(fanout::Watch::Change(resource)) => {
+                    match Changed::named(&control_plane.store, resource).await {
+                        Ok(changed) => yield Event::default().event("change").json_data(changed)?,
+                        Err(_) => yield Event::default().event("resync").json_data(Refetch {})?,
+                    }
+                }
+                Some(fanout::Watch::Resync) => {
+                    yield Event::default().event("resync").json_data(Refetch {})?;
+                }
+                None => break,
+            }
         }
     };
 
@@ -2235,12 +2919,14 @@ async fn transcript(
 /// The state is read in the transaction the page is, so a Workspace sealed between the two
 /// cannot end the stream short of its last entry.
 async fn reading(
-    store: &Store,
+    control_plane: &ControlPlane,
     id: WorkspaceId,
     from: Option<Cursor>,
     kinds: &log::Kinds,
+    summaries: bool,
+    range: log::SeqRange,
 ) -> Result<Read, Refused> {
-    let mut tx = store.begin().await?;
+    let mut tx = control_plane.store.read().await?;
     let workspace = tx
         .workspaces()
         .find(id)
@@ -2248,11 +2934,24 @@ async fn reading(
         .ok_or_else(|| Refused::NotFound("no workspace".to_owned()))?;
     let page = tx
         .log()
-        .page(&workspace, from, Window::DEFAULT, kinds)
+        .transcript_page(&workspace, from, Window::DEFAULT, kinds, summaries, range)
         .await?;
 
+    let session = tx
+        .workspaces()
+        .unfinished_session(&workspace)
+        .await?
+        .map(|holding| holding.session);
+    let session_state = TranscriptSessionState {
+        session_id: session.as_ref().map(|session| session.id),
+        state: session
+            .as_ref()
+            .map(|session| control_plane.summaries.current_session(session))
+            .unwrap_or_default(),
+    };
     Ok(Read {
         page,
+        session_state,
         sealed: workspace.state == WorkspaceState::Sealed,
     })
 }
@@ -2274,10 +2973,11 @@ enum Refused {
     BadRequest(String),
     Forbidden(String),
     NotFound(String),
+    Gone(String),
     Conflict(String),
     Unprocessable(String),
-    /// A value a person named, refused: the request field it came in travels with the reason.
     Named {
+        status: StatusCode,
         field: &'static str,
         why: String,
     },
@@ -2291,6 +2991,7 @@ impl Refused {
             Refused::BadRequest(why)
             | Refused::Forbidden(why)
             | Refused::NotFound(why)
+            | Refused::Gone(why)
             | Refused::Conflict(why)
             | Refused::Unprocessable(why)
             | Refused::Named { why, .. }
@@ -2307,12 +3008,27 @@ impl From<anyhow::Error> for Refused {
         }
         if let Some(named) = error.downcast_ref::<FieldRefusal>() {
             return Refused::Named {
+                status: match named.kind {
+                    Kind::Unacceptable => StatusCode::UNPROCESSABLE_ENTITY,
+                    Kind::Missing | Kind::Ambiguous => StatusCode::NOT_FOUND,
+                    Kind::Taken => StatusCode::CONFLICT,
+                },
                 field: named.field,
                 why: named.message.clone(),
             };
         }
         if let Some(silent) = error.downcast_ref::<crate::live_read::NotAnswering>() {
             return Refused::NotAnswering(silent.to_string());
+        }
+        if let Some(refused) = error.downcast_ref::<HeldMessageRefusal>() {
+            let why = refused.to_string();
+            return match refused {
+                HeldMessageRefusal::NeverHeld(_) => Refused::NotFound(why),
+                HeldMessageRefusal::NotTheAuthor(_) => Refused::Forbidden(why),
+                HeldMessageRefusal::AlreadyTaken | HeldMessageRefusal::AlreadyWithdrawn => {
+                    Refused::Conflict(why)
+                }
+            };
         }
         match error.downcast::<Declined>() {
             Ok(Declined::Unacceptable(why)) => Refused::Unprocessable(why),
@@ -2345,9 +3061,10 @@ impl IntoResponse for Refused {
             Refused::BadRequest(why) => (StatusCode::BAD_REQUEST, why, None),
             Refused::Forbidden(why) => (StatusCode::FORBIDDEN, why, None),
             Refused::NotFound(why) => (StatusCode::NOT_FOUND, why, None),
+            Refused::Gone(why) => (StatusCode::GONE, why, None),
             Refused::Conflict(why) => (StatusCode::CONFLICT, why, None),
             Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why, None),
-            Refused::Named { field, why } => (StatusCode::UNPROCESSABLE_ENTITY, why, Some(field)),
+            Refused::Named { status, field, why } => (status, why, Some(field)),
             Refused::NotAnswering(why) => (StatusCode::GATEWAY_TIMEOUT, why, None),
             Refused::Unavailable(error) => {
                 warn!(%error, busy, "the operator boundary could not answer");
@@ -2368,4 +3085,28 @@ struct Refusal {
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     field: Option<&'static str>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::warns_cache;
+
+    #[test]
+    fn the_cache_warning_table_is_per_category_and_per_harness() {
+        for category in ["model", "thought_level", "model_config"] {
+            assert!(
+                warns_cache("opencode", Some(category)),
+                "{category} warns for opencode"
+            );
+        }
+        assert!(!warns_cache("opencode", Some("mode")));
+        assert!(!warns_cache("opencode", None));
+        assert!(!warns_cache("opencode", Some("_scripted")));
+
+        assert!(
+            !warns_cache("claude", Some("thought_level")),
+            "Claude keeps the prompt cache across a change of effort"
+        );
+        assert!(warns_cache("claude", Some("model")));
+    }
 }

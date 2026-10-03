@@ -1,16 +1,20 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import {
-	Conversation,
-	ConversationContent,
-	ConversationEmptyState,
-	ConversationScrollButton,
-} from "#/components/ai-elements/conversation";
 import { Refusal } from "#/components/refusal";
 import { Skeleton } from "#/components/ui/skeleton";
+import { SessionQueueLine } from "#/components/workbench/session-queue-line";
+import { SessionStatus } from "#/components/workbench/session-status";
+import { TranscriptPane } from "#/components/workbench/transcript-pane";
+import { WorkPane } from "#/components/workbench/work-pane";
 import { PaneHeading, Workbench } from "#/components/workbench/workbench";
 import { WorkspacesPane } from "#/components/workbench/workspaces-pane";
-import { workspaceQuery } from "#/operator/queries";
+import { useTranscript } from "#/operator/follow";
+import {
+	sessionQuery,
+	workspaceQuery,
+	workspaceSessionsQuery,
+	workspacesQuery,
+} from "#/operator/queries";
 
 export const Route = createFileRoute("/organizations/$organization/workspaces/$workspace")({
 	component: WorkspaceView,
@@ -18,7 +22,15 @@ export const Route = createFileRoute("/organizations/$organization/workspaces/$w
 
 function WorkspaceView() {
 	const { organization, workspace } = Route.useParams();
+	const transcript = useTranscript(organization, workspace);
 	const shown = useQuery(workspaceQuery(organization, workspace));
+	const sessions = useQuery(workspaceSessionsQuery(organization, workspace));
+	const known = useQuery(workspacesQuery(organization));
+	const current = shown.data?.unfinished_session?.id ?? sessions.data?.at(-1)?.id;
+	const session = useQuery({
+		...sessionQuery(organization, current ?? ""),
+		enabled: current !== undefined,
+	});
 
 	return (
 		<Workbench
@@ -33,19 +45,29 @@ function WorkspaceView() {
 							<Refusal error={shown.error} />
 						</div>
 					) : (
-						<Conversation>
-							<ConversationContent>
-								<ConversationEmptyState
-									title="Transcript"
-									description={`${shown.data.project} on ${shown.data.checkout.branch}`}
-								/>
-							</ConversationContent>
-							<ConversationScrollButton />
-						</Conversation>
+						<>
+							<SessionQueueLine organization={organization} workspace={shown.data.id} />
+							<SessionStatus organization={organization} record={shown.data} />
+							<TranscriptPane
+								transcript={transcript}
+								organization={organization}
+								read={shown.data}
+								session={session.data}
+								workspace={workspace}
+								workspaces={known.data}
+							/>
+						</>
 					)}
 				</>
 			}
-			work={<PaneHeading>Work</PaneHeading>}
+			work={
+				<WorkPane
+					transcript={transcript}
+					organization={organization}
+					workspace={workspace}
+					record={shown.data}
+				/>
+			}
 		/>
 	);
 }

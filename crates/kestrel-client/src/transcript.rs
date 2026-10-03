@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::Write as _;
 use std::time::{Duration, Instant};
 
@@ -32,24 +33,46 @@ impl From<reqwest::Error> for Cut {
     }
 }
 
-/// Reads until the control plane ends the stream on purpose, reconnecting from the last entry
-/// printed whenever it is cut off. Returns the cursor the read ended at.
+pub struct Selection<'a> {
+    pub follow: bool,
+    pub kinds: &'a str,
+    pub summaries: bool,
+    pub as_participant: Option<&'a str>,
+}
+
+#[derive(Clone, Copy)]
+struct Stream<'a> {
+    client: &'a Client,
+    url: &'a Url,
+    followers: &'a Url,
+    selection: &'a Selection<'a>,
+    presentation: &'a Presentation,
+}
+
 pub async fn read(
     control_plane: &Url,
     organization: &str,
     workspace: &str,
     from: Option<String>,
-    follow: bool,
-    kinds: &str,
+    selection: Selection<'_>,
     presentation: &Presentation,
 ) -> Result<Option<String>> {
     let client = Client::new();
-    let url = transcript(control_plane, organization, workspace, follow, kinds)?;
+    let url = transcript(control_plane, organization, workspace, &selection)?;
+    let followers = followers(control_plane, organization, workspace)?;
+    let stream = Stream {
+        client: &client,
+        url: &url,
+        followers: &followers,
+        selection: &selection,
+        presentation,
+    };
+    let mut activities = Activities::default();
     let mut cursor = from;
     let mut heard = Instant::now();
 
     loop {
-        match streamed(&client, &url, &mut cursor, &mut heard, presentation).await {
+        match streamed(stream, &mut cursor, &mut heard, &mut activities).await {
             Ok(()) => return Ok(cursor),
             Err(Cut::Refused(status, why)) => bail!(Failed::new(
                 crate::api::refused(status),
@@ -68,12 +91,18 @@ pub async fn read(
 }
 
 async fn streamed(
-    client: &Client,
-    url: &Url,
+    stream: Stream<'_>,
     cursor: &mut Option<String>,
     heard: &mut Instant,
-    presentation: &Presentation,
+    activities: &mut Activities,
 ) -> Result<(), Cut> {
+    let Stream {
+        client,
+        url,
+        followers,
+        selection,
+        presentation,
+    } = stream;
     let mut request = client
         .get(url.clone())
         .header(header::ACCEPT, "text/event-stream");
@@ -95,6 +124,7 @@ async fn streamed(
     }
     *heard = Instant::now();
 
+    let mut renewal: Option<Renewal> = None;
     let mut events = Events::over(response);
     let mut stdout = std::io::stdout().lock();
     while let Some(event) = events.next().await? {
@@ -109,13 +139,90 @@ async fn streamed(
                     })?;
                 *cursor = event.id;
             }
+            Some("activity") => {
+                let activity: Value =
+                    serde_json::from_str(&event.data).map_err(|error| Cut::Failed(error.into()))?;
+                if let Some(line) = activities
+                    .observe(activity, presentation)
+                    .map_err(Cut::Failed)?
+                {
+                    writeln!(stdout, "{line}")
+                        .and_then(|()| stdout.flush())
+                        .map_err(|error| Cut::Failed(error.into()))?;
+                }
+                *cursor = event.id;
+            }
             Some("cursor") => *cursor = event.id,
-            Some("end") => return Ok(()),
+            Some("follower") => {
+                let follower: Follower = serde_json::from_str(&event.data)
+                    .map_err(|error| Cut::Failed(anyhow!(error).context("reading the follower")))?;
+                // Replacing stops the renewal of a registration this stream no longer holds.
+                let _previous = renewal.replace(Renewal::start(
+                    client,
+                    followers,
+                    &follower.id,
+                    follower.lease_seconds,
+                ));
+            }
+            Some("end") => {
+                if !selection.follow
+                    && let Some(open) = activities.open.take()
+                {
+                    let line = activity_line(&open, presentation).map_err(Cut::Failed)?;
+                    writeln!(stdout, "{line}")
+                        .and_then(|()| stdout.flush())
+                        .map_err(|error| Cut::Failed(error.into()))?;
+                }
+                return Ok(());
+            }
             _ => {}
         }
     }
 
     Err(Cut::Lost(anyhow!("the stream closed before it ended")))
+}
+
+#[derive(Deserialize)]
+struct Follower {
+    id: String,
+    lease_seconds: u64,
+}
+
+struct Renewal {
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Renewal {
+    fn start(client: &Client, followers: &Url, id: &str, lease_seconds: u64) -> Self {
+        let mut url = followers.clone();
+        url.path_segments_mut()
+            .expect("the followers URL is a base for a path")
+            .extend([id, "lease"]);
+        // A third of the lease, so a dropped renewal still leaves two more before it passes.
+        let every = Duration::from_secs((lease_seconds / 3).max(1));
+
+        Self {
+            task: tokio::spawn(renewing(client.clone(), url, every)),
+        }
+    }
+}
+
+impl Drop for Renewal {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn renewing(client: Client, url: Url, every: Duration) {
+    loop {
+        tokio::time::sleep(every).await;
+
+        match client.post(url.clone()).send().await {
+            Ok(response) if response.status() == StatusCode::NO_CONTENT => {}
+            Ok(response) if response.status() == StatusCode::NOT_FOUND => return,
+            _ => {}
+        }
+    }
 }
 
 fn presented(data: &str, presentation: &Presentation) -> Result<String> {
@@ -129,8 +236,35 @@ fn transcript(
     control_plane: &Url,
     organization: &str,
     workspace: &str,
-    follow: bool,
-    kinds: &str,
+    selection: &Selection<'_>,
+) -> Result<Url> {
+    let mut url = workspace_path(control_plane, organization, workspace, "transcript")?;
+    {
+        let mut query = url.query_pairs_mut();
+        query
+            .append_pair("follow", if selection.follow { "true" } else { "false" })
+            .append_pair("kinds", selection.kinds)
+            .append_pair(
+                "summaries",
+                if selection.summaries { "true" } else { "false" },
+            );
+        if let Some(name) = selection.as_participant {
+            query.append_pair("as", name);
+        }
+    }
+
+    Ok(url)
+}
+
+fn followers(control_plane: &Url, organization: &str, workspace: &str) -> Result<Url> {
+    workspace_path(control_plane, organization, workspace, "followers")
+}
+
+fn workspace_path(
+    control_plane: &Url,
+    organization: &str,
+    workspace: &str,
+    tail: &str,
 ) -> Result<Url> {
     let mut url = control_plane.clone();
     url.path_segments_mut()
@@ -148,11 +282,51 @@ fn transcript(
             organization,
             "workspaces",
             workspace,
-            "transcript",
+            tail,
         ]);
-    url.query_pairs_mut()
-        .append_pair("follow", if follow { "true" } else { "false" })
-        .append_pair("kinds", kinds);
 
     Ok(url)
+}
+
+#[derive(Default)]
+struct Activities {
+    printed: HashSet<i64>,
+    open: Option<Value>,
+}
+impl Activities {
+    fn observe(&mut self, activity: Value, presentation: &Presentation) -> Result<Option<String>> {
+        let first = activity["first_seq"]
+            .as_i64()
+            .context("an Activity has no first seq")?;
+        if activity["closed"] == true {
+            self.open = None;
+            if self.printed.insert(first) {
+                return activity_line(&activity, presentation).map(Some);
+            }
+        } else if !self.printed.contains(&first) {
+            self.open = Some(activity);
+        }
+        Ok(None)
+    }
+}
+fn activity_line(activity: &Value, presentation: &Presentation) -> Result<String> {
+    if matches!(presentation, Presentation::Json(_)) {
+        return crate::output::line(presentation, &view::ENTRIES, activity);
+    }
+    let counts = &activity["counts"];
+    Ok(format!(
+        "activity  {}..{}  {} tools, {} failed, {} thoughts, {} plans, {} tombstones{}",
+        activity["first_seq"],
+        activity["last_seq"],
+        counts["tool_calls"],
+        counts["failed_calls"],
+        counts["thoughts"],
+        counts["plans"],
+        counts["tombstones"],
+        if activity["anomaly"] == true {
+            "  interrupted or unresolved"
+        } else {
+            ""
+        }
+    ))
 }

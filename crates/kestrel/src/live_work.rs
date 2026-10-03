@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::domain::Usage;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Repository {
     pub repository: String,
@@ -52,6 +54,7 @@ pub struct Summary {
 struct Live {
     streams: usize,
     summary: Option<Summary>,
+    sessions: HashMap<String, SessionState>,
 }
 
 #[derive(Clone, Default)]
@@ -145,4 +148,61 @@ pub async fn read(
     Ok(Work::NotAnswering {
         message: "the Instance isn't answering",
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunningTool {
+    pub call_id: String,
+    pub title: String,
+    pub status: String,
+    pub started_at: Timestamp,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionState {
+    pub tools: Vec<RunningTool>,
+    pub message_buffering: bool,
+    pub thought_buffering: bool,
+    /// Held in memory, never a row (ADR-0041).
+    #[serde(default)]
+    pub usage: Option<Usage>,
+}
+
+impl Summaries {
+    pub fn report_session(&self, instance: &str, session: &str, state: SessionState) {
+        if let Some(live) = self.0.lock().unwrap().get_mut(instance) {
+            live.sessions.insert(session.to_owned(), state);
+        }
+    }
+
+    pub fn report_usage(&self, instance: &str, session: &str, usage: Usage) {
+        if let Some(live) = self.0.lock().unwrap().get_mut(instance) {
+            live.sessions.entry(session.to_owned()).or_default().usage = Some(usage);
+        }
+    }
+    pub fn current_session(&self, session: &crate::domain::Session) -> SessionState {
+        if crate::domain::SessionState::LIVE.contains(&session.state)
+            && session
+                .lease_expires_at
+                .is_some_and(|at| at > Timestamp::now())
+        {
+            session
+                .instance
+                .as_deref()
+                .map(|instance| self.session(instance, &session.id.to_string()))
+                .unwrap_or_default()
+        } else {
+            SessionState::default()
+        }
+    }
+
+    pub fn session(&self, instance: &str, session: &str) -> SessionState {
+        self.0
+            .lock()
+            .unwrap()
+            .get(instance)
+            .and_then(|live| live.sessions.get(session))
+            .cloned()
+            .unwrap_or_default()
+    }
 }

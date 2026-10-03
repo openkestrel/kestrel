@@ -327,21 +327,35 @@ fn declared(kestrel: &Booted) {
 }
 
 fn opened(kestrel: &Booted) -> String {
-    kestrel.run(&[
+    let opened = kestrel.record(&[
         "workspace",
         "open",
         "--project",
         support::repository::NAME,
         "--agent",
         "builder",
-    ])
+        "--json",
+        "workspace",
+    ]);
+
+    opened["workspace"]
+        .as_str()
+        .expect("the opened workspace's generated name")
+        .to_owned()
 }
 
 /// Each entry as `seq kind …`, without the moment it was appended, which is different every
 /// session.
 fn transcribed(kestrel: &Booted, workspace: &str) -> Vec<String> {
     kestrel
-        .records(&["workspace", "transcript", workspace, "--json", "seq,entry"])
+        .records(&[
+            "workspace",
+            "transcript",
+            workspace,
+            "--no-summaries",
+            "--json",
+            "seq,entry",
+        ])
         .iter()
         .map(|recorded| {
             let entry = &recorded["entry"];
@@ -351,6 +365,7 @@ fn transcribed(kestrel: &Booted, workspace: &str) -> Vec<String> {
                     format!("session started {} {}", entry["session"], entry["agent"])
                 }
                 "said" => format!("said {} {}", entry["participant"], entry["message"]),
+                "brief" => format!("brief {}", entry["brief"]),
                 "session_ended" => format!(
                     "session ended {} {}",
                     entry["session"], entry["exit"]["status"]
@@ -364,6 +379,217 @@ fn transcribed(kestrel: &Booted, workspace: &str) -> Vec<String> {
             format!("{} {}", recorded["seq"], said.replace('"', ""))
         })
         .collect()
+}
+
+#[test]
+fn a_session_show_says_the_title_its_options_and_its_commands() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Announces, "info");
+    declared(&booted);
+    let workspace = opened(&booted);
+    booted.run(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "operator",
+        "go",
+    ]);
+
+    let listed = booted.until(
+        &[
+            "session",
+            "list",
+            "--workspace",
+            &workspace,
+            "--json",
+            "id,title",
+        ],
+        |listed| listed.iter().any(|session| !session["title"].is_null()),
+        "show the harness's title",
+    );
+    let session = listed
+        .iter()
+        .find(|session| !session["title"].is_null())
+        .and_then(|session| session["id"].as_str())
+        .expect("the session's identifier")
+        .to_owned();
+
+    let shown = booted.run(&["session", "show", &session]);
+
+    assert!(
+        shown.contains(kestrel_scripted_agent::TITLE),
+        "the title is not shown:\n{shown}"
+    );
+    assert!(
+        shown.contains("model: scripted-max"),
+        "the model option's current value is not shown as `category: current`:\n{shown}"
+    );
+    assert!(
+        shown.contains("mode: plan"),
+        "the mode option's current value is not shown:\n{shown}"
+    );
+    assert!(
+        shown.contains("compact"),
+        "the commands are not shown:\n{shown}"
+    );
+
+    booted.terminated();
+}
+
+#[test]
+fn a_session_option_set_changes_an_option_and_warns_about_the_cache() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "info");
+    declared(&booted);
+    let workspace = opened(&booted);
+    booted.run(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "operator",
+        "go",
+    ]);
+
+    let waiting = booted.until(
+        &[
+            "session",
+            "list",
+            "--workspace",
+            &workspace,
+            "--json",
+            "id,state",
+        ],
+        |listed| listed.iter().any(|session| session["state"] == "waiting"),
+        "reach a waiting session",
+    );
+    let session = waiting
+        .iter()
+        .find(|session| session["state"] == "waiting")
+        .and_then(|session| session["id"].as_str())
+        .expect("the waiting session's identifier")
+        .to_owned();
+    // The bookkeeping report is debounced, so the option is waited for before it is changed.
+    booted.until(
+        &["session", "show", &session, "--json", "id,options"],
+        |shown| {
+            shown[0]["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|option| option["category"] == "model")
+        },
+        "report its options",
+    );
+
+    let changed = booted.client(&[
+        "session",
+        "option",
+        "set",
+        &session,
+        "model",
+        kestrel_scripted_agent::OTHER_MODEL,
+        "--as-participant",
+        "operator",
+    ]);
+    assert!(
+        changed.status.success(),
+        "`session option set` failed:\n{}",
+        changed.err
+    );
+    assert!(
+        changed.err.contains("1200"),
+        "the cache warning did not name the context it re-reads:\n{}",
+        changed.err
+    );
+
+    let settled = booted.until(
+        &[
+            "session",
+            "show",
+            &session,
+            "--json",
+            "id,options,changing_options",
+        ],
+        |shown| {
+            let shown = &shown[0];
+            shown["changing_options"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+                && shown["options"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|option| {
+                        option["category"] == "model"
+                            && option["current"] == kestrel_scripted_agent::OTHER_MODEL
+                    })
+        },
+        "apply the changed model",
+    );
+    assert_eq!(
+        settled[0]["changing_options"].as_array().map(Vec::len),
+        Some(0)
+    );
+
+    booted.terminated();
+}
+
+#[test]
+fn workspace_open_declares_the_mode_its_first_session_runs_in() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.boot();
+    declared(&booted);
+    let workspace = booted.record(&[
+        "workspace",
+        "open",
+        "--project",
+        support::repository::NAME,
+        "--agent",
+        "builder",
+        "--mode",
+        kestrel_scripted_agent::SWITCHED_MODE,
+        "--brief",
+        "go",
+        "--as-participant",
+        "operator",
+        "--json",
+        "workspace",
+    ])["workspace"]
+        .as_str()
+        .expect("the opened workspace's name")
+        .to_owned();
+
+    let listed = booted.until(
+        &[
+            "session",
+            "list",
+            "--workspace",
+            &workspace,
+            "--json",
+            "id,state",
+        ],
+        |listed| listed.iter().any(|session| session["state"] == "waiting"),
+        "answer its first turn",
+    );
+    let session = listed[0]["id"].as_str().expect("the session's identifier");
+    let shown: Value = serde_json::from_str(&booted.run(&[
+        "session",
+        "show",
+        session,
+        "--json",
+        "mode,worked_model",
+    ]))
+    .expect("the session's fields as JSON");
+
+    assert_eq!(
+        shown["mode"],
+        kestrel_scripted_agent::SWITCHED_MODE,
+        "the mode the open declared was not set on the harness: {shown}"
+    );
+
+    booted.terminated();
 }
 
 #[test]
@@ -480,7 +706,7 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
     );
     assert_eq!(
         transcribed(&booted, &workspace).last(),
-        Some(&format!("10 instance released operator {instance}")),
+        Some(&format!("11 instance released operator {instance}")),
         "the release is not on the record"
     );
     assert!(
@@ -506,12 +732,196 @@ fn a_workspace_post_without_a_participant_is_a_usage_error() {
 }
 
 #[test]
+fn a_held_message_is_printed_listed_edited_and_withdrawn() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Dawdles, "info");
+    declared(&booted);
+    let workspace = opened(&booted);
+    booted.run(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "operator",
+        "go",
+    ]);
+    booted.until(
+        &[
+            "session",
+            "list",
+            "--workspace",
+            &workspace,
+            "--json",
+            "state",
+        ],
+        |listed| listed.iter().any(|session| session["state"] == "working"),
+        "reach a working session",
+    );
+
+    let held = booted.run(&[
+        "workspace",
+        "post",
+        &workspace,
+        "--as-participant",
+        "alice",
+        "one more change",
+    ]);
+    let id: i64 = held.parse().expect("the post prints the held id");
+    let listed = booted.record(&["workspace", "show", &workspace, "--json", "held_messages"]);
+    assert_eq!(listed["held_messages"][0]["id"], id);
+    assert_eq!(listed["held_messages"][0]["participant"], "alice");
+    assert_eq!(listed["held_messages"][0]["message"], "one more change");
+
+    let edited = booted.record(&[
+        "workspace",
+        "message",
+        "edit",
+        &workspace,
+        &held,
+        "--as-participant",
+        "alice",
+        "the edited change",
+        "--json",
+        "id,message,edited_at",
+    ]);
+    assert_eq!(edited["id"], id);
+    assert_eq!(edited["message"], "the edited change");
+    assert!(!edited["edited_at"].is_null(), "{edited}");
+
+    let refused = booted.refused(&[
+        "workspace",
+        "message",
+        "edit",
+        &workspace,
+        &held,
+        "--as-participant",
+        "bob",
+        "mine now",
+    ]);
+    assert!(
+        refused.contains("only its author may change it"),
+        "{refused}"
+    );
+
+    booted.run(&[
+        "workspace",
+        "message",
+        "withdraw",
+        &workspace,
+        &held,
+        "--as-participant",
+        "alice",
+    ]);
+    assert_eq!(
+        booted.record(&["workspace", "show", &workspace, "--json", "held_messages"])["held_messages"],
+        serde_json::json!([])
+    );
+    let refused = booted.refused(&[
+        "workspace",
+        "message",
+        "withdraw",
+        &workspace,
+        &held,
+        "--as-participant",
+        "alice",
+    ]);
+    assert!(refused.contains("already withdrawn"), "{refused}");
+}
+
+#[test]
+fn a_session_interrupt_names_who_asked_and_a_waiting_one_is_refused() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.booting("127.0.0.1:0", Script::WorksUntilCancelled, "info");
+    declared(&booted);
+    // Opened with a Brief, so the session's first turn is its instruction and nothing races it.
+    let workspace = booted.record(&[
+        "workspace",
+        "open",
+        "--project",
+        support::repository::NAME,
+        "--agent",
+        "builder",
+        "--brief",
+        "go",
+        "--json",
+        "workspace",
+    ])["workspace"]
+        .as_str()
+        .expect("the opened workspace's name")
+        .to_owned();
+    let listed = booted.until(
+        &[
+            "session",
+            "list",
+            "--workspace",
+            &workspace,
+            "--json",
+            "id,state",
+        ],
+        |listed| listed.iter().any(|session| session["state"] == "working"),
+        "reach a working session",
+    );
+    let session = listed[0]["id"]
+        .as_str()
+        .expect("the working session's id")
+        .to_owned();
+
+    let interrupted = booted.record(&[
+        "session",
+        "interrupt",
+        &session,
+        "--as-participant",
+        "alice",
+        "--json",
+        "id,state,interrupting.participant",
+    ]);
+    assert_eq!(interrupted["id"], session);
+    assert_eq!(interrupted["state"], "working");
+    assert_eq!(interrupted["interrupting"]["participant"], "alice");
+
+    let waiting = booted.until(
+        &["session", "show", &session, "--json", "state"],
+        |shown| shown.iter().any(|session| session["state"] == "waiting"),
+        "settle waiting",
+    );
+    assert_eq!(waiting[0]["state"], "waiting");
+    assert!(
+        booted
+            .refused(&[
+                "session",
+                "interrupt",
+                &session,
+                "--as-participant",
+                "alice"
+            ])
+            .contains("waiting"),
+    );
+
+    let entries = booted.records(&[
+        "workspace",
+        "transcript",
+        &workspace,
+        "--kinds",
+        "shared_state,narration,detail",
+        "--json",
+        "entry",
+    ]);
+    assert!(
+        entries.iter().any(|recorded| {
+            recorded["entry"]["type"] == "turn_interrupted"
+                && recorded["entry"]["participant"] == "alice"
+        }),
+        "{entries:?}"
+    );
+}
+
+#[test]
 fn a_session_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
     let kestrel = Kestrel::new();
     let booted = kestrel.boot();
     declared(&booted);
     let workspace = opened(&booted);
-    let session = booted.run(&[
+    booted.run(&[
         "workspace",
         "post",
         &workspace,
@@ -521,8 +931,11 @@ fn a_session_ends_succeeded_while_waiting_and_is_not_stopped_twice() {
     ]);
 
     let listed = dispatched(&booted, &workspace);
+    let session = listed[0]["id"]
+        .as_str()
+        .expect("the session's id")
+        .to_owned();
 
-    assert_eq!(listed[0]["id"], session);
     assert_eq!(listed[0]["exit"]["status"], "succeeded");
     assert!(
         listed[0]["instance"]
@@ -635,14 +1048,19 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
     let killed = kestrel.booting(&listen, Script::Lingers, "info");
     declared(&killed);
     let workspace = opened(&killed);
-    let session = killed.run(&[
+    let session = killed.record(&[
         "workspace",
         "post",
         &workspace,
         "--as-participant",
         "operator",
         "go",
-    ]);
+        "--json",
+        "session.id",
+    ])["session"]["id"]
+        .as_str()
+        .expect("the session the post reached")
+        .to_owned();
     // The transcript says the Session started only once the supervisor holds the Start instruction,
     // which is the first moment a restart has anything to recover; an instance alone is not.
     killed.until(
@@ -690,11 +1108,11 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
         vec![
             "1 participant joined builder".to_owned(),
             "2 participant joined operator".to_owned(),
-            "3 said operator go".to_owned(),
+            "3 brief go".to_owned(),
             format!("4 session started {session} builder"),
-            "7 said builder half of one message, and the other half".to_owned(),
-            "8 said builder a second message".to_owned(),
-            format!("9 session ended {session} succeeded"),
+            "8 said builder half of one message, and the other half".to_owned(),
+            "9 said builder a second message".to_owned(),
+            format!("10 session ended {session} succeeded"),
         ]
     );
 }
@@ -1318,6 +1736,7 @@ fn transcript_kinds_select_the_entries_the_client_streams() {
         "workspace",
         "transcript",
         &workspace,
+        "--no-summaries",
         "--json",
         "kind,entry",
     ]);
@@ -1328,6 +1747,7 @@ fn transcript_kinds_select_the_entries_the_client_streams() {
         &workspace,
         "--kinds",
         "narration",
+        "--no-summaries",
         "--json",
         "seq,kind,session_id,entry",
     ]);
@@ -1345,6 +1765,7 @@ fn transcript_kinds_select_the_entries_the_client_streams() {
         &workspace,
         "--kinds",
         "narration,shared_state",
+        "--no-summaries",
         "--json",
         "seq,kind,entry",
     ]);

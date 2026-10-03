@@ -10,7 +10,7 @@ use jiff::SignedDuration;
 use kestrel::domain::{
     Direction, Exit, OnOpenWorkspace, Session, SessionState, Workspace, WorkspaceId,
 };
-use kestrel::log::Entry;
+use kestrel::log::{BriefSource, Entry};
 use kestrel::trigger::Would;
 use kestrel_scripted_agent::conversed;
 use support::github_stub::{self, GithubStub};
@@ -149,13 +149,13 @@ async fn sessions(kestrel: &Kestrel, workspace: WorkspaceId, count: usize) -> Ve
     }
 }
 
-async fn briefs(kestrel: &Kestrel, workspace: WorkspaceId) -> Vec<(Option<String>, String)> {
+async fn briefs(kestrel: &Kestrel, workspace: WorkspaceId) -> Vec<(BriefSource, String)> {
     kestrel
         .transcript(workspace)
         .await
         .into_iter()
         .filter_map(|recorded| match recorded.entry {
-            Entry::Brief { trigger, brief } => Some((trigger, brief)),
+            Entry::Brief { source, brief } => Some((source, brief)),
             _ => None,
         })
         .collect()
@@ -170,9 +170,11 @@ fn ci_failed(stub: &GithubStub, labels: &[&str]) {
     );
 }
 
-fn ci_brief() -> (Option<String>, String) {
+fn ci_brief() -> (BriefSource, String) {
     (
-        Some("ci".to_owned()),
+        BriefSource::Trigger {
+            trigger: "ci".to_owned(),
+        },
         format!("Fix the build of an issue numbered {ISSUE}"),
     )
 }
@@ -300,7 +302,7 @@ async fn a_new_session_trigger_starts_a_session_with_its_agent_and_brief() {
     assert_eq!(
         transcript[ended + 1].entry,
         Entry::Brief {
-            trigger: ci_brief().0,
+            source: ci_brief().0,
             brief: ci_brief().1,
         },
         "the new session's brief is not its first entry"
@@ -438,7 +440,7 @@ async fn a_workspace_drains_messages_and_new_sessions_in_the_order_they_arrived(
                     .join(", "),
             ),
             Entry::Brief {
-                trigger: Some(trigger),
+                source: BriefSource::Trigger { trigger },
                 ..
             } => Some(trigger.clone()),
             _ => None,
@@ -534,11 +536,12 @@ async fn a_command_chooses_the_agent_of_a_new_session_among_those_its_trigger_al
     let started = sessions(&kestrel, workspace.id, 2).await;
 
     assert_eq!(started[1].agent.name, "codex");
-    assert!(
-        briefs(&kestrel, workspace.id)
-            .await
-            .contains(&(Some("asked".to_owned()), "fix the build".to_owned()))
-    );
+    assert!(briefs(&kestrel, workspace.id).await.contains(&(
+        BriefSource::Trigger {
+            trigger: "asked".to_owned()
+        },
+        "fix the build".to_owned()
+    )));
 
     kestrel.teardown().await;
 }

@@ -538,7 +538,7 @@ enum InstanceCommand {
 
 #[derive(Debug, Subcommand)]
 enum WorkspaceCommand {
-    /// Open a Workspace against a Project and an Agent
+    /// Open a Workspace against a Project and an Agent, and enqueue its first Session
     Open {
         /// The Project its work happens against
         #[arg(long)]
@@ -556,6 +556,22 @@ enum WorkspaceCommand {
         /// unambiguous prefix of its identifier, or `latest`
         #[arg(long, value_name = "WORKSPACE")]
         continues: Option<String>,
+        /// The Brief the Workspace starts with; `@FILE` reads it from a file and `-` from
+        /// standard input
+        #[arg(long)]
+        brief: Option<String>,
+        /// The model the first Session runs on. Without it, the Agent's
+        #[arg(long)]
+        model: Option<String>,
+        /// The mode the first Session runs in. Without it, the Agent's
+        #[arg(long)]
+        mode: Option<String>,
+        /// The thought level the first Session runs at. Without it, the Agent's
+        #[arg(long)]
+        thought_level: Option<String>,
+        /// The name the Brief is written under. Without it, it is the operator's
+        #[arg(long)]
+        as_participant: Option<String>,
     },
     /// List every Workspace in the Organization
     List,
@@ -608,6 +624,9 @@ enum WorkspaceCommand {
         /// What the participant says
         message: String,
     },
+    /// Change a Held Message before a Turn takes it
+    #[command(subcommand)]
+    Message(MessageCommand),
     /// Seal a Workspace: readable ever after, and never reopened
     Seal {
         /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
@@ -626,8 +645,41 @@ enum WorkspaceCommand {
         /// Keep reading as entries are appended, until the Workspace is sealed
         #[arg(long)]
         follow: bool,
+        /// Join the Workspace's presence as this person while following
+        #[arg(long, requires = "follow")]
+        as_participant: Option<String>,
         #[arg(long, default_value = "shared_state")]
         kinds: String,
+        #[arg(long)]
+        no_summaries: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum MessageCommand {
+    /// Replace a Held Message's text; only its author's name is accepted
+    Edit {
+        /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
+        /// `latest`
+        workspace: String,
+        /// The id the post answered with
+        id: i64,
+        /// The participant that wrote the message, and only that one
+        #[arg(long)]
+        as_participant: String,
+        /// What the message now says
+        message: String,
+    },
+    /// Take a Held Message back, so no Turn sees it; only its author's name is accepted
+    Withdraw {
+        /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
+        /// `latest`
+        workspace: String,
+        /// The id the post answered with
+        id: i64,
+        /// The participant that wrote the message, and only that one
+        #[arg(long)]
+        as_participant: String,
     },
 }
 
@@ -645,6 +697,12 @@ enum SessionCommand {
         /// The model it works with, or none for its Agent's or Harness's default
         #[arg(long)]
         model: Option<String>,
+        /// The mode it works in, or none for its Agent's or Harness's default
+        #[arg(long)]
+        mode: Option<String>,
+        /// The thought level it works at, or none for its Agent's or Harness's default
+        #[arg(long)]
+        thought_level: Option<String>,
     },
     /// List every Session in a Workspace
     List {
@@ -659,11 +717,42 @@ enum SessionCommand {
         /// `latest`
         session: String,
     },
+    /// Cancel a Session's working turn without ending it, so held messages go to the agent at once
+    Interrupt {
+        /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
+        /// `latest`
+        session: String,
+        /// The participant asking
+        #[arg(long)]
+        as_participant: String,
+    },
     /// End a Session: it succeeds between turns, and fails mid-turn or before it started
     Stop {
         /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
         /// `latest`
         session: String,
+    },
+    /// Change one of a Session's options between Turns
+    Option {
+        #[command(subcommand)]
+        command: SessionOptionCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SessionOptionCommand {
+    /// Set an option, by the id the harness gave it or by its category
+    Set {
+        /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
+        /// `latest`
+        session: String,
+        /// The option's id, or one of the categories model, mode or thought_level
+        option: String,
+        /// The value to set, as the harness offers it
+        value: String,
+        /// The person making the change
+        #[arg(long)]
+        as_participant: String,
     },
 }
 
@@ -873,8 +962,11 @@ async fn run() -> Result<()> {
         }
         Command::Credential(CredentialCommand::Forget { variable }) => {
             let organization = scoping.resolve().await?.organization;
-            api.delete(&["organizations", &organization, "credentials", &variable])
-                .await?;
+            api.delete(
+                &["organizations", &organization, "credentials", &variable],
+                &json!({}),
+            )
+            .await?;
         }
         Command::Profile(ProfileCommand::Declare { name, owner }) => {
             let organization = scoping.resolve().await?.organization;
@@ -908,7 +1000,8 @@ async fn run() -> Result<()> {
         }
         Command::Profile(ProfileCommand::Forget { name, entry }) => {
             let organization = scoping.resolve().await?.organization;
-            api.delete(&entry.path(&organization, &name)).await?;
+            api.delete(&entry.path(&organization, &name), &json!({}))
+                .await?;
         }
         Command::Integration(IntegrationCommand::Register(register)) => {
             let organization = scoping.resolve().await?.organization;
@@ -956,13 +1049,16 @@ async fn run() -> Result<()> {
         }
         Command::Integration(IntegrationCommand::AcknowledgeRefusal { name }) => {
             let organization = scoping.resolve().await?.organization;
-            api.delete(&[
-                "organizations",
-                &organization,
-                "integrations",
-                &name,
-                "event-refusal",
-            ])
+            api.delete(
+                &[
+                    "organizations",
+                    &organization,
+                    "integrations",
+                    &name,
+                    "event-refusal",
+                ],
+                &json!({}),
+            )
             .await?;
         }
         Command::Event(EventCommand::List { limit }) => {
@@ -1171,12 +1267,16 @@ async fn run() -> Result<()> {
             profile,
             branch,
             continues,
+            brief,
+            model,
+            mode,
+            thought_level,
+            as_participant,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
-                &presentation,
-                &view::DECLARED,
-                &api.post(
+            let brief = brief.as_deref().map(given).transpose()?;
+            let opened = api
+                .post(
                     &["organizations", &organization, "workspaces"],
                     &json!({
                         "project": project,
@@ -1184,9 +1284,23 @@ async fn run() -> Result<()> {
                         "profile": profile,
                         "branch": branch,
                         "continues": continues,
+                        "model": model,
+                        "mode": mode,
+                        "thought_level": thought_level,
+                        "brief": brief,
+                        "participant": as_participant,
                     }),
                 )
-                .await?,
+                .await?;
+            show(
+                &presentation,
+                &view::OPENED,
+                &json!({
+                    "workspace": opened["workspace"]["name"],
+                    "workspace_id": opened["workspace"]["id"],
+                    "session": opened["session"]["name"],
+                    "session_id": opened["session"]["id"],
+                }),
             )?;
         }
         Command::Workspace(WorkspaceCommand::List) => {
@@ -1324,10 +1438,58 @@ async fn run() -> Result<()> {
                     &json!({ "participant": as_participant, "message": message }),
                 )
                 .await?;
-            if answer.is_null() {
+            let session = &answer["session"];
+            let held = &answer["held_message"];
+            if client.json.is_some() {
+                show(&presentation, &view::DECLARED, &answer)?;
+            } else if !session.is_null() {
+                show(&presentation, &view::DECLARED, session)?;
+            } else if !held.is_null() {
+                show(&presentation, &view::DECLARED, held)?;
+            } else {
                 eprintln!("queued as the next turn of the session already in flight");
             }
-            show(&presentation, &view::DECLARED, &answer)?;
+        }
+        Command::Workspace(WorkspaceCommand::Message(MessageCommand::Edit {
+            workspace,
+            id,
+            as_participant,
+            message,
+        })) => {
+            let organization = scoping.resolve().await?.organization;
+            let answer = api
+                .put(
+                    &[
+                        "organizations",
+                        &organization,
+                        "workspaces",
+                        &workspace,
+                        "messages",
+                        &id.to_string(),
+                    ],
+                    &json!({ "participant": as_participant, "message": message }),
+                )
+                .await?;
+            show(&presentation, &view::HELD_MESSAGE, &answer)?;
+        }
+        Command::Workspace(WorkspaceCommand::Message(MessageCommand::Withdraw {
+            workspace,
+            id,
+            as_participant,
+        })) => {
+            let organization = scoping.resolve().await?.organization;
+            api.delete(
+                &[
+                    "organizations",
+                    &organization,
+                    "workspaces",
+                    &workspace,
+                    "messages",
+                    &id.to_string(),
+                ],
+                &json!({ "participant": as_participant }),
+            )
+            .await?;
         }
         Command::Workspace(WorkspaceCommand::Seal { workspace }) => {
             let organization = scoping.resolve().await?.organization;
@@ -1351,7 +1513,9 @@ async fn run() -> Result<()> {
             workspace,
             cursor,
             follow,
+            as_participant,
             kinds,
+            no_summaries,
         }) => {
             let organization = scoping.resolve().await?.organization;
             let read = transcript::read(
@@ -1359,8 +1523,12 @@ async fn run() -> Result<()> {
                 &organization,
                 &workspace,
                 cursor,
-                follow,
-                &kinds,
+                transcript::Selection {
+                    follow,
+                    kinds: &kinds,
+                    summaries: !no_summaries,
+                    as_participant: as_participant.as_deref(),
+                },
                 &presentation,
             )
             .await?;
@@ -1373,6 +1541,8 @@ async fn run() -> Result<()> {
             workspace,
             agent,
             model,
+            mode,
+            thought_level,
         }) => {
             let organization = scoping.resolve().await?.organization;
             show(
@@ -1386,7 +1556,12 @@ async fn run() -> Result<()> {
                         &workspace,
                         "sessions",
                     ],
-                    &json!({ "agent": agent, "model": model }),
+                    &json!({
+                        "agent": agent,
+                        "model": model,
+                        "mode": mode,
+                        "thought_level": thought_level,
+                    }),
                 )
                 .await?,
             )?;
@@ -1408,11 +1583,31 @@ async fn run() -> Result<()> {
         }
         Command::Session(SessionCommand::Show { session }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            shown_session(
                 &presentation,
-                &view::SESSION,
                 &api.get(&["organizations", &organization, "sessions", &session])
                     .await?,
+            )?;
+        }
+        Command::Session(SessionCommand::Interrupt {
+            session,
+            as_participant,
+        }) => {
+            let organization = scoping.resolve().await?.organization;
+            show(
+                &presentation,
+                &view::INTERRUPTED,
+                &api.post(
+                    &[
+                        "organizations",
+                        &organization,
+                        "sessions",
+                        &session,
+                        "interrupt",
+                    ],
+                    &json!({ "participant": as_participant }),
+                )
+                .await?,
             )?;
         }
         Command::Session(SessionCommand::Stop { session }) => {
@@ -1426,6 +1621,34 @@ async fn run() -> Result<()> {
                 )
                 .await?,
             )?;
+        }
+        Command::Session(SessionCommand::Option { command }) => {
+            let SessionOptionCommand::Set {
+                session,
+                option,
+                value,
+                as_participant,
+            } = command;
+            let organization = scoping.resolve().await?.organization;
+            let body = if declares(&option) {
+                json!({ "participant": as_participant, "category": option, "value": value })
+            } else {
+                json!({ "participant": as_participant, "option": option, "value": value })
+            };
+            let changed = api
+                .post(
+                    &[
+                        "organizations",
+                        &organization,
+                        "sessions",
+                        &session,
+                        "options",
+                    ],
+                    &body,
+                )
+                .await?;
+            warn_about_cache(&changed, &option);
+            shown_session(&presentation, &changed)?;
         }
         Command::Instance(InstanceCommand::List) => {
             let organization = scoping.resolve().await?.organization;
@@ -1585,6 +1808,96 @@ async fn started(
 /// The limits and their occupancy said first, so every row below is read against what it
 /// counts against. A script asks `--json` for the fields and gets the rows alone, each one
 /// carrying the limits it arrived with.
+/// A `--json` read asks for the fields themselves and gets them exactly as served.
+fn shown_session(presentation: &Presentation, session: &Value) -> Result<()> {
+    let mut record = session.clone();
+    if !matches!(presentation, Presentation::Json(_)) {
+        record["options"] = Value::from(session_options(&record["options"]));
+        record["changing_options"] = Value::from(changing_options(&record["changing_options"]));
+        record["commands"] = Value::from(session_commands(&record["commands"]));
+    }
+
+    show(presentation, &view::SESSION, &record)
+}
+
+fn changing_options(changing: &Value) -> String {
+    changing
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|change| {
+            format!(
+                "{}: {} ({})",
+                change["option"].as_str().unwrap_or("option"),
+                change["value"].as_str().unwrap_or(""),
+                change["participant"].as_str().unwrap_or("")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// ADR-0041: a change that makes the next Turn re-read the context without the prompt cache says
+/// so, with the size of the context it last reported.
+fn warn_about_cache(changed: &Value, named: &str) {
+    let warns = changed["options"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|option| {
+            option["id"].as_str() == Some(named) || option["category"].as_str() == Some(named)
+        })
+        .is_some_and(|option| option["warns_cache"] == true);
+    if !warns {
+        return;
+    }
+
+    match changed["usage"]["context_used"].as_u64() {
+        Some(tokens) => eprintln!(
+            "changing this makes the next turn re-read the context without the prompt cache: \
+             {tokens} tokens"
+        ),
+        None => eprintln!(
+            "changing this makes the next turn re-read the context without the prompt cache"
+        ),
+    }
+}
+
+fn declares(category: &str) -> bool {
+    matches!(category, "model" | "mode" | "thought_level")
+}
+
+fn session_options(options: &Value) -> String {
+    options
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|option| {
+            let category = option["category"]
+                .as_str()
+                .or_else(|| option["id"].as_str())
+                .unwrap_or("option");
+            let current = match &option["current"] {
+                Value::String(value) => value.clone(),
+                other => other.to_string(),
+            };
+
+            format!("{category}: {current}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn session_commands(commands: &Value) -> String {
+    commands
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|command| command["name"].as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
     let slots = &snapshot["active_work"];
     let instances = &snapshot["instances"];
@@ -1600,6 +1913,7 @@ fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
                 "live instances",
                 occupancy(instances, "unbounded", "counted"),
             ),
+            ("environment", environment(snapshot)),
         ];
         let width = said
             .iter()
@@ -1613,7 +1927,7 @@ fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
     }
 
     let mut rows = Vec::new();
-    for state in ["queued", "waiting"] {
+    for state in ["queued", "waiting", "unbriefed"] {
         let section = snapshot[state].as_array().with_context(|| {
             Failed::new(
                 Exit::Unavailable,
@@ -1630,6 +1944,8 @@ fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
             record.insert("state".to_owned(), Value::from(state));
             record.entry("position").or_insert(Value::Null);
             record.entry("pending_since").or_insert(Value::Null);
+            record.entry("preparing").or_insert(Value::Null);
+            record.entry("reasons").or_insert(Value::Array(Vec::new()));
             record.insert("why".to_owned(), Value::from(why(&record)));
             record.insert("active_work".to_owned(), slots.clone());
             record.insert("instances".to_owned(), instances.clone());
@@ -1642,6 +1958,13 @@ fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
 
 fn why(row: &serde_json::Map<String, Value>) -> String {
     let mut said: Vec<String> = Vec::new();
+    if let Some(preparing) = row["preparing"].as_str() {
+        said.push(match preparing {
+            "starting_harness" => "starting harness".to_owned(),
+            "harness_ready" => "harness ready".to_owned(),
+            step => step.to_owned(),
+        });
+    }
     if let Some(since) = row["pending_since"].as_str() {
         said.push(format!("input since {since}"));
     }
@@ -1656,6 +1979,7 @@ fn why(row: &serde_json::Map<String, Value>) -> String {
         said.push(
             match row["state"].as_str() {
                 Some("waiting") => "waiting for a turn",
+                Some("unbriefed") => "getting ready for its first message",
                 _ => "ready",
             }
             .to_owned(),
@@ -1663,6 +1987,12 @@ fn why(row: &serde_json::Map<String, Value>) -> String {
     }
 
     said.join("; ")
+}
+
+fn environment(snapshot: &Value) -> String {
+    snapshot["work_role"]["driver"]
+        .as_str()
+        .map_or_else(|| "no work role is dispatching".to_owned(), str::to_owned)
 }
 
 fn reason_in_words(reason: &Value) -> String {

@@ -12,7 +12,6 @@ export function getRouter() {
 			},
 		},
 	});
-
 	return createRouter({
 		routeTree,
 		context: { queryClient },

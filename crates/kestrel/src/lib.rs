@@ -18,6 +18,7 @@ pub mod live_work;
 pub mod log;
 pub mod operator;
 pub mod participant;
+pub mod presence;
 pub mod profile;
 pub mod provider;
 pub mod pull_request;
@@ -45,12 +46,18 @@ pub async fn run(cli: &Cli, shutdown: CancellationToken) -> anyhow::Result<()> {
 
     match cli.command {
         None => {
-            let all_in_one = role::bind(store, cli.listen()).await?;
+            let all_in_one = role::bind(store, cli.listen(), cli.follow_lease()).await?;
             let dispatch = cli.dispatch(all_in_one.bound().link)?;
             all_in_one.run(Some(dispatch), shutdown).await
         }
         Some(Command::Serve) => {
-            let listening = role::serve::bind(store, cli.listen(), timer::Wake::default()).await?;
+            let listening = role::serve::bind(
+                store,
+                cli.listen(),
+                timer::Wake::default(),
+                cli.follow_lease(),
+            )
+            .await?;
             role::serve::run(listening, shutdown).await
         }
         Some(Command::Work) => {

@@ -120,12 +120,18 @@ pub const WORKSPACE: View = View::Detail(&[
     "started_by",
     "continues",
     "continued_by",
+    "held_messages",
     "pull_requests",
+    "unfinished_session.state",
+    "unfinished_session.preparing",
 ]);
+pub const HELD_MESSAGE: View =
+    View::Detail(&["id", "participant", "message", "posted_at", "edited_at"]);
 pub const SESSIONS: View = View::Rows(&[
     "id",
     "name",
     "state",
+    "preparing",
     "agent",
     "exit.status",
     "exit.because",
@@ -137,6 +143,7 @@ pub const SESSION: View = View::Detail(&[
     "name",
     "workspace",
     "state",
+    "preparing",
     "exit.status",
     "exit.because",
     "outcome_message",
@@ -146,6 +153,10 @@ pub const SESSION: View = View::Detail(&[
     "harness",
     "model",
     "worked_model",
+    "title",
+    "options",
+    "changing_options",
+    "commands",
     "enqueued_at",
     "started_at",
     "ended_at",
@@ -153,6 +164,13 @@ pub const SESSION: View = View::Detail(&[
     "connected_at",
     "supervisor_version",
     "usage",
+    "tools",
+]);
+pub const INTERRUPTED: View = View::Detail(&[
+    "id",
+    "state",
+    "interrupting.participant",
+    "interrupting.requested_at",
 ]);
 pub const STOPPED: View = View::Value("exit.status");
 pub const INSTANCES: View = View::Rows(&["workspace", "instance", "because"]);
@@ -192,6 +210,8 @@ pub const EXIT_CODES: View = View::Detail(&["code", "name", "meaning", "branch"]
 
 pub const STARTED: View =
     View::Detail(&["organization", "project", "agent", "workspace", "session"]);
+
+pub const OPENED: View = View::Detail(&["workspace", "workspace_id", "session", "session_id"]);
 
 /// What a creation answers back is the identifier the next command is given.
 pub const DECLARED: View = View::Value("id");

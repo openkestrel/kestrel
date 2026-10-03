@@ -22,6 +22,7 @@ use crate::work;
 use crate::workspace;
 
 const SWEEP: Duration = Duration::from_millis(500);
+const RETENTION_SWEEP: Duration = Duration::from_secs(60 * 60);
 
 /// Starts the sweeps that consume Events now rather than at their next tick. It reaches only a
 /// work role in the same process; across processes the sweep interval is the guarantee.
@@ -47,11 +48,12 @@ pub async fn sweeping(store: &Store, wake: &Wake, shutdown: &CancellationToken) 
     // unswept for the length of an HTTP request is a Workspace wedged for that long.
     tokio::try_join!(
         sweeping_leases(store, shutdown),
+        expiring_transcripts(store, shutdown),
         polling(store, &github, shutdown),
         elapsing(store, wake, shutdown),
         firing(store, &github, wake.0.subscribe(), shutdown),
         following_up(store, wake.0.subscribe(), shutdown),
-        learning_pull_requests(store, wake.0.subscribe(), shutdown),
+        learning_pull_requests(store, &github, wake.0.subscribe(), shutdown),
         sealing_idle_workspaces(store, shutdown),
         delivering(store, &github, shutdown)
     )?;
@@ -87,11 +89,12 @@ async fn following_up(
 
 async fn learning_pull_requests(
     store: &Store,
+    github: &Github,
     mut woken: watch::Receiver<()>,
     shutdown: &CancellationToken,
 ) -> Result<()> {
     while !shutdown.is_cancelled() {
-        match pull_request::learn(store).await {
+        match pull_request::learn(store, github).await {
             Ok(learned) => {
                 for learned in learned {
                     info!(
@@ -334,6 +337,28 @@ async fn poll(store: &Store, github: &Github) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+pub async fn expire_transcript(store: &Store) -> Result<usize> {
+    let mut tx = store.begin().await?;
+    let expired = tx.log().expire(Timestamp::now()).await?;
+    tx.commit().await?;
+    Ok(expired)
+}
+
+async fn expiring_transcripts(store: &Store, shutdown: &CancellationToken) -> Result<()> {
+    while !shutdown.is_cancelled() {
+        match expire_transcript(store).await {
+            Ok(expired) if expired > 0 => info!(expired, "Transcript entries expired"),
+            Ok(_) => {}
+            Err(error) => warn!(%error, "a retention sweep found nothing it could do"),
+        }
+        tokio::select! {
+            () = tokio::time::sleep(RETENTION_SWEEP) => {},
+            () = shutdown.cancelled() => {},
+        }
+    }
     Ok(())
 }
 
