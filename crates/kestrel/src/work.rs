@@ -917,19 +917,21 @@ pub async fn interrupt(store: &Store, id: SessionId, participant: &str) -> Resul
     let organization = tx.organizations().by_id(session.organization).await?;
     let participant = participant::accepted(&mut tx, &organization, participant).await?;
 
-    if session.state == SessionState::Trailing {
-        return Err(Declined::Taken(format!(
-            "the session {id} is trailing: its turn has already answered, \
-             so stop the session to end the work its agent is still doing"
-        ))
-        .into());
-    }
-    if session.state != SessionState::Working {
-        return Err(Declined::Taken(format!(
-            "the session {id} is {}, and only a working turn can be interrupted",
-            session.state
-        ))
-        .into());
+    match session.state {
+        SessionState::Working => {}
+        SessionState::Trailing => {
+            return Err(Declined::Taken(format!(
+                "the session {id} is trailing: its turn has already answered, \
+                 so stop the session to end the work its agent is still doing"
+            ))
+            .into());
+        }
+        phase => {
+            return Err(Declined::Taken(format!(
+                "the session {id} is {phase}, and only a working turn can be interrupted"
+            ))
+            .into());
+        }
     }
     if tx
         .workspaces()

@@ -1610,7 +1610,7 @@
       "post": {
         "operationId": "interruptSession",
         "summary": "Interrupt a Session's working Turn.",
-        "description": "The Turn is cancelled without ending the Session: its conversation and Instance stay, and a Held Message becomes the next Turn at once. A Session that is not working is refused 409, naming its phase; a trailing one has already answered, and is ended with stop. A second interrupt while one is pending answers 202 and sends nothing more.",
+        "description": "The Turn is cancelled without ending the Session: its conversation and Instance stay, and a Held Message becomes the next Turn at once. A Session that is not working is refused 409, naming its phase; a trailing one has already answered its Turn, and is ended by stopping the Session. A second interrupt while one is pending answers 202 and sends nothing more.",
         "parameters": [
           { "name": "organization", "in": "path", "required": true, "schema": { "type": "string" } },
           { "name": "session", "in": "path", "required": true, "schema": { "type": "string" } }
