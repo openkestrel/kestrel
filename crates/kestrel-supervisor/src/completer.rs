@@ -161,6 +161,10 @@ impl Completer {
         completed
     }
 
+    pub fn is_open(&self, unit: &str) -> bool {
+        self.units.contains_key(unit)
+    }
+
     /// A settled unit adds no entry: whatever it produced arrived as updates of its own.
     pub fn unit(&mut self, change: UnitChange, now: Timestamp) -> Completed {
         let mut completed = Completed::default();

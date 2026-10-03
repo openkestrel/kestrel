@@ -33,6 +33,7 @@ use crate::link::{
     Report, SessionCommand, SessionInfo, SessionOption, SessionOptionGroup, SessionOptionKind,
     SessionOptionValue, TurnOutcome, UnitKind,
 };
+use crate::opencode;
 use crate::permission::{self, Subject};
 
 /// What this Environment was configured to drive, what the Session asks of it, and where what the
@@ -451,6 +452,19 @@ async fn living(
             },
             agent_client_protocol::on_receive_notification!(),
         )
+        .on_receive_notification(
+            {
+                let heard = Arc::clone(heard);
+                async move |child: opencode::ChildUpdateNotification, _connection| {
+                    heard
+                        .lock()
+                        .expect("what the agent said should not be poisoned")
+                        .child(child.0);
+                    Ok(())
+                }
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
         .on_receive_request(
             {
                 let heard = Arc::clone(heard);
@@ -798,6 +812,7 @@ fn declarations() -> ClientCapabilities {
             "version": 1,
             "capabilities": ["asyncTasks", "nativeSubagentSessions"],
         }},
+        opencode::CHILD_SESSION_UPDATES: true,
     }) else {
         unreachable!("a literal object")
     };
@@ -1490,16 +1505,20 @@ impl Hearing {
             .reports
             .send(ConversationEvent::Report(Report::SessionInfo(info)));
     }
+    /// A subagent's update reaches the completer only, as an OpenCode child's does.
     fn heard(&mut self, session: &str, update: serde_json::Value) {
         if self.replaying {
             return;
         }
-        let update = match self.subagents.contains(session) {
+        let subagent = self.subagents.contains(session);
+        let update = match subagent {
             true => folded(session, update),
             false => update,
         };
-        match heard(update) {
-            Heard::Acp(update) => self.update(update),
+        let now = jiff::Timestamp::now();
+        let completed = match heard(update) {
+            Heard::Acp(update) if subagent => self.completer.update(update, now),
+            Heard::Acp(update) => return self.update(update),
             Heard::Unit(change) => {
                 if let UnitChange::Opened {
                     id,
@@ -1509,13 +1528,14 @@ impl Hearing {
                 {
                     self.subagents.insert(id.clone());
                 }
-                let completed = self.completer.unit(change, jiff::Timestamp::now());
-                self.emit(completed);
+                self.completer.unit(change, now)
             }
             Heard::Unread(diagnostic) => {
                 let _ = self.diagnostics.send(diagnostic);
+                return;
             }
-        }
+        };
+        self.emit(completed);
     }
     fn update(&mut self, update: SessionUpdate) {
         if self.replaying {
@@ -1545,6 +1565,53 @@ impl Hearing {
                 self.usage = Some(usage.clone());
             }
         }
+        self.emit(completed);
+    }
+    /// A child's update reaches the completer only, so it cannot change the parent's own state.
+    fn child(&mut self, child: serde_json::Value) {
+        if self.replaying {
+            return;
+        }
+        let child = match serde_json::from_value::<opencode::ChildUpdate>(child) {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = self.diagnostics.send(format!(
+                    "kestrel: an OpenCode child session update could not be read: {error}"
+                ));
+                return;
+            }
+        };
+        let id = child.child_session_id;
+        let now = jiff::Timestamp::now();
+        let completed = match child.event {
+            opencode::ChildEvent::Update { update } => match heard(update) {
+                Heard::Acp(update) => self.completer.update(update, now),
+                Heard::Unit(change) => self.completer.unit(change, now),
+                Heard::Unread(diagnostic) => {
+                    let _ = self.diagnostics.send(diagnostic);
+                    return;
+                }
+            },
+            opencode::ChildEvent::Status {
+                status: opencode::ChildStatus::Created | opencode::ChildStatus::Running,
+            } if !self.completer.is_open(&id) => self.completer.unit(
+                UnitChange::Opened {
+                    title: child.title.unwrap_or_else(|| id.clone()),
+                    id,
+                    kind: UnitKind::Subagent,
+                },
+                now,
+            ),
+            opencode::ChildEvent::Status {
+                status: opencode::ChildStatus::Created | opencode::ChildStatus::Running,
+            } => self.completer.unit(UnitChange::Progressed { id }, now),
+            opencode::ChildEvent::Status {
+                status:
+                    opencode::ChildStatus::Completed
+                    | opencode::ChildStatus::Failed
+                    | opencode::ChildStatus::Interrupted,
+            } => self.completer.unit(UnitChange::Settled { id }, now),
+        };
         self.emit(completed);
     }
     fn worked(&mut self, failed: Option<String>) -> Worked {
@@ -1668,6 +1735,129 @@ mod tests {
         infos
     }
 
+    fn child(event: serde_json::Value) -> serde_json::Value {
+        let mut child = serde_json::json!({
+            "rootSessionId": "parent",
+            "childSessionId": "child",
+            "parentSessionId": "parent",
+            "depth": 1,
+            "title": "explore",
+        });
+        child
+            .as_object_mut()
+            .unwrap()
+            .extend(event.as_object().unwrap().clone());
+        child
+    }
+
+    fn child_update(update: serde_json::Value) -> serde_json::Value {
+        child(serde_json::json!({"type": "update", "update": update}))
+    }
+
+    fn child_status(status: &str) -> serde_json::Value {
+        child(serde_json::json!({"type": "status", "status": status}))
+    }
+
+    fn open_units(heard: &mut mpsc::UnboundedReceiver<ConversationEvent>) -> serde_json::Value {
+        let mut units = serde_json::Value::Null;
+        while let Ok(event) = heard.try_recv() {
+            if let ConversationEvent::State(state) = event {
+                units = serde_json::to_value(state).unwrap()["units"].clone();
+            }
+        }
+        units
+    }
+
+    #[test]
+    fn every_initialize_declares_opencodes_child_session_updates() {
+        let declared = serde_json::to_value(declarations()).unwrap();
+        assert_eq!(
+            declared["_meta"]["opencode/child-session-updates"],
+            serde_json::json!(true)
+        );
+    }
+
+    #[test]
+    fn an_opencode_child_is_a_subagent_unit_from_its_creation_to_its_end() {
+        for end in ["completed", "failed", "interrupted"] {
+            let (mut hearing, mut heard) = hearing();
+            let (diagnostics, mut diagnosed) = mpsc::unbounded_channel();
+            hearing.diagnostics = diagnostics;
+            hearing.child(child_status("created"));
+            hearing.child(child_status("running"));
+            let units = open_units(&mut heard);
+            assert_eq!(units.as_array().map(Vec::len), Some(1), "{units}");
+            assert_eq!(units[0]["id"], "child");
+            assert_eq!(units[0]["kind"], "subagent");
+            assert_eq!(units[0]["title"], "explore");
+
+            hearing.child(child_status(end));
+            assert_eq!(open_units(&mut heard), serde_json::json!([]), "{end}");
+            assert!(diagnosed.try_recv().is_err(), "{end}");
+        }
+    }
+
+    #[test]
+    fn an_opencode_child_that_runs_again_after_it_ended_opens_again() {
+        let (mut hearing, mut heard) = hearing();
+        hearing.child(child_status("created"));
+        hearing.child(child_status("completed"));
+        hearing.child(child_status("running"));
+
+        assert_eq!(open_units(&mut heard)[0]["id"], "child");
+    }
+
+    #[test]
+    fn an_opencode_childs_update_is_folded_into_the_parents_turn_as_it_came() {
+        let (mut hearing, mut heard) = hearing();
+        hearing.completer.begin();
+        hearing.child(child_update(serde_json::json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "child:call-1",
+            "title": "explore: read",
+            "status": "completed",
+        })));
+
+        let mut calls = Vec::new();
+        while let Ok(event) = heard.try_recv() {
+            if let ConversationEvent::Report(report @ Report::ToolCall { .. }) = event {
+                calls.push(serde_json::to_value(report).unwrap());
+            }
+        }
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert_eq!(calls[0]["call_id"], "child:call-1");
+        assert_eq!(calls[0]["title"], "explore: read");
+        assert!(hearing.completer.produced);
+    }
+
+    #[test]
+    fn an_opencode_childs_title_is_not_its_parents() {
+        let (mut hearing, mut heard) = hearing();
+        hearing.child(child_update(serde_json::json!({
+            "sessionUpdate": "session_info_update",
+            "title": "the child's own title",
+        })));
+
+        assert!(session_infos(&mut heard).is_empty());
+    }
+
+    #[test]
+    fn an_opencode_child_update_kestrel_cannot_read_is_a_diagnostic() {
+        let (mut hearing, mut heard) = hearing();
+        let (diagnostics, mut diagnosed) = mpsc::unbounded_channel();
+        hearing.diagnostics = diagnostics;
+        hearing.child(child_update(
+            serde_json::json!({"sessionUpdate": "something_new"}),
+        ));
+
+        assert!(
+            diagnosed
+                .try_recv()
+                .is_ok_and(|diagnostic| diagnostic.contains("something_new"))
+        );
+        assert!(heard.try_recv().is_err());
+    }
+
     #[test]
     fn every_initialize_declares_claudes_async_tasks_and_native_subagents() {
         let declared = serde_json::to_value(declarations()).unwrap();
@@ -1724,6 +1914,21 @@ mod tests {
             "title": "read the diff",
             "status": "completed",
         })
+    }
+
+    #[test]
+    fn a_claude_subagents_title_is_not_its_parents() {
+        let (mut hearing, mut heard) = hearing();
+        hearing.heard("parent", subagent_spawned("subagent"));
+        hearing.heard(
+            "subagent",
+            serde_json::json!({
+                "sessionUpdate": "session_info_update",
+                "title": "the subagent's own title",
+            }),
+        );
+
+        assert!(session_infos(&mut heard).is_empty());
     }
 
     #[test]

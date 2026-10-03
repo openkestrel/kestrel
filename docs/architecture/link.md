@@ -230,8 +230,8 @@ with no branch on which harness it drives.
 - Claude's `subagent_spawned` opens a `subagent` unit keyed by `subagentSessionId` and titled by
   its `name`; a `subagent_state_update` of `completed`, `failed`, `cancelled` or `disconnected`
   settles it. Declaring native subagents moves all their output off the parent session, so an
-  update under a known subagent session is folded into the parent's completer, its `toolCallId`
-  prefixed `<subagent>:` so two subagents' calls can't collide.
+  update under a known subagent session is folded into the parent's completer, and only there,
+  its `toolCallId` prefixed `<subagent>:` so two subagents' calls can't collide.
 - `session/request_permission` is answered with the agent's own allow-once option
   (`permission.rs`). There is no policy yet.
 - The pure completer buffers messages and thoughts independently by ID, completes chunks without

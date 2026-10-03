@@ -54,6 +54,11 @@ pub const SUBAGENT: &str = "reviewer";
 pub const SUBAGENT_CALL: &str = "read the diff";
 pub const SAID_BY_SUBAGENT: &str = "the diff looks right";
 pub const WRITTEN_WHILE_TRAILING: &str = "written-while-trailing.txt";
+pub const CHILD_TITLE: &str = "explore the checkout";
+pub const CHILD_SAID_IN_TURN: &str = "the child read the code";
+pub const CHILD_SAID_WHILE_TRAILING: &str = "the child finished its search";
+/// Longer than a test's quiet period, so only the child still running keeps its Session trailing.
+pub const CHILD_SILENT_FOR: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Script {
@@ -160,6 +165,12 @@ pub enum Script {
     /// Claude's adapter does, it gives a subagent its own session only for a client that declared
     /// `nativeSubagentSessions`, and otherwise sends the first's output on its own session.
     AnswersWithSubagents,
+    /// Runs an OpenCode child session through its turn and on past the answer, silent for
+    /// `CHILD_SILENT_FOR` before it completes. As OpenCode does, it sends the child's output on
+    /// the child channel only to a client that declared it, and otherwise folds it into the turn
+    /// and drops it after the answer.
+    #[value(name = "runs-an-opencode-child")]
+    RunsAnOpenCodeChild,
 }
 
 impl Script {
@@ -217,6 +228,7 @@ impl Script {
             Script::AnswersThenWrites => "answers-then-writes",
             Script::AnswersWithABackgroundTask => "answers-with-a-background-task",
             Script::AnswersWithSubagents => "answers-with-subagents",
+            Script::RunsAnOpenCodeChild => "runs-an-opencode-child",
         }
     }
 }

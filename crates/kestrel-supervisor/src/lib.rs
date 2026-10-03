@@ -5,6 +5,7 @@ pub mod files;
 pub mod harness;
 pub mod link;
 pub mod login;
+mod opencode;
 pub mod permission;
 
 use std::collections::{BTreeMap, VecDeque};
