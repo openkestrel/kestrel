@@ -110,7 +110,10 @@ pub enum Report {
         #[serde(default)]
         trailing: bool,
     },
-    Settled,
+    Settled {
+        #[serde(default)]
+        usage: Option<Usage>,
+    },
     Checkout {
         repositories: Vec<Observed>,
     },
@@ -141,7 +144,7 @@ impl Report {
             | Report::OptionChanged { .. }
             | Report::Answered { .. }
             | Report::Interrupted { .. }
-            | Report::Settled
+            | Report::Settled { .. }
             | Report::Checkout { .. }
             | Report::Finished { .. } => true,
         }
@@ -774,10 +777,7 @@ async fn reported(
                 tx.workspaces()
                     .record_active(session.organization, session.workspace, Timestamp::now())
                     .await?;
-                if let Some(usage) = usage {
-                    info!(session = %session.id, %usage, "a supervisor reported what its agent used");
-                    tx.workspaces().record_usage(session, &usage).await?;
-                }
+                record_usage(tx, session, usage.as_ref()).await?;
                 prompt_pending(tx, session).await?;
             }
             info!(session = %session.id, "a supervisor reported its agent answered a turn");
@@ -810,12 +810,13 @@ async fn reported(
             prompt_pending(tx, session).await?;
             info!(session = %session.id, "a supervisor reported its agent's turn interrupted");
         }
-        Report::Settled => {
+        Report::Settled { usage } => {
             if tx.workspaces().settle(session).await? {
                 tx.workspaces()
                     .record_active(session.organization, session.workspace, Timestamp::now())
                     .await?;
             }
+            record_usage(tx, session, usage.as_ref()).await?;
             info!(session = %session.id, "a supervisor reported its agent's work settled");
         }
         Report::Checkout { repositories } => {
@@ -827,15 +828,20 @@ async fn reported(
         }
         Report::Finished { exit, usage } => {
             let stands = ending(tx, session, exit).await?;
-            if let Some(usage) = usage {
-                info!(session = %session.id, %usage, "a supervisor reported what its agent used");
-                tx.workspaces().record_usage(session, &usage).await?;
-            }
+            record_usage(tx, session, usage.as_ref()).await?;
             info!(session = %session.id, %stands, "a supervisor reported its session finished");
         }
     }
 
     Ok(())
+}
+
+async fn record_usage(tx: &mut Tx<'_>, session: &Session, usage: Option<&Usage>) -> Result<()> {
+    let Some(usage) = usage else {
+        return Ok(());
+    };
+    info!(session = %session.id, %usage, "a supervisor reported what its agent used");
+    tx.workspaces().record_usage(session, usage).await
 }
 
 pub async fn instance(store: &Store, workspace: WorkspaceId) -> Result<Option<String>> {
@@ -891,8 +897,18 @@ pub async fn supervised(
     tx.commit().await
 }
 
+pub(crate) fn expired_lease() -> Exit {
+    Exit::Failed {
+        because: "the supervisor stopped holding the session's lease out, and it expired"
+            .to_owned(),
+    }
+}
+
 /// Forgotten with the Sessions it was carrying, so the next Session on the Instance starts
 /// another.
+///
+/// A lease that lapsed first decides the reason, so one lapse reads the same whether the sweep or
+/// the supervisor's exit gets to the Session first.
 pub async fn supervisor_exited(
     store: &Store,
     instance: &str,
@@ -902,10 +918,15 @@ pub async fn supervisor_exited(
     let mut tx = store.begin().await?;
     tx.workspaces().forget_supervisor(instance).await?;
     let sessions = tx.workspaces().live_sessions_on(instance).await?;
+    let now = Timestamp::now();
     for session in &sessions {
         close_lost_units(&mut tx, session, summaries).await?;
-        let exit = Exit::Failed {
-            because: because.to_owned(),
+        let exit = if session.lease_expires_at.is_some_and(|at| at <= now) {
+            expired_lease()
+        } else {
+            Exit::Failed {
+                because: because.to_owned(),
+            }
         };
         ending(&mut tx, session, exit).await?;
     }

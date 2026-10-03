@@ -247,7 +247,13 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
                 options: Vec::new(),
             },
         ),
-        (Some("a-session"), Some(4), Report::Settled),
+        (
+            Some("a-session"),
+            Some(4),
+            Report::Settled {
+                usage: Some(usage()),
+            },
+        ),
         (
             Some("a-session"),
             Some(5),

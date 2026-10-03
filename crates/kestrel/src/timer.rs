@@ -300,13 +300,12 @@ async fn sweep(
     let mut closed = Vec::new();
 
     for session in tx.workspaces().expired_leases(Timestamp::now()).await? {
-        let exit = Exit::Failed {
-            because: "the supervisor stopped holding the session's lease out, and it expired"
-                .to_owned(),
-        };
         work::close_lost_units(&mut tx, &session, summaries).await?;
         closed.push(session.clone());
-        expired.push((session.id, work::ending(&mut tx, &session, exit).await?));
+        expired.push((
+            session.id,
+            work::ending(&mut tx, &session, work::expired_lease()).await?,
+        ));
     }
     tx.commit().await?;
 
