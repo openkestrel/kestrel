@@ -891,14 +891,29 @@ pub async fn supervised(
     tx.commit().await
 }
 
+pub(crate) fn expired_lease() -> Exit {
+    Exit::Failed {
+        because: "the supervisor stopped holding the session's lease out, and it expired"
+            .to_owned(),
+    }
+}
+
 /// Forgotten with the Sessions it was carrying, so the next Session on the Instance starts
 /// another.
+///
+/// A lease that lapsed first decides the reason, so one lapse reads the same whether the sweep or
+/// the supervisor's exit gets to the Session first.
 pub async fn supervisor_exited(store: &Store, instance: &str, because: &str) -> Result<()> {
     let mut tx = store.begin().await?;
     tx.workspaces().forget_supervisor(instance).await?;
+    let now = Timestamp::now();
     for session in tx.workspaces().live_sessions_on(instance).await? {
-        let exit = Exit::Failed {
-            because: because.to_owned(),
+        let exit = if session.lease_expires_at.is_some_and(|at| at <= now) {
+            expired_lease()
+        } else {
+            Exit::Failed {
+                because: because.to_owned(),
+            }
         };
         ending(&mut tx, &session, exit).await?;
     }

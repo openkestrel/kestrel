@@ -140,8 +140,14 @@ type Shared = Arc<OnceCell<(Outcome, Instant)>>;
 struct Live {
     streams: HashMap<String, Vec<(u64, mpsc::UnboundedSender<Request>)>>,
     opened: u64,
-    awaiting: HashMap<Uuid, (String, oneshot::Sender<Arriving>)>,
+    awaiting: HashMap<Uuid, Waiting>,
     shared: HashMap<(String, Read), Shared>,
+}
+
+struct Waiting {
+    instance: String,
+    read: Read,
+    arriving: oneshot::Sender<Arriving>,
 }
 
 /// Where the operator's reads meet the supervisor's answers: in the serve role's memory, which
@@ -184,6 +190,16 @@ impl Reads {
         let mut live = self.0.lock().unwrap();
         live.opened += 1;
         let opened = live.opened;
+        // A supervisor redials without reading what its dropped stream still held, so a read
+        // waiting on an answer is asked again rather than left to its deadline.
+        for (request, waiting) in &live.awaiting {
+            if waiting.instance == instance {
+                let _ = asking.send(Request {
+                    request: *request,
+                    read: waiting.read.clone(),
+                });
+            }
+        }
         live.streams
             .entry(instance.to_owned())
             .or_default()
@@ -207,10 +223,10 @@ impl Reads {
         json: bool,
     ) -> Option<oneshot::Receiver<()>> {
         let mut live = self.0.lock().unwrap();
-        if live.awaiting.get(&request)?.0 != instance {
+        if live.awaiting.get(&request)?.instance != instance {
             return None;
         }
-        let (_, arriving) = live.awaiting.remove(&request)?;
+        let arriving = live.awaiting.remove(&request)?.arriving;
         let (taken, answered) = oneshot::channel();
         arriving.send(Arriving { body, json, taken }).ok()?;
 
@@ -273,8 +289,14 @@ impl Reads {
                     read: read.clone(),
                 });
             }
-            live.awaiting
-                .insert(request, (instance.to_owned(), arriving));
+            live.awaiting.insert(
+                request,
+                Waiting {
+                    instance: instance.to_owned(),
+                    read: read.clone(),
+                    arriving,
+                },
+            );
         }
         let _awaited = Awaited {
             reads: self.clone(),
@@ -371,5 +393,31 @@ mod tests {
         assert!(began.elapsed() >= ANSWER_BEGUN_WITHIN);
         assert!(asked.try_recv().is_ok());
         assert!(reads.0.lock().unwrap().awaiting.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_read_left_on_a_stream_the_supervisor_dropped_is_asked_again_once_it_redials() {
+        let reads = Reads::default();
+        let (mut dropped, stream) = reads.connected("redialling");
+        let reading = tokio::spawn({
+            let reads = reads.clone();
+            async move { reads.read("redialling", Read::Files { path: None }).await }
+        });
+        let asked = dropped.recv().await.expect("the read goes down the link");
+        drop((dropped, stream));
+
+        let (mut redialled, _stream) = reads.connected("redialling");
+        let again = redialled.try_recv().expect("the read is asked again");
+        assert_eq!(again.request, asked.request);
+        reads.answer(
+            "redialling",
+            again.request,
+            Body::from(
+                r#"{"answer":"listing","path":"","entries":[],"total":0,"truncated":false}"#,
+            ),
+            true,
+        );
+
+        assert!(reading.await.unwrap().is_ok());
     }
 }
