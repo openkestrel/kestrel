@@ -832,7 +832,7 @@ struct SessionUpdated {
 }
 
 enum Heard {
-    Acp(SessionUpdate),
+    Acp(Box<SessionUpdate>),
     Unit(UnitChange),
     Unread(String),
 }
@@ -880,7 +880,8 @@ fn heard(update: serde_json::Value) -> Heard {
     };
 
     match extension {
-        Extension::Acp => serde_json::from_value(update).map_or_else(unread, Heard::Acp),
+        Extension::Acp => serde_json::from_value(update)
+            .map_or_else(unread, |update| Heard::Acp(Box::new(update))),
         Extension::AsyncTaskSpawned {
             async_task_id,
             name,
@@ -1518,8 +1519,8 @@ impl Hearing {
         };
         let now = jiff::Timestamp::now();
         let completed = match heard(update) {
-            Heard::Acp(update) if subagent => self.completer.update(update, now),
-            Heard::Acp(update) => return self.update(update),
+            Heard::Acp(update) if subagent => self.completer.update(*update, now),
+            Heard::Acp(update) => return self.update(*update),
             Heard::Unit(change) => {
                 if let UnitChange::Opened {
                     id,
@@ -1586,7 +1587,7 @@ impl Hearing {
         let now = jiff::Timestamp::now();
         let completed = match child.event {
             opencode::ChildEvent::Update { update } => match heard(update) {
-                Heard::Acp(update) => self.completer.update(update, now),
+                Heard::Acp(update) => self.completer.update(*update, now),
                 Heard::Unit(change) => self.completer.unit(change, now),
                 Heard::Unread(diagnostic) => {
                     let _ = self.diagnostics.send(diagnostic);
@@ -2017,10 +2018,9 @@ mod tests {
             "sessionUpdate": "agent_message_chunk",
             "content": {"type": "text", "text": "hello"},
         }));
-        assert!(matches!(
-            standard,
-            Heard::Acp(SessionUpdate::AgentMessageChunk(_))
-        ));
+        assert!(
+            matches!(standard, Heard::Acp(update) if matches!(*update, SessionUpdate::AgentMessageChunk(_)))
+        );
     }
 
     #[test]
