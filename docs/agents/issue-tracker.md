@@ -97,6 +97,26 @@ the ones its prose names. Spec 0.3 Trailing Sessions published #390 blocked by #
 it used the adapter units #388 builds. Write each edge as a native dependency (see **Blocking**
 under Wayfinding operations).
 
+## When a skill closes work through PRs
+
+A PR closes work: `Closes #<ticket>` in its body closes the ticket on merge. A spec implemented
+across tickets lands as one PR on its integration branch, or, when the user asks for stacked PRs,
+as a **stack** with one PR per ticket:
+
+- **Order** the stack by when tickets finish, not by ticket number, so it stays linear even when the
+  ticket graph is not.
+- **The integration branch is the stack's top.** A finished ticket branch must contain it
+  (`git merge-base --is-ancestor <integration> <ticket-branch>`); fast-forward the integration
+  branch to the ticket branch, then open the ticket's PR against the branch below it:
+  `gh pr create --base <branch-below> --head <ticket-branch> --draft`.
+- **Link** the first two PRs with `gh stack link <bottom-branch> <next-branch>`, then grow the stack
+  with `gh stack link <stack-number> <ticket-branch>`.
+- **Merge, never rebase.** Each branch takes the one below by merge commit, so pushed history stays
+  put and `gh stack` needs no force-push.
+- **Fix low, merge up.** A fix lands on the lowest branch whose PR introduced the problem, then
+  each branch above merges the one below, so every PR goes green on its own.
+- The top PR also closes the spec. Mark every PR ready together once all are green.
+
 ## When a skill says "fetch the relevant ticket"
 
 Run `gh issue view <number> --comments`.
