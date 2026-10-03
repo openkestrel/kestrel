@@ -122,8 +122,7 @@ struct Carried<'a> {
 struct ControlPlane {
     store: Store,
     shutdown: CancellationToken,
-    summaries: crate::live_work::Summaries,
-    reads: crate::live_read::Reads,
+    live: crate::live::Live,
 }
 
 struct Waiting {
@@ -174,12 +173,7 @@ struct Recorded {
     entry: serde_json::Value,
 }
 
-pub fn router(
-    store: Store,
-    shutdown: CancellationToken,
-    summaries: crate::live_work::Summaries,
-    reads: crate::live_read::Reads,
-) -> Router {
+pub fn router(store: Store, shutdown: CancellationToken, live: crate::live::Live) -> Router {
     Router::new()
         .route(ANSWERS, post(answer))
         .route(CREDENTIALS, get(credentials).patch(refresh_credentials))
@@ -189,8 +183,7 @@ pub fn router(
         .with_state(ControlPlane {
             store,
             shutdown,
-            summaries,
-            reads,
+            live,
         })
 }
 
@@ -326,8 +319,8 @@ async fn instructions(
         cursor, "a supervisor is on the link"
     );
 
-    let connection = control_plane.summaries.connected(&linked.instance);
-    let (mut asked, reading) = control_plane.reads.connected(&linked.instance);
+    let connection = control_plane.live.summaries.connected(&linked.instance);
+    let (mut asked, reading) = control_plane.live.reads.connected(&linked.instance);
     let stream = async_stream::try_stream! {
         let _connection = connection;
         let _reading = reading;
@@ -491,7 +484,7 @@ async fn report(
 ) -> Result<Response, Refused> {
     let (linked, _) = authenticated(&control_plane, &headers, &instance).await?;
     if let work::Report::Work { repositories } = reported.report {
-        if control_plane.summaries.report(&instance, repositories) {
+        if control_plane.live.summaries.report(&instance, repositories) {
             let mut touched = Touched::default();
             touched.workspace_id(linked.organization, linked.workspace);
             control_plane.store.notices().publish(touched);
@@ -508,7 +501,7 @@ async fn report(
     } = &reported.report
     {
         let session = still_carried(&control_plane, &linked, reported.session).await?;
-        let noticed = control_plane.summaries.report_session(
+        let noticed = control_plane.live.summaries.report_session(
             &instance,
             &session.id.to_string(),
             crate::live_work::SessionState {
@@ -532,9 +525,11 @@ async fn report(
     }
     if let work::Report::Usage { usage } = &reported.report {
         let session = still_carried(&control_plane, &linked, reported.session).await?;
-        control_plane
-            .summaries
-            .report_usage(&instance, &session.id.to_string(), usage.clone());
+        control_plane.live.summaries.report_usage(
+            &instance,
+            &session.id.to_string(),
+            usage.clone(),
+        );
         return Ok(StatusCode::ACCEPTED.into_response());
     }
     let connected = matches!(reported.report, work::Report::Connected { .. });
@@ -568,6 +563,7 @@ async fn answer(
         .and_then(|kind| kind.to_str().ok())
         .is_some_and(|kind| kind.starts_with("application/json"));
     let taken = control_plane
+        .live
         .reads
         .answer(&instance, request, body, json)
         .ok_or_else(|| Refused::Gone("no read is waiting on this answer".to_owned()))?;
