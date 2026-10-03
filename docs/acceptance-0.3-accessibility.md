@@ -1,7 +1,7 @@
 # Browser workbench accessibility acceptance
 
 Tracking: [#424](https://github.com/openkestrel/kestrel/issues/424). The browser implementation
-landed in [#448](https://github.com/openkestrel/kestrel/pull/448); the VoiceOver pass remains open.
+landed in [#448](https://github.com/openkestrel/kestrel/pull/448).
 
 ## Verification on 2026-10-03
 
@@ -22,7 +22,11 @@ announcement check inspects live-region markup; it does not establish what a scr
 Safari's desktop accessibility tree exposed the Workspaces, Transcript and Work regions, disclosure
 controls, labelled Post text area and Work view tabs in an isolated Workspace with a brief.
 
-## VoiceOver: incomplete
+## VoiceOver: validated by the operator
+
+On 2026-10-03, the operator reported: “I've validated voiceover myself”, completing the remaining
+manual acceptance pass for #424. No findings requiring fixes were reported. This result is the
+operator's validation, distinct from the automated checks and the agent's attempted inspection.
 
 VoiceOver was temporarily enabled through System Settings, with the existing caption-panel
 preference enabled. The automation tool could read Safari but could not read VoiceOver's caption
@@ -30,8 +34,7 @@ window: `permission_denied`, with AX reads blocked after retries. Its permission
 Accessibility and Screen Recording granted. VoiceOver was restored to off, verified through the
 System Settings switch. No spoken-announcement result or 375 px VoiceOver result was obtained.
 
-Complete the following in Safari with VoiceOver, first at desktop width and then with a 375 px
-viewport, recording findings and fixes on #424:
+For future regression passes, use Safari with VoiceOver at desktop width and with a 375 px viewport:
 
 1. Navigate the live Transcript and its disclosure controls; at 375 px, change pane tabs and
    return, checking selection and keyboard focus.
