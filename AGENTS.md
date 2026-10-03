@@ -29,12 +29,15 @@ CI is the full gate: it runs fmt, clippy, the build and every test on every pull
 you have right now, and only when you have one. This machine's CPU and memory are shared with
 other agents, so each local cargo run has a real cost.
 
-- Compiles? `cargo check -p <crate>`.
+- Compiles? `cargo clippy -p <crate> --all-targets -- -D warnings`, CI's lint scoped to one
+  crate; it type-checks without codegen, as `cargo check` does.
+- Changed `openapi/*.json`? The Client's types are generated from it:
+  `cd packages/client && bun install && bun run typecheck`.
 - Behaves? One test target, filtered to the test: `cargo test -p kestrel --test <file> <name>`.
   Each file in `crates/*/tests/` is its own binary, and the suite builds the supervisor and
   scripted agent itself, so a whole-package or workspace run is many builds, not one.
 - Batch edits before checking; one check after a coherent change, never one per line.
-- Before pushing, `cargo fmt --all`. Leave clippy, the workspace suite and the `#[ignore]`d
+- Before pushing, `cargo fmt --all`. Leave the workspace suite and the `#[ignore]`d
   suites to CI. CI runs only on a pull request, so finish by pushing the branch and opening one;
   then read what failed with `gh pr checks` and `gh run view --log-failed`.
 - Documentation, skill and agent-guidance changes need no local check.
