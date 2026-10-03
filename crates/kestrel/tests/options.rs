@@ -502,33 +502,43 @@ async fn changing_thought_level_on_a_queued_session_starts_it_with_that_value() 
 }
 
 #[tokio::test]
-async fn a_trailing_session_takes_a_change_as_a_waiting_one_does() {
-    let kestrel = Kestrel::boot().await;
+async fn changing_the_mode_while_trailing_leaves_the_session_trailing() {
+    let kestrel = dispatching(Script::AnswersWithAToolOpen).await;
     let workspace = a_workspace(&kestrel, Declared::default()).await;
-    let (session, _) = kestrel.dispatch_to_the_link(workspace.id).await;
-    kestrel.start_on_the_link(&session).await;
-    kestrel.report_answered(&session, 1).await;
-    kestrel
-        .report_session_info(&session, &[model_option(DEFAULT_MODEL)])
-        .await;
-    assert_eq!(
-        kestrel.session(session.id).await.state,
-        SessionState::Trailing
-    );
+    let session = kestrel.enqueue_session(workspace.id).await;
+    until_state(&kestrel, session.id, SessionState::Trailing).await;
+    until_current_is(&kestrel, session.id, "mode", STARTING_MODE).await;
 
     let (status, changed) = set_option(
         &kestrel,
         session.id,
-        json!({"participant": "operator", "option": "model", "value": OTHER_MODEL}),
+        json!({"participant": "operator", "category": "mode", "value": SWITCHED_MODE}),
     )
     .await;
-
     assert_eq!(status, StatusCode::ACCEPTED, "{changed}");
-    assert!(matches!(
-        kestrel.instruction(&session).await,
-        kestrel::link::Instruction::SetOption { .. }
-    ));
 
+    let Entry::OptionChanged {
+        participant,
+        category,
+        from,
+        to,
+        refused,
+        ..
+    } = until_changed(&kestrel, workspace.id).await
+    else {
+        unreachable!("until_changed only returns option changes")
+    };
+    assert_eq!(participant, "operator");
+    assert_eq!(category, "mode");
+    assert_eq!(from.as_deref(), Some(STARTING_MODE));
+    assert_eq!(to.as_deref(), Some(SWITCHED_MODE), "{refused:?}");
+    let changed = kestrel.session(session.id).await;
+    assert_eq!(changed.state, SessionState::Trailing, "{:?}", changed.exit);
+    assert_eq!(current(&changed, "mode").as_deref(), Some(SWITCHED_MODE));
+
+    until_state(&kestrel, session.id, SessionState::Waiting).await;
+
+    kestrel.stop_session(session.id).await;
     kestrel.teardown().await;
 }
 

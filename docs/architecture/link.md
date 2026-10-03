@@ -120,6 +120,10 @@ Each names the Session it is for.
   other way ends the Turn as it would have. The supervisor counts `KESTREL_INTERRUPT_DEADLINE`
   (30 s) from the instruction: an agent that does not answer by then has its harness ended, its open
   units closed `unresolved`, and its Session reported finished failed, lost ACP continuity.
+- `set_option {option, value, participant}`: change one of the Session's options between Turns.
+  The supervisor sends ACP `session/set_config_option`, or `session/set_mode` for a mode it
+  synthesized from legacy `modes`, and reports `option_changed`. It is written in the transaction
+  that checks the Session is not working, so it reaches the harness ahead of any later `prompt`.
 - `stop`: sent whenever a Session ends, however it ends, so the next Session's `start` always follows
   the last one's `stop`. It ends the harness; the supervisor stays.
 
@@ -150,6 +154,7 @@ effects (ADR-0004).
 | `session_state {tools, units, message_buffering, thought_buffering, usage?, last_activity_at?}` | no | Each tool is `{call_id, title, tool_kind, status, started_at}`; `units` are the adapter units still open, which the Session read and `session show` list. Replaces the Session’s transient snapshot in serve-role memory; reconnect resends it. `last_activity_at` is present only while the supervisor trails; a Waiting Session that reports it moves to Trailing. |
 | `usage {usage}` | no | Held in serve-role memory beside the running tools: at most one a second, at the window's trailing edge, and never recorded (ADR-0041). |
 | `session_info {title, options, commands}` | no | Records the harness's whole bookkeeping state on the Session (ADR-0041). Sent when it changes, at most once a second, and again after a reconnect. |
+| `option_changed {participant, option, category, from, to?, refused?, options}` | yes | Clears the pending change, records the harness's options, and appends shared-state `OptionChanged` naming who asked, with `refused` in place of `to` when the harness refused. Leaves the Session's state as it was. |
 | `checkout {repositories}` | yes | Replaces the Workspace's observed git state (decides Unpublished Work); an unbriefed Session moves from `cloning` to `starting_harness`. |
 | `answered {usage?}` | yes | Closes the open Turn, moves the Session to Trailing, clears any pending interrupt, records a delivery from what was said up to it, and records the usage it carries; held messages become the next Turn at once, so the Session stays Working when there are any. |
 | `interrupted {trailing}` | yes | Closes the interrupted Turn, moves the Session to Waiting, or to Trailing when `trailing` says units the agent started still run, and appends shared-state `TurnInterrupted` naming who asked; held messages become the next Turn at once, so the Session stays Working when there are any. Writes no delivery. |

@@ -97,6 +97,17 @@ offered; a declared mode a harness offers only as a legacy `modes` entry is set 
 `session/set_mode`. Recovery applies the declared values again. `PUT …/agents/{agent}/model`
 reaches no Session already enqueued.
 
+## Changing options
+
+`work::set_option` changes one option, named by id or category. On a queued Session it sets the
+declared value for `model`, `mode` or `thought_level` and appends `OptionChanged` at once. On a
+Waiting or Trailing Session, or an unbriefed one that has reported options, it checks the value is
+offered, records the change in `changing_options` and sends the `set_option` instruction
+([Link](link.md#instructions)); the supervisor's `option_changed` clears it. A working Turn, an
+ended or unreachable Session and an unbriefed one with no options yet are refused naming the
+phase, because a harness's handling of a mid-Turn change is undefined (ADR-0041). A change never
+moves the Session between phases.
+
 ## The unfinished Session
 
 A Workspace has at most one **Unfinished Session**: queued, working, trailing, waiting or
