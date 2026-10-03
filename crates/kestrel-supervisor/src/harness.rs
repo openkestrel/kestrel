@@ -11,14 +11,14 @@ use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthMethod, AuthenticateRequest, AvailableCommand, AvailableCommandInput,
-    CancelNotification, ContentBlock, ErrorCode, InitializeRequest, InitializeResponse,
-    LoadSessionRequest, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
-    SelectedPermissionOutcome, SessionConfigId, SessionConfigKind, SessionConfigOption,
-    SessionConfigOptionCategory, SessionConfigSelect, SessionConfigSelectOption,
-    SessionConfigSelectOptions, SessionConfigValueId, SessionId, SessionModeId, SessionModeState,
-    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
-    StopReason, TextContent,
+    CancelNotification, ClientCapabilities, ContentBlock, ErrorCode, InitializeRequest,
+    InitializeResponse, LoadSessionRequest, NewSessionRequest, PromptRequest,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigId, SessionConfigKind,
+    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelect,
+    SessionConfigSelectOption, SessionConfigSelectOptions, SessionConfigValueId, SessionId,
+    SessionModeId, SessionModeState, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason, TextContent,
 };
 use agent_client_protocol::{
     AcpAgent, AcpAgentConfig, Client, ConnectionTo, Error, LineDirection,
@@ -33,6 +33,7 @@ use crate::link::{
     Report, SessionCommand, SessionInfo, SessionOption, SessionOptionGroup, SessionOptionKind,
     SessionOptionValue, TurnOutcome,
 };
+use crate::opencode;
 use crate::permission::{self, Subject};
 
 /// What this Environment was configured to drive, what the Session asks of it, and where what the
@@ -450,6 +451,19 @@ async fn living(
             },
             agent_client_protocol::on_receive_notification!(),
         )
+        .on_receive_notification(
+            {
+                let heard = Arc::clone(heard);
+                async move |child: opencode::ChildUpdateNotification, _connection| {
+                    heard
+                        .lock()
+                        .expect("what the agent said should not be poisoned")
+                        .child(child.0);
+                    Ok(())
+                }
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
         .on_receive_request(
             {
                 let heard = Arc::clone(heard);
@@ -748,12 +762,19 @@ fn described(error: &Error) -> String {
         .map_or_else(|| error.to_string(), str::to_owned)
 }
 
+/// Declared to every harness, since one ignores a key it does not know.
+fn declared() -> ClientCapabilities {
+    let mut meta = serde_json::Map::new();
+    meta.insert(opencode::CHILD_SESSION_UPDATES.to_owned(), true.into());
+    ClientCapabilities::new().meta(meta)
+}
+
 async fn initialized(
     connection: &ConnectionTo<agent_client_protocol::Agent>,
     auth: Option<&str>,
 ) -> Result<InitializeResponse, Error> {
     let initialized = connection
-        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+        .send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(declared()))
         .block_task()
         .await?;
     if initialized.protocol_version != ProtocolVersion::V1 {
@@ -1385,6 +1406,28 @@ impl Hearing {
         }
         self.emit(completed);
     }
+    /// A child's update reaches the completer only, so it cannot change the parent's own state.
+    fn child(&mut self, child: serde_json::Value) {
+        if self.replaying {
+            return;
+        }
+        let update = serde_json::from_value(child).and_then(|child| match child {
+            opencode::ChildUpdate::Update { update } => serde_json::from_value(update).map(Some),
+            opencode::ChildUpdate::Status => Ok(None),
+        });
+        match update {
+            Ok(Some(update)) => {
+                let completed = self.completer.update(update, jiff::Timestamp::now());
+                self.emit(completed);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let _ = self.diagnostics.send(format!(
+                    "kestrel: an OpenCode child session update could not be read: {error}"
+                ));
+            }
+        }
+    }
     fn worked(&mut self, failed: Option<String>) -> Worked {
         let outcome = match &failed {
             Some(because) => TurnOutcome::Failed {
@@ -1503,6 +1546,69 @@ mod tests {
         }
 
         infos
+    }
+
+    fn child_update(update: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "rootSessionId": "parent",
+            "childSessionId": "child",
+            "parentSessionId": "parent",
+            "depth": 1,
+            "title": "explore",
+            "type": "update",
+            "update": update,
+        })
+    }
+
+    #[test]
+    fn an_opencode_childs_update_is_folded_into_the_parents_turn_as_it_came() {
+        let (mut hearing, mut heard) = hearing();
+        hearing.completer.begin();
+        hearing.child(child_update(serde_json::json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "child:call-1",
+            "title": "explore: read",
+            "status": "completed",
+        })));
+
+        let mut calls = Vec::new();
+        while let Ok(event) = heard.try_recv() {
+            if let ConversationEvent::Report(report @ Report::ToolCall { .. }) = event {
+                calls.push(serde_json::to_value(report).unwrap());
+            }
+        }
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert_eq!(calls[0]["call_id"], "child:call-1");
+        assert_eq!(calls[0]["title"], "explore: read");
+        assert!(hearing.completer.produced);
+    }
+
+    #[test]
+    fn an_opencode_childs_title_is_not_its_parents() {
+        let (mut hearing, mut heard) = hearing();
+        hearing.child(child_update(serde_json::json!({
+            "sessionUpdate": "session_info_update",
+            "title": "the child's own title",
+        })));
+
+        assert!(session_infos(&mut heard).is_empty());
+    }
+
+    #[test]
+    fn an_opencode_child_update_kestrel_cannot_read_is_a_diagnostic() {
+        let (mut hearing, mut heard) = hearing();
+        let (diagnostics, mut diagnosed) = mpsc::unbounded_channel();
+        hearing.diagnostics = diagnostics;
+        hearing.child(child_update(
+            serde_json::json!({"sessionUpdate": "something_new"}),
+        ));
+
+        assert!(
+            diagnosed
+                .try_recv()
+                .is_ok_and(|diagnostic| diagnostic.contains("OpenCode child"))
+        );
+        assert!(heard.try_recv().is_err());
     }
 
     #[test]

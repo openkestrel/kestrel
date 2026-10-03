@@ -21,11 +21,12 @@ use agent_client_protocol::schema::v1::{
     SetSessionModeResponse, StopReason, TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
     ToolCallUpdateFields, UnstructuredCommandInput, UsageUpdate,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo, Error, Result, Stdio};
+use agent_client_protocol::{Agent, Client, ConnectionTo, Error, Result, Stdio, UntypedMessage};
 use clap::Parser;
 use kestrel_scripted_agent::{
     BACKGROUND, BOOKKEEPING, BURSTED_SIZE, BURSTED_USAGE, CHATTER, CHATTERED_LINES,
-    CHATTERED_MESSAGES, COMMAND, COMMAND_DESCRIPTION, COMMAND_HINT, CONFIDED, CUSTOM_CATEGORY,
+    CHATTERED_MESSAGES, CHILD_SAID_IN_TURN, CHILD_SAID_WHILE_TRAILING, CHILD_SILENT_FOR,
+    CHILD_TITLE, COMMAND, COMMAND_DESCRIPTION, COMMAND_HINT, CONFIDED, CUSTOM_CATEGORY,
     CUSTOM_OPTION, DEFAULT_MODEL, FIRST_MEMORY, LAST_MEMORY, LOGIN, MODE_OPTION, MUTTERED,
     OTHER_MODE, OTHER_MODEL, OTHER_THOUGHT_LEVEL, OVERLONG, REFRESHED, REPEATS, RESUMES_AFTER,
     SAID_WHILE_TRAILING, STARTING_MODE, STARTING_THOUGHT_LEVEL, SWITCHED_MODE, Script,
@@ -48,6 +49,7 @@ const BURST_SETTLED: Duration = Duration::from_millis(1_000);
 /// a heartbeat landing inside it would carry a value the window has not reported.
 const BURST_SPACING: Duration = Duration::from_millis(200);
 const BURST_PATIENCE: Duration = Duration::from_millis(2_500);
+const CHILD: &str = "child-1";
 
 #[derive(Debug, Parser)]
 #[command(name = "kestrel-scripted-agent", version)]
@@ -92,6 +94,16 @@ async fn main() -> Result<()> {
                         initialize.protocol_version
                     )));
                 }
+
+                CHILD_UPDATES_DECLARED.store(
+                    initialize
+                        .client_capabilities
+                        .meta
+                        .as_ref()
+                        .and_then(|meta| meta.get("opencode/child-session-updates"))
+                        == Some(&serde_json::Value::Bool(true)),
+                    Ordering::SeqCst,
+                );
 
                 if script == Script::Predates {
                     return responder.respond(InitializeResponse::new(ProtocolVersion::V0));
@@ -290,6 +302,7 @@ async fn main() -> Result<()> {
 }
 
 static TURN: AtomicUsize = AtomicUsize::new(0);
+static CHILD_UPDATES_DECLARED: AtomicBool = AtomicBool::new(false);
 
 async fn play(
     script: Script,
@@ -335,6 +348,26 @@ async fn play(
             ),
         )?;
         return std::future::pending().await;
+    }
+    if script == Script::RunsAnOpenCodeChild && earlier.is_empty() {
+        child_status(connection, "created")?;
+        child_status(connection, "running")?;
+        child(
+            connection,
+            SessionUpdate::ToolCall(
+                ToolCall::new(
+                    format!("{CHILD}:{TOOL_CALL}"),
+                    format!("{CHILD_TITLE}: read"),
+                )
+                .status(ToolCallStatus::Completed),
+            ),
+        )?;
+        child(
+            connection,
+            SessionUpdate::AgentMessageChunk(chunk(Some("child-message"), CHILD_SAID_IN_TURN)),
+        )?;
+        say(connection, "message-1", "the child is still looking")?;
+        return Ok(StopReason::EndTurn);
     }
     if script == Script::ReportsThenWaits {
         say(connection, "first", "first message")?;
@@ -814,6 +847,25 @@ async fn trail(
                 ),
             )
         }
+        Script::RunsAnOpenCodeChild if CHILD_UPDATES_DECLARED.load(Ordering::SeqCst) => {
+            tokio::time::sleep(VANISHING).await;
+            child(
+                connection,
+                SessionUpdate::AgentMessageChunk(chunk(None, CHILD_SAID_WHILE_TRAILING)),
+            )?;
+            child(
+                connection,
+                SessionUpdate::ToolCall(
+                    ToolCall::new(
+                        format!("{CHILD}:{background}"),
+                        format!("{CHILD_TITLE}: search"),
+                    )
+                    .status(ToolCallStatus::Completed),
+                ),
+            )?;
+            tokio::time::sleep(CHILD_SILENT_FOR).await;
+            child_status(connection, "completed")
+        }
         _ => Ok(()),
     }
 }
@@ -879,6 +931,46 @@ fn say(connection: &ConnectionTo<Client>, message: &str, said: &str) -> Result<(
 
 fn update(connection: &ConnectionTo<Client>, update: SessionUpdate) -> Result<()> {
     connection.send_notification(SessionNotification::new(SESSION, update))
+}
+
+/// What OpenCode does with a child session's update: projected onto the parent's turn for a
+/// client that has not declared the child channel, and sent only on that channel for one that has.
+fn child(connection: &ConnectionTo<Client>, projected: SessionUpdate) -> Result<()> {
+    if !CHILD_UPDATES_DECLARED.load(Ordering::SeqCst) {
+        return update(connection, projected);
+    }
+    child_event(
+        connection,
+        serde_json::json!({"type": "update", "update": projected}),
+    )
+}
+
+fn child_status(connection: &ConnectionTo<Client>, status: &str) -> Result<()> {
+    if !CHILD_UPDATES_DECLARED.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    child_event(
+        connection,
+        serde_json::json!({"type": "status", "status": status}),
+    )
+}
+
+fn child_event(connection: &ConnectionTo<Client>, event: serde_json::Value) -> Result<()> {
+    let mut params = serde_json::json!({
+        "rootSessionId": SESSION,
+        "childSessionId": CHILD,
+        "parentSessionId": SESSION,
+        "depth": 1,
+        "title": CHILD_TITLE,
+    });
+    params
+        .as_object_mut()
+        .expect("an object")
+        .extend(event.as_object().expect("an object").clone());
+    connection.send_notification(UntypedMessage::new(
+        "opencode/session/child_update",
+        params,
+    )?)
 }
 
 fn chunk(message: Option<&str>, said: &str) -> ContentChunk {

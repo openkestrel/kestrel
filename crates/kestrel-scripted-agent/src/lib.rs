@@ -47,6 +47,11 @@ pub const BOOKKEEPING: std::time::Duration = std::time::Duration::from_secs(6);
 pub const RESUMES_AFTER: std::time::Duration = std::time::Duration::from_secs(4);
 pub const SAID_WHILE_TRAILING: &str = "the background tests passed";
 pub const WRITTEN_WHILE_TRAILING: &str = "written-while-trailing.txt";
+pub const CHILD_TITLE: &str = "explore the checkout";
+pub const CHILD_SAID_IN_TURN: &str = "the child read the code";
+pub const CHILD_SAID_WHILE_TRAILING: &str = "the child finished its search";
+/// Longer than a test's quiet period, so only the child still running keeps its Session trailing.
+pub const CHILD_SILENT_FOR: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Script {
@@ -141,6 +146,12 @@ pub enum Script {
     ResumesAfterSettling,
     /// Answers, then writes `WRITTEN_WHILE_TRAILING` into its checkout.
     AnswersThenWrites,
+    /// Runs an OpenCode child session through its turn and on past the answer, silent for
+    /// `CHILD_SILENT_FOR` before it completes. As OpenCode does, it sends the child's output on
+    /// the child channel only to a client that declared it, and otherwise folds it into the turn
+    /// and drops it after the answer.
+    #[value(name = "runs-an-opencode-child")]
+    RunsAnOpenCodeChild,
 }
 
 impl Script {
@@ -195,6 +206,7 @@ impl Script {
             Script::AnswersThenKeepsBooks => "answers-then-keeps-books",
             Script::ResumesAfterSettling => "resumes-after-settling",
             Script::AnswersThenWrites => "answers-then-writes",
+            Script::RunsAnOpenCodeChild => "runs-an-opencode-child",
         }
     }
 }

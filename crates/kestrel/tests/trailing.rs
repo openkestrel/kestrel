@@ -10,7 +10,10 @@ use kestrel::domain::{Session, SessionId, SessionState, Workspace, WorkspaceStat
 use kestrel::instance::{Git, Observed};
 use kestrel::log::{ClosingReason, Entry, ToolStatus};
 use kestrel::work::Occupied;
-use kestrel_scripted_agent::{BACKGROUND, BOOKKEEPING, OTHER_MODEL, SAID_WHILE_TRAILING};
+use kestrel_scripted_agent::{
+    BACKGROUND, BOOKKEEPING, CHILD_SAID_IN_TURN, CHILD_SAID_WHILE_TRAILING, CHILD_TITLE,
+    OTHER_MODEL, SAID_WHILE_TRAILING,
+};
 use support::scripted_agent::{self, Script};
 use support::{HARNESS, Kestrel, QUIET_PERIOD, repository, supervisor};
 
@@ -468,4 +471,70 @@ fn the_published_documents_describe_trailing() {
         schemas["SessionState"]["properties"]["last_activity_at"]["format"],
         "date-time"
     );
+}
+
+#[tokio::test]
+async fn an_opencode_childs_output_in_a_turn_reaches_its_parents_transcript() {
+    let (kestrel, workspace, session) = playing(Script::RunsAnOpenCodeChild).await;
+    kestrel.answering(session.id, 1).await;
+
+    let entries = kestrel.every_entry(workspace.id).await;
+    let read = position(&entries, "the child's tool call", |entry| {
+        matches!(
+            entry,
+            Entry::ToolCall { call_id, title, status: ToolStatus::Completed, .. }
+                if call_id == "child-1:call-1" && *title == format!("{CHILD_TITLE}: read")
+        )
+    });
+    let said = position(
+        &entries,
+        "the child's message",
+        |entry| matches!(entry, Entry::Said { message, .. } if message == CHILD_SAID_IN_TURN),
+    );
+    let answer = position(
+        &entries,
+        "answer",
+        |entry| matches!(entry, Entry::Said { message, .. } if message == "the child is still looking"),
+    );
+    assert!(read < answer && said < answer, "{entries:#?}");
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_opencode_childs_output_after_the_answer_lands_before_the_next_prompt() {
+    let (kestrel, workspace, session) = playing(Script::RunsAnOpenCodeChild).await;
+    kestrel.answered(session.id, 1).await;
+    kestrel
+        .post(workspace.id, "jack", "and the next thing")
+        .await;
+    kestrel.answering(session.id, 2).await;
+
+    let entries = kestrel.every_entry(workspace.id).await;
+    let answer = position(
+        &entries,
+        "answer",
+        |entry| matches!(entry, Entry::Said { message, .. } if message == "the child is still looking"),
+    );
+    let late = position(
+        &entries,
+        "the child's message after the answer",
+        |entry| matches!(entry, Entry::Said { message, .. } if message == CHILD_SAID_WHILE_TRAILING),
+    );
+    let search = position(&entries, "the child's call after the answer", |entry| {
+        matches!(
+            entry,
+            Entry::ToolCall { call_id, status: ToolStatus::Completed, .. }
+                if call_id == "child-1:call-1-background"
+        )
+    });
+    let prompt = position(&entries, "next prompt", |entry| {
+        matches!(entry, Entry::Messages { .. })
+    });
+    assert!(
+        answer < late && late < prompt && answer < search && search < prompt,
+        "{entries:#?}"
+    );
+
+    kestrel.teardown().await;
 }
