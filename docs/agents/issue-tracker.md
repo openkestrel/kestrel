@@ -35,14 +35,14 @@ the item. The authoritative frontier query is the one under "Wayfinding operatio
 
 ### Milestones are rungs
 
-Every milestone is a rung of the ladder in `ROADMAP.md`. `0.2`–`0.7` and `v1` exist; `0.1` is not
+Every milestone is a rung of the ladder in `ROADMAP.md`. `0.2`–`0.8` and `v1` exist; `0.1` is not
 created because it is closed.
 
 - **An issue carries a rung once it leaves triage.** `ready-for-agent` and `ready-for-human` issues
   name a milestone; `needs-triage` and `needs-info` issues may leave it empty, and show up in the By
   rung view's unplaced group.
 - **Assign at creation**, to the rung the work actually lands in rather than the current one — a
-  `0.6` integration ticket takes `0.6` while the project sits at `0.2`.
+  `0.7` integration ticket takes `0.7` while the project sits at `0.2`.
 - **Revise during triage** when work belongs to another rung:
   `gh issue edit <n> --repo openkestrel/kestrel --milestone "<rung>"`.
 - Milestones carry no due dates. The ladder is deliberately dateless.

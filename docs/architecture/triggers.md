@@ -161,7 +161,7 @@ Triggers:
   no Session, and a Trigger declared for the same Event fires as it would anyway.
 - `pull_request_attachment` records every Event considered and its verdict, and
   `pull_request_candidate` every Workspace it matched with the state that Workspace was in, so each
-  is considered once and the `0.4` Audit Record can explain the verdict.
+  is considered once and the `0.5` Audit Record can explain the verdict.
 
 ## Delivery
 

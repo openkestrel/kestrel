@@ -7,8 +7,8 @@ It carries three things: the **supervisor**, **opencode**, and **git**. Nothing 
 [ADR-0007](../../docs/adr/0007-acp-is-the-agent-runtime-contract.md) took the `claude` binary out,
 and Node left with it — opencode speaks ACP natively, so nothing stands between the supervisor and
 the agent. A **Project**'s setup layers its repositories' dependencies on top; injecting the
-supervisor into a bring-your-own image is the `0.7` escape hatch, and installing an agent from the
-ACP Registry is `0.7` work under the constraints ADR-0007 records. Nothing here downloads an agent.
+supervisor into a bring-your-own image is the `0.8` escape hatch, and installing an agent from the
+ACP Registry is `0.8` work under the constraints ADR-0007 records. Nothing here downloads an agent.
 
 ## Building it
 

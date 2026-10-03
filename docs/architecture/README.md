@@ -161,8 +161,11 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   is no GitHub App. The Integration and the agent's `gh` both use tokens an operator supplies.
 - **Pull request state** ([ADR-0032](../adr/0032-a-pull-request-event-updates-workspace-state-without-a-firing.md)):
   opened, reopened, closed (including merges) and head-moved Events are learned. The Audit Record
-  that explains unattended attachment verdicts remains `0.4` work.
+  that explains unattended attachment verdicts remains `0.5` work.
 - **Split roles**: `serve` and `work` parse separately but run correctly only in one process.
+- **The first run** ([ADR-0045](../adr/0045-a-browser-tab-holds-one-stream-and-subscribes-over-requests.md)–[ADR-0049](../adr/0049-an-install-has-one-operator-and-by-default-one-organization.md)):
+  the Client is still served over HTTPS with a stream per follow; there is no sign-in catalogue,
+  relay, image label, Operator or default Organization, and `kestrel-env` carries opencode alone.
 - **Policy, Approvals, Questions, Workflows, Campaigns** exist in `GLOSSARY.md` and
   [`ROADMAP.md`](../../ROADMAP.md), not in code. `session_dependency` and the Unreachable state are
   the only Workflow machinery built.
