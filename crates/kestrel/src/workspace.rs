@@ -337,6 +337,7 @@ pub(crate) enum PostDestination<'a> {
     Brief(&'a Session),
     Held,
     Wake(&'a Session),
+    Prompt(&'a Session),
     Unbriefed(&'a Session),
 }
 
@@ -383,6 +384,9 @@ impl UnfinishedSession {
             }
             Some(session) if session.state == SessionState::Waiting => {
                 PostDestination::Wake(session)
+            }
+            Some(session) if session.state == SessionState::Trailing => {
+                PostDestination::Prompt(session)
             }
             Some(session) if session.state == SessionState::Unbriefed => {
                 PostDestination::Unbriefed(session)
@@ -505,6 +509,24 @@ pub(crate) async fn post_as(
             Ok(Posted {
                 session: Some(waiting.clone()),
                 held_message: Some(held_message),
+            })
+        }
+        // A trailing Session already holds the slot its next Turn takes.
+        PostDestination::Prompt(trailing) => {
+            let posted = tx
+                .workspaces()
+                .add_pending_message(workspace, participant, message)
+                .await?;
+            work::prompt_pending(tx, trailing).await?;
+            let held_message = tx
+                .workspaces()
+                .held_messages(workspace.id)
+                .await?
+                .into_iter()
+                .find(|held| held.id == posted.id);
+            Ok(Posted {
+                session: Some(tx.workspaces().session(trailing.id).await?),
+                held_message,
             })
         }
         PostDestination::Unbriefed(unbriefed) => {
@@ -820,10 +842,12 @@ mod tests {
 
     #[test]
     fn unfinished_session_rules_cover_every_phase_with_and_without_held_input() {
-        use SessionState::{Ended, Queued, Unbriefed, Unreachable, Waiting, Working};
+        use SessionState::{Ended, Queued, Trailing, Unbriefed, Unreachable, Waiting, Working};
         let brief: fn(&PostDestination) -> bool = |post| matches!(post, PostDestination::Brief(_));
         let held: fn(&PostDestination) -> bool = |post| matches!(post, PostDestination::Held);
         let wake: fn(&PostDestination) -> bool = |post| matches!(post, PostDestination::Wake(_));
+        let prompt: fn(&PostDestination) -> bool =
+            |post| matches!(post, PostDestination::Prompt(_));
         let unbriefed: fn(&PostDestination) -> bool =
             |post| matches!(post, PostDestination::Unbriefed(_));
         #[rustfmt::skip]
@@ -832,6 +856,8 @@ mod tests {
             Case { state: Queued,      held_input: true,  in_flight: true,  post: brief },
             Case { state: Working,     held_input: false, in_flight: true,  post: held },
             Case { state: Working,     held_input: true,  in_flight: true,  post: held },
+            Case { state: Trailing,    held_input: false, in_flight: true,  post: prompt },
+            Case { state: Trailing,    held_input: true,  in_flight: true,  post: prompt },
             Case { state: Waiting,     held_input: false, in_flight: false, post: wake },
             Case { state: Waiting,     held_input: true,  in_flight: true,  post: wake },
             Case { state: Unbriefed,   held_input: false, in_flight: false, post: unbriefed },

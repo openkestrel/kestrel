@@ -231,6 +231,7 @@ impl Completer {
                 .map(|(id, (call, started_at))| crate::link::RunningTool {
                     call_id: id.clone(),
                     title: call.title.clone(),
+                    tool_kind: wire_name(call.kind),
                     status: wire_name(call.status),
                     started_at: *started_at,
                 })

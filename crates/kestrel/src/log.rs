@@ -313,6 +313,28 @@ impl<'a> Log<'a> {
         Ok(joined)
     }
 
+    pub async fn has_tool_call(
+        &mut self,
+        workspace: &Workspace,
+        session: SessionId,
+        call_id: &str,
+    ) -> Result<bool> {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                 SELECT 1 FROM transcript_entry
+                 WHERE workspace_id = ? AND session_id = ?
+                   AND json_extract(body, '$.type') = 'tool_call'
+                   AND json_extract(body, '$.call_id') = ?
+             )",
+        )
+        .bind(workspace.id.to_string())
+        .bind(session.to_string())
+        .bind(call_id)
+        .fetch_one(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading the tool calls of session {session}"))
+    }
+
     pub async fn last_said_for_session(
         &mut self,
         workspace: &Workspace,

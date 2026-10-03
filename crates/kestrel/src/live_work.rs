@@ -5,6 +5,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::Usage;
+use crate::log::ToolStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Repository {
@@ -154,7 +155,8 @@ pub async fn read(
 pub struct RunningTool {
     pub call_id: String,
     pub title: String,
-    pub status: String,
+    pub tool_kind: String,
+    pub status: ToolStatus,
     pub started_at: Timestamp,
 }
 

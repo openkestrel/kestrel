@@ -1046,7 +1046,8 @@ async fn a_transcript_follow_replaces_activity_and_snapshots_session_state_witho
             tools: vec![kestrel::live_work::RunningTool {
                 call_id: "running".into(),
                 title: "read source".into(),
-                status: "in_progress".into(),
+                tool_kind: "read".into(),
+                status: kestrel::log::ToolStatus::InProgress,
                 started_at: "2026-09-29T12:00:00Z".parse().unwrap(),
             }],
             message_buffering: true,
