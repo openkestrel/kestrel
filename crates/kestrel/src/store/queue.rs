@@ -4,7 +4,7 @@ use sqlx::{Row, SqliteConnection};
 
 use crate::domain::{Exit, Organization, SessionId, SessionState};
 use crate::fanout::Touched;
-use crate::store::workspace::{UNSATISFIED_BLOCKER, held_input, live, profile_held};
+use crate::store::workspace::{UNSATISFIED_BLOCKER, held_input, live, occupying, profile_held};
 
 /// What a work role that can dispatch recorded on start: the Active-Work Slot limit it
 /// enforces, the harnesses it dispatches one Session at a time, and the Compute driver it
@@ -169,7 +169,7 @@ impl<'a> Queue<'a> {
              ORDER BY s.id, a.enqueued_at, a.id"
         ))
         .bind(serde_json::to_string(serialized)?)
-        .bind(SessionState::Working.as_str())
+        .bind(occupying()?)
         .bind(organization.id.to_string())
         .bind(SessionState::Queued.as_str())
         .bind(SessionState::Waiting.as_str())

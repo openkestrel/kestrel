@@ -528,7 +528,7 @@ async fn living(
                                     let mut heard = heard.lock().expect("the observation lock");
                                     match heard.completer.settle(jiff::Timestamp::now(), quiet) {
                                         Settling::Settled(completed) => {
-                                            heard.emit(completed);
+                                            heard.emit(*completed);
                                             drop(heard);
                                             if turns.send(ConversationEvent::Settled).is_err() {
                                                 return Ok(Ended::HungUp);
@@ -622,10 +622,11 @@ async fn living(
                                 .boundary(TurnOutcome::Cancelled, jiff::Timestamp::now());
                             heard.emit(completed);
                             if cancelled {
+                                let trailing = heard.completer.trailing();
                                 drop(heard);
                                 // kestrel asked for this cancel, so the conversation stays open and
                                 // the Turn is reported interrupted.
-                                let _ = turns.send(ConversationEvent::Interrupted);
+                                let _ = turns.send(ConversationEvent::Interrupted { trailing });
                                 continue;
                             }
                         }
@@ -1239,7 +1240,7 @@ fn stopped_short(stop: StopReason) -> Option<String> {
 pub enum ConversationEvent {
     Report(Report),
     Worked(Worked),
-    Interrupted,
+    Interrupted { trailing: bool },
     Settled,
     State(Report),
     Ready,

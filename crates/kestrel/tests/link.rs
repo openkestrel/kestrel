@@ -1048,7 +1048,7 @@ async fn a_transcript_follow_replaces_activity_and_snapshots_session_state_witho
                 call_id: "running".into(),
                 title: "read source".into(),
                 tool_kind: "read".into(),
-                status: "in_progress".into(),
+                status: kestrel::log::ToolStatus::InProgress,
                 started_at: "2026-09-29T12:00:00Z".parse().unwrap(),
             }],
             units: vec![],

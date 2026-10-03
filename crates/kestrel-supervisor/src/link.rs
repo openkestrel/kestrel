@@ -274,7 +274,9 @@ pub enum Report {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
     },
-    Interrupted,
+    Interrupted {
+        trailing: bool,
+    },
     Settled,
     Checkout {
         repositories: Vec<Observed>,
@@ -305,7 +307,7 @@ impl Report {
             Report::SessionInfo { .. } => "session_info",
             Report::OptionChanged { .. } => "option_changed",
             Report::Answered { .. } => "answered",
-            Report::Interrupted => "interrupted",
+            Report::Interrupted { .. } => "interrupted",
             Report::Settled => "settled",
             Report::Checkout { .. } => "checkout",
             Report::Finished { .. } => "finished",
@@ -902,7 +904,6 @@ pub struct RunningTool {
     pub started_at: jiff::Timestamp,
 }
 
-/// Work an adapter declared it runs apart from any tool call, open until the adapter settles it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RunningUnit {
     pub id: String,

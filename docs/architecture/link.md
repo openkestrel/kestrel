@@ -151,8 +151,8 @@ effects (ADR-0004).
 | `usage {usage}` | no | Held in serve-role memory beside the running tools: at most one a second, at the window's trailing edge, and never recorded (ADR-0041). |
 | `session_info {title, options, commands}` | no | Records the harness's whole bookkeeping state on the Session (ADR-0041). Sent when it changes, at most once a second, and again after a reconnect. |
 | `checkout {repositories}` | yes | Replaces the Workspace's observed git state (decides Unpublished Work); an unbriefed Session moves from `cloning` to `starting_harness`. |
-| `answered {usage?}` | yes | Closes the open Turn, moves the Session to Trailing, clears any pending interrupt, records a delivery from what was said up to it, and records the usage it carries. |
-| `interrupted` | yes | Closes the interrupted Turn, moves the Session to Waiting, and appends shared-state `TurnInterrupted` naming who asked; held messages become the next Turn at once, so the Session stays Working when there are any. Writes no delivery. |
+| `answered {usage?}` | yes | Closes the open Turn, moves the Session to Trailing, clears any pending interrupt, records a delivery from what was said up to it, and records the usage it carries; held messages become the next Turn at once, so the Session stays Working when there are any. |
+| `interrupted {trailing}` | yes | Closes the interrupted Turn, moves the Session to Waiting, or to Trailing when `trailing` says units the agent started still run, and appends shared-state `TurnInterrupted` naming who asked; held messages become the next Turn at once, so the Session stays Working when there are any. Writes no delivery. |
 | `settled` | yes | Moves a Trailing Session to Waiting and records the Workspace active. Follows the `checkout` observed then. |
 | `finished {exit, usage?}` | yes | Ends the Session, recording the usage it carries. |
 

@@ -411,6 +411,39 @@ async fn sessions_on_a_serialized_harness_sharing_a_profile_are_dispatched_one_a
     kestrel.teardown().await;
 }
 
+/// A trailing agent still uses its subscription, so it holds the Profile as a working one does.
+#[tokio::test]
+async fn a_trailing_session_holds_its_serialized_profile_until_it_settles() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, SERIALIZED).await;
+    a_profile(&kestrel, "jack", "Jack", &login_file(), FIRST_LOGIN).await;
+    let first = kestrel
+        .open_workspace_with("acme", repository::NAME, "builder", "jack")
+        .await;
+    let second = kestrel
+        .open_workspace_with("acme", repository::NAME, "builder", "jack")
+        .await;
+    kestrel.enqueue_session(first.id).await;
+    let trailing = kestrel.claim_session().await.expect("the first claims");
+    kestrel.on_the_link(&trailing).await;
+    kestrel.start_on_the_link(&trailing).await;
+    kestrel.report_answered(&trailing, 1).await;
+    kestrel.enqueue_session(second.id).await;
+
+    assert_eq!(
+        kestrel.claim_session().await.map(|next| next.workspace),
+        None
+    );
+
+    kestrel.report_settled(&trailing, 2).await;
+    assert_eq!(
+        kestrel.claim_session().await.map(|next| next.workspace),
+        Some(second.id)
+    );
+
+    kestrel.teardown().await;
+}
+
 /// A Session can hand back a refreshed login and never add one the person did not put there.
 #[tokio::test]
 async fn a_session_refreshes_only_the_files_its_profile_already_holds() {

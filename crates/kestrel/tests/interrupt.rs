@@ -315,7 +315,7 @@ async fn an_interrupted_turn_that_produced_nothing_leaves_the_session_unfailed()
         .interrupt(session.id, "alice")
         .await
         .expect("a working turn should interrupt");
-    kestrel.report_interrupted(&session).await;
+    kestrel.report_interrupted(&session, false).await;
 
     let after = kestrel.session(session.id).await;
     assert_eq!(after.state, SessionState::Waiting);
@@ -323,6 +323,30 @@ async fn an_interrupted_turn_that_produced_nothing_leaves_the_session_unfailed()
         after.exit.is_none(),
         "an interrupted turn that produced nothing never fails its Session: {:?}",
         after.exit
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_interrupt_that_leaves_units_running_trails_until_they_settle() {
+    let kestrel = Kestrel::boot().await;
+    let session = a_working_session(&kestrel).await;
+
+    kestrel
+        .interrupt(session.id, "alice")
+        .await
+        .expect("a working turn should interrupt");
+    kestrel.report_interrupted(&session, true).await;
+    assert_eq!(
+        kestrel.session(session.id).await.state,
+        SessionState::Trailing
+    );
+
+    kestrel.report_settled(&session, 2).await;
+    assert_eq!(
+        kestrel.session(session.id).await.state,
+        SessionState::Waiting
     );
 
     kestrel.teardown().await;
@@ -343,7 +367,7 @@ async fn an_interrupted_report_takes_held_messages_at_once_on_the_slot_it_held()
         .interrupt(session.id, "alice")
         .await
         .expect("a working turn should interrupt");
-    kestrel.report_interrupted(&session).await;
+    kestrel.report_interrupted(&session, false).await;
 
     let after = kestrel.session(session.id).await;
     assert_eq!(
