@@ -1517,7 +1517,7 @@ impl Hearing {
         let now = jiff::Timestamp::now();
         let completed = match child.event {
             opencode::ChildEvent::Update { update } => match heard(update) {
-                Heard::Acp(update) => self.completer.update(update, now),
+                Heard::Acp(update) => self.completer.update(*update, now),
                 Heard::Unit(change) => self.completer.unit(change, now),
                 Heard::Unread(diagnostic) => {
                     let _ = self.diagnostics.send(diagnostic);
