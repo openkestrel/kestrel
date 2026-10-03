@@ -507,7 +507,9 @@ async fn report(
         last_activity_at,
     } = &reported.report
     {
-        let session = still_carried(&control_plane, &linked, reported.session).await?;
+        // Serialize live-unit reports with the transaction that closes them on supervisor loss.
+        let mut tx = control_plane.store.begin().await?;
+        let session = still_carried(&mut tx, &linked, reported.session).await?;
         let noticed = control_plane.summaries.report_session(
             &instance,
             &session.id.to_string(),
@@ -520,6 +522,7 @@ async fn report(
                 last_activity_at: *last_activity_at,
             },
         );
+        tx.commit().await?;
         if noticed {
             let mut touched = Touched::default();
             touched.session(&session);
@@ -531,14 +534,29 @@ async fn report(
         return Ok(StatusCode::ACCEPTED.into_response());
     }
     if let work::Report::Usage { usage } = &reported.report {
-        let session = still_carried(&control_plane, &linked, reported.session).await?;
+        let mut tx = control_plane.store.read().await?;
+        let session = still_carried(&mut tx, &linked, reported.session).await?;
         control_plane
             .summaries
             .report_usage(&instance, &session.id.to_string(), usage.clone());
         return Ok(StatusCode::ACCEPTED.into_response());
     }
     let connected = matches!(reported.report, work::Report::Connected { .. });
+    let finished = matches!(reported.report, work::Report::Finished { .. });
+    let session_id = reported.session;
     work::report(&control_plane.store, &linked.instance, reported).await?;
+    if finished && let Some(id) = session_id {
+        let session = control_plane
+            .store
+            .read()
+            .await?
+            .workspaces()
+            .session(id)
+            .await?;
+        if session.state == SessionState::Ended {
+            control_plane.summaries.clear_session(&session);
+        }
+    }
     if connected {
         let checkout = control_plane
             .store
@@ -638,16 +656,13 @@ async fn carried(
 }
 
 async fn still_carried(
-    control_plane: &ControlPlane,
+    tx: &mut Tx<'_>,
     linked: &Linked,
     session: Option<SessionId>,
 ) -> Result<Session, Refused> {
     let session = session.ok_or(ReportRefused::MissingSession)?;
 
-    Ok(control_plane
-        .store
-        .read()
-        .await?
+    Ok(tx
         .workspaces()
         .carried(&linked.instance, session)
         .await?

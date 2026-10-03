@@ -1249,3 +1249,45 @@ async fn a_supervisor_reconnecting_within_its_lease_keeps_its_tool_open() {
     supervisor.destroy();
     kestrel.teardown().await;
 }
+
+#[tokio::test]
+async fn live_units_wait_for_the_transaction_that_can_end_their_session() {
+    use kestrel::work::{Report, Reported};
+    use support::link_client::Link;
+
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let supervisor = Supervisor::provision_playing(&kestrel.link(), &on, Script::CarriesAToolOver);
+    kestrel.start(&session, supervisor.harness()).await;
+    let before = running(&kestrel, session.id, "trailing").await;
+    let link = Link::to(&kestrel.link());
+    let reported = Reported {
+        session: Some(session.id),
+        seq: None,
+        report: Report::SessionState {
+            tools: serde_json::from_value(before["tools"].clone()).unwrap(),
+            units: vec![],
+            message_buffering: false,
+            thought_buffering: false,
+            usage: None,
+            last_activity_at: None,
+        },
+    };
+    let reporting = link.report(&on.instance, Some(&on.credential), &reported);
+    tokio::pin!(reporting);
+    kestrel
+        .while_the_database_is_locked(async {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(200), &mut reporting)
+                    .await
+                    .is_err(),
+                "live units changed while a transaction could be ending their Session"
+            );
+        })
+        .await;
+    assert_eq!(reporting.await.status(), reqwest::StatusCode::ACCEPTED);
+    assert!(tool_calls(&kestrel, &workspace).await.is_empty());
+    supervisor.destroy();
+    kestrel.teardown().await;
+}
