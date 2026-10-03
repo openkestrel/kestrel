@@ -1,5 +1,9 @@
 # The browser Client is served over HTTPS, so each tab streams on its own
 
+> **Superseded by [ADR-0045](0045-a-browser-tab-holds-one-stream-and-subscribes-over-requests.md).** The
+> Client is served over plain HTTP, and each tab holds one stream it subscribes over, so a first run
+> needs no certificate.
+
 > **Supersedes the third paragraph of [ADR-0035](0035-organization-change-notices-and-workspace-presence.md)**
 > and amends the Origin rule of [ADR-0036](0036-the-browser-client-shares-the-loopback-operator-origin.md).
 

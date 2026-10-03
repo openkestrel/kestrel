@@ -8,7 +8,7 @@ Client ([ADR-0015](../adr/0015-the-cli-is-a-client-not-a-role.md)). Server:
 ## The boundary
 
 - Served on its own listener (`KESTREL_OPERATOR_LISTEN`, default loopback 7718) and authenticates
-  nobody. Operator identity is `0.4` work; until then, reaching the port is authority.
+  nobody. Operator identity is `0.5` work; until then, reaching the port is authority.
 - Every route refuses a `Host` that is not loopback and, when the request carries one, an `Origin`
   that is not exactly `http://` and that `Host`; a cross-origin preflight is granted nothing. The
   guard is `operator::addressed_here`, pinned by `crates/kestrel/tests/forgery.rs`. These checks

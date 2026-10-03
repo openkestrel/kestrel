@@ -11,7 +11,7 @@
 > [`GLOSSARY.md`](GLOSSARY.md) and the direction in [`README.md`](README.md). A Session that runs out of
 > credits still ends failed and waits on an operator to resume it.
 
-Seven rungs from an empty repository to v1, and no dates. Each is a `0.N` release, and each is named
+Eight rungs from an empty repository to v1, and no dates. Each is a `0.N` release, and each is named
 by a class of kestrel's own work rather than by a feature list, because the ladder is walked by
 kestrel building kestrel: a rung nobody can dogfood does not belong on it. [`README.md`](README.md)
 says what v1 means and what the twelve capabilities are. This document says the order they arrive in,
@@ -32,14 +32,14 @@ the point of no return is rung one.
 
 **Depth first, breadth once.** The generic CloudEvents endpoint accepts trigger events from any
 producer at `0.1`, so breadth arrives on the inbound path from the first rung. The named surfaces
-still wait until `0.6`: each needs its adapter and outbound half, and all seven external surfaces
+still wait until `0.7`: each needs its adapter and outbound half, and all seven external surfaces
 must round-trip. A schedule has no external recipient, so its outcome is visible in kestrel. This
 adapter work is delayed until the durable workspace model has stopped moving underneath it. The
 order avoids coupling those adapters to the changing work model; it does not ask a team to wait for
 an adapter before kestrel can receive its events.
 
 **`Organization` is in every durable record from the first migration**, while multi-tenancy is a
-`0.7` capability. The boundary is ruinous to introduce late and cheap to carry early, so it is added
+`0.8` capability. The boundary is ruinous to introduce late and cheap to carry early, so it is added
 at rung one and stays invisible until the rung that makes it mean something. Multi-tenancy could not
 have been a rung of its own in any case: kestrel developing kestrel is one organization, so there is
 no dogfooding test for the second one.
@@ -56,10 +56,11 @@ every read.
 | 0.1 | **kestrel opens its own PRs**          | issues labelled `ready-for-agent` are worked by kestrel, not by you in a terminal | trigger ingestion (GitHub and generic CloudEvents), isolated execution, model choice, persistent workspaces, storage (SQLite) |
 | 0.2 | **kestrel works the backlog**          | many issues at once; you stop being the queue                 | scheduling                                                                                   |
 | 0.3 | **kestrel's work is joinable mid-flight** | you pick up a running workspace instead of reading a finished one | multiplayer, browser Client, queue and work visibility                                        |
-| 0.4 | **kestrel asks before it acts**        | kestrel does work you would not have let it do unsupervised   | governance, operator identity, managed Skills, MCP, Trigger inspection                      |
-| 0.5 | **kestrel runs multi-step work**       | classes of work that are a sequence, not a single session     | workflows and Campaign operations                                                             |
-| 0.6 | **kestrel meets the team where it works** | integrations return outcomes where work began               | seven external surfaces with outcomes, plus schedule                                          |
-| 0.7 | **kestrel runs where you run**         | kestrel develops itself on infrastructure that is not your laptop | pluggable storage, the rule of two, the eight targets                                    |
+| 0.4 | **kestrel starts from one command** | you go from `docker compose up` to a working Session without reading a guide | guided first run in the CLI and the browser, harness sign-in, published images |
+| 0.5 | **kestrel asks before it acts**        | kestrel does work you would not have let it do unsupervised   | governance, operator identity, managed Skills, MCP, Trigger inspection                      |
+| 0.6 | **kestrel runs multi-step work**       | classes of work that are a sequence, not a single session     | workflows and Campaign operations                                                             |
+| 0.7 | **kestrel meets the team where it works** | integrations return outcomes where work began               | seven external surfaces with outcomes, plus schedule                                          |
+| 0.8 | **kestrel runs where you run**         | kestrel develops itself on infrastructure that is not your laptop | pluggable storage, the rule of two, the eight targets                                    |
 | —   | **v1**                                 | the lock                                                      | —                                                                                            |
 
 ### 0.1 — kestrel opens its own PRs
@@ -184,7 +185,39 @@ uses change notices that the CLI does not consume at this rung
 [ADR-0035](docs/adr/0035-organization-change-notices-and-workspace-presence.md),
 [ADR-0036](docs/adr/0036-the-browser-client-shares-the-loopback-operator-origin.md)).
 
-### 0.4 — kestrel asks before it acts
+### 0.4 — kestrel starts from one command
+
+You go from `docker compose up` to a working Session without reading a guide. The first person to
+drive kestrel from a fresh build met a stale volume reported only as "unhealthy", a certificate to
+trust by hand, a blank page, a subscription token passed to a harness that cannot use it, a harness
+the image did not carry, and a login read from standard input until Ctrl-D. Each was a dead end
+behind an error that named none of it, and the documents that would have helped were spread across
+four files. A rung nobody can start does not get dogfooded.
+
+**`docker compose up` is the only step.** Compose pulls published images rather than building
+kestrel from source, and the browser Client is served over plain HTTP on loopback, so there is no
+certificate to trust: a tab holds one event stream and subscribes over requests
+([ADR-0045](docs/adr/0045-a-browser-tab-holds-one-stream-and-subscribes-over-requests.md)). A control
+plane that cannot start says why in one line, and the Client says it is not running rather than
+waiting for it to be healthy.
+
+**Every surface guides, and none is required.** The operator API is the one surface; the CLI and the
+browser are each complete Clients of it, and each walks a person through the same steps: name the
+**Operator**, choose a harness and sign in, connect GitHub and choose a repository, write a Brief
+([ADR-0049](docs/adr/0049-an-install-has-one-operator-and-by-default-one-organization.md)). The
+control plane answers what is missing and what fixes it, and both Clients render that answer. In the
+CLI, `kestrel start` asks for what it cannot infer and every prompt has a flag; errors name the
+command that fixes them, and the shell completes names.
+
+**Signing in is kestrel's job.** kestrel ships a catalogue of how each harness signs in
+([ADR-0046](docs/adr/0046-kestrel-ships-a-catalogue-of-how-each-harness-signs-in.md)), relays a
+person's own subscription sign-in to whichever Client they are using, including a terminal on a
+remote machine ([ADR-0047](docs/adr/0047-kestrel-relays-a-persons-own-sign-in.md)), and checks each
+sign-in with a real call when it is saved. The default image carries every catalogued harness and
+says so in a label, so kestrel never offers one it cannot run
+([ADR-0048](docs/adr/0048-the-environment-image-carries-every-catalogued-harness.md)).
+
+### 0.5 — kestrel asks before it acts
 
 kestrel does work you would not have let it do unsupervised: policy enforced at the execution layer
 rather than by prompt, an approval that reaches a human where they already are, and an audit record
@@ -199,7 +232,7 @@ select, and each change is audited.
 **This is the rung on which kestrel becomes usable by someone who is not the maintainer.** Below it,
 kestrel acts on your repository with no approval path and no audit record: defensible for the one
 person who owns it, indefensible for anyone else. The browser Client already makes live work usable
-at `0.3`; `0.4` makes shared operation governable, and `0.6` carries it into the team's other tools.
+at `0.3`; `0.5` makes shared operation governable, and `0.7` carries it into the team's other tools.
 
 Approvals are proven here over GitHub and the generic webhook rather than over Slack. Building a chat
 adapter against a governance model that this rung is still inventing is the coupling depth-first
@@ -214,7 +247,7 @@ grants, and a local administrator path bootstraps a single-machine install. Poli
 discovery, read and join separately; posworkspace of a link grants none of them. Approvals arriving
 through Integrations continue to authorize verified external identifiers without requiring a kestrel
 account. This fills the operator identity slot [ADR-0015](docs/adr/0015-the-cli-is-a-client-not-a-role.md)
-reserved for `0.4`, while retaining the external identity decision in
+reserved for `0.5`, while retaining the external identity decision in
 [issue 16](https://github.com/jtmthf/kestrel/issues/16).
 
 **Operators can inspect decisions as well as answer them.** A Trigger dry-run evaluates a sample or
@@ -242,7 +275,7 @@ transport fails visibly. Kestrel mediates external tool calls through Policy and
 supplying per-server, per-Session credentials without ambient harness secrets. Event data and unreviewed
 repository MCP configuration cannot select tool authority.
 
-### 0.5 — kestrel runs multi-step work
+### 0.6 — kestrel runs multi-step work
 
 Classes of work that are a sequence rather than a single session. A workflow declares a roster of agents
 that may be enqueued plus the caps and tolerances that bound one enactment of it; each firing of a
@@ -260,7 +293,7 @@ runs no git command ([ADR-0019](docs/adr/0019-kestrel-declares-the-branch-and-le
 `0.1` already writes those first entries; this rung only adds a second kind of writer.
 
 **Governance precedes workflows as a constraint, not a preference.** A workflow's approval step is
-governance machinery, so `0.4` has to land first. The README lists the two as independent
+governance machinery, so `0.5` has to land first. The README lists the two as independent
 capabilities; the ladder cannot.
 
 The Client makes a Campaign inspectable as a graph of child Workspaces and dependency edges, with
@@ -268,7 +301,7 @@ status, blocked or unreachable reasons, spend and navigation into each Workspace
 can post follow-ups, pause and resume a Campaign, or cancel it. Pause stops new dispatch while active
 Sessions finish; cancel terminates active Sessions. There is no separate skip or rewire operation.
 
-### 0.6 — kestrel meets the team where it works
+### 0.7 — kestrel meets the team where it works
 
 GitHub, Slack, Linear, Jira, Microsoft Teams, GitLab and the generic webhook round-trip, so an
 external surface that started a Workspace receives its outcome there. GitLab is a second source-code
@@ -284,7 +317,7 @@ A schedule has no external surface to reply to, so its outcome is visible in the
 Bitbucket and Azure DevOps remain possible additions through the generic Integration seam, rather
 than named v1 guarantees.
 
-### 0.7 — kestrel runs where you run
+### 0.8 — kestrel runs where you run
 
 kestrel develops itself on infrastructure that is not your laptop. Postgres joins SQLite, and every
 pluggable layer ships its second real implementation — the rule of two — which is the same work as
@@ -306,7 +339,7 @@ demo mode.
 
 ## v1 — the lock
 
-v1 is not a separate implementation rung. It is the stability lock applied after the `0.7` product
+v1 is not a separate implementation rung. It is the stability lock applied after the `0.8` product
 floor is complete: the project commits to no breaking changes until v2, with semver on its public
 API, workspace-preserving migrations, a documented upgrade path and a deprecation policy. Kestrel's
 ACP client has been proven against two agents of different lineages. The browser Client handles
@@ -315,4 +348,4 @@ scripting and power use. The twelve capabilities in the README are the content o
 lock is the day this project is willing to stop changing its mind. The `0.x` line carries real,
 recommended releases, and is where people will live for a long time.
 
-By `0.7`, kestrel should be the thing that moves the marker at the top of this file.
+By `0.8`, kestrel should be the thing that moves the marker at the top of this file.

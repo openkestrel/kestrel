@@ -27,6 +27,11 @@ subscription-issued key. Owned by that person and used by sessions they authoriz
 organization.
 _Avoid_: provider credential, shared login
 
+**Sign-in Method**:
+One way a harness can be signed in to, either a subscription or a key. A subscription is
+always held in its signer's own subscription profile, and a key as a provider credential.
+_Avoid_: auth method, login type, provider
+
 ### Work
 
 **Workspace**:
@@ -297,6 +302,12 @@ workspace makes no structural distinction between a human and an agent in the tr
 turn-taking. Reachability is where they differ: an agent is reached through its harness, a human
 only through an integration, or not at all.
 _Avoid_: member, user, collaborator
+
+**Operator**:
+The person who runs a kestrel install, named once when it is set up. The default owner of a
+subscription profile and the default participant behind anything typed into a client. Being named
+authenticates nobody.
+_Avoid_: admin, user, owner, account
 
 **Presence**:
 Who appears to be following a workspace right now. Best-effort: held nowhere durable, lost on restart,
