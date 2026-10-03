@@ -108,7 +108,12 @@ impl Drop for Connection {
         if let Some(live) = summaries.get_mut(&self.instance) {
             live.streams -= 1;
             if live.streams == 0 {
-                summaries.remove(&self.instance);
+                live.summary = None;
+                live.sessions
+                    .retain(|_, state| !state.tools.is_empty() || !state.units.is_empty());
+                if live.sessions.is_empty() {
+                    summaries.remove(&self.instance);
+                }
             }
         }
     }
@@ -231,6 +236,19 @@ impl Summaries {
                 .unwrap_or_default()
         } else {
             SessionState::default()
+        }
+    }
+
+    pub fn clear_session(&self, session: &crate::domain::Session) {
+        let Some(instance) = session.instance.as_deref() else {
+            return;
+        };
+        let mut summaries = self.0.lock().unwrap();
+        if let Some(live) = summaries.get_mut(instance) {
+            live.sessions.remove(&session.id.to_string());
+            if live.streams == 0 && live.sessions.is_empty() {
+                summaries.remove(instance);
+            }
         }
     }
 

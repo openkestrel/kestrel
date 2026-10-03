@@ -62,7 +62,14 @@ pub async fn run(cli: &Cli, shutdown: CancellationToken) -> anyhow::Result<()> {
         }
         Some(Command::Work) => {
             let dispatch = cli.dispatch(cli.listen)?;
-            role::work::run(store, Some(dispatch), timer::Wake::default(), shutdown).await
+            role::work::run(
+                store,
+                Some(dispatch),
+                timer::Wake::default(),
+                live_work::Summaries::default(),
+                shutdown,
+            )
+            .await
         }
     }
 }

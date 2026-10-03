@@ -572,6 +572,7 @@ async fn a_running_background_task_is_listed_again_after_the_supervisor_reconnec
     let read = listing_a_unit(&kestrel, session.id).await;
     assert_eq!(read["state"], "trailing");
     assert_eq!(read["units"][0]["title"], BACKGROUND_TASK);
+    assert!(tool_calls(&kestrel, &workspace).await.is_empty());
 
     supervisor.destroy();
     kestrel.teardown().await;
@@ -1043,5 +1044,208 @@ async fn a_running_opencode_child_keeps_its_session_trailing_as_a_subagent_unit_
         serde_json::json!([])
     );
 
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_lapsed_supervisor_closes_its_open_tool_unresolved() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let supervisor = Supervisor::provision_playing(&kestrel.link(), &on, Script::CarriesAToolOver);
+    kestrel.start(&session, supervisor.harness()).await;
+    running(&kestrel, session.id, "trailing").await;
+    supervisor.destroy();
+    kestrel
+        .lease_until(&session, Timestamp::now() - SignedDuration::from_secs(1))
+        .await;
+    ended(&kestrel, session.id).await;
+    let calls = tool_calls(&kestrel, &workspace).await;
+    assert!(
+        matches!(calls.as_slice(), [Entry::ToolCall {
+        title, closing_reason: Some(ClosingReason::Unresolved), result, ..
+    }] if title == "background tests" && result.is_null()),
+        "{calls:#?}"
+    );
+    let read = session_read(&kestrel, session.id).await;
+    assert_eq!(read["tools"], serde_json::json!([]));
+    assert_eq!(read["units"], serde_json::json!([]));
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_lapsed_supervisor_closes_its_open_adapter_units_unresolved() {
+    for (script, kind, title) in [
+        (
+            Script::AnswersWithABackgroundTask,
+            "background_task",
+            BACKGROUND_TASK,
+        ),
+        (Script::AnswersWithSubagents, "subagent", SUBAGENT),
+    ] {
+        let kestrel = Kestrel::boot().await;
+        let workspace = a_workspace(&kestrel).await;
+        let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+        let supervisor = Supervisor::provision_playing(&kestrel.link(), &on, script);
+        kestrel.start(&session, supervisor.harness()).await;
+        let before = listing_a_unit(&kestrel, session.id).await;
+        let unit = &before["units"][0];
+        supervisor.destroy();
+        kestrel
+            .lease_until(&session, Timestamp::now() - SignedDuration::from_secs(1))
+            .await;
+        ended(&kestrel, session.id).await;
+        let calls = tool_calls(&kestrel, &workspace).await;
+        let unresolved: Vec<_> = calls
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    Entry::ToolCall {
+                        closing_reason: Some(ClosingReason::Unresolved),
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert!(
+            matches!(unresolved.as_slice(), [Entry::ToolCall {
+            call_id, title: recorded_title, tool_kind, result, completion, ..
+        }] if call_id == &format!("unit/{}", unit["id"].as_str().unwrap())
+            && recorded_title == title && tool_kind == kind && result.is_null()
+            && completion.started_at.to_string() == unit["started_at"].as_str().unwrap()),
+            "{calls:#?}"
+        );
+        let read = session_read(&kestrel, session.id).await;
+        assert_eq!(read["tools"], serde_json::json!([]));
+        assert_eq!(read["units"], serde_json::json!([]));
+        kestrel.teardown().await;
+    }
+}
+
+#[tokio::test]
+async fn a_supervisor_that_exits_without_reporting_closes_its_open_work_unresolved() {
+    for script in [Script::CarriesAToolOver, Script::AnswersWithABackgroundTask] {
+        let (kestrel, workspace, session) = playing(script).await;
+        if script == Script::CarriesAToolOver {
+            running(&kestrel, session.id, "trailing").await;
+        } else {
+            listing_a_unit(&kestrel, session.id).await;
+        }
+        let instance = kestrel.session(session.id).await.instance.unwrap();
+        kestrel::compute::Driver::LocalExec(kestrel::compute::LocalExec::running(
+            supervisor::binary(),
+        ))
+        .destroy_named(&instance)
+        .unwrap();
+        let session = ended(&kestrel, session.id).await;
+        assert!(
+            matches!(session.exit, Some(Exit::Failed { because }) if because.contains("supervisor exited"))
+        );
+        let calls = tool_calls(&kestrel, &workspace).await;
+        assert!(
+            matches!(
+                calls.as_slice(),
+                [Entry::ToolCall {
+                    closing_reason: Some(ClosingReason::Unresolved),
+                    ..
+                }]
+            ),
+            "{calls:#?}"
+        );
+        let read = session_read(&kestrel, session.id).await;
+        assert_eq!(read["tools"], serde_json::json!([]));
+        assert_eq!(read["units"], serde_json::json!([]));
+        kestrel.teardown().await;
+    }
+}
+
+#[tokio::test]
+async fn supervisor_loss_does_not_record_an_already_recorded_call_again() {
+    use kestrel::live_work::{RunningTool, SessionState as LiveSession};
+    use kestrel::work::{Report, Reported};
+    use support::link_client::Link;
+
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let supervisor =
+        Supervisor::provision_playing(&kestrel.link(), &on, Script::AnswersWithSubagents);
+    kestrel.start(&session, supervisor.harness()).await;
+    kestrel.answering(session.id, 1).await;
+    let before = tool_calls(&kestrel, &workspace).await;
+    let Entry::ToolCall {
+        call_id,
+        title,
+        tool_kind,
+        status,
+        completion,
+        ..
+    } = &before[0]
+    else {
+        panic!("the scripted subagent recorded no tool call");
+    };
+    let stale = RunningTool {
+        call_id: call_id.clone(),
+        title: title.clone(),
+        tool_kind: tool_kind.clone(),
+        status: *status,
+        started_at: completion.started_at,
+    };
+    let link = Link::to(&kestrel.link());
+    let _stream = link.open(&on.instance, &on.credential, None).await;
+    supervisor.destroy();
+    let state = LiveSession {
+        tools: vec![stale],
+        ..LiveSession::default()
+    };
+    let response = link
+        .report(
+            &on.instance,
+            Some(&on.credential),
+            &Reported {
+                session: Some(session.id),
+                seq: None,
+                report: Report::SessionState {
+                    tools: state.tools,
+                    units: state.units,
+                    message_buffering: false,
+                    thought_buffering: false,
+                    usage: None,
+                    last_activity_at: None,
+                },
+            },
+        )
+        .await;
+    assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+    kestrel
+        .lease_until(&session, Timestamp::now() - SignedDuration::from_secs(1))
+        .await;
+    ended(&kestrel, session.id).await;
+    assert_eq!(
+        serde_json::to_value(tool_calls(&kestrel, &workspace).await).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
+    assert_eq!(
+        session_read(&kestrel, session.id).await["tools"],
+        serde_json::json!([])
+    );
+    drop(_stream);
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_supervisor_reconnecting_within_its_lease_keeps_its_tool_open() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let supervisor = Supervisor::provision_playing(&kestrel.link(), &on, Script::CarriesAToolOver);
+    kestrel.start(&session, supervisor.harness()).await;
+    let before = running(&kestrel, session.id, "trailing").await;
+    let kestrel = kestrel.kill_and_restart().await;
+    let after = running(&kestrel, session.id, "trailing").await;
+    assert_eq!(before["tools"], after["tools"]);
+    assert!(tool_calls(&kestrel, &workspace).await.is_empty());
+    supervisor.destroy();
     kestrel.teardown().await;
 }

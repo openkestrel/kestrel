@@ -35,11 +35,12 @@ impl AllInOne {
         dispatch: Option<work::Dispatch>,
         shutdown: CancellationToken,
     ) -> Result<()> {
+        let summaries = self.listening.summaries.clone();
         let serve = tokio::spawn(stopping_the_others(shutdown.clone(), |shutdown| {
             serve::run(self.listening, shutdown)
         }));
         let work = tokio::spawn(stopping_the_others(shutdown.clone(), |shutdown| {
-            work::run(self.store, dispatch, self.wake, shutdown)
+            work::run(self.store, dispatch, self.wake, summaries, shutdown)
         }));
 
         let (serve, work) = tokio::join!(serve, work);

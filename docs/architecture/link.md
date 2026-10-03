@@ -31,8 +31,10 @@ line counts, `origin/<declared>`'s commit, and untracked and stash counts. The s
 on connect, at turn close, and when a two-second check during a working turn finds a change.
 Every supervisor git command sets `GIT_OPTIONAL_LOCKS=0`.
 
-`live_work::Summaries` belongs to the serve role and is shared by its link and operator routers.
-It holds reports with their arrival times only while the Instance has an open instruction stream.
+`live_work::Summaries` is shared by the serve and work roles in one process. Repository summaries
+with their arrival times live only while the Instance has an open instruction stream. Open tools
+and adapter units survive a disconnect until the Session ends, so supervisor loss can close them
+`unresolved` in the same transaction that ends the Session.
 The operator also checks the supervisor's heartbeat freshness before serving a summary. The
 separate numbered `checkout` report remains durable and supplies the reaping gate only.
 

@@ -41,13 +41,18 @@ impl Wake {
     }
 }
 
-pub async fn sweeping(store: &Store, wake: &Wake, shutdown: &CancellationToken) -> Result<()> {
+pub async fn sweeping(
+    store: &Store,
+    wake: &Wake,
+    summaries: &crate::live_work::Summaries,
+    shutdown: &CancellationToken,
+) -> Result<()> {
     let github = Github::dialling_out()?;
 
     // Beside the lease sweep rather than in it: a poll waits on GitHub, and a lease left
     // unswept for the length of an HTTP request is a Workspace wedged for that long.
     tokio::try_join!(
-        sweeping_leases(store, shutdown),
+        sweeping_leases(store, summaries, shutdown),
         expiring_transcripts(store, shutdown),
         polling(store, &github, shutdown),
         elapsing(store, wake, shutdown),
@@ -150,11 +155,15 @@ async fn sealing_idle_workspaces(store: &Store, shutdown: &CancellationToken) ->
     Ok(())
 }
 
-async fn sweeping_leases(store: &Store, shutdown: &CancellationToken) -> Result<()> {
+async fn sweeping_leases(
+    store: &Store,
+    summaries: &crate::live_work::Summaries,
+    shutdown: &CancellationToken,
+) -> Result<()> {
     while !shutdown.is_cancelled() {
         // The database being busy is not a reason to stop keeping time: the same due times
         // are still there to be found on the next sweep.
-        match sweep(store).await {
+        match sweep(store, summaries).await {
             Ok(expired) => {
                 for (session, exit) in expired {
                     info!(%session, %exit, "a lease expired");
@@ -282,19 +291,28 @@ async fn tick_or_woken(shutdown: &CancellationToken, woken: &mut watch::Receiver
 /// either got there first — and its Session is not in this read — or waits for the write lock and
 /// finds a Session that has ended. A lease that expires fails its Session and never re-dispatches
 /// it: kestrel retries dispatch, never work.
-async fn sweep(store: &Store) -> Result<Vec<(SessionId, Exit)>> {
+async fn sweep(
+    store: &Store,
+    summaries: &crate::live_work::Summaries,
+) -> Result<Vec<(SessionId, Exit)>> {
     let mut tx = store.begin().await?;
     let mut expired = Vec::new();
+    let mut closed = Vec::new();
 
     for session in tx.workspaces().expired_leases(Timestamp::now()).await? {
         let exit = Exit::Failed {
             because: "the supervisor stopped holding the session's lease out, and it expired"
                 .to_owned(),
         };
+        work::close_lost_units(&mut tx, &session, summaries).await?;
+        closed.push(session.clone());
         expired.push((session.id, work::ending(&mut tx, &session, exit).await?));
     }
     tx.commit().await?;
 
+    for session in closed {
+        summaries.clear_session(&session);
+    }
     Ok(expired)
 }
 
