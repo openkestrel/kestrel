@@ -108,26 +108,10 @@ fn human(out: &mut impl Write, view: &View, records: &[&Value], width: usize) ->
                     writeln!(out)?;
                 }
                 for (label, field) in labels.iter().zip(*fields) {
-                    let value = if *field == "tools" {
-                        at(record, field)
-                            .and_then(Value::as_array)
-                            .map(|tools| {
-                                tools
-                                    .iter()
-                                    .map(|tool| {
-                                        format!(
-                                            "{}\n{}  {}",
-                                            rendered(tool.get("title")),
-                                            rendered(tool.get("status")),
-                                            rendered(tool.get("started_at"))
-                                        )
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join("\n")
-                            })
-                            .unwrap_or_default()
-                    } else {
-                        rendered(at(record, field))
+                    let value = match *field {
+                        "tools" => running(record, field, "status"),
+                        "units" => running(record, field, "kind"),
+                        _ => rendered(at(record, field)),
                     };
                     let mut lines = value.lines();
                     let first = lines.next().unwrap_or_default();
@@ -212,6 +196,26 @@ fn at<'a>(record: &'a Value, path: &str) -> Option<&'a Value> {
     }
 
     Some(value)
+}
+
+fn running(record: &Value, field: &str, beside: &str) -> String {
+    at(record, field)
+        .and_then(Value::as_array)
+        .map(|running| {
+            running
+                .iter()
+                .map(|one| {
+                    format!(
+                        "{}\n{}  {}",
+                        rendered(one.get("title")),
+                        rendered(one.get(beside)),
+                        rendered(one.get("started_at"))
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
 }
 
 fn cells(record: &Value, fields: &[&str]) -> Vec<String> {
@@ -324,6 +328,17 @@ mod tests {
         assert!(shown.contains("read README.md"));
         assert!(shown.contains("in_progress"));
         assert!(shown.contains("2026-09-30T12:00:00Z"));
+    }
+
+    #[test]
+    fn session_show_lists_running_units_with_kind_and_start_time() {
+        let record = json!({"units":[{"id":"task","kind":"background_task","title":"cargo test","started_at":"2026-10-02T12:00:00Z"}]});
+        let mut human_output = Vec::new();
+        human(&mut human_output, &crate::view::SESSION, &[&record], 240).unwrap();
+        let shown = String::from_utf8(human_output).unwrap();
+        assert!(shown.contains("cargo test"), "{shown}");
+        assert!(shown.contains("background_task"), "{shown}");
+        assert!(shown.contains("2026-10-02T12:00:00Z"), "{shown}");
     }
 
     #[test]

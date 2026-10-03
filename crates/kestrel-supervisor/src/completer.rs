@@ -6,7 +6,8 @@ use agent_client_protocol::schema::v1::{
 };
 
 use crate::link::{
-    ClosingReason, Completion, Cost, PlanEntry, Report, ToolStatus, TurnOutcome, Usage,
+    ClosingReason, Completion, Cost, PlanEntry, Report, RunningUnit, ToolStatus, TurnOutcome,
+    UnitKind, Usage,
 };
 
 #[derive(Default)]
@@ -15,6 +16,7 @@ pub struct Completer {
     thoughts: Stream,
     tools: BTreeMap<String, (ToolCall, Timestamp)>,
     completed_tools: BTreeSet<String>,
+    units: BTreeMap<String, RunningUnit>,
     pub produced: bool,
     phase: Phase,
     last_activity: Option<Timestamp>,
@@ -38,6 +40,20 @@ pub enum Settling {
     /// Asked again then; a Completer that is not trailing is asked again a quiet period on, since
     /// activity may start it trailing in between.
     Until(Timestamp),
+}
+
+pub enum UnitChange {
+    Opened {
+        id: String,
+        kind: UnitKind,
+        title: String,
+    },
+    Progressed {
+        id: String,
+    },
+    Settled {
+        id: String,
+    },
 }
 
 #[derive(Default)]
@@ -141,15 +157,63 @@ impl Completer {
             }),
             _ => {}
         }
-        let after = self.snapshot();
+        self.restate(&before, &mut completed);
+        completed
+    }
+
+    pub fn is_open(&self, unit: &str) -> bool {
+        self.units.contains_key(unit)
+    }
+
+    /// A settled unit adds no entry: whatever it produced arrived as updates of its own.
+    pub fn unit(&mut self, change: UnitChange, now: Timestamp) -> Completed {
+        let mut completed = Completed::default();
+        let before = self.snapshot();
+        self.active(now);
+        match change {
+            UnitChange::Opened { id, kind, title } => {
+                if self.units.contains_key(&id) {
+                    completed
+                        .diagnostics
+                        .push(format!("kestrel: a duplicate start arrived for unit {id}"));
+                } else {
+                    self.units.insert(
+                        id.clone(),
+                        RunningUnit {
+                            id,
+                            kind,
+                            title,
+                            started_at: now,
+                        },
+                    );
+                }
+            }
+            UnitChange::Progressed { id } if !self.units.contains_key(&id) => {
+                completed.diagnostics.push(format!(
+                    "kestrel: progress arrived for unknown or settled unit {id}"
+                ))
+            }
+            UnitChange::Progressed { .. } => {}
+            UnitChange::Settled { id } => {
+                if self.units.remove(&id).is_none() {
+                    completed.diagnostics.push(format!(
+                        "kestrel: an end arrived for unknown or settled unit {id}"
+                    ));
+                }
+            }
+        }
+        self.restate(&before, &mut completed);
+        completed
+    }
+
+    fn restate(&mut self, before: &Report, completed: &mut Completed) {
         let grain_passed = matches!(
             (self.last_activity, self.reported_activity),
             (Some(last), Some(reported)) if last.duration_since(reported) >= ACTIVITY_GRAIN
         );
-        if before != after || grain_passed {
+        if *before != self.snapshot() || grain_passed {
             completed.state = Some(self.reported());
         }
-        completed
     }
 
     fn active(&mut self, now: Timestamp) {
@@ -163,7 +227,7 @@ impl Completer {
         let Some(last) = self.last_activity.filter(|_| self.phase == Phase::Trailing) else {
             return Settling::Until(now + quiet);
         };
-        if !self.tools.is_empty() {
+        if !self.tools.is_empty() || !self.units.is_empty() {
             return Settling::Until(now + quiet);
         }
         if now < last + quiet {
@@ -182,8 +246,9 @@ impl Completer {
         Settling::Settled(completed)
     }
 
-    /// An answer leaves open calls running and starts the Session trailing; a call still open
-    /// when trailing ends is closed `unresolved`, whatever ended it.
+    /// An answer leaves open calls and units running and starts the Session trailing; a call
+    /// still open when trailing ends is closed `unresolved`, whatever ended it. Any other
+    /// boundary drops open units, since it leaves the Session waiting or ended.
     pub fn boundary(&mut self, outcome: TurnOutcome, now: Timestamp) -> Completed {
         let mut completed = Completed::default();
         self.messages
@@ -195,6 +260,9 @@ impl Completer {
             for id in self.tools.keys().cloned().collect::<Vec<_>>() {
                 self.settle_tool(&id, now, Some(outcome.clone()), trailing, &mut completed);
             }
+        }
+        if !matches!(outcome, TurnOutcome::Answered { .. }) {
+            self.units.clear();
         }
         match outcome {
             TurnOutcome::Answered { .. } => {
@@ -221,6 +289,11 @@ impl Completer {
                 .map(|(id, (call, started_at))| crate::link::RunningTool {
                     call_id: id.clone(),
                     title: call.title.clone(),
+                    tool_kind: serde_json::to_value(call.kind)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
                     status: serde_json::to_value(call.status)
                         .unwrap()
                         .as_str()
@@ -229,6 +302,7 @@ impl Completer {
                     started_at: *started_at,
                 })
                 .collect(),
+            units: self.units.values().cloned().collect(),
             message_buffering: self.messages.open.is_some(),
             thought_buffering: self.thoughts.open.is_some(),
             // Filled in when the state goes up the link, which is what holds the latest usage.
@@ -675,6 +749,130 @@ mod tests {
             completer.settle(at(500), QUIET),
             Settling::Until(_)
         ));
+    }
+
+    fn opened(id: &str) -> UnitChange {
+        UnitChange::Opened {
+            id: id.to_owned(),
+            kind: UnitKind::BackgroundTask,
+            title: "background tests".to_owned(),
+        }
+    }
+
+    #[test]
+    fn an_open_unit_keeps_the_session_trailing_however_long_it_is_silent() {
+        let mut completer = Completer::default();
+        completer.begin();
+        completer.unit(opened("task"), NOW);
+        let answer = completer.boundary(answered(), at(1));
+        let state = serde_json::to_value(answer.state.unwrap()).unwrap();
+        assert_eq!(
+            state["units"],
+            serde_json::json!([{
+                "id": "task",
+                "kind": "background_task",
+                "title": "background tests",
+                "started_at": NOW.to_string(),
+            }])
+        );
+        assert!(matches!(
+            completer.settle(at(600), QUIET),
+            Settling::Until(_)
+        ));
+        let done = completer.unit(
+            UnitChange::Settled {
+                id: "task".to_owned(),
+            },
+            at(700),
+        );
+        assert!(done.reports.is_empty());
+        assert_eq!(
+            serde_json::to_value(done.state.unwrap()).unwrap()["units"],
+            serde_json::json!([])
+        );
+        assert_eq!(until(completer.settle(at(710), QUIET)), at(730));
+        settled(completer.settle(at(730), QUIET));
+    }
+
+    #[test]
+    fn every_unit_change_is_activity() {
+        let mut completer = Completer::default();
+        completer.begin();
+        completer.boundary(answered(), NOW);
+        settled(completer.settle(at(30), QUIET));
+        let resumed = completer.unit(opened("task"), at(40));
+        let state = serde_json::to_value(resumed.state.unwrap()).unwrap();
+        assert_eq!(state["last_activity_at"], at(40).to_string());
+        completer.unit(
+            UnitChange::Progressed {
+                id: "task".to_owned(),
+            },
+            at(50),
+        );
+        completer.unit(
+            UnitChange::Settled {
+                id: "task".to_owned(),
+            },
+            at(60),
+        );
+        assert_eq!(until(completer.settle(at(61), QUIET)), at(90));
+        completer.unit(
+            UnitChange::Progressed {
+                id: "task".to_owned(),
+            },
+            at(70),
+        );
+        assert_eq!(until(completer.settle(at(71), QUIET)), at(100));
+    }
+
+    #[test]
+    fn a_change_to_a_unit_never_opened_or_already_settled_is_a_diagnostic() {
+        let mut completer = Completer::default();
+        completer.begin();
+        completer.unit(opened("task"), NOW);
+        assert_eq!(completer.unit(opened("task"), NOW).diagnostics.len(), 1);
+        completer.unit(
+            UnitChange::Settled {
+                id: "task".to_owned(),
+            },
+            NOW,
+        );
+        for change in [
+            UnitChange::Progressed {
+                id: "task".to_owned(),
+            },
+            UnitChange::Settled {
+                id: "task".to_owned(),
+            },
+        ] {
+            let late = completer.unit(change, NOW);
+            assert!(late.reports.is_empty());
+            assert_eq!(late.diagnostics.len(), 1);
+        }
+    }
+
+    #[test]
+    fn a_unit_carries_over_into_the_next_turn_and_a_lost_harness_drops_it() {
+        let mut completer = Completer::default();
+        completer.begin();
+        completer.unit(opened("task"), NOW);
+        completer.boundary(answered(), NOW);
+        completer.begin();
+        assert_eq!(
+            serde_json::to_value(completer.snapshot()).unwrap()["units"][0]["id"],
+            "task"
+        );
+        let lost = completer.boundary(
+            TurnOutcome::Failed {
+                because: "the harness exited".to_owned(),
+            },
+            at(5),
+        );
+        assert!(lost.reports.is_empty());
+        assert_eq!(
+            serde_json::to_value(lost.state.unwrap()).unwrap()["units"],
+            serde_json::json!([])
+        );
     }
 
     #[test]

@@ -2505,6 +2505,35 @@
           "completion"
         ]
       },
+      "RunningUnit": {
+        "description": "Work an adapter declared it runs apart from any tool call, such as a Claude background task, open until the adapter settles it. A settled unit adds no Transcript entry.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "background_task",
+              "subagent"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "started_at"
+        ]
+      },
       "RunningTool": {
         "type": "object",
         "properties": {
@@ -2512,6 +2541,9 @@
             "type": "string"
           },
           "title": {
+            "type": "string"
+          },
+          "tool_kind": {
             "type": "string"
           },
           "status": {
@@ -2525,6 +2557,7 @@
         "required": [
           "call_id",
           "title",
+          "tool_kind",
           "status",
           "started_at"
         ]
@@ -2596,7 +2629,7 @@
         ]
       },
       "SessionState": {
-        "description": "A whole transient Session snapshot, sent on changes and reconnect: the running tools, whether a message or thought is still buffering, what the Harness has spent, and when its agent last showed activity while trailing. Unnumbered; never enters the Transcript and never recorded.",
+        "description": "A whole transient Session snapshot, sent on changes and reconnect: the running tools and adapter units, whether a message or thought is still buffering, what the Harness has spent, and when its agent last showed activity while trailing. Unnumbered; never enters the Transcript and never recorded.",
         "type": "object",
         "properties": {
           "kind": {
@@ -2610,6 +2643,12 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/RunningTool"
+            }
+          },
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningUnit"
             }
           },
           "message_buffering": {
@@ -2632,6 +2671,7 @@
           "kind",
           "session",
           "tools",
+          "units",
           "message_buffering",
           "thought_buffering"
         ]

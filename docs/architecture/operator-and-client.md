@@ -85,7 +85,7 @@ events carry global cursors. The stream sends a `cursor` event when omitted entr
 beyond the last delivered entry or Activity.
 
 A follow starts every connect with a transient `session_state` snapshot, including empty state,
-then sends changes to running tools, buffering flags and the usage the harness reports — at most
+then sends changes to running tools and adapter units, buffering flags and the usage the harness reports — at most
 one usage change a second, at the window's trailing edge, and never a row. These events have no id
 and are never stored. The CLI passes `--kinds` and `--no-summaries` to the read, prints each closed
 Activity once across reconnects, and prints a caught-up open summary on a non-follow read.

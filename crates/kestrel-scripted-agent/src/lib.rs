@@ -46,6 +46,10 @@ pub const BOOKKEEPING: std::time::Duration = std::time::Duration::from_secs(6);
 /// Longer than a test's quiet period, so the Session is waiting before its agent resumes.
 pub const RESUMES_AFTER: std::time::Duration = std::time::Duration::from_secs(4);
 pub const SAID_WHILE_TRAILING: &str = "the background tests passed";
+pub const BACKGROUND_TASK: &str = "cargo test --workspace";
+/// Longer than a test's quiet period, and silent throughout.
+pub const TASK_RUNS: std::time::Duration = std::time::Duration::from_secs(4);
+pub const UNKNOWN_UPDATE: &str = "scripted_mystery";
 pub const WRITTEN_WHILE_TRAILING: &str = "written-while-trailing.txt";
 pub const CHILD_TITLE: &str = "explore the checkout";
 pub const CHILD_SAID_IN_TURN: &str = "the child read the code";
@@ -140,12 +144,18 @@ pub enum Script {
     AnswersWithAToolOpen,
     /// Answers with a tool call still running, then exits cleanly without settling it.
     AnswersWithAToolOpenThenExits,
+    /// Answers with a tool call still running, and settles it `BACKGROUND` into the next turn.
+    CarriesAToolOver,
     /// Answers, then sends only usage and config option updates for `BOOKKEEPING`.
     AnswersThenKeepsBooks,
     /// Answers, stays quiet for `RESUMES_AFTER`, then runs a tool call for `BACKGROUND`.
     ResumesAfterSettling,
     /// Answers, then writes `WRITTEN_WHILE_TRAILING` into its checkout.
     AnswersThenWrites,
+    /// Sends an `UNKNOWN_UPDATE` session update, then answers having spawned Claude's async task
+    /// `BACKGROUND_TASK`, which completes `TASK_RUNS` later without another word. As Claude's
+    /// adapter does, it sends the task only to a client that declared `asyncTasks`.
+    AnswersWithABackgroundTask,
     /// Runs an OpenCode child session through its turn and on past the answer, silent for
     /// `CHILD_SILENT_FOR` before it completes. As OpenCode does, it sends the child's output on
     /// the child channel only to a client that declared it, and otherwise folds it into the turn
@@ -203,9 +213,11 @@ impl Script {
             Script::AnswersThenWorks => "answers-then-works",
             Script::AnswersWithAToolOpen => "answers-with-a-tool-open",
             Script::AnswersWithAToolOpenThenExits => "answers-with-a-tool-open-then-exits",
+            Script::CarriesAToolOver => "carries-a-tool-over",
             Script::AnswersThenKeepsBooks => "answers-then-keeps-books",
             Script::ResumesAfterSettling => "resumes-after-settling",
             Script::AnswersThenWrites => "answers-then-writes",
+            Script::AnswersWithABackgroundTask => "answers-with-a-background-task",
             Script::RunsAnOpenCodeChild => "runs-an-opencode-child",
         }
     }

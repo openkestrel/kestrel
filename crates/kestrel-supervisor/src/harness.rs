@@ -17,21 +17,21 @@ use agent_client_protocol::schema::v1::{
     ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigId, SessionConfigKind,
     SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelect,
     SessionConfigSelectOption, SessionConfigSelectOptions, SessionConfigValueId, SessionId,
-    SessionModeId, SessionModeState, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason, TextContent,
+    SessionModeId, SessionModeState, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionModeRequest, StopReason, TextContent,
 };
 use agent_client_protocol::{
-    AcpAgent, AcpAgentConfig, Client, ConnectionTo, Error, LineDirection,
+    AcpAgent, AcpAgentConfig, Client, ConnectionTo, Error, JsonRpcNotification, LineDirection,
     is_incoming_transport_closed,
 };
 
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::completer::{Completed, Completer, Settling};
+use crate::completer::{Completed, Completer, Settling, UnitChange};
 use crate::link::{
     Report, SessionCommand, SessionInfo, SessionOption, SessionOptionGroup, SessionOptionKind,
-    SessionOptionValue, TurnOutcome,
+    SessionOptionValue, TurnOutcome, UnitKind,
 };
 use crate::opencode;
 use crate::permission::{self, Subject};
@@ -441,11 +441,11 @@ async fn living(
         .on_receive_notification(
             {
                 let heard = Arc::clone(heard);
-                async move |notification: SessionNotification, _connection| {
+                async move |notification: SessionUpdated, _connection| {
                     heard
                         .lock()
                         .expect("what the agent said should not be poisoned")
-                        .update(notification.update);
+                        .heard(notification.update);
                     Ok(())
                 }
             },
@@ -762,19 +762,14 @@ fn described(error: &Error) -> String {
         .map_or_else(|| error.to_string(), str::to_owned)
 }
 
-/// Declared to every harness, since one ignores a key it does not know.
-fn declared() -> ClientCapabilities {
-    let mut meta = serde_json::Map::new();
-    meta.insert(opencode::CHILD_SESSION_UPDATES.to_owned(), true.into());
-    ClientCapabilities::new().meta(meta)
-}
-
 async fn initialized(
     connection: &ConnectionTo<agent_client_protocol::Agent>,
     auth: Option<&str>,
 ) -> Result<InitializeResponse, Error> {
     let initialized = connection
-        .send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(declared()))
+        .send_request(
+            InitializeRequest::new(ProtocolVersion::V1).client_capabilities(declarations()),
+        )
         .block_task()
         .await?;
     if initialized.protocol_version != ProtocolVersion::V1 {
@@ -807,6 +802,87 @@ async fn initialized(
     }
 
     Ok(initialized)
+}
+
+/// Every harness is told every declaration, since a harness ignores a key it doesn't know.
+fn declarations() -> ClientCapabilities {
+    let serde_json::Value::Object(meta) = serde_json::json!({
+        "jetbrains": {"air": {"version": 1, "capabilities": ["asyncTasks"]}},
+        opencode::CHILD_SESSION_UPDATES: true,
+    }) else {
+        unreachable!("a literal object")
+    };
+
+    ClientCapabilities::new().meta(meta)
+}
+
+/// Untyped, because adapters send `session/update` variants ACP v1 doesn't define, and a typed
+/// notification that fails to parse is lost whole.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonRpcNotification)]
+#[notification(method = "session/update")]
+struct SessionUpdated {
+    update: serde_json::Value,
+}
+
+enum Heard {
+    Acp(SessionUpdate),
+    Unit(UnitChange),
+    Unread(String),
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "sessionUpdate", rename_all = "snake_case")]
+enum Extension {
+    #[serde(rename_all = "camelCase")]
+    AsyncTaskSpawned { async_task_id: String, name: String },
+    #[serde(rename_all = "camelCase")]
+    AsyncTaskProgress { async_task_id: String },
+    #[serde(rename_all = "camelCase")]
+    AsyncTaskStateUpdate {
+        async_task_id: String,
+        state: String,
+    },
+    #[serde(other)]
+    Acp,
+}
+
+fn heard(update: serde_json::Value) -> Heard {
+    let variant = update
+        .get("sessionUpdate")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("none")
+        .to_owned();
+    let unread = |error: serde_json::Error| {
+        Heard::Unread(format!(
+            "kestrel: the agent sent a session update kestrel can't read ({variant}): {error}"
+        ))
+    };
+    let extension = match serde_json::from_value::<Extension>(update.clone()) {
+        Ok(extension) => extension,
+        Err(error) => return unread(error),
+    };
+
+    match extension {
+        Extension::Acp => serde_json::from_value(update).map_or_else(unread, Heard::Acp),
+        Extension::AsyncTaskSpawned {
+            async_task_id,
+            name,
+        } => Heard::Unit(UnitChange::Opened {
+            id: async_task_id,
+            kind: UnitKind::BackgroundTask,
+            title: name,
+        }),
+        Extension::AsyncTaskStateUpdate {
+            async_task_id,
+            state,
+        } if matches!(state.as_str(), "completed" | "failed" | "stopped") => {
+            Heard::Unit(UnitChange::Settled { id: async_task_id })
+        }
+        Extension::AsyncTaskProgress { async_task_id }
+        | Extension::AsyncTaskStateUpdate { async_task_id, .. } => {
+            Heard::Unit(UnitChange::Progressed { id: async_task_id })
+        }
+    }
 }
 
 /// Everything kestrel asks of an agent before its first prompt, in the order ACP has a client
@@ -1376,6 +1452,21 @@ impl Hearing {
             .reports
             .send(ConversationEvent::Report(Report::SessionInfo(info)));
     }
+    fn heard(&mut self, update: serde_json::Value) {
+        if self.replaying {
+            return;
+        }
+        match heard(update) {
+            Heard::Acp(update) => self.update(update),
+            Heard::Unit(change) => {
+                let completed = self.completer.unit(change, jiff::Timestamp::now());
+                self.emit(completed);
+            }
+            Heard::Unread(diagnostic) => {
+                let _ = self.diagnostics.send(diagnostic);
+            }
+        }
+    }
     fn update(&mut self, update: SessionUpdate) {
         if self.replaying {
             return;
@@ -1411,22 +1502,47 @@ impl Hearing {
         if self.replaying {
             return;
         }
-        let update = serde_json::from_value(child).and_then(|child| match child {
-            opencode::ChildUpdate::Update { update } => serde_json::from_value(update).map(Some),
-            opencode::ChildUpdate::Status => Ok(None),
-        });
-        match update {
-            Ok(Some(update)) => {
-                let completed = self.completer.update(update, jiff::Timestamp::now());
-                self.emit(completed);
-            }
-            Ok(None) => {}
+        let child = match serde_json::from_value::<opencode::ChildUpdate>(child) {
+            Ok(child) => child,
             Err(error) => {
                 let _ = self.diagnostics.send(format!(
                     "kestrel: an OpenCode child session update could not be read: {error}"
                 ));
+                return;
             }
-        }
+        };
+        let id = child.child_session_id;
+        let now = jiff::Timestamp::now();
+        let completed = match child.event {
+            opencode::ChildEvent::Update { update } => match heard(update) {
+                Heard::Acp(update) => self.completer.update(update, now),
+                Heard::Unit(change) => self.completer.unit(change, now),
+                Heard::Unread(diagnostic) => {
+                    let _ = self.diagnostics.send(diagnostic);
+                    return;
+                }
+            },
+            opencode::ChildEvent::Status {
+                status: opencode::ChildStatus::Created | opencode::ChildStatus::Running,
+            } if !self.completer.is_open(&id) => self.completer.unit(
+                UnitChange::Opened {
+                    title: child.title.unwrap_or_else(|| id.clone()),
+                    id,
+                    kind: UnitKind::Subagent,
+                },
+                now,
+            ),
+            opencode::ChildEvent::Status {
+                status: opencode::ChildStatus::Created | opencode::ChildStatus::Running,
+            } => self.completer.unit(UnitChange::Progressed { id }, now),
+            opencode::ChildEvent::Status {
+                status:
+                    opencode::ChildStatus::Completed
+                    | opencode::ChildStatus::Failed
+                    | opencode::ChildStatus::Interrupted,
+            } => self.completer.unit(UnitChange::Settled { id }, now),
+        };
+        self.emit(completed);
     }
     fn worked(&mut self, failed: Option<String>) -> Worked {
         let outcome = match &failed {
@@ -1548,16 +1664,76 @@ mod tests {
         infos
     }
 
-    fn child_update(update: serde_json::Value) -> serde_json::Value {
-        serde_json::json!({
+    fn child(event: serde_json::Value) -> serde_json::Value {
+        let mut child = serde_json::json!({
             "rootSessionId": "parent",
             "childSessionId": "child",
             "parentSessionId": "parent",
             "depth": 1,
             "title": "explore",
-            "type": "update",
-            "update": update,
-        })
+        });
+        child
+            .as_object_mut()
+            .unwrap()
+            .extend(event.as_object().unwrap().clone());
+        child
+    }
+
+    fn child_update(update: serde_json::Value) -> serde_json::Value {
+        child(serde_json::json!({"type": "update", "update": update}))
+    }
+
+    fn child_status(status: &str) -> serde_json::Value {
+        child(serde_json::json!({"type": "status", "status": status}))
+    }
+
+    fn open_units(heard: &mut mpsc::UnboundedReceiver<ConversationEvent>) -> serde_json::Value {
+        let mut units = serde_json::Value::Null;
+        while let Ok(event) = heard.try_recv() {
+            if let ConversationEvent::State(state) = event {
+                units = serde_json::to_value(state).unwrap()["units"].clone();
+            }
+        }
+        units
+    }
+
+    #[test]
+    fn every_initialize_declares_opencodes_child_session_updates() {
+        let declared = serde_json::to_value(declarations()).unwrap();
+        assert_eq!(
+            declared["_meta"]["opencode/child-session-updates"],
+            serde_json::json!(true)
+        );
+    }
+
+    #[test]
+    fn an_opencode_child_is_a_subagent_unit_from_its_creation_to_its_end() {
+        for end in ["completed", "failed", "interrupted"] {
+            let (mut hearing, mut heard) = hearing();
+            let (diagnostics, mut diagnosed) = mpsc::unbounded_channel();
+            hearing.diagnostics = diagnostics;
+            hearing.child(child_status("created"));
+            hearing.child(child_status("running"));
+            let units = open_units(&mut heard);
+            assert_eq!(units.as_array().map(Vec::len), Some(1), "{units}");
+            assert_eq!(units[0]["id"], "child");
+            assert_eq!(units[0]["kind"], "subagent");
+            assert_eq!(units[0]["title"], "explore");
+
+            hearing.child(child_status(end));
+            assert_eq!(open_units(&mut heard), serde_json::json!([]), "{end}");
+            assert!(diagnosed.try_recv().is_err(), "{end}");
+        }
+    }
+
+    #[test]
+    fn an_opencode_child_that_runs_again_after_it_ended_opens_again() {
+        let (mut hearing, mut heard) = hearing();
+        hearing.child(child_status("created"));
+        hearing.child(child_status("completed"));
+        hearing.child(child_status("running"));
+
+        assert_eq!(open_units(&mut heard)[0]["id"], "child");
     }
 
     #[test]
@@ -1606,9 +1782,80 @@ mod tests {
         assert!(
             diagnosed
                 .try_recv()
-                .is_ok_and(|diagnostic| diagnostic.contains("OpenCode child"))
+                .is_ok_and(|diagnostic| diagnostic.contains("something_new"))
         );
         assert!(heard.try_recv().is_err());
+    }
+
+    #[test]
+    fn every_initialize_declares_claudes_async_tasks() {
+        let declared = serde_json::to_value(declarations()).unwrap();
+        assert_eq!(
+            declared["_meta"]["jetbrains"]["air"],
+            serde_json::json!({"version": 1, "capabilities": ["asyncTasks"]})
+        );
+    }
+
+    #[test]
+    fn an_async_task_opens_a_background_task_unit_that_only_a_terminal_state_settles() {
+        let spawned = heard(serde_json::json!({
+            "sessionUpdate": "async_task_spawned",
+            "asyncTaskId": "task",
+            "name": "cargo test",
+            "taskType": "local_bash",
+            "description": "cargo test --workspace",
+            "showInTranscript": false,
+            "canStop": true,
+        }));
+        assert!(matches!(
+            spawned,
+            Heard::Unit(UnitChange::Opened { id, kind: UnitKind::BackgroundTask, title })
+                if id == "task" && title == "cargo test"
+        ));
+        let progress = heard(serde_json::json!({
+            "sessionUpdate": "async_task_progress",
+            "asyncTaskId": "task",
+            "summary": "compiling",
+        }));
+        assert!(matches!(progress, Heard::Unit(UnitChange::Progressed { id }) if id == "task"));
+        for state in ["running", "paused"] {
+            let open = heard(serde_json::json!({
+                "sessionUpdate": "async_task_state_update",
+                "asyncTaskId": "task",
+                "state": state,
+            }));
+            assert!(
+                matches!(open, Heard::Unit(UnitChange::Progressed { .. })),
+                "{state}"
+            );
+        }
+        for state in ["completed", "failed", "stopped"] {
+            let settled = heard(serde_json::json!({
+                "sessionUpdate": "async_task_state_update",
+                "asyncTaskId": "task",
+                "state": state,
+            }));
+            assert!(
+                matches!(settled, Heard::Unit(UnitChange::Settled { .. })),
+                "{state}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_session_update_kestrel_does_not_know_is_a_diagnostic_naming_it() {
+        let unknown = heard(serde_json::json!({"sessionUpdate": "scripted_mystery"}));
+        assert!(
+            matches!(&unknown, Heard::Unread(diagnostic) if diagnostic.contains("scripted_mystery"))
+        );
+        let standard = heard(serde_json::json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "hello"},
+        }));
+        assert!(matches!(
+            standard,
+            Heard::Acp(SessionUpdate::AgentMessageChunk(_))
+        ));
     }
 
     #[test]

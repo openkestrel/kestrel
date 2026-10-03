@@ -154,13 +154,24 @@ pub async fn read(
 pub struct RunningTool {
     pub call_id: String,
     pub title: String,
+    pub tool_kind: String,
     pub status: String,
+    pub started_at: Timestamp,
+}
+
+/// Work an adapter runs apart from any tool call, open until the adapter settles it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunningUnit {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
     pub started_at: Timestamp,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SessionState {
     pub tools: Vec<RunningTool>,
+    pub units: Vec<RunningUnit>,
     pub message_buffering: bool,
     pub thought_buffering: bool,
     /// Held in memory, never a row (ADR-0041).

@@ -13,7 +13,7 @@ use crate::domain::{
 use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
 use crate::link;
-use crate::live_work::RunningTool;
+use crate::live_work::{RunningTool, RunningUnit};
 use crate::log::{ClosingReason, Completion, Entry, Message, PlanEntry, ToolStatus};
 use crate::participant;
 use crate::store::workspace::Taken;
@@ -67,6 +67,7 @@ pub enum Report {
     },
     SessionState {
         tools: Vec<RunningTool>,
+        units: Vec<RunningUnit>,
         message_buffering: bool,
         thought_buffering: bool,
         #[serde(default)]
@@ -1080,12 +1081,45 @@ pub async fn interrupt(store: &Store, id: SessionId, participant: &str) -> Resul
 
 /// A waiting Session has done everything asked of it, so stopping it there is how it
 /// succeeds; stopping one mid-turn abandons what its agent was still doing.
-pub async fn stop(store: &Store, id: SessionId) -> Result<Exit> {
+pub async fn stop(store: &Store, id: SessionId, running: &[RunningTool]) -> Result<Exit> {
     let mut tx = store.begin().await?;
     let session = tx.workspaces().session(id).await?;
     let Some(exit) = session.state.stop_exit() else {
         bail!("the session {id} has already ended");
     };
+    // The Session has ended before its supervisor hears the stop, so no report closes these.
+    let workspace = tx.workspaces().get(session.workspace).await?;
+    let now = Timestamp::now();
+    for tool in running {
+        if tx
+            .log()
+            .has_tool_call(&workspace, session.id, &tool.call_id)
+            .await?
+        {
+            continue;
+        }
+        tx.log()
+            .append(
+                &workspace,
+                Entry::ToolCall {
+                    session_id: session.id,
+                    call_id: tool.call_id.clone(),
+                    title: tool.title.clone(),
+                    tool_kind: tool.tool_kind.clone(),
+                    status: serde_json::from_value(serde_json::Value::String(tool.status.clone()))
+                        .unwrap_or(ToolStatus::Pending),
+                    input: serde_json::Value::Null,
+                    result: Box::new(serde_json::Value::Null),
+                    closing_reason: Some(ClosingReason::Interrupted),
+                    completion: Completion {
+                        started_at: tool.started_at,
+                        finished_at: now,
+                        turn_outcome: None,
+                    },
+                },
+            )
+            .await?;
+    }
     let stands = ending(&mut tx, &session, exit).await?;
     tx.commit().await?;
 
@@ -1214,7 +1248,7 @@ async fn continue_pending(tx: &mut Tx<'_>, workspace: WorkspaceId) -> Result<Opt
     ))
 }
 
-async fn prompt_pending(tx: &mut Tx<'_>, session: &Session) -> Result<()> {
+pub(crate) async fn prompt_pending(tx: &mut Tx<'_>, session: &Session) -> Result<()> {
     let workspace = tx.workspaces().get(session.workspace).await?;
     let pending = tx
         .workspaces()
