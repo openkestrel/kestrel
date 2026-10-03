@@ -2038,8 +2038,15 @@ struct OccupantRecord {
     name: String,
     workspace: String,
     agent: String,
-    phase: &'static str,
+    phase: OccupantPhase,
     enqueued_at: Timestamp,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum OccupantPhase {
+    Working,
+    Trailing,
 }
 
 #[derive(Serialize)]
@@ -2140,7 +2147,10 @@ impl QueueRecord {
                         name: session.name,
                         workspace: session.workspace.to_string(),
                         agent: session.agent.name,
-                        phase: session.state.as_str(),
+                        phase: match session.state {
+                            domain::SessionState::Trailing => OccupantPhase::Trailing,
+                            _ => OccupantPhase::Working,
+                        },
                         enqueued_at: session.enqueued_at,
                     })
                     .collect(),
