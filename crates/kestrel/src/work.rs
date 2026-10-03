@@ -468,7 +468,7 @@ pub async fn set_option(
 
     let live = match session.state {
         SessionState::Queued => false,
-        SessionState::Waiting => true,
+        SessionState::Waiting | SessionState::Trailing => true,
         SessionState::Unbriefed if !session.options.is_empty() => true,
         phase => return Err(OptionRefusal::Phase(phase_refusal(phase, &session))),
     };
@@ -586,18 +586,13 @@ fn phase_refusal(phase: SessionState, session: &Session) -> String {
             "the session {} is working, and an option cannot change mid-turn",
             session.id
         ),
-        SessionState::Trailing => format!(
-            "the session {} is trailing its answer, and an option cannot change while its agent \
-             works",
-            session.id
-        ),
         SessionState::Ended => format!("the session {} has ended", session.id),
         SessionState::Unreachable => format!("the session {} is unreachable", session.id),
         SessionState::Unbriefed => format!(
             "the session {} is unbriefed with no options yet",
             session.id
         ),
-        SessionState::Queued | SessionState::Waiting => {
+        SessionState::Queued | SessionState::Waiting | SessionState::Trailing => {
             format!("the session {} cannot change options", session.id)
         }
     }
@@ -674,12 +669,17 @@ pub async fn report(
     Ok(())
 }
 
-pub async fn stirred(store: &Store, session: &Session) -> Result<()> {
+pub async fn resume_trailing(store: &Store, session: &Session) -> Result<()> {
     let mut tx = store.begin().await?;
-    if tx.workspaces().stir(session).await? {
+    resuming_trailing(&mut tx, session).await?;
+    tx.commit().await
+}
+
+async fn resuming_trailing(tx: &mut Tx<'_>, session: &Session) -> Result<()> {
+    if tx.workspaces().resume_trailing(session).await? {
         info!(session = %session.id, "a waiting session's agent is working again");
     }
-    tx.commit().await
+    Ok(())
 }
 
 /// What a Session's own report does, reached here without asking which Instance carries it.
@@ -720,9 +720,8 @@ async fn reported(
             | Report::Thought { .. }
             | Report::Plan { .. }
             | Report::ToolCall { .. }
-    ) && tx.workspaces().stir(session).await?
-    {
-        info!(session = %session.id, "a waiting session's agent is working again");
+    ) {
+        resuming_trailing(tx, session).await?;
     }
 
     match report {
@@ -913,6 +912,7 @@ async fn reported(
                     info!(session = %session.id, %usage, "a supervisor reported what its agent used");
                     tx.workspaces().record_usage(session, &usage).await?;
                 }
+                prompt_pending(tx, session).await?;
             }
             info!(session = %session.id, "a supervisor reported its agent answered a turn");
         }

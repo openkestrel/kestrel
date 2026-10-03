@@ -54,6 +54,7 @@ function session(overrides: Partial<Session> = {}): Session {
 		tools: [],
 		message_buffering: false,
 		thought_buffering: false,
+		last_activity_at: null,
 		...overrides,
 	};
 }

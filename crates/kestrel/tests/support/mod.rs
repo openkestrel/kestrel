@@ -391,7 +391,7 @@ impl Kestrel {
             max_active_sessions: provisions.max_active_sessions,
             serialized: vec![SERIALIZED.to_owned()],
             interrupt_deadline: provisions.interrupt_deadline,
-            quiet_period: QUIET_PERIOD,
+            quiet_period: Some(QUIET_PERIOD),
         });
         let roles = tokio::spawn(all_in_one.run(dispatch, shutdown.clone()));
 

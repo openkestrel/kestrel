@@ -47,7 +47,7 @@ macro_rules! profile_held {
          JOIN session AS a ON a.workspace_id = o.id AND a.harness = s.harness
          WHERE w.id = s.workspace_id
            AND s.harness IN (SELECT value FROM json_each(?))
-           AND a.state = ?"
+           AND a.state IN (SELECT value FROM json_each(?))"
     };
 }
 pub(crate) use profile_held;
@@ -1151,7 +1151,7 @@ impl<'a> Workspaces<'a> {
         sqlx::query_scalar(sqlx::AssertSqlSafe(holds))
             .bind(session.id.to_string())
             .bind(serde_json::to_string(serialized)?)
-            .bind(SessionState::Working.as_str())
+            .bind(occupying()?)
             .fetch_one(&mut *self.connection)
             .await
             .with_context(|| format!("reading what holds the profile of session {}", session.id))
@@ -2083,15 +2083,16 @@ impl<'a> Workspaces<'a> {
         self.turn(session).await
     }
 
-    /// `None` when the Session was neither waiting nor unbriefed, so a replayed prompt starts no
-    /// second turn.
+    /// `None` when the Session was not waiting, trailing or unbriefed, so a replayed prompt starts
+    /// no second turn.
     pub async fn prompt_turn(&mut self, session: &Session) -> Result<Option<i64>> {
         let moved = sqlx::query(
-            "UPDATE session SET state = ?, preparing = NULL WHERE id = ? AND state IN (?, ?)",
+            "UPDATE session SET state = ?, preparing = NULL WHERE id = ? AND state IN (?, ?, ?)",
         )
         .bind(SessionState::Working.as_str())
         .bind(session.id.to_string())
         .bind(SessionState::Waiting.as_str())
+        .bind(SessionState::Trailing.as_str())
         .bind(SessionState::Unbriefed.as_str())
         .execute(&mut *self.connection)
         .await?;
@@ -2195,7 +2196,7 @@ impl<'a> Workspaces<'a> {
 
     /// A waiting Session whose agent is working again takes a slot whatever the limit, since the
     /// work is already running.
-    pub async fn stir(&mut self, session: &Session) -> Result<bool> {
+    pub async fn resume_trailing(&mut self, session: &Session) -> Result<bool> {
         self.move_session(session, SessionState::Waiting, SessionState::Trailing)
             .await
     }
@@ -2321,7 +2322,7 @@ impl<'a> Workspaces<'a> {
         let row = sqlx::query(concat!(held_input!(profile_free!()), " LIMIT 1"))
             .bind(SessionState::Waiting.as_str())
             .bind(serde_json::to_string(serialized)?)
-            .bind(SessionState::Working.as_str())
+            .bind(occupying()?)
             .fetch_optional(&mut *self.connection)
             .await
             .context("reading which waiting session has input held longest")?;

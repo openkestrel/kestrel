@@ -17,16 +17,18 @@ pub struct Completer {
     completed_tools: BTreeSet<String>,
     pub produced: bool,
     phase: Phase,
-    last_activity: Option<Timestamp>,
     reported_activity: Option<Timestamp>,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum Phase {
+    /// No Turn has answered, so activity has nothing to trail.
     #[default]
     Unprompted,
     Turn,
-    Trailing,
+    Trailing {
+        last_activity: Timestamp,
+    },
     Between,
 }
 
@@ -34,9 +36,7 @@ enum Phase {
 const ACTIVITY_GRAIN: SignedDuration = SignedDuration::from_secs(1);
 
 pub enum Settling {
-    Settled(Completed),
-    /// Asked again then; a Completer that is not trailing is asked again a quiet period on, since
-    /// activity may start it trailing in between.
+    Settled(Box<Completed>),
     Until(Timestamp),
 }
 
@@ -63,7 +63,6 @@ impl Completer {
     pub fn begin(&mut self) {
         self.produced = false;
         self.phase = Phase::Turn;
-        self.last_activity = None;
     }
 
     pub fn update(&mut self, update: SessionUpdate, now: Timestamp) -> Completed {
@@ -80,29 +79,19 @@ impl Completer {
             }
             SessionUpdate::Plan(plan) => {
                 self.active(now);
-                {
-                    self.produced = true;
-                    completed.reports.push(Report::Plan {
-                        entries: plan
-                            .entries
-                            .into_iter()
-                            .map(|entry| PlanEntry {
-                                content: entry.content,
-                                priority: serde_json::to_value(entry.priority)
-                                    .expect("a plan priority")
-                                    .as_str()
-                                    .expect("a priority string")
-                                    .to_owned(),
-                                status: serde_json::to_value(entry.status)
-                                    .expect("a plan status")
-                                    .as_str()
-                                    .expect("a status string")
-                                    .to_owned(),
-                            })
-                            .collect(),
-                        completion: Completion::at(now),
-                    });
-                }
+                self.produced = true;
+                completed.reports.push(Report::Plan {
+                    entries: plan
+                        .entries
+                        .into_iter()
+                        .map(|entry| PlanEntry {
+                            content: entry.content,
+                            priority: wire_name(entry.priority),
+                            status: wire_name(entry.status),
+                        })
+                        .collect(),
+                    completion: Completion::at(now),
+                });
             }
             SessionUpdate::ToolCall(call) => {
                 self.active(now);
@@ -114,7 +103,7 @@ impl Completer {
                 } else {
                     self.produced = true;
                     self.tools.insert(id.clone(), (call, now));
-                    self.settle_tool(&id, now, None, false, &mut completed);
+                    self.settle_tool(&id, now, None, None, &mut completed);
                 }
             }
             SessionUpdate::ToolCallUpdate(update) => {
@@ -122,7 +111,7 @@ impl Completer {
                 let id = update.tool_call_id.0.to_string();
                 if let Some((call, _)) = self.tools.get_mut(&id) {
                     call.update(update.fields);
-                    self.settle_tool(&id, now, None, false, &mut completed);
+                    self.settle_tool(&id, now, None, None, &mut completed);
                 } else {
                     completed.diagnostics.push(format!(
                         "kestrel: an update arrived for unknown or completed tool {id}"
@@ -143,7 +132,7 @@ impl Completer {
         }
         let after = self.snapshot();
         let grain_passed = matches!(
-            (self.last_activity, self.reported_activity),
+            (self.last_activity(), self.reported_activity),
             (Some(last), Some(reported)) if last.duration_since(reported) >= ACTIVITY_GRAIN
         );
         if before != after || grain_passed {
@@ -153,14 +142,22 @@ impl Completer {
     }
 
     fn active(&mut self, now: Timestamp) {
-        if matches!(self.phase, Phase::Trailing | Phase::Between) {
-            self.phase = Phase::Trailing;
-            self.last_activity = Some(now);
+        if matches!(self.phase, Phase::Trailing { .. } | Phase::Between) {
+            self.phase = Phase::Trailing { last_activity: now };
         }
     }
 
+    fn last_activity(&self) -> Option<Timestamp> {
+        match self.phase {
+            Phase::Trailing { last_activity } => Some(last_activity),
+            _ => None,
+        }
+    }
+
+    /// A Completer that is not trailing is asked again a quiet period on, since activity may start
+    /// it trailing in between.
     pub fn settle(&mut self, now: Timestamp, quiet: SignedDuration) -> Settling {
-        let Some(last) = self.last_activity.filter(|_| self.phase == Phase::Trailing) else {
+        let Some(last) = self.last_activity() else {
             return Settling::Until(now + quiet);
         };
         if !self.tools.is_empty() {
@@ -173,43 +170,56 @@ impl Completer {
         self.messages.close(now, false, None, &mut completed);
         self.thoughts.close(now, true, None, &mut completed);
         for id in self.tools.keys().cloned().collect::<Vec<_>>() {
-            self.settle_tool(&id, now, None, true, &mut completed);
+            self.settle_tool(
+                &id,
+                now,
+                None,
+                Some(ClosingReason::Unresolved),
+                &mut completed,
+            );
         }
         self.phase = Phase::Between;
-        self.last_activity = None;
         completed.state = Some(self.reported());
 
-        Settling::Settled(completed)
+        Settling::Settled(Box::new(completed))
     }
 
-    /// An answer leaves open calls running and starts the Session trailing; a call still open
-    /// when trailing ends is closed `unresolved`, whatever ended it.
+    /// A call still open when trailing ends is closed `unresolved`, whatever ended it.
     pub fn boundary(&mut self, outcome: TurnOutcome, now: Timestamp) -> Completed {
         let mut completed = Completed::default();
         self.messages
             .close(now, false, Some(outcome.clone()), &mut completed);
         self.thoughts
             .close(now, true, Some(outcome.clone()), &mut completed);
-        let trailing = self.phase == Phase::Trailing;
-        if !matches!(outcome, TurnOutcome::Answered { .. }) || trailing {
+        let trailing = matches!(self.phase, Phase::Trailing { .. });
+        let closing_reason = match &outcome {
+            _ if trailing => Some(ClosingReason::Unresolved),
+            TurnOutcome::Answered { .. } => None,
+            TurnOutcome::Cancelled => Some(ClosingReason::Interrupted),
+            TurnOutcome::Failed { .. } => Some(ClosingReason::Failed),
+        };
+        if closing_reason.is_some() {
             for id in self.tools.keys().cloned().collect::<Vec<_>>() {
-                self.settle_tool(&id, now, Some(outcome.clone()), trailing, &mut completed);
+                self.settle_tool(
+                    &id,
+                    now,
+                    Some(outcome.clone()),
+                    closing_reason,
+                    &mut completed,
+                );
             }
         }
-        match outcome {
-            TurnOutcome::Answered { .. } => {
-                self.phase = Phase::Trailing;
-                self.last_activity = Some(now);
-            }
-            _ if trailing => self.last_activity = Some(now),
-            _ => self.phase = Phase::Between,
-        }
+        self.phase = if trailing || matches!(outcome, TurnOutcome::Answered { .. }) {
+            Phase::Trailing { last_activity: now }
+        } else {
+            Phase::Between
+        };
         completed.state = Some(self.reported());
         completed
     }
 
     fn reported(&mut self) -> Report {
-        self.reported_activity = self.last_activity;
+        self.reported_activity = self.last_activity();
         self.snapshot()
     }
 
@@ -221,11 +231,7 @@ impl Completer {
                 .map(|(id, (call, started_at))| crate::link::RunningTool {
                     call_id: id.clone(),
                     title: call.title.clone(),
-                    status: serde_json::to_value(call.status)
-                        .unwrap()
-                        .as_str()
-                        .unwrap()
-                        .to_owned(),
+                    status: wire_name(call.status),
                     started_at: *started_at,
                 })
                 .collect(),
@@ -233,23 +239,23 @@ impl Completer {
             thought_buffering: self.thoughts.open.is_some(),
             // Filled in when the state goes up the link, which is what holds the latest usage.
             usage: None,
-            last_activity_at: self.last_activity.filter(|_| self.phase == Phase::Trailing),
+            last_activity_at: self.last_activity(),
         }
     }
 
+    /// With no `closing_reason`, a call settles only once its agent has finished it.
     fn settle_tool(
         &mut self,
         id: &str,
         now: Timestamp,
         outcome: Option<TurnOutcome>,
-        unresolved: bool,
+        closing_reason: Option<ClosingReason>,
         completed: &mut Completed,
     ) {
         let Some((call, _)) = self.tools.get(id) else {
             return;
         };
-        if !unresolved
-            && outcome.is_none()
+        if closing_reason.is_none()
             && !matches!(
                 call.status,
                 ToolCallStatus::Completed | ToolCallStatus::Failed
@@ -259,13 +265,6 @@ impl Completer {
         }
         let (call, started_at) = self.tools.remove(id).unwrap();
         self.completed_tools.insert(id.to_owned());
-        let closing_reason = match (&outcome, unresolved) {
-            (_, true) => Some(ClosingReason::Unresolved),
-            (Some(TurnOutcome::Cancelled), false) => Some(ClosingReason::Interrupted),
-            (Some(TurnOutcome::Failed { .. }), false) => Some(ClosingReason::Failed),
-            (Some(TurnOutcome::Answered { .. }), false) => Some(ClosingReason::Unresolved),
-            (None, false) => None,
-        };
         let status = match call.status {
             ToolCallStatus::InProgress => ToolStatus::InProgress,
             ToolCallStatus::Completed => ToolStatus::Completed,
@@ -275,11 +274,7 @@ impl Completer {
         completed.reports.push(Report::ToolCall {
             call_id: id.to_owned(),
             title: call.title,
-            tool_kind: serde_json::to_value(call.kind)
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_owned(),
+            tool_kind: wire_name(call.kind),
             status,
             input: call.raw_input.unwrap_or(serde_json::Value::Null),
             result: Box::new(serde_json::json!({"content":call.content,"output":call.raw_output})),
@@ -290,6 +285,14 @@ impl Completer {
                 turn_outcome: outcome,
             },
         });
+    }
+}
+
+/// The name ACP gives a value on the wire, which kestrel reports as is.
+fn wire_name(value: impl serde::Serialize) -> String {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(name)) => name,
+        other => panic!("ACP names this value with a string, not {other:?}"),
     }
 }
 
@@ -485,7 +488,7 @@ mod tests {
 
     fn settled(settling: Settling) -> Completed {
         match settling {
-            Settling::Settled(completed) => completed,
+            Settling::Settled(completed) => *completed,
             Settling::Until(at) => panic!("still trailing until {at}"),
         }
     }

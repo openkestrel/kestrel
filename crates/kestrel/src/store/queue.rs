@@ -169,7 +169,7 @@ impl<'a> Queue<'a> {
              ORDER BY s.id, a.enqueued_at, a.id"
         ))
         .bind(serde_json::to_string(serialized)?)
-        .bind(SessionState::Working.as_str())
+        .bind(occupying()?)
         .bind(organization.id.to_string())
         .bind(SessionState::Queued.as_str())
         .bind(SessionState::Waiting.as_str())
