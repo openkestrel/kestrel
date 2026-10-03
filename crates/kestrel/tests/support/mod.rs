@@ -57,9 +57,9 @@ use kestrel::link::{self, Instruction};
 use kestrel::log::{Cursor, Entry, Page, TranscriptEntry, Unreadable, Window};
 use kestrel::profile::{self, Contents};
 use kestrel::provider::{self, Held};
-use kestrel::queue;
 use kestrel::role::serve::{self, Listen};
 use kestrel::role::work::{Dispatch, HarnessCommand};
+use kestrel::scheduling;
 use kestrel::store::Store;
 use kestrel::timer::Wake;
 use kestrel::trigger::apply::Applied;
@@ -1810,25 +1810,25 @@ impl Kestrel {
     }
 
     pub async fn occupy_session(&self) -> Option<Session> {
-        match work::occupy(&self.store, 2, &[SERIALIZED.to_owned()])
+        match scheduling::dispatch(&self.store, 2, &[SERIALIZED.to_owned()])
             .await
             .expect("the occupancy should ask")
         {
-            Some(work::Occupied::Claimed(claimed)) => Some(claimed),
-            Some(work::Occupied::Resumed(_)) => panic!("no session should resume"),
+            Some(scheduling::Occupied::Claimed(claimed)) => Some(claimed),
+            Some(scheduling::Occupied::Resumed(_)) => panic!("no session should resume"),
             None => None,
         }
     }
 
     /// Prompts a waiting Session with what is held for it, the way the work role's sweep does.
     pub async fn prompt_waiting(&self) {
-        work::occupy(&self.store, 1, &[SERIALIZED.to_owned()])
+        scheduling::dispatch(&self.store, 1, &[SERIALIZED.to_owned()])
             .await
             .expect("the occupancy should ask");
     }
 
-    pub async fn occupy_up_to(&self, slots: usize) -> Option<work::Occupied> {
-        work::occupy(&self.store, slots, &[SERIALIZED.to_owned()])
+    pub async fn occupy_up_to(&self, slots: usize) -> Option<scheduling::Occupied> {
+        scheduling::dispatch(&self.store, slots, &[SERIALIZED.to_owned()])
             .await
             .expect("the occupancy should ask")
     }
@@ -1842,8 +1842,8 @@ impl Kestrel {
         tx.commit().await.expect("the record should commit");
     }
 
-    pub async fn queue(&self, organization: &str) -> queue::Snapshot {
-        queue::snapshot(&self.store, organization)
+    pub async fn queue(&self, organization: &str) -> scheduling::Snapshot {
+        scheduling::snapshot(&self.store, organization)
             .await
             .expect("the queue should read")
     }
@@ -2073,6 +2073,20 @@ impl Kestrel {
         work::report_on(&self.store, session, Some(seq), changed)
             .await
             .expect("the option change should be taken");
+    }
+
+    pub async fn report_activity(&self, session: &Session, seq: i64, message: &str) {
+        work::report_on(
+            &self.store,
+            session,
+            Some(seq),
+            work::Report::Said {
+                message: message.to_owned(),
+                completion: kestrel::log::Completion::at(jiff::Timestamp::now()),
+            },
+        )
+        .await
+        .expect("the activity should be reported");
     }
 
     pub async fn report_answered(&self, session: &Session, seq: i64) {

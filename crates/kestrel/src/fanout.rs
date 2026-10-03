@@ -49,9 +49,9 @@ impl Touched {
 
     pub fn queue(&mut self, organization: OrganizationId) {
         self.resources.push((organization, Resource::Queue));
+        self.queues_everywhere = true;
     }
 
-    /// A write no Organization owns, such as the work role's limits: every subscriber hears it.
     pub fn every_queue(&mut self) {
         self.queues_everywhere = true;
     }

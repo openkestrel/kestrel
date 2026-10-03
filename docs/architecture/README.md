@@ -124,7 +124,7 @@ real implementation exists ([ADR-0022](../adr/0022-store-repository-traits-and-e
 | `Log` | `log.rs` | The Transcript. Same database and transaction as `Store` ([ADR-0004](../adr/0004-store-and-log-are-one-transactional-domain.md)). |
 | `Fanout` | `fanout.rs` | The in-process hub a committed transaction hands its touched resources to; only the Organization change stream subscribes. Everything else polls `Store`. |
 | `Timer` | `timer.rs` | In-process sweeps; every due time lives in `Store`, so a restart loses none. |
-| `Work` | `work.rs` | Enqueue, claim, lease, reports, ending a Session. |
+| `Work` | `work.rs`, `scheduling.rs` | Enqueue, dispatch and explain slot requests, lease, reports, ending a Session. |
 | `Compute` | `compute/` | `Driver` enum over `Docker` and `LocalExec`, chosen once by `KESTREL_COMPUTE`. |
 
 ### Modules
@@ -133,7 +133,7 @@ The rest of `crates/kestrel/src`, grouped by the page that covers them:
 
 | Area | Modules |
 | --- | --- |
-| Sessions | `work.rs`, `workspace.rs`, `instance.rs`, `queue.rs`, `role/work.rs` |
+| Sessions | `work.rs`, `workspace.rs`, `instance.rs`, `scheduling.rs`, `role/work.rs` |
 | Link | `link/`, `provider.rs`, `profile.rs`, `keyring.rs` |
 | Triggers | `trigger.rs`, `trigger/apply.rs`, `filter.rs`, `template.rs`, `cron.rs`, `readiness.rs`, `follow_up.rs`, `pull_request.rs`, `integration/` |
 | Operator | `operator.rs`, `declaration.rs`, `start.rs`, `agent.rs`, `reference.rs`, `declined.rs` |

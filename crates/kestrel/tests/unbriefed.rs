@@ -7,8 +7,8 @@ use kestrel::domain::{
     Exit, Preparing, Session, SessionId, SessionState, Workspace, WorkspaceState,
 };
 use kestrel::log::{BriefSource, Entry};
-use kestrel::queue::Reason;
-use kestrel::work::Occupied;
+use kestrel::scheduling::Occupied;
+use kestrel::scheduling::Reason;
 use support::repository;
 use support::scripted_agent::{self, Script};
 use support::supervisor;

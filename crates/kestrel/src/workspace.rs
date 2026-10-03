@@ -627,6 +627,7 @@ async fn brief(
         )
         .await?;
 
+    tx.queue().changed();
     Ok(())
 }
 

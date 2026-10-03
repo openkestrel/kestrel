@@ -15,6 +15,7 @@ export function phaseOf(row: SessionRow): RowPhase {
 	if (needsAttention(row)) return "attention";
 	switch (row.session?.state) {
 		case "working":
+		case "trailing":
 		case "unbriefed":
 			return "working";
 		case "waiting":

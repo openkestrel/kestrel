@@ -1907,7 +1907,7 @@ fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
         let said = [
             (
                 "active-work slots",
-                occupancy(slots, "no work role is dispatching", "occupied"),
+                occupancy(slots, "no dispatch configuration recorded", "occupied"),
             ),
             (
                 "live instances",
@@ -1939,6 +1939,7 @@ fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
         record.insert("position".to_owned(), Value::Null);
         record.insert("pending_since".to_owned(), Value::Null);
         record.insert("preparing".to_owned(), Value::Null);
+        record.insert("brief_since".to_owned(), Value::Null);
         record.insert("reasons".to_owned(), Value::Array(Vec::new()));
         record.insert("why".to_owned(), Value::from(why(&record)));
         record.insert("active_work".to_owned(), slots.clone());
@@ -1962,6 +1963,7 @@ fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
             record.insert("state".to_owned(), Value::from(state));
             record.entry("position").or_insert(Value::Null);
             record.entry("pending_since").or_insert(Value::Null);
+            record.entry("brief_since").or_insert(Value::Null);
             record.entry("preparing").or_insert(Value::Null);
             record.entry("reasons").or_insert(Value::Array(Vec::new()));
             record.insert("why".to_owned(), Value::from(why(&record)));
@@ -1982,6 +1984,9 @@ fn why(row: &serde_json::Map<String, Value>) -> String {
             "harness_ready" => "harness ready".to_owned(),
             step => step.to_owned(),
         });
+    }
+    if let Some(since) = row["brief_since"].as_str() {
+        said.push(format!("Brief since {since}"));
     }
     if let Some(since) = row["pending_since"].as_str() {
         said.push(format!("input since {since}"));
@@ -2010,9 +2015,10 @@ fn why(row: &serde_json::Map<String, Value>) -> String {
 }
 
 fn environment(snapshot: &Value) -> String {
-    snapshot["work_role"]["driver"]
-        .as_str()
-        .map_or_else(|| "no work role is dispatching".to_owned(), str::to_owned)
+    snapshot["work_role"]["driver"].as_str().map_or_else(
+        || "no dispatch configuration recorded".to_owned(),
+        str::to_owned,
+    )
 }
 
 fn reason_in_words(reason: &Value) -> String {
@@ -2043,7 +2049,19 @@ fn reason_in_words(reason: &Value) -> String {
         }
         "live_instance_limit" => format!("at the limit of {limit} live Instance{plural}"),
         "active_work_slots" => format!("all {limit} Active-Work Slot{plural} occupied"),
-        "ahead" => format!("behind {}", names("sessions")),
+        "ahead" => {
+            let mut ahead = names("sessions");
+            if let Some(elsewhere) = reason["elsewhere"].as_u64() {
+                if !ahead.is_empty() {
+                    ahead.push_str(", ");
+                }
+                ahead.push_str(&format!(
+                    "{elsewhere} Session{} in other Organizations",
+                    if elsewhere == 1 { "" } else { "s" }
+                ));
+            }
+            format!("behind {ahead}")
+        }
         kind => kind.to_owned(),
     }
 }

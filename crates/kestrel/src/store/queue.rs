@@ -28,7 +28,6 @@ impl<'a> Queue<'a> {
         }
     }
 
-    /// `None` says no work role is dispatching.
     pub async fn recorded(&mut self) -> Result<Option<Recorded>> {
         let Some(row) =
             sqlx::query("SELECT active_work_slots, serialized_harnesses, driver FROM work_role")
@@ -46,6 +45,10 @@ impl<'a> Queue<'a> {
             )?,
             driver: row.get("driver"),
         }))
+    }
+
+    pub(crate) fn changed(&mut self) {
+        self.touched.every_queue();
     }
 
     pub async fn record(
@@ -156,16 +159,16 @@ impl<'a> Queue<'a> {
         &mut self,
         organization: &Organization,
         serialized: &[String],
-    ) -> Result<Vec<(SessionId, String, String)>> {
+    ) -> Result<Vec<(SessionId, String, Option<String>)>> {
         sqlx::query(concat!(
-            "SELECT s.id AS held, a.name AS holder,
+            "SELECT s.id AS held, CASE WHEN a.organization_id = s.organization_id THEN a.name END AS holder,
                     (SELECT name FROM subscription_profile WHERE id = w.subscription_profile_id)
                         AS profile
              FROM session AS s, ",
             profile_held!(),
             "
                AND s.organization_id = ?
-               AND s.state IN (?, ?)
+               AND s.state IN (?, ?, ?)
              ORDER BY s.id, a.enqueued_at, a.id"
         ))
         .bind(serde_json::to_string(serialized)?)
@@ -173,6 +176,7 @@ impl<'a> Queue<'a> {
         .bind(organization.id.to_string())
         .bind(SessionState::Queued.as_str())
         .bind(SessionState::Waiting.as_str())
+        .bind(SessionState::Unbriefed.as_str())
         .fetch_all(&mut *self.connection)
         .await
         .context("reading which sessions a subscription profile holds back")?
@@ -187,13 +191,9 @@ impl<'a> Queue<'a> {
         .collect()
     }
 
-    pub async fn held_input(
-        &mut self,
-        organization: &Organization,
-    ) -> Result<Vec<(SessionId, Timestamp)>> {
-        sqlx::query(held_input!("s.organization_id = ?"))
+    pub async fn held_input(&mut self) -> Result<Vec<(SessionId, Timestamp)>> {
+        sqlx::query(held_input!("1"))
             .bind(SessionState::Waiting.as_str())
-            .bind(organization.id.to_string())
             .fetch_all(&mut *self.connection)
             .await
             .context("reading the input held for waiting sessions")?

@@ -68,18 +68,21 @@ stateDiagram-v2
   idle one is safe to archive, or none is recoverable. Only the dispatcher's claim archives the
   idle one (`instance::reclaim`), and only for a Session it could claim; the claim moves on
   either way.
-- **Nothing stores why a Session waits.** `queue::snapshot` derives positions and reasons at read
-  time from the dispatcher's own rules: `UNSATISFIED_BLOCKER`, the `profile_held!` conflict,
-  Working and Trailing as the slot occupants, `held_input!` ordering and `work::goes_before_input`. A rule
-  changed in one place changes both: unless older held input is prompted first, a free slot
-  claims position 1.
-- **The snapshot also lists the unbriefed Sessions**, beside the Waiting ones and never numbered:
-  they hold their Instances and no slot, so they count against the live Instance limit alone. Each
-  carries its preparing step and any message held for its Brief. A queued Session whose Workspace
-  has no Brief shows only its Instance reasons and takes no position.
+- **Nothing stores why a Session waits.** `scheduling::snapshot` and `scheduling::dispatch`
+  evaluate the same slot requests against their transaction's state. Queued Sessions, Held
+  Messages for Waiting Sessions and ready first Briefs share one global order. Positions remain
+  visible while slots are full; blocked requests are unnumbered. A snapshot never reclaims an
+  Instance. Working and Trailing both occupy slots.
+- **The snapshot also lists the unbriefed Sessions.** They hold their Instances and no slot,
+  count against the live Instance limit, and show their preparing step and held input. Once
+  HarnessReady with a first Brief, they request a slot and receive a position. Briefless
+  provisioning requests remain unnumbered.
 - **The work role's record carries the Environment.** `work_role` holds the Active-Work Slot limit,
-  the serialized harnesses and the Compute driver (`Driver::name`), so the snapshot can say which
-  Environment work is provisioned in; with no record, no work role is dispatching.
+  the serialized harnesses and the Compute driver (`Driver::name`). Without a record, positions
+  and Profile constraints are unknown. The record does not establish work-role liveness.
+- **Queue ranks span Organizations.** Explanations name local predecessors and count foreign
+  ones. Changes to slot requests invalidate every Organization's queue without revealing a
+  foreign Session or Workspace.
 
 ## Declared options
 
@@ -105,7 +108,7 @@ What arrives while one exists is held, never interleaved:
 
 | Arrives | Held in | Released when |
 | --- | --- | --- |
-| A message (post, follow-up comment, a `continue` firing) | `pending_message` | A Trailing Session is prompted with it at once, in the same transaction, on the slot it holds, and so is one whose Turn it waited on as that Turn answers or is interrupted. A Waiting Session is prompted with it once a slot is free (`work::occupy`), or the next Session starts with it. |
+| A message (post, follow-up comment, a `continue` firing) | `pending_message` | A Trailing Session is prompted with it at once, in the same transaction, on the slot it holds, and so is one whose Turn it waited on as that Turn answers or is interrupted. A Waiting Session is prompted with it once a slot is free (`scheduling::dispatch`), or the next Session starts with it. |
 | A `new-session` firing | `pending_session` | The unfinished Session lets go. A Waiting one is ended (succeeded) to make way. |
 
 `work::continue_pending` runs as the unfinished Session ends and releases the next thing. A pending
@@ -136,12 +139,11 @@ Sessions, and the serialized-Profile rule applies to it then, not at dispatch.
 1. Fail the Session of any supervisor this process started that has exited (`watch`), and forget
    that supervisor so the next Session starts another.
 2. Stop the supervisor of, and destroy, each Instance queued in `instance_archive` (`archive`).
-3. `work::occupy`: if a slot is free, claim the oldest claimable queued Session, or, if held input
+3. `scheduling::dispatch`: if a slot is free, claim the oldest claimable queued Session, or, if held input
    for a Waiting Session or an unbriefed Session's first Turn asked earlier, prompt that instead.
    A queued Session whose Workspace has no Brief and nothing posted is claimed whether or not a
    slot is free, and without the serialized Profile check: it has no Turn to run, so it provisions
-   as Unbriefed while the person writes. `work::awaiting_a_brief` is the one rule the dispatcher
-   and the queue share. Claiming sets Working or Unbriefed and starts a 2-minute lease in one
+   as Unbriefed while the person writes. The scheduler owns eligibility, ordering, claiming and the read-only explanation. Claiming sets Working or Unbriefed and starts a 2-minute lease in one
    guarded update, so a Session is dispatched at most once. Prompting an unbriefed Session's Brief
    moves it to Working and starts its first Turn.
 4. For a claim, `execute` in its own task:

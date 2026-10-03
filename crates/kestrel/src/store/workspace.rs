@@ -52,12 +52,6 @@ macro_rules! profile_held {
 }
 pub(crate) use profile_held;
 
-macro_rules! profile_free {
-    () => {
-        concat!("NOT EXISTS (SELECT 1 FROM ", profile_held!(), ")")
-    };
-}
-
 /// Each Waiting Session's held input, oldest first: the order a freed slot prompts them in.
 macro_rules! held_input {
     ($condition:expr) => {
@@ -709,6 +703,7 @@ impl<'a> Workspaces<'a> {
         })?;
 
         self.touched.workspace(workspace);
+        self.touched.queue(workspace.organization.id);
 
         held(&row)
     }
@@ -782,6 +777,7 @@ impl<'a> Workspaces<'a> {
         let taken = row.as_ref().map(held).transpose()?;
         if taken.is_some() {
             self.touched.workspace(workspace);
+            self.touched.queue(workspace.organization.id);
         }
 
         Ok(taken)
@@ -842,6 +838,7 @@ impl<'a> Workspaces<'a> {
             })?;
 
         self.touched.workspace(workspace);
+        self.touched.queue(workspace.organization.id);
 
         Ok(taken)
     }
@@ -915,6 +912,7 @@ impl<'a> Workspaces<'a> {
         })?;
 
         self.touched.workspace(workspace);
+        self.touched.queue(workspace.organization.id);
 
         Ok(())
     }
@@ -1215,15 +1213,15 @@ impl<'a> Workspaces<'a> {
             .collect()
     }
 
-    pub async fn unbriefed_sessions(&mut self) -> Result<Vec<Session>> {
+    pub(crate) async fn pending_sessions(&mut self) -> Result<Vec<Session>> {
         sqlx::query(sessions_where!(
-            "state = ? AND preparing = ? ORDER BY enqueued_at, id"
+            "state IN (?, ?, ?) ORDER BY enqueued_at, id"
         ))
+        .bind(SessionState::Queued.as_str())
+        .bind(SessionState::Waiting.as_str())
         .bind(SessionState::Unbriefed.as_str())
-        .bind(Preparing::HarnessReady.as_str())
         .fetch_all(&mut *self.connection)
-        .await
-        .context("reading the unbriefed sessions")?
+        .await?
         .iter()
         .map(session)
         .collect()
@@ -1818,6 +1816,7 @@ impl<'a> Workspaces<'a> {
 
         if ready.rows_affected() > 0 {
             self.touched.session(session);
+            self.touched.queue(session.organization);
         }
 
         Ok(ready.rows_affected() > 0)
@@ -2313,29 +2312,6 @@ impl<'a> Workspaces<'a> {
         .context("counting the sessions occupying an active-work slot")?;
 
         Ok(usize::try_from(row.get::<i64, _>("occupying"))?)
-    }
-
-    pub async fn oldest_held_input(
-        &mut self,
-        serialized: &[String],
-    ) -> Result<Option<(Session, Timestamp)>> {
-        let row = sqlx::query(concat!(held_input!(profile_free!()), " LIMIT 1"))
-            .bind(SessionState::Waiting.as_str())
-            .bind(serde_json::to_string(serialized)?)
-            .bind(occupying()?)
-            .fetch_optional(&mut *self.connection)
-            .await
-            .context("reading which waiting session has input held longest")?;
-
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let since = row.get::<String, _>("since").parse()?;
-
-        Ok(Some((
-            self.session(row.get::<String, _>("id").parse()?).await?,
-            since,
-        )))
     }
 }
 

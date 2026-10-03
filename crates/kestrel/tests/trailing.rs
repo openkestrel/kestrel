@@ -12,7 +12,7 @@ use kestrel::domain::{
 use kestrel::instance::{Git, Observed};
 use kestrel::link::Instruction;
 use kestrel::log::{ClosingReason, Entry, ToolStatus};
-use kestrel::work::Occupied;
+use kestrel::scheduling::Occupied;
 use kestrel_scripted_agent::{
     BACKGROUND, BACKGROUND_TASK, BOOKKEEPING, CHILD_SAID_IN_TURN, CHILD_SAID_WHILE_TRAILING,
     CHILD_TITLE, OTHER_MODEL, SAID_BY_SUBAGENT, SAID_WHILE_TRAILING, SUBAGENT, SUBAGENT_CALL,
