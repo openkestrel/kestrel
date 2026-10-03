@@ -47,6 +47,9 @@ Patterns the code relies on that no single file states. Comment style is in `AGE
   define their own structs for the OpenAPI documents they speak.
 - **No branching on which harness.** The supervisor speaks ACP and nothing else; a harness-specific
   `if` is a bug ([ADR-0007](../adr/0007-acp-is-the-agent-runtime-contract.md)).
+  `crates/kestrel-supervisor/tests/boundary.rs` fails the build on any agent name or control-plane
+  noun (`workspace`, `transcript`, …) anywhere under the supervisor's `src/`, unit-test names
+  included.
 
 ## Tests
 
