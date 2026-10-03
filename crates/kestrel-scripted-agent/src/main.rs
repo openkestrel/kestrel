@@ -702,7 +702,9 @@ async fn play(
     }
     if matches!(
         script,
-        Script::AnswersWithAToolOpen | Script::AnswersWithAToolOpenThenExits
+        Script::AnswersWithAToolOpen
+            | Script::AnswersWithAToolKeptOpen
+            | Script::AnswersWithAToolOpenThenExits
     ) && earlier.is_empty()
     {
         update(

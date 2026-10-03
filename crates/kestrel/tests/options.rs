@@ -503,7 +503,7 @@ async fn changing_thought_level_on_a_queued_session_starts_it_with_that_value() 
 
 #[tokio::test]
 async fn changing_the_mode_while_trailing_leaves_the_session_trailing() {
-    let kestrel = dispatching(Script::AnswersWithAToolOpen).await;
+    let kestrel = dispatching(Script::AnswersWithAToolKeptOpen).await;
     let workspace = a_workspace(&kestrel, Declared::default()).await;
     let session = kestrel.enqueue_session(workspace.id).await;
     until_state(&kestrel, session.id, SessionState::Trailing).await;
@@ -532,11 +532,9 @@ async fn changing_the_mode_while_trailing_leaves_the_session_trailing() {
     assert_eq!(category, "mode");
     assert_eq!(from.as_deref(), Some(STARTING_MODE));
     assert_eq!(to.as_deref(), Some(SWITCHED_MODE), "{refused:?}");
-    let changed = kestrel.session(session.id).await;
-    assert_eq!(changed.state, SessionState::Trailing, "{:?}", changed.exit);
-    assert_eq!(current(&changed, "mode").as_deref(), Some(SWITCHED_MODE));
-
-    until_state(&kestrel, session.id, SessionState::Waiting).await;
+    let after = kestrel.session(session.id).await;
+    assert_eq!(after.state, SessionState::Trailing, "{:?}", after.exit);
+    assert_eq!(current(&after, "mode").as_deref(), Some(SWITCHED_MODE));
 
     kestrel.stop_session(session.id).await;
     kestrel.teardown().await;
@@ -617,6 +615,53 @@ async fn an_unoffered_value_an_unknown_option_and_an_agents_name_are_refused() {
     assert_eq!(refused["field"], "participant");
 
     kestrel.stop_session(session.id).await;
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_category_with_no_option_an_ended_session_and_an_undeclarable_category_are_refused() {
+    let kestrel = Kestrel::boot().await;
+    let (session, _) = live_on_the_link(&kestrel).await;
+
+    let (status, refused) = set_option(
+        &kestrel,
+        session.id,
+        json!({"participant": "operator", "category": "mode", "value": SWITCHED_MODE}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+
+    kestrel.stop_session(session.id).await;
+    let (status, refused) = set_option(
+        &kestrel,
+        session.id,
+        json!({"participant": "operator", "option": "model", "value": OTHER_MODEL}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("ended")),
+        "{refused}"
+    );
+
+    let queued = kestrel.enqueue_session(session.workspace).await;
+    assert_eq!(queued.state, SessionState::Queued);
+    let (status, refused) = set_option(
+        &kestrel,
+        queued.id,
+        json!({"participant": "operator", "category": "_scripted", "value": "true"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["field"], "category");
+    assert!(
+        changed_entries(&kestrel, session.workspace)
+            .await
+            .is_empty()
+    );
+
     kestrel.teardown().await;
 }
 

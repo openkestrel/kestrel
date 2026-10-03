@@ -103,10 +103,10 @@ reaches no Session already enqueued.
 declared value for `model`, `mode` or `thought_level` and appends `OptionChanged` at once. On a
 Waiting or Trailing Session, or an unbriefed one that has reported options, it checks the value is
 offered, records the change in `changing_options` and sends the `set_option` instruction
-([Link](link.md#instructions)); the supervisor's `option_changed` clears it. A working Turn, an
-ended or unreachable Session and an unbriefed one with no options yet are refused naming the
-phase, because a harness's handling of a mid-Turn change is undefined (ADR-0041). A change never
-moves the Session between phases.
+([Link](link.md#instructions)); the supervisor's `option_changed` clears it. A working Turn is
+refused naming the phase, because a harness's handling of a mid-Turn change is undefined
+(ADR-0041); so are an ended or unreachable Session and an unbriefed one with no options yet, which
+have nothing to take it. A change never moves the Session between phases.
 
 ## The unfinished Session
 
