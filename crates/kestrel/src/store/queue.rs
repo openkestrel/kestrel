@@ -4,7 +4,7 @@ use sqlx::{Row, SqliteConnection};
 
 use crate::domain::{Exit, Organization, SessionId, SessionState};
 use crate::fanout::Touched;
-use crate::store::workspace::{UNSATISFIED_BLOCKER, held_input, live, profile_held};
+use crate::store::workspace::{UNSATISFIED_BLOCKER, held_input, live, occupying, profile_held};
 
 /// What a work role that can dispatch recorded on start: the Active-Work Slot limit it
 /// enforces, the harnesses it dispatches one Session at a time, and the Compute driver it
