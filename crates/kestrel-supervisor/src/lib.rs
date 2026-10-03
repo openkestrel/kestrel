@@ -879,7 +879,9 @@ async fn settled(carrying: &mut Carrying) {
     carrying.saying.push_back(Report::Checkout {
         repositories: observed,
     });
-    carrying.saying.push_back(Report::Settled);
+    carrying.saying.push_back(Report::Settled {
+        usage: carrying.usage.clone(),
+    });
 }
 
 /// Waits out whatever is left of the bound since the link last answered, so a stream that stays

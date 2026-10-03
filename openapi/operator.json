@@ -3656,7 +3656,7 @@
           "lease_expires_at": { "type": ["string", "null"], "format": "date-time" },
           "connected_at": { "type": ["string", "null"], "format": "date-time" },
           "supervisor_version": { "type": ["string", "null"] },
-          "usage": { "anyOf": [{ "$ref": "#/components/schemas/Usage" }, { "type": "null" }] },
+          "usage": { "anyOf": [{ "$ref": "#/components/schemas/Usage" }, { "type": "null" }], "description": "What the Harness has spent on the Session: the live figure while its agent works, otherwise the latest its Turn answer or the end of its trailing work reported." },
           "tools": { "type": "array", "items": { "$ref": "#/components/schemas/RunningTool" } },
           "units": { "type": "array", "description": "Adapter units still running, such as a Claude background task; they keep a trailing Session trailing.", "items": { "$ref": "#/components/schemas/RunningUnit" } },
           "message_buffering": { "type": "boolean" },
@@ -4761,7 +4761,7 @@
                 "type": "null"
               }
             ],
-            "description": "What the Harness has spent so far, kept in memory while the Session is live; null until it reports one."
+            "description": "What the Harness has spent so far, held in memory beside the running tools while the Session is live and carried to followers; null until it reports one."
           },
           "last_activity_at": {
             "type": "string",

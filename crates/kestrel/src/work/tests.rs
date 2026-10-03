@@ -199,15 +199,16 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         Reported {
             session: Some(first_session.id),
             seq: Some(2),
-            report: Report::Settled,
+            report: Report::Settled {
+                usage: Some(usage()),
+            },
         },
     )
     .await
     .unwrap();
-    assert_eq!(
-        session(&store, first_session.id).await.unwrap().state,
-        SessionState::Waiting
-    );
+    let settled = session(&store, first_session.id).await.unwrap();
+    assert_eq!(settled.state, SessionState::Waiting);
+    assert_eq!(settled.usage, Some(usage()));
 
     let second_queued = workspace::post(&store, second.id, "operator", "start please")
         .await
@@ -282,7 +283,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         Reported {
             session: Some(alex_session.id),
             seq: Some(2),
-            report: Report::Settled,
+            report: Report::Settled { usage: None },
         },
     )
     .await
