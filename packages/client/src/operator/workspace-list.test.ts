@@ -72,6 +72,7 @@ function session(overrides: Partial<Session> = {}): Session {
 		supervisor_version: null,
 		usage: null,
 		tools: [],
+		units: [],
 		message_buffering: false,
 		thought_buffering: false,
 		last_activity_at: null,

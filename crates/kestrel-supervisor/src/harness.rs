@@ -11,27 +11,27 @@ use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthMethod, AuthenticateRequest, AvailableCommand, AvailableCommandInput,
-    CancelNotification, ContentBlock, ErrorCode, InitializeRequest, InitializeResponse,
-    LoadSessionRequest, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
-    SelectedPermissionOutcome, SessionConfigId, SessionConfigKind, SessionConfigOption,
-    SessionConfigOptionCategory, SessionConfigSelect, SessionConfigSelectOption,
-    SessionConfigSelectOptions, SessionConfigValueId, SessionId, SessionModeId, SessionModeState,
-    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
-    StopReason, TextContent,
+    CancelNotification, ClientCapabilities, ContentBlock, ErrorCode, InitializeRequest,
+    InitializeResponse, LoadSessionRequest, NewSessionRequest, PromptRequest,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigId, SessionConfigKind,
+    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelect,
+    SessionConfigSelectOption, SessionConfigSelectOptions, SessionConfigValueId, SessionId,
+    SessionModeId, SessionModeState, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionModeRequest, StopReason, TextContent,
 };
 use agent_client_protocol::{
-    AcpAgent, AcpAgentConfig, Client, ConnectionTo, Error, LineDirection,
+    AcpAgent, AcpAgentConfig, Client, ConnectionTo, Error, JsonRpcNotification, LineDirection,
     is_incoming_transport_closed,
 };
 
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::completer::{Completed, Completer, Settling};
+use crate::completer::{Completed, Completer, Settling, UnitChange};
 use crate::link::{
     Report, SessionCommand, SessionInfo, SessionOption, SessionOptionGroup, SessionOptionKind,
-    SessionOptionValue, TurnOutcome,
+    SessionOptionValue, TurnOutcome, UnitKind,
 };
 use crate::permission::{self, Subject};
 
@@ -440,11 +440,11 @@ async fn living(
         .on_receive_notification(
             {
                 let heard = Arc::clone(heard);
-                async move |notification: SessionNotification, _connection| {
+                async move |notification: SessionUpdated, _connection| {
                     heard
                         .lock()
                         .expect("what the agent said should not be poisoned")
-                        .update(notification.update);
+                        .heard(notification.update);
                     Ok(())
                 }
             },
@@ -608,10 +608,11 @@ async fn living(
                                 .boundary(TurnOutcome::Cancelled, jiff::Timestamp::now());
                             heard.emit(completed);
                             if cancelled {
+                                let trailing = heard.completer.trailing();
                                 drop(heard);
                                 // kestrel asked for this cancel, so the conversation stays open and
                                 // the Turn is reported interrupted.
-                                let _ = turns.send(ConversationEvent::Interrupted);
+                                let _ = turns.send(ConversationEvent::Interrupted { trailing });
                                 continue;
                             }
                         }
@@ -753,7 +754,9 @@ async fn initialized(
     auth: Option<&str>,
 ) -> Result<InitializeResponse, Error> {
     let initialized = connection
-        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+        .send_request(
+            InitializeRequest::new(ProtocolVersion::V1).client_capabilities(declarations()),
+        )
         .block_task()
         .await?;
     if initialized.protocol_version != ProtocolVersion::V1 {
@@ -786,6 +789,87 @@ async fn initialized(
     }
 
     Ok(initialized)
+}
+
+/// Every harness is told every declaration, since a harness ignores a key it doesn't know.
+fn declarations() -> ClientCapabilities {
+    let serde_json::Value::Object(meta) = serde_json::json!({
+        "jetbrains": {"air": {"version": 1, "capabilities": ["asyncTasks"]}},
+    }) else {
+        unreachable!("a literal object")
+    };
+
+    ClientCapabilities::new().meta(meta)
+}
+
+/// Untyped, because adapters send `session/update` variants ACP v1 doesn't define, and a typed
+/// notification that fails to parse is lost whole.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonRpcNotification)]
+#[notification(method = "session/update")]
+struct SessionUpdated {
+    update: serde_json::Value,
+}
+
+enum Heard {
+    Acp(Box<SessionUpdate>),
+    Unit(UnitChange),
+    Unread(String),
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "sessionUpdate", rename_all = "snake_case")]
+enum Extension {
+    #[serde(rename_all = "camelCase")]
+    AsyncTaskSpawned { async_task_id: String, name: String },
+    #[serde(rename_all = "camelCase")]
+    AsyncTaskProgress { async_task_id: String },
+    #[serde(rename_all = "camelCase")]
+    AsyncTaskStateUpdate {
+        async_task_id: String,
+        state: String,
+    },
+    #[serde(other)]
+    Acp,
+}
+
+fn heard(update: serde_json::Value) -> Heard {
+    let variant = update
+        .get("sessionUpdate")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("none")
+        .to_owned();
+    let unread = |error: serde_json::Error| {
+        Heard::Unread(format!(
+            "kestrel: the agent sent a session update kestrel can't read ({variant}): {error}"
+        ))
+    };
+    let extension = match serde_json::from_value::<Extension>(update.clone()) {
+        Ok(extension) => extension,
+        Err(error) => return unread(error),
+    };
+
+    match extension {
+        Extension::Acp => serde_json::from_value(update)
+            .map_or_else(unread, |update| Heard::Acp(Box::new(update))),
+        Extension::AsyncTaskSpawned {
+            async_task_id,
+            name,
+        } => Heard::Unit(UnitChange::Opened {
+            id: async_task_id,
+            kind: UnitKind::BackgroundTask,
+            title: name,
+        }),
+        Extension::AsyncTaskStateUpdate {
+            async_task_id,
+            state,
+        } if matches!(state.as_str(), "completed" | "failed" | "stopped") => {
+            Heard::Unit(UnitChange::Settled { id: async_task_id })
+        }
+        Extension::AsyncTaskProgress { async_task_id }
+        | Extension::AsyncTaskStateUpdate { async_task_id, .. } => {
+            Heard::Unit(UnitChange::Progressed { id: async_task_id })
+        }
+    }
 }
 
 /// Everything kestrel asks of an agent before its first prompt, in the order ACP has a client
@@ -1142,7 +1226,7 @@ fn stopped_short(stop: StopReason) -> Option<String> {
 pub enum ConversationEvent {
     Report(Report),
     Worked(Worked),
-    Interrupted,
+    Interrupted { trailing: bool },
     Settled,
     State(Report),
     Ready,
@@ -1355,6 +1439,21 @@ impl Hearing {
             .reports
             .send(ConversationEvent::Report(Report::SessionInfo(info)));
     }
+    fn heard(&mut self, update: serde_json::Value) {
+        if self.replaying {
+            return;
+        }
+        match heard(update) {
+            Heard::Acp(update) => self.update(*update),
+            Heard::Unit(change) => {
+                let completed = self.completer.unit(change, jiff::Timestamp::now());
+                self.emit(completed);
+            }
+            Heard::Unread(diagnostic) => {
+                let _ = self.diagnostics.send(diagnostic);
+            }
+        }
+    }
     fn update(&mut self, update: SessionUpdate) {
         if self.replaying {
             return;
@@ -1503,6 +1602,75 @@ mod tests {
         }
 
         infos
+    }
+
+    #[test]
+    fn every_initialize_declares_async_tasks() {
+        let declared = serde_json::to_value(declarations()).unwrap();
+        assert_eq!(
+            declared["_meta"]["jetbrains"]["air"],
+            serde_json::json!({"version": 1, "capabilities": ["asyncTasks"]})
+        );
+    }
+
+    #[test]
+    fn an_async_task_opens_a_background_task_unit_that_only_a_terminal_state_settles() {
+        let spawned = heard(serde_json::json!({
+            "sessionUpdate": "async_task_spawned",
+            "asyncTaskId": "task",
+            "name": "cargo test",
+            "taskType": "local_bash",
+            "description": "cargo test --all",
+            "canStop": true,
+        }));
+        assert!(matches!(
+            spawned,
+            Heard::Unit(UnitChange::Opened { id, kind: UnitKind::BackgroundTask, title })
+                if id == "task" && title == "cargo test"
+        ));
+        let progress = heard(serde_json::json!({
+            "sessionUpdate": "async_task_progress",
+            "asyncTaskId": "task",
+            "summary": "compiling",
+        }));
+        assert!(matches!(progress, Heard::Unit(UnitChange::Progressed { id }) if id == "task"));
+        for state in ["running", "paused"] {
+            let open = heard(serde_json::json!({
+                "sessionUpdate": "async_task_state_update",
+                "asyncTaskId": "task",
+                "state": state,
+            }));
+            assert!(
+                matches!(open, Heard::Unit(UnitChange::Progressed { .. })),
+                "{state}"
+            );
+        }
+        for state in ["completed", "failed", "stopped"] {
+            let settled = heard(serde_json::json!({
+                "sessionUpdate": "async_task_state_update",
+                "asyncTaskId": "task",
+                "state": state,
+            }));
+            assert!(
+                matches!(settled, Heard::Unit(UnitChange::Settled { .. })),
+                "{state}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_session_update_kestrel_does_not_know_is_a_diagnostic_naming_it() {
+        let unknown = heard(serde_json::json!({"sessionUpdate": "scripted_mystery"}));
+        assert!(
+            matches!(&unknown, Heard::Unread(diagnostic) if diagnostic.contains("scripted_mystery"))
+        );
+        let standard = heard(serde_json::json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "hello"},
+        }));
+        assert!(
+            matches!(standard, Heard::Acp(update) if matches!(*update, SessionUpdate::AgentMessageChunk(_)))
+        );
     }
 
     #[test]

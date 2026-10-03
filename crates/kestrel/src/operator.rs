@@ -716,6 +716,7 @@ struct SessionRecord {
     supervisor_version: Option<String>,
     usage: Option<domain::Usage>,
     tools: Vec<crate::live_work::RunningTool>,
+    units: Vec<crate::live_work::RunningUnit>,
     message_buffering: bool,
     thought_buffering: bool,
     last_activity_at: Option<Timestamp>,
@@ -926,6 +927,7 @@ impl SessionRecord {
             supervisor_version: session.connected.map(|connected| connected.version),
             usage: session.usage,
             tools: Vec::new(),
+            units: Vec::new(),
             message_buffering: false,
             thought_buffering: false,
             last_activity_at: None,
@@ -938,6 +940,7 @@ impl SessionRecord {
         // The live figure is the Turn in flight; the recorded one is the last Turn answered.
         record.usage = state.usage.or(record.usage);
         record.tools = state.tools;
+        record.units = state.units;
         record.message_buffering = state.message_buffering;
         record.thought_buffering = state.thought_buffering;
         if record.state == domain::SessionState::Trailing.as_str() {

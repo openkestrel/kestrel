@@ -13,7 +13,7 @@ use crate::domain::{
 use crate::instance::{Admission, Observed};
 use crate::integration::delivery;
 use crate::link;
-use crate::live_work::RunningTool;
+use crate::live_work::{RunningTool, RunningUnit};
 use crate::log::{ClosingReason, Completion, Entry, Message, PlanEntry, ToolStatus};
 use crate::participant;
 use crate::store::workspace::Taken;
@@ -67,6 +67,7 @@ pub enum Report {
     },
     SessionState {
         tools: Vec<RunningTool>,
+        units: Vec<RunningUnit>,
         message_buffering: bool,
         thought_buffering: bool,
         #[serde(default)]
@@ -104,7 +105,11 @@ pub enum Report {
         #[serde(default)]
         usage: Option<Usage>,
     },
-    Interrupted,
+    /// `trailing` while units the agent started still run past the interrupt.
+    Interrupted {
+        #[serde(default)]
+        trailing: bool,
+    },
     Settled,
     Checkout {
         repositories: Vec<Observed>,
@@ -135,7 +140,7 @@ impl Report {
             | Report::ToolCall { .. }
             | Report::OptionChanged { .. }
             | Report::Answered { .. }
-            | Report::Interrupted
+            | Report::Interrupted { .. }
             | Report::Settled
             | Report::Checkout { .. }
             | Report::Finished { .. } => true,
@@ -916,7 +921,7 @@ async fn reported(
             }
             info!(session = %session.id, "a supervisor reported its agent answered a turn");
         }
-        Report::Interrupted => {
+        Report::Interrupted { trailing } => {
             let workspace = tx.workspaces().get(session.workspace).await?;
             if let Some(interrupting) = tx.workspaces().take_interrupting(session).await? {
                 tx.log()
@@ -929,12 +934,12 @@ async fn reported(
                     )
                     .await?;
             }
-            if tx
-                .workspaces()
-                .answer_turn(session, SessionState::Waiting)
-                .await?
-                .is_some()
-            {
+            let then = if trailing {
+                SessionState::Trailing
+            } else {
+                SessionState::Waiting
+            };
+            if tx.workspaces().answer_turn(session, then).await?.is_some() {
                 tx.workspaces()
                     .record_active(session.organization, session.workspace, Timestamp::now())
                     .await?;

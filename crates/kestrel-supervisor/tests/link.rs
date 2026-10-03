@@ -181,6 +181,12 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
             None,
             Report::SessionState {
                 tools: vec![],
+                units: vec![link::RunningUnit {
+                    id: "task".to_owned(),
+                    kind: link::UnitKind::BackgroundTask,
+                    title: "background tests".to_owned(),
+                    started_at: "2026-09-30T12:00:00Z".parse().unwrap(),
+                }],
                 message_buffering: false,
                 thought_buffering: false,
                 usage: Some(usage()),

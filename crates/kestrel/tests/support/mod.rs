@@ -2135,10 +2135,15 @@ impl Kestrel {
             .collect()
     }
 
-    pub async fn report_interrupted(&self, session: &Session) {
-        work::report_on(&self.store, session, Some(1), work::Report::Interrupted)
-            .await
-            .expect("the interruption should be reported");
+    pub async fn report_interrupted(&self, session: &Session, trailing: bool) {
+        work::report_on(
+            &self.store,
+            session,
+            Some(1),
+            work::Report::Interrupted { trailing },
+        )
+        .await
+        .expect("the interruption should be reported");
     }
 
     pub async fn instruct(&self, session: &Session, instruction: Instruction) {

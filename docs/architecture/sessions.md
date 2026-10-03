@@ -52,8 +52,9 @@ stateDiagram-v2
   instruction; only a working Turn is interruptible, so every other phase is refused naming itself.
   On the supervisor's `interrupted` report the control plane writes shared-state
   `TurnInterrupted {session, participant}`, clears `interrupting`, closes the Turn, and prompts any
-  Held Message at once on the slot the Turn held; with none held the Session becomes Waiting. An
-  interrupted Turn never fails its Session and never trails.
+  Held Message at once on the slot the Turn held; with none held the Session becomes Waiting, or
+  Trailing while background tasks or subagents its agent started still run. An interrupted Turn
+  never fails its Session.
 - **Stopping a Waiting or Trailing Session succeeds** (`SessionState::stop_exit`). It has answered everything
   it was asked; ending it mid-turn is a failure.
 - **A stop closes the Session's open tool calls `interrupted`.** The Session has ended before its

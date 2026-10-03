@@ -495,6 +495,7 @@ async fn report(
     }
     if let work::Report::SessionState {
         tools,
+        units,
         message_buffering,
         thought_buffering,
         usage,
@@ -507,6 +508,7 @@ async fn report(
             &session.id.to_string(),
             crate::live_work::SessionState {
                 tools: tools.clone(),
+                units: units.clone(),
                 message_buffering: *message_buffering,
                 thought_buffering: *thought_buffering,
                 usage: usage.clone(),

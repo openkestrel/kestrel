@@ -147,12 +147,12 @@ effects (ADR-0004).
 | `thought {text, completion}` | yes | Appends narration `Thought`. |
 | `plan {entries, completion}` | yes | Appends one narration plan replacement. |
 | `tool_call {call_id, title, tool_kind, status, input, result, closing_reason, completion}` | yes | Appends one completed detail entry. |
-| `session_state {tools, message_buffering, thought_buffering, usage?, last_activity_at?}` | no | Each tool is `{call_id, title, tool_kind, status, started_at}`. Replaces the Session’s transient snapshot in serve-role memory; reconnect resends it. `last_activity_at` is present only while the supervisor trails; a Waiting Session that reports it moves to Trailing. |
+| `session_state {tools, units, message_buffering, thought_buffering, usage?, last_activity_at?}` | no | Each tool is `{call_id, title, tool_kind, status, started_at}`; `units` are the adapter units still open, which the Session read and `session show` list. Replaces the Session’s transient snapshot in serve-role memory; reconnect resends it. `last_activity_at` is present only while the supervisor trails; a Waiting Session that reports it moves to Trailing. |
 | `usage {usage}` | no | Held in serve-role memory beside the running tools: at most one a second, at the window's trailing edge, and never recorded (ADR-0041). |
 | `session_info {title, options, commands}` | no | Records the harness's whole bookkeeping state on the Session (ADR-0041). Sent when it changes, at most once a second, and again after a reconnect. |
 | `checkout {repositories}` | yes | Replaces the Workspace's observed git state (decides Unpublished Work); an unbriefed Session moves from `cloning` to `starting_harness`. |
 | `answered {usage?}` | yes | Closes the open Turn, moves the Session to Trailing, clears any pending interrupt, records a delivery from what was said up to it, and records the usage it carries; held messages become the next Turn at once, so the Session stays Working when there are any. |
-| `interrupted` | yes | Closes the interrupted Turn, moves the Session to Waiting, and appends shared-state `TurnInterrupted` naming who asked; held messages become the next Turn at once, so the Session stays Working when there are any. Writes no delivery. |
+| `interrupted {trailing}` | yes | Closes the interrupted Turn, moves the Session to Waiting, or to Trailing when `trailing` says units the agent started still run, and appends shared-state `TurnInterrupted` naming who asked; held messages become the next Turn at once, so the Session stays Working when there are any. Writes no delivery. |
 | `settled` | yes | Moves a Trailing Session to Waiting and records the Workspace active. Follows the `checkout` observed then. |
 | `finished {exit, usage?}` | yes | Ends the Session, recording the usage it carries. |
 
@@ -218,6 +218,14 @@ with no branch on which harness it drives.
 - The `start`'s auth names an ACP auth method for harnesses that require a login.
 - `KESTREL_`-prefixed variables, the Instance credential among them, are removed from the harness's
   environment.
+- Every `initialize` declares `clientCapabilities._meta.jetbrains.air = {version: 1, capabilities:
+  ["asyncTasks"]}`, whatever the harness; one that doesn't know the key ignores it.
+- `session/update` is taken untyped, since adapters send variants ACP v1 doesn't define. A
+  variant kestrel can't read is an operator diagnostic, never a failed notification.
+- Claude's `async_task_spawned` opens a `background_task` unit keyed by `asyncTaskId` and titled
+  by its `name`; `async_task_progress` and an `async_task_state_update` of `running` or `paused`
+  are activity; one of `completed`, `failed` or `stopped` settles it. A settled unit adds no
+  Transcript entry.
 - `session/request_permission` is answered with the agent's own allow-once option
   (`permission.rs`). There is no policy yet.
 - The pure completer buffers messages and thoughts independently by ID, completes chunks without
@@ -227,8 +235,10 @@ with no branch on which harness it drives.
   interrupted on cancellation and failed on failure.
 - The completer keeps running between Turns. An answer leaves open tools open and starts the
   Session trailing. Message and thought chunks, plans, tool calls and their updates are activity
-  and restart the quiet period (`KESTREL_QUIET_PERIOD`, 30 s, handed down by the work role);
-  bookkeeping never does. Once no tool is open and the quiet period has passed, the supervisor
+  and restart the quiet period (`KESTREL_QUIET_PERIOD`, 30 s, handed down by the work role), as
+  does any change to an adapter unit; bookkeeping never does. Open units carry over into the next
+  Turn, and a cancelled or failed one drops them. Once no tool or unit is open and the quiet
+  period has passed, the supervisor
   closes buffered text, closes any tool still open unresolved, and reports `checkout` and
   `settled`. Activity after that trails again. A tool still open when trailing ends any other way
   closes unresolved. A tool open when the next Turn starts stays open into it.

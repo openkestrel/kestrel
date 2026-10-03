@@ -160,9 +160,25 @@ pub struct RunningTool {
     pub started_at: Timestamp,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunningUnit {
+    pub id: String,
+    pub kind: UnitKind,
+    pub title: String,
+    pub started_at: Timestamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnitKind {
+    BackgroundTask,
+    Subagent,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SessionState {
     pub tools: Vec<RunningTool>,
+    pub units: Vec<RunningUnit>,
     pub message_buffering: bool,
     pub thought_buffering: bool,
     /// Held in memory, never a row (ADR-0041).

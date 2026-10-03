@@ -165,6 +165,7 @@ pub const SESSION: View = View::Detail(&[
     "supervisor_version",
     "usage",
     "tools",
+    "units",
     "last_activity_at",
 ]);
 pub const INTERRUPTED: View = View::Detail(&[

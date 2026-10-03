@@ -243,6 +243,7 @@ pub enum Report {
     },
     SessionState {
         tools: Vec<RunningTool>,
+        units: Vec<RunningUnit>,
         message_buffering: bool,
         thought_buffering: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -273,7 +274,9 @@ pub enum Report {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
     },
-    Interrupted,
+    Interrupted {
+        trailing: bool,
+    },
     Settled,
     Checkout {
         repositories: Vec<Observed>,
@@ -304,7 +307,7 @@ impl Report {
             Report::SessionInfo { .. } => "session_info",
             Report::OptionChanged { .. } => "option_changed",
             Report::Answered { .. } => "answered",
-            Report::Interrupted => "interrupted",
+            Report::Interrupted { .. } => "interrupted",
             Report::Settled => "settled",
             Report::Checkout { .. } => "checkout",
             Report::Finished { .. } => "finished",
@@ -899,4 +902,19 @@ pub struct RunningTool {
     pub tool_kind: String,
     pub status: String,
     pub started_at: jiff::Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RunningUnit {
+    pub id: String,
+    pub kind: UnitKind,
+    pub title: String,
+    pub started_at: jiff::Timestamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnitKind {
+    BackgroundTask,
+    Subagent,
 }

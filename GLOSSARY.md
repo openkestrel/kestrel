@@ -68,6 +68,13 @@ backgrounded commands, subagents, or output that keeps arriving. It becomes wait
 settles and the agent falls quiet. It takes a new turn at once.
 _Avoid_: settling, backgrounded, busy
 
+**Adapter Unit**:
+Work a harness's adapter declares it runs apart from any tool call, a background task or a
+subagent, open from its start until the adapter settles it. An open one keeps its session trailing,
+and an interrupt leaves it running. It is not the completed unit a transcript entry records, and
+it adds no entry of its own.
+_Avoid_: unit (alone), job, background process
+
 **Unbriefed**:
 A session's phase after its harness is up and before its first turn: its instance and agent
 conversation ready, no brief yet given. The first message posted to it becomes its brief.
