@@ -129,6 +129,7 @@ pub enum Script {
     Announces,
     Repeats,
     SwitchesModel,
+    SwitchesModeBack,
     /// Offers only legacy `modes` and no Mode-category option, and switches mode mid-turn.
     LegacyModes,
     /// Offers only legacy `modes` and no Mode-category option, and keeps the mode it is set to.
@@ -207,6 +208,7 @@ impl Script {
             Script::Announces => "announces",
             Script::Repeats => "repeats",
             Script::SwitchesModel => "switches-model",
+            Script::SwitchesModeBack => "switches-mode-back",
             Script::LegacyModes => "legacy-modes",
             Script::LegacyModesKept => "legacy-modes-kept",
             Script::BurstsUsage => "bursts-usage",
