@@ -287,11 +287,10 @@ async fn sweep(store: &Store) -> Result<Vec<(SessionId, Exit)>> {
     let mut expired = Vec::new();
 
     for session in tx.workspaces().expired_leases(Timestamp::now()).await? {
-        let exit = Exit::Failed {
-            because: "the supervisor stopped holding the session's lease out, and it expired"
-                .to_owned(),
-        };
-        expired.push((session.id, work::ending(&mut tx, &session, exit).await?));
+        expired.push((
+            session.id,
+            work::ending(&mut tx, &session, work::expired_lease()).await?,
+        ));
     }
     tx.commit().await?;
 

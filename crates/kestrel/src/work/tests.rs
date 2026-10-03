@@ -533,6 +533,44 @@ async fn a_heartbeat_never_revives_a_lease_that_has_passed_and_its_session_is_go
 }
 
 #[tokio::test]
+async fn a_supervisor_that_exits_after_its_sessions_lease_lapsed_fails_it_for_its_lease() {
+    let fixture = Fixture::new().await;
+    let mut tx = fixture.store.begin().await.unwrap();
+    tx.workspaces()
+        .hold_lease(
+            &fixture.session,
+            Timestamp::now() - SignedDuration::from_secs(1),
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    supervisor_exited(&fixture.store, INSTANCE, "the supervisor exited unreported")
+        .await
+        .unwrap();
+
+    let recorded = session(&fixture.store, fixture.session.id).await.unwrap();
+    assert_eq!(recorded.exit, Some(expired_lease()));
+}
+
+#[tokio::test]
+async fn a_supervisor_that_exits_while_its_sessions_lease_holds_fails_it_for_the_exit() {
+    let fixture = Fixture::new().await;
+
+    supervisor_exited(&fixture.store, INSTANCE, "the supervisor exited unreported")
+        .await
+        .unwrap();
+
+    let recorded = session(&fixture.store, fixture.session.id).await.unwrap();
+    assert_eq!(
+        recorded.exit,
+        Some(Exit::Failed {
+            because: "the supervisor exited unreported".to_owned()
+        })
+    );
+}
+
+#[tokio::test]
 async fn a_report_about_a_session_that_has_ended_is_gone() {
     let fixture = Fixture::new().await;
     complete(&fixture.store, &fixture.session).await.unwrap();
