@@ -14,8 +14,8 @@ use kestrel::link::Instruction;
 use kestrel::log::{ClosingReason, Entry, ToolStatus};
 use kestrel::work::Occupied;
 use kestrel_scripted_agent::{
-    BACKGROUND, BACKGROUND_TASK, BOOKKEEPING, OTHER_MODEL, SAID_WHILE_TRAILING, TASK_RUNS,
-    UNKNOWN_UPDATE,
+    BACKGROUND, BACKGROUND_TASK, BOOKKEEPING, OTHER_MODEL, SAID_BY_SUBAGENT, SAID_WHILE_TRAILING,
+    SUBAGENT, SUBAGENT_CALL, TASK_RUNS, UNKNOWN_UPDATE,
 };
 use support::github_stub::{self, GithubStub};
 use support::scripted_agent::{self, Script};
@@ -572,6 +572,83 @@ async fn a_running_background_task_is_listed_again_after_the_supervisor_reconnec
     assert_eq!(read["units"][0]["title"], BACKGROUND_TASK);
 
     supervisor.destroy();
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_subagents_tool_calls_and_messages_reach_the_parent_transcript_as_before_the_declaration()
+{
+    for declared in [false, true] {
+        let (kestrel, workspace, session) = match declared {
+            false => playing_unaware(Script::AnswersWithSubagents).await,
+            true => playing(Script::AnswersWithSubagents).await,
+        };
+        assert_eq!(
+            kestrel.answered(session.id, 1).await.state,
+            SessionState::Waiting
+        );
+
+        let entries = kestrel.every_entry(workspace.id).await;
+        position(&entries, "subagent's call", |entry| {
+            matches!(
+                entry,
+                Entry::ToolCall { title, status: ToolStatus::Completed, closing_reason: None, session_id, .. }
+                    if title == SUBAGENT_CALL && *session_id == session.id
+            )
+        });
+        position(
+            &entries,
+            "subagent's message",
+            |entry| matches!(entry, Entry::Said { message, session_id, .. } if message == SAID_BY_SUBAGENT && *session_id == Some(session.id)),
+        );
+
+        kestrel.teardown().await;
+    }
+}
+
+#[tokio::test]
+async fn two_subagents_using_one_tool_call_id_produce_two_detail_entries() {
+    let (kestrel, workspace, session) = playing(Script::AnswersWithSubagents).await;
+    kestrel.answered(session.id, 1).await;
+
+    let calls: Vec<String> = tool_calls(&kestrel, &workspace)
+        .await
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Entry::ToolCall { title, call_id, .. } if title == SUBAGENT_CALL => Some(call_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_ne!(calls[0], calls[1]);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_silent_subagent_keeps_its_session_trailing_until_it_finishes() {
+    let (kestrel, _workspace, session) = playing(Script::AnswersWithSubagents).await;
+    kestrel.answering(session.id, 1).await;
+
+    let read = listing_a_unit(&kestrel, session.id).await;
+    assert_eq!(read["state"], "trailing");
+    let unit = &read["units"][0];
+    assert_eq!(read["units"].as_array().unwrap().len(), 1, "{read}");
+    assert_eq!(unit["kind"], "subagent");
+    assert_eq!(unit["title"], SUBAGENT);
+
+    tokio::time::sleep(QUIET_PERIOD * 2).await;
+    let silent = session_read(&kestrel, session.id).await;
+    assert_eq!(silent["state"], "trailing");
+    assert_eq!(silent["units"][0]["kind"], "subagent");
+
+    let waiting = kestrel.answered(session.id, 1).await;
+    assert_eq!(waiting.state, SessionState::Waiting);
+    assert_eq!(
+        session_read(&kestrel, session.id).await["units"],
+        serde_json::json!([])
+    );
+
     kestrel.teardown().await;
 }
 

@@ -50,6 +50,9 @@ pub const BACKGROUND_TASK: &str = "cargo test --workspace";
 /// Longer than a test's quiet period, and silent throughout.
 pub const TASK_RUNS: std::time::Duration = std::time::Duration::from_secs(4);
 pub const UNKNOWN_UPDATE: &str = "scripted_mystery";
+pub const SUBAGENT: &str = "reviewer";
+pub const SUBAGENT_CALL: &str = "read the diff";
+pub const SAID_BY_SUBAGENT: &str = "the diff looks right";
 pub const WRITTEN_WHILE_TRAILING: &str = "written-while-trailing.txt";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -151,6 +154,12 @@ pub enum Script {
     /// `BACKGROUND_TASK`, which completes `TASK_RUNS` later without another word. As Claude's
     /// adapter does, it sends the task only to a client that declared `asyncTasks`.
     AnswersWithABackgroundTask,
+    /// Spawns two Claude subagents named `SUBAGENT`, each completing `SUBAGENT_CALL` under the
+    /// same tool call id, and the first saying `SAID_BY_SUBAGENT` and finishing. It answers with
+    /// the second still running, which finishes `TASK_RUNS` later without another word. As
+    /// Claude's adapter does, it gives a subagent its own session only for a client that declared
+    /// `nativeSubagentSessions`, and otherwise sends the first's output on its own session.
+    AnswersWithSubagents,
 }
 
 impl Script {
@@ -207,6 +216,7 @@ impl Script {
             Script::ResumesAfterSettling => "resumes-after-settling",
             Script::AnswersThenWrites => "answers-then-writes",
             Script::AnswersWithABackgroundTask => "answers-with-a-background-task",
+            Script::AnswersWithSubagents => "answers-with-subagents",
         }
     }
 }

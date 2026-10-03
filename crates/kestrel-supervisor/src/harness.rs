@@ -354,6 +354,7 @@ async fn conversing(
         replaying: false,
         info: Held::default(),
         announced: None,
+        subagents: BTreeSet::new(),
     }));
     let mut continuity = Continuity::default();
 
@@ -444,7 +445,7 @@ async fn living(
                     heard
                         .lock()
                         .expect("what the agent said should not be poisoned")
-                        .heard(notification.update);
+                        .heard(&notification.session_id, notification.update);
                     Ok(())
                 }
             },
@@ -793,7 +794,10 @@ async fn initialized(
 /// Every harness is told every declaration, since a harness ignores a key it doesn't know.
 fn declarations() -> ClientCapabilities {
     let serde_json::Value::Object(meta) = serde_json::json!({
-        "jetbrains": {"air": {"version": 1, "capabilities": ["asyncTasks"]}},
+        "jetbrains": {"air": {
+            "version": 1,
+            "capabilities": ["asyncTasks", "nativeSubagentSessions"],
+        }},
     }) else {
         unreachable!("a literal object")
     };
@@ -805,7 +809,9 @@ fn declarations() -> ClientCapabilities {
 /// notification that fails to parse is lost whole.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonRpcNotification)]
 #[notification(method = "session/update")]
+#[serde(rename_all = "camelCase")]
 struct SessionUpdated {
+    session_id: String,
     update: serde_json::Value,
 }
 
@@ -825,6 +831,16 @@ enum Extension {
     #[serde(rename_all = "camelCase")]
     AsyncTaskStateUpdate {
         async_task_id: String,
+        state: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    SubagentSpawned {
+        subagent_session_id: String,
+        name: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    SubagentStateUpdate {
+        subagent_session_id: String,
         state: String,
     },
     #[serde(other)]
@@ -867,7 +883,43 @@ fn heard(update: serde_json::Value) -> Heard {
         | Extension::AsyncTaskStateUpdate { async_task_id, .. } => {
             Heard::Unit(UnitChange::Progressed { id: async_task_id })
         }
+        Extension::SubagentSpawned {
+            subagent_session_id,
+            name,
+        } => Heard::Unit(UnitChange::Opened {
+            id: subagent_session_id,
+            kind: UnitKind::Subagent,
+            title: name,
+        }),
+        Extension::SubagentStateUpdate {
+            subagent_session_id,
+            state,
+        } if matches!(
+            state.as_str(),
+            "completed" | "failed" | "cancelled" | "disconnected"
+        ) =>
+        {
+            Heard::Unit(UnitChange::Settled {
+                id: subagent_session_id,
+            })
+        }
+        Extension::SubagentStateUpdate {
+            subagent_session_id,
+            ..
+        } => Heard::Unit(UnitChange::Progressed {
+            id: subagent_session_id,
+        }),
     }
+}
+
+/// Two subagents may use the same tool call id, so each one's is prefixed by its session's.
+fn folded(subagent: &str, mut update: serde_json::Value) -> serde_json::Value {
+    if let Some(call) = update.get_mut("toolCallId")
+        && let Some(id) = call.as_str()
+    {
+        *call = format!("{subagent}:{id}").into();
+    }
+    update
 }
 
 /// Everything kestrel asks of an agent before its first prompt, in the order ACP has a client
@@ -1241,6 +1293,7 @@ struct Hearing {
     replaying: bool,
     info: Held,
     announced: Option<SessionInfo>,
+    subagents: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -1437,13 +1490,25 @@ impl Hearing {
             .reports
             .send(ConversationEvent::Report(Report::SessionInfo(info)));
     }
-    fn heard(&mut self, update: serde_json::Value) {
+    fn heard(&mut self, session: &str, update: serde_json::Value) {
         if self.replaying {
             return;
         }
+        let update = match self.subagents.contains(session) {
+            true => folded(session, update),
+            false => update,
+        };
         match heard(update) {
             Heard::Acp(update) => self.update(update),
             Heard::Unit(change) => {
+                if let UnitChange::Opened {
+                    id,
+                    kind: UnitKind::Subagent,
+                    ..
+                } = &change
+                {
+                    self.subagents.insert(id.clone());
+                }
                 let completed = self.completer.unit(change, jiff::Timestamp::now());
                 self.emit(completed);
             }
@@ -1586,6 +1651,7 @@ mod tests {
                 replaying: false,
                 info: Held::default(),
                 announced: None,
+                subagents: BTreeSet::new(),
             },
             heard,
         )
@@ -1603,12 +1669,90 @@ mod tests {
     }
 
     #[test]
-    fn every_initialize_declares_claudes_async_tasks() {
+    fn every_initialize_declares_claudes_async_tasks_and_native_subagents() {
         let declared = serde_json::to_value(declarations()).unwrap();
         assert_eq!(
             declared["_meta"]["jetbrains"]["air"],
-            serde_json::json!({"version": 1, "capabilities": ["asyncTasks"]})
+            serde_json::json!({
+                "version": 1,
+                "capabilities": ["asyncTasks", "nativeSubagentSessions"],
+            })
         );
+    }
+
+    fn subagent_spawned(subagent: &str) -> serde_json::Value {
+        serde_json::json!({
+            "sessionUpdate": "subagent_spawned",
+            "subagentSessionId": subagent,
+            "name": "reviewer",
+            "task": "review the change",
+            "capabilities": {},
+        })
+    }
+
+    #[test]
+    fn a_subagent_opens_a_subagent_unit_that_only_a_terminal_state_settles() {
+        assert!(matches!(
+            heard(subagent_spawned("subagent")),
+            Heard::Unit(UnitChange::Opened { id, kind: UnitKind::Subagent, title })
+                if id == "subagent" && title == "reviewer"
+        ));
+        for (state, settles) in [
+            ("running", false),
+            ("completed", true),
+            ("failed", true),
+            ("cancelled", true),
+            ("disconnected", true),
+        ] {
+            let changed = heard(serde_json::json!({
+                "sessionUpdate": "subagent_state_update",
+                "subagentSessionId": "subagent",
+                "state": state,
+            }));
+            assert_eq!(
+                matches!(changed, Heard::Unit(UnitChange::Settled { id }) if id == "subagent"),
+                settles,
+                "{state}"
+            );
+        }
+    }
+
+    fn completed_call(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": id,
+            "title": "read the diff",
+            "status": "completed",
+        })
+    }
+
+    #[test]
+    fn a_subagents_output_is_the_parents_with_its_tool_call_ids_prefixed_by_the_subagents() {
+        let (mut hearing, mut heard) = hearing();
+        hearing.heard("parent", completed_call("call"));
+        for subagent in ["first", "second"] {
+            hearing.heard("parent", subagent_spawned(subagent));
+            hearing.heard(subagent, completed_call("call"));
+        }
+        hearing.heard(
+            "first",
+            serde_json::json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "the diff looks right"},
+            }),
+        );
+
+        let mut calls = Vec::new();
+        let mut said = Vec::new();
+        while let Ok(event) = heard.try_recv() {
+            match event {
+                ConversationEvent::Report(Report::ToolCall { call_id, .. }) => calls.push(call_id),
+                ConversationEvent::Report(Report::Said { message, .. }) => said.push(message),
+                _ => {}
+            }
+        }
+        assert_eq!(calls, ["call", "first:call", "second:call"]);
+        assert_eq!(said, ["the diff looks right"]);
     }
 
     #[test]

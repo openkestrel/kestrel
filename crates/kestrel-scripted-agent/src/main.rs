@@ -28,9 +28,9 @@ use kestrel_scripted_agent::{
     CHATTERED_LINES, CHATTERED_MESSAGES, COMMAND, COMMAND_DESCRIPTION, COMMAND_HINT, CONFIDED,
     CUSTOM_CATEGORY, CUSTOM_OPTION, DEFAULT_MODEL, FIRST_MEMORY, LAST_MEMORY, LOGIN, MODE_OPTION,
     MUTTERED, OTHER_MODE, OTHER_MODEL, OTHER_THOUGHT_LEVEL, OVERLONG, REFRESHED, REPEATS,
-    RESUMES_AFTER, SAID_WHILE_TRAILING, STARTING_MODE, STARTING_THOUGHT_LEVEL, SWITCHED_MODE,
-    Script, TASK_RUNS, THOUGHT_LEVEL_OPTION, TITLE, UNKNOWN_UPDATE, WRITTEN_WHILE_TRAILING,
-    chattered, conversed,
+    RESUMES_AFTER, SAID_BY_SUBAGENT, SAID_WHILE_TRAILING, STARTING_MODE, STARTING_THOUGHT_LEVEL,
+    SUBAGENT, SUBAGENT_CALL, SWITCHED_MODE, Script, TASK_RUNS, THOUGHT_LEVEL_OPTION, TITLE,
+    UNKNOWN_UPDATE, WRITTEN_WHILE_TRAILING, chattered, conversed,
 };
 
 const SESSION: &str = "scripted";
@@ -101,7 +101,11 @@ async fn main() -> Result<()> {
                     return responder.respond(InitializeResponse::new(ProtocolVersion::V0));
                 }
                 ASYNC_TASKS.store(
-                    !unaware && declares_async_tasks(&initialize),
+                    !unaware && declares(&initialize, "asyncTasks"),
+                    Ordering::Relaxed,
+                );
+                SUBAGENTS.store(
+                    !unaware && declares(&initialize, "nativeSubagentSessions"),
                     Ordering::Relaxed,
                 );
 
@@ -300,9 +304,12 @@ async fn main() -> Result<()> {
 static TURN: AtomicUsize = AtomicUsize::new(0);
 static ASYNC_TASKS: AtomicBool = AtomicBool::new(false);
 const ASYNC_TASK: &str = "task-1";
+static SUBAGENTS: AtomicBool = AtomicBool::new(false);
+const SUBAGENT_SESSIONS: [&str; 2] = ["subagent-1", "subagent-2"];
+const SUBAGENT_TOOL_CALL: &str = "toolu-subagent";
 
 /// Read as Claude's adapter reads it.
-fn declares_async_tasks(initialize: &InitializeRequest) -> bool {
+fn declares(initialize: &InitializeRequest, capability: &str) -> bool {
     let air = initialize
         .client_capabilities
         .meta
@@ -315,7 +322,7 @@ fn declares_async_tasks(initialize: &InitializeRequest) -> bool {
         && air
             .and_then(|air| air.get("capabilities"))
             .and_then(serde_json::Value::as_array)
-            .is_some_and(|capabilities| capabilities.contains(&"asyncTasks".into()))
+            .is_some_and(|capabilities| capabilities.contains(&capability.into()))
 }
 
 async fn play(
@@ -605,6 +612,37 @@ async fn play(
         }
         return Ok(StopReason::EndTurn);
     }
+    if script == Script::AnswersWithSubagents && earlier.is_empty() {
+        let called = || {
+            SessionUpdate::ToolCall(
+                ToolCall::new(SUBAGENT_TOOL_CALL, SUBAGENT_CALL).status(ToolCallStatus::Completed),
+            )
+        };
+        let said =
+            || SessionUpdate::AgentMessageChunk(chunk(Some("subagent-message"), SAID_BY_SUBAGENT));
+        if SUBAGENTS.load(Ordering::Relaxed) {
+            for subagent in SUBAGENT_SESSIONS {
+                extension(
+                    connection,
+                    serde_json::json!({
+                        "sessionUpdate": "subagent_spawned",
+                        "subagentSessionId": subagent,
+                        "name": SUBAGENT,
+                        "task": "review the change",
+                        "capabilities": {},
+                    }),
+                )?;
+                update_in(connection, subagent, called())?;
+            }
+            update_in(connection, SUBAGENT_SESSIONS[0], said())?;
+            subagent_state(connection, SUBAGENT_SESSIONS[0], "completed")?;
+        } else {
+            update(connection, called())?;
+            update(connection, said())?;
+        }
+        say(connection, "message-1", "the reviewers are on it")?;
+        return Ok(StopReason::EndTurn);
+    }
     if script == Script::CarriesAToolOver {
         if earlier.is_empty() {
             update(
@@ -883,6 +921,10 @@ async fn trail(
             tokio::time::sleep(TASK_RUNS).await;
             async_task_state(connection, "completed")
         }
+        Script::AnswersWithSubagents if SUBAGENTS.load(Ordering::Relaxed) => {
+            tokio::time::sleep(TASK_RUNS).await;
+            subagent_state(connection, SUBAGENT_SESSIONS[1], "completed")
+        }
         Script::AnswersThenWrites => {
             tokio::time::sleep(VANISHING).await;
             let directory = located.ok_or_else(Error::internal_error)?;
@@ -960,7 +1002,15 @@ fn say(connection: &ConnectionTo<Client>, message: &str, said: &str) -> Result<(
 }
 
 fn update(connection: &ConnectionTo<Client>, update: SessionUpdate) -> Result<()> {
-    connection.send_notification(SessionNotification::new(SESSION, update))
+    update_in(connection, SESSION, update)
+}
+
+fn update_in(
+    connection: &ConnectionTo<Client>,
+    session: &str,
+    update: SessionUpdate,
+) -> Result<()> {
+    connection.send_notification(SessionNotification::new(session.to_owned(), update))
 }
 
 /// A `session/update` ACP v1 has no type for.
@@ -977,6 +1027,17 @@ fn async_task_state(connection: &ConnectionTo<Client>, state: &str) -> Result<()
         serde_json::json!({
             "sessionUpdate": "async_task_state_update",
             "asyncTaskId": ASYNC_TASK,
+            "state": state,
+        }),
+    )
+}
+
+fn subagent_state(connection: &ConnectionTo<Client>, subagent: &str, state: &str) -> Result<()> {
+    extension(
+        connection,
+        serde_json::json!({
+            "sessionUpdate": "subagent_state_update",
+            "subagentSessionId": subagent,
             "state": state,
         }),
     )

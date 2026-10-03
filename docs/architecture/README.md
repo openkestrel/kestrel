@@ -158,7 +158,7 @@ supervisor ([ADR-0026](../adr/0026-kestrel-carries-named-credentials-never-a-run
 An accepted ADR is a decision, not a description. These are decided and not yet built:
 
 - **Trailing Sessions** ([ADR-0040](../adr/0040-a-session-trails-its-answer-while-its-work-runs.md)):
-  the ACP-only baseline and Claude's background tasks are built. Claude's subagents, OpenCode's
+  the ACP-only baseline and Claude's background tasks and subagents are built. OpenCode's
   children, a post, Firing or stop reaching a trailing Session, and trailing in the queue are
   not, as [Spec #385](https://github.com/openkestrel/kestrel/issues/385) scopes them.
 - **Integration identity** ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)): there
