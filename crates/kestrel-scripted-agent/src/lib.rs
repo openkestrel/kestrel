@@ -50,6 +50,9 @@ pub const BACKGROUND_TASK: &str = "cargo test --workspace";
 /// Longer than a test's quiet period, and silent throughout.
 pub const TASK_RUNS: std::time::Duration = std::time::Duration::from_secs(4);
 pub const UNKNOWN_UPDATE: &str = "scripted_mystery";
+pub const SUBAGENT: &str = "reviewer";
+pub const SUBAGENT_CALL: &str = "read the diff";
+pub const SAID_BY_SUBAGENT: &str = "the diff looks right";
 pub const WRITTEN_WHILE_TRAILING: &str = "written-while-trailing.txt";
 pub const CHILD_TITLE: &str = "explore the checkout";
 pub const CHILD_SAID_IN_TURN: &str = "the child read the code";
@@ -155,6 +158,10 @@ pub enum Script {
     /// Sends an `UNKNOWN_UPDATE`, then answers with Claude's async task `BACKGROUND_TASK`, sent
     /// only if the client declared `asyncTasks`, running silently for `TASK_RUNS`.
     AnswersWithABackgroundTask,
+    /// Spawns two Claude subagents `SUBAGENT`, the first saying `SAID_BY_SUBAGENT` and the second
+    /// still running silently for `TASK_RUNS` past the answer, each in its own session only for a
+    /// client that declared `nativeSubagentSessions`.
+    AnswersWithSubagents,
     /// Runs an OpenCode child through its turn and silently past the answer for `CHILD_SILENT_FOR`,
     /// sending its output on the child channel only to a client that declared it.
     #[value(name = "runs-an-opencode-child")]
@@ -215,6 +222,7 @@ impl Script {
             Script::ResumesAfterSettling => "resumes-after-settling",
             Script::AnswersThenWrites => "answers-then-writes",
             Script::AnswersWithABackgroundTask => "answers-with-a-background-task",
+            Script::AnswersWithSubagents => "answers-with-subagents",
             Script::RunsAnOpenCodeChild => "runs-an-opencode-child",
         }
     }

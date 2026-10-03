@@ -219,13 +219,19 @@ with no branch on which harness it drives.
 - `KESTREL_`-prefixed variables, the Instance credential among them, are removed from the harness's
   environment.
 - Every `initialize` declares `clientCapabilities._meta.jetbrains.air = {version: 1, capabilities:
-  ["asyncTasks"]}`, whatever the harness; one that doesn't know the key ignores it.
+  ["asyncTasks", "nativeSubagentSessions"]}`, whatever the harness; one that doesn't know the key
+  ignores it.
 - `session/update` is taken untyped, since adapters send variants ACP v1 doesn't define. A
   variant kestrel can't read is an operator diagnostic, never a failed notification.
 - Claude's `async_task_spawned` opens a `background_task` unit keyed by `asyncTaskId` and titled
   by its `name`; `async_task_progress` and an `async_task_state_update` of `running` or `paused`
   are activity; one of `completed`, `failed` or `stopped` settles it. A settled unit adds no
   Transcript entry.
+- Claude's `subagent_spawned` opens a `subagent` unit keyed by `subagentSessionId` and titled by
+  its `name`; a `subagent_state_update` of `completed`, `failed`, `cancelled` or `disconnected`
+  settles it. Declaring native subagents moves all their output off the parent session, so an
+  update under a known subagent session is folded into the parent's completer, and only there,
+  its `toolCallId` prefixed `<subagent>:` so two subagents' calls can't collide.
 - `session/request_permission` is answered with the agent's own allow-once option
   (`permission.rs`). There is no policy yet.
 - The pure completer buffers messages and thoughts independently by ID, completes chunks without
