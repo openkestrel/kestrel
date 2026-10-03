@@ -1326,14 +1326,14 @@ impl Held {
     /// Synthesizes a Mode option from legacy `modes` for a harness that offers none (ADR-0041).
     fn snapshot(&self) -> SessionInfo {
         let mut options: Vec<SessionOption> = self.options.iter().map(option).collect();
-        let mode = self.current_mode.clone().or_else(|| {
-            self.modes
-                .as_ref()
-                .map(|modes| modes.current_mode_id.clone())
-        });
         match options.iter_mut().find(|option| option.is_category(MODE)) {
-            Some(option) => set_current(option, mode),
+            Some(option) => set_current(option, self.current_mode.clone()),
             None => {
+                let mode = self.current_mode.clone().or_else(|| {
+                    self.modes
+                        .as_ref()
+                        .map(|modes| modes.current_mode_id.clone())
+                });
                 if let Some(current) = mode {
                     options.push(synthesized_mode(&current, self.modes.as_ref()));
                 }
@@ -1490,9 +1490,16 @@ impl Hearing {
     }
     fn hold(&mut self, options: Option<Vec<SessionConfigOption>>, modes: Option<SessionModeState>) {
         if let Some(options) = options {
+            if options
+                .iter()
+                .any(|option| option.category == Some(SessionConfigOptionCategory::Mode))
+            {
+                self.info.current_mode = None;
+            }
             self.info.options = options;
         }
         if let Some(modes) = modes {
+            self.info.current_mode = None;
             self.info.modes = Some(modes);
         }
         self.announce();
@@ -1545,7 +1552,8 @@ impl Hearing {
         }
         match &update {
             SessionUpdate::ConfigOptionUpdate(update) => {
-                self.info.options = update.config_options.clone();
+                self.hold(Some(update.config_options.clone()), None);
+                return;
             }
             SessionUpdate::SessionInfoUpdate(update) => match &update.title {
                 MaybeUndefined::Value(title) => self.info.title = Some(title.clone()),

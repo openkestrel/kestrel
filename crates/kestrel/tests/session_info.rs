@@ -115,6 +115,82 @@ fn command<'a>(shown: &'a Value, name: &str) -> &'a Value {
 }
 
 #[tokio::test]
+async fn unchanged_bookkeeping_is_not_reported_again_on_the_same_connection() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel, None).await;
+    let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("the observing link should bind");
+    let address = listener.local_addr().expect("the link's address");
+    let base = kestrel.link();
+    let client = reqwest::Client::new();
+    let (reported, mut reports) = tokio::sync::mpsc::unbounded_channel();
+    let router = axum::Router::new().fallback(move |request: axum::extract::Request| {
+        let base = base.clone();
+        let client = client.clone();
+        let reported = reported.clone();
+        async move {
+            let (parts, body) = request.into_parts();
+            let body = axum::body::to_bytes(body, 1024 * 1024)
+                .await
+                .expect("a bounded link request");
+            if parts.uri.path().ends_with("/reports") {
+                let report: Value = serde_json::from_slice(&body).expect("a report as JSON");
+                if report["kind"] == "session_info" {
+                    reported.send(report).expect("the test is still receiving");
+                }
+            }
+            let response = client
+                .request(parts.method, format!("{base}{}", parts.uri))
+                .headers(parts.headers)
+                .body(body)
+                .send()
+                .await
+                .expect("the control plane should answer");
+            let status = response.status();
+            let headers = response.headers().clone();
+            let mut forwarded = axum::response::Response::new(axum::body::Body::from_stream(
+                response.bytes_stream(),
+            ));
+            *forwarded.status_mut() = status;
+            *forwarded.headers_mut() = headers;
+            forwarded
+        }
+    });
+    let observing = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("the link serves");
+    });
+    let mut supervisor = supervisor::Supervisor::provision_playing(
+        &format!("http://{address}"),
+        &on,
+        Script::Repeats,
+    );
+    kestrel.start(&session, supervisor.harness()).await;
+
+    let first = tokio::time::timeout(PATIENCE, reports.recv())
+        .await
+        .expect("bookkeeping should reach the link")
+        .expect("a bookkeeping report");
+    assert_eq!(first["session"], session.id.to_string());
+    assert!(first["seq"].is_null(), "bookkeeping is unnumbered");
+    let repeated = tokio::time::timeout(Duration::from_secs(3), reports.recv()).await;
+    kestrel.stop_session(session.id).await;
+    supervisor.lets_go_of(session.id).await;
+
+    assert!(
+        repeated.is_err(),
+        "unchanged bookkeeping was sent again: {repeated:?}"
+    );
+
+    supervisor.destroy();
+    observing.abort();
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_session_read_shows_the_title_its_options_and_its_commands() {
     let kestrel = Kestrel::dispatching_to(
         supervisor::binary(),
@@ -197,6 +273,46 @@ async fn a_current_mode_update_changes_the_mode_options_current_value() {
             .is_some_and(|values| values.iter().any(|value| value["value"] == STARTING_MODE)),
         "the mode option offers no values: {mode}"
     );
+
+    kestrel.answered(session.id, 1).await;
+    let path = kestrel::operator::SESSION_OPTIONS
+        .replace("{organization}", "acme")
+        .replace("{session}", &session.id.to_string());
+    let response = reqwest::Client::new()
+        .post(format!("{}{path}", kestrel.operator()))
+        .json(&serde_json::json!({
+            "participant": "operator",
+            "option": MODE_OPTION,
+            "value": STARTING_MODE,
+        }))
+        .send()
+        .await
+        .expect("the operator boundary should answer");
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    until_shown(&kestrel, session.id, "the mode it was set to", |shown| {
+        option(shown, "mode")["current"] == STARTING_MODE
+    })
+    .await;
+
+    kestrel.stop_session(session.id).await;
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_later_option_list_replaces_the_mode_from_an_earlier_notification() {
+    let kestrel = Kestrel::dispatching_to(
+        supervisor::binary(),
+        &scripted_agent::playing(Script::SwitchesModeBack),
+    )
+    .await;
+    let workspace = a_workspace(&kestrel, None).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+
+    let shown = until_shown(&kestrel, session.id, "the updated option list", |shown| {
+        shown["worked_model"] == OTHER_MODEL
+    })
+    .await;
+    assert_eq!(option(&shown, "mode")["current"], STARTING_MODE);
 
     kestrel.stop_session(session.id).await;
     kestrel.teardown().await;

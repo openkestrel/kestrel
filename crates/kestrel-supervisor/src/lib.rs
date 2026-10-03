@@ -544,7 +544,7 @@ async fn say_session_info(
     };
     if carrying
         .info_due
-        .is_some_and(|due| tokio::time::Instant::now() < due)
+        .is_none_or(|due| tokio::time::Instant::now() < due)
     {
         return Ok(());
     }

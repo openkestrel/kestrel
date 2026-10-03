@@ -801,7 +801,13 @@ async fn play(
         say(connection, "message-1", "repeated")?;
         return Ok(StopReason::EndTurn);
     }
-    if script == Script::SwitchesModel {
+    if script == Script::SwitchesModeBack {
+        update(
+            connection,
+            SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(SWITCHED_MODE)),
+        )?;
+    }
+    if matches!(script, Script::SwitchesModel | Script::SwitchesModeBack) {
         update(
             connection,
             SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(offered(OTHER_MODEL))),
