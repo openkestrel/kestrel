@@ -63,6 +63,10 @@ impl Kestrel {
             .env("KESTREL_COMPUTE", "local-exec")
             .env("KESTREL_SUPERVISOR", support::supervisor::binary())
             .env(
+                "KESTREL_QUIET_PERIOD",
+                support::QUIET_PERIOD.as_secs().to_string(),
+            )
+            .env(
                 "KESTREL_HARNESS_COMMANDS",
                 format!(
                     "{}={}",
