@@ -564,6 +564,7 @@ async fn a_running_background_task_is_listed_again_after_the_supervisor_reconnec
     let supervisor =
         Supervisor::provision_playing(&kestrel.link(), &on, Script::AnswersWithABackgroundTask);
     kestrel.start(&session, supervisor.harness()).await;
+    kestrel.answering(session.id, 1).await;
     listing_a_unit(&kestrel, session.id).await;
 
     let kestrel = kestrel.kill_and_restart().await;
