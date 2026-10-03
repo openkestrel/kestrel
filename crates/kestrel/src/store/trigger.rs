@@ -807,6 +807,18 @@ fn matching(query: &mut QueryBuilder<Sqlite>, trigger: &Trigger) {
     query
         .push(" AND event.type <> ")
         .push_bind(crate::trigger::DISPATCHED)
+        // Kestrel's own voice fires nothing, by author (ADR-0028).
+        .push(
+            " AND NOT EXISTS (
+                 SELECT 1 FROM integration AS own
+                 WHERE own.id = event.integration_id
+                   AND own.bot_login IS NOT NULL
+                   AND (lower(json_extract(event.data, '$.actor.login')) = lower(own.bot_login)
+                     OR lower(json_extract(event.data, '$.user.login')) = lower(own.bot_login)
+                     OR lower(json_extract(event.data, '$.sender.login')) = lower(own.bot_login)
+                     OR lower(json_extract(event.data, '$.comment.user.login')) = lower(own.bot_login))
+             )",
+        )
         .push(")");
 }
 

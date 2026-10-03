@@ -284,6 +284,201 @@ async fn a_github_integration_without_a_signing_secret_accepts_no_delivery() {
 }
 
 #[tokio::test]
+async fn a_comment_from_the_integration_itself_never_queues_a_session() {
+    let kestrel = Kestrel::boot().await;
+    let stub = GithubStub::start();
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    kestrel
+        .declare_trigger(
+            "acme",
+            "ready",
+            &labelled_on(REPOSITORY, "ready-for-agent"),
+            "kestrel",
+            "builder",
+        )
+        .await;
+    let github = kestrel
+        .register_signed_github("acme", "github", REPOSITORY, &stub.base_url(), SECRET)
+        .await;
+
+    let answered = delivered(&kestrel, &github, "d-1", labelled(43), SECRET)
+        .send()
+        .await
+        .expect("the webhook answers");
+    assert_eq!(answered.status(), StatusCode::ACCEPTED);
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while kestrel.workspaces("acme").await.is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the delivered label never opened a workspace"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let workspace = kestrel.workspaces("acme").await.remove(0);
+
+    let comment = serde_json::json!({
+        "action": "created",
+        "comment": {
+            "id": 99,
+            "body": "progress update\n\n<!-- kestrel session 01a0 turn 1 -->",
+            "user": { "login": "kestrel[bot]" }
+        },
+        "issue": { "number": 43 },
+        "sender": { "login": "kestrel[bot]" },
+        "repository": { "full_name": REPOSITORY }
+    })
+    .to_string()
+    .into_bytes();
+    let answered = post(&kestrel, &github)
+        .header("content-type", "application/json")
+        .header("x-github-event", "issue_comment")
+        .header("x-github-delivery", "d-2")
+        .header("x-hub-signature-256", signature(SECRET, &comment))
+        .body(comment)
+        .send()
+        .await
+        .expect("the webhook answers");
+    assert_eq!(answered.status(), StatusCode::ACCEPTED);
+
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while !kestrel
+        .events("acme")
+        .await
+        .iter()
+        .any(|event| event.occurrence.r#type == "com.github.issue_comment.created")
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the bot comment was never recorded"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    assert!(
+        !kestrel.has_pending_messages(workspace.id).await,
+        "the integration's own comment was held as input"
+    );
+    assert!(
+        kestrel
+            .transcript(workspace.id)
+            .await
+            .iter()
+            .all(|recorded| match &recorded.entry {
+                kestrel::log::Entry::Said { participant, .. } => participant != "kestrel[bot]",
+                kestrel::log::Entry::Messages { messages, .. } => messages
+                    .iter()
+                    .all(|message| message.participant != "kestrel[bot]"),
+                _ => true,
+            }),
+        "the integration's own comment reached the transcript"
+    );
+    assert_eq!(kestrel.workspaces("acme").await.len(), 1);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_command_from_the_integration_itself_fires_no_trigger() {
+    let kestrel = Kestrel::boot().await;
+    let stub = GithubStub::start();
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &organization,
+            "kestrel",
+            &["https://github.com/jtmthf/kestrel".to_owned()],
+            "main",
+        )
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    kestrel
+        .declare_trigger(
+            "acme",
+            "any-comment",
+            &serde_json::json!({"all": [
+                {"exact": {"source": format!("https://github.com/{REPOSITORY}")}},
+                {"exact": {"type": "com.github.issue_comment.created"}},
+            ]})
+            .to_string(),
+            "kestrel",
+            "builder",
+        )
+        .await;
+    let github = kestrel
+        .register_signed_github("acme", "github", REPOSITORY, &stub.base_url(), SECRET)
+        .await;
+
+    let comment = serde_json::json!({
+        "action": "created",
+        "comment": { "id": 99, "body": "@kestrel /implement", "user": { "login": "kestrel[bot]" } },
+        "issue": { "number": 43 },
+        "sender": { "login": "kestrel[bot]" },
+        "repository": { "full_name": REPOSITORY }
+    })
+    .to_string()
+    .into_bytes();
+    let answered = post(&kestrel, &github)
+        .header("content-type", "application/json")
+        .header("x-github-event", "issue_comment")
+        .header("x-github-delivery", "d-2")
+        .header("x-hub-signature-256", signature(SECRET, &comment))
+        .body(comment)
+        .send()
+        .await
+        .expect("the webhook answers");
+    assert_eq!(answered.status(), StatusCode::ACCEPTED);
+
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while !kestrel
+        .events("acme")
+        .await
+        .iter()
+        .any(|event| event.occurrence.r#type == "com.github.issue_comment.created")
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the bot comment was never recorded"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    assert!(
+        kestrel.workspaces("acme").await.is_empty(),
+        "the integration's own command fired a trigger"
+    );
+    let events = kestrel.events("acme").await;
+    let recorded = events
+        .iter()
+        .find(|event| event.occurrence.r#type == "com.github.issue_comment.created")
+        .expect("the bot comment was recorded");
+    assert!(
+        kestrel
+            .firings(recorded.record_id)
+            .await
+            .iter()
+            .all(|firing| firing.outcome == "failed" || firing.outcome == "held"),
+        "the integration's own command fired a trigger"
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_delivered_label_opens_a_workspace_and_the_repository_is_not_polled() {
     let kestrel = Kestrel::boot().await;
     let stub = GithubStub::start();

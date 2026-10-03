@@ -1414,6 +1414,7 @@ enum ConnectionRegistration {
         interval: Option<String>,
         webhook_secret: Option<String>,
         api: Option<String>,
+        bot_login: Option<String>,
     },
     Webhook {
         secret: String,
@@ -1430,6 +1431,7 @@ struct IntegrationRecord {
     carries: Vec<Direction>,
     polled_every: Option<String>,
     webhook_path: Option<String>,
+    bot_login: Option<String>,
     last_event_refusal: Option<EventRefusalRecord>,
 }
 
@@ -1446,19 +1448,23 @@ impl From<Integration> for IntegrationRecord {
     fn from(integration: Integration) -> Self {
         let webhook_path = integration.webhook_path();
         let kind = integration.kind().as_str();
-        let (repository, polled_every, webhook_path) = match integration.connection {
-            Connection::Github(github) if github.signed => {
-                (Some(github.repository), None, Some(webhook_path))
-            }
+        let (repository, polled_every, webhook_path, bot_login) = match integration.connection {
+            Connection::Github(github) if github.signed => (
+                Some(github.repository),
+                None,
+                Some(webhook_path),
+                github.bot_login,
+            ),
             Connection::Github(github) if !integration.carries.contains(&Direction::Inbound) => {
-                (Some(github.repository), None, None)
+                (Some(github.repository), None, None, github.bot_login)
             }
             Connection::Github(github) => (
                 Some(github.repository),
                 Some(format!("{:#}", github.interval)),
                 None,
+                github.bot_login,
             ),
-            Connection::Webhook => (None, None, Some(webhook_path)),
+            Connection::Webhook => (None, None, Some(webhook_path), None),
         };
 
         Self {
@@ -1469,6 +1475,7 @@ impl From<Integration> for IntegrationRecord {
             carries: integration.carries,
             polled_every,
             webhook_path,
+            bot_login,
             last_event_refusal: integration.last_event_refusal.map(Into::into),
         }
     }
@@ -1510,6 +1517,7 @@ async fn register_integration(
             interval,
             webhook_secret,
             api,
+            bot_login,
         } => (
             Connecting::Github {
                 repository,
@@ -1522,6 +1530,7 @@ async fn register_integration(
                         Refused::Unprocessable(format!("an interval is a duration: {error}"))
                     })?,
                 signing_secret: webhook_secret.as_deref(),
+                bot_login: bot_login.as_deref(),
             },
             &[Direction::Inbound, Direction::Outbound][..],
         ),

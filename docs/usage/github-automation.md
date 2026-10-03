@@ -7,10 +7,11 @@ A GitHub integration records repository events and can post results back to an i
 ```sh
 kestrel integration register github origin \
   --repository openkestrel/kestrel \
-  --token ghp_your_token
+  --token ghp_your_token \
+  --bot-login kestrel[bot]
 ```
 
-Kestrel polls for events every minute. The first poll reads one page, establishing a starting point rather than replaying the repository's history. If GitHub can reach the control plane, add `--webhook-secret` and configure the repository webhook at the path shown by `kestrel integration list` (`/webhooks/<integration id>`, content type `application/json`). With a webhook secret, Kestrel uses deliveries instead of polling and verifies `X-Hub-Signature-256`.
+Kestrel polls for events every minute. The first poll reads one page, establishing a starting point rather than replaying the repository's history. The `--bot-login` records the login the Integration speaks as on GitHub, so that kestrel never takes what its own identity said as input or as a command — whatever any trigger's filter admits. If GitHub can reach the control plane, add `--webhook-secret` and configure the repository webhook at the path shown by `kestrel integration list` (`/webhooks/<integration id>`, content type `application/json`). With a webhook secret, Kestrel uses deliveries instead of polling and verifies `X-Hub-Signature-256`.
 
 `kestrel event list` shows recorded events, and `kestrel event show <record>` includes an event's payload and trigger firings. Register the integration before applying a trigger so you can inspect the event shape and test the rule against a real example.
 
