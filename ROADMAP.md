@@ -209,6 +209,11 @@ control plane answers what is missing and what fixes it, and both Clients render
 CLI, `kestrel start` asks for what it cannot infer and every prompt has a flag; errors name the
 command that fixes them, and the shell completes names.
 
+The browser asks one focused question at a time and ends with a review before starting the first
+Session. Saving the Operator's name is one prerequisite, not the end of setup: returning before the
+first confirmed start succeeds resumes the remaining steps. Later gaps use contextual fix-it states
+and settings ([browser setup decision](https://github.com/openkestrel/kestrel/issues/491)).
+
 **Signing in is kestrel's job.** kestrel ships a catalogue of how each harness signs in
 ([ADR-0046](docs/adr/0046-kestrel-ships-a-catalogue-of-how-each-harness-signs-in.md)), relays a
 person's own subscription sign-in to whichever Client they are using, including a terminal on a
