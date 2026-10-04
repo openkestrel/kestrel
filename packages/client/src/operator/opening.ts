@@ -1,4 +1,5 @@
 import { queryOptions } from "@tanstack/react-query";
+import type { NewWorkspaceDraft } from "#/lib/new-workspace-draft";
 import type {
 	Agent,
 	Opened,
@@ -42,6 +43,25 @@ export async function openWorkspace(
 		operatorPath("organizations", organization, "workspaces"),
 		declaration,
 	);
+}
+
+export function newWorkspaceDeclaration(
+	draft: NewWorkspaceDraft,
+	name: string,
+): WorkspaceDeclaration {
+	// A Brief and its Participant travel together: an open with no Brief names no Participant (ADR-0038).
+	const brief = draft.brief.trim() === "" ? null : draft.brief;
+	return {
+		project: draft.project,
+		agent: draft.agent,
+		profile: draft.profile === "" ? null : draft.profile,
+		// A continuation runs on the branch of the Workspace it continues and names none of its own.
+		branch: draft.continues !== "" ? null : draft.branch.trim() === "" ? null : draft.branch.trim(),
+		model: draft.model.trim() === "" ? null : draft.model.trim(),
+		brief,
+		participant: brief === null ? null : name.trim(),
+		continues: draft.continues === "" ? null : draft.continues,
+	};
 }
 
 export function resolvedRepositories(project: Project | undefined): string {

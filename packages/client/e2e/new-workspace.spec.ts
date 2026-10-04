@@ -123,10 +123,13 @@ test("a dropped file is read into the Brief, and nothing is uploaded", async ({ 
 	expect(posted).toEqual([]);
 });
 
-test("a browser with no declared name is asked for one, and remembers it", async ({ page }) => {
+test("a Brief is written under a name: a browser with none declared is asked, and remembers it", async ({
+	page,
+}) => {
 	await page.goto(FORM);
 
 	await expect(page.getByLabel("Your name")).toBeVisible();
+	await page.getByLabel("Brief").fill("Name me.");
 	await page.getByRole("button", { name: "Open Workspace" }).click();
 	await expect(page.locator("#new-workspace-name-error")).toHaveText(
 		"Your name is needed before sending.",
@@ -134,12 +137,43 @@ test("a browser with no declared name is asked for one, and remembers it", async
 	await expect(page).toHaveURL(/\/organizations\/acme\/new$/);
 
 	await named(page, "jack");
-	await page.getByLabel("Brief").fill("Name me.");
 	await page.getByRole("button", { name: "Open Workspace" }).click();
 	await expect(page).toHaveURL(OPENED);
 
 	await page.getByRole("link", { name: "New Workspace" }).click();
 	await expect(page.getByLabel("Your name")).toBeHidden();
+});
+
+test("an empty or whitespace-only Brief opens unbriefed, with no Participant", async ({ page }) => {
+	const declarations: unknown[] = [];
+	page.on("request", (request) => {
+		if (request.method() === "POST" && request.url().endsWith("/workspaces")) {
+			declarations.push(request.postDataJSON());
+		}
+	});
+
+	await page.goto(FORM);
+
+	await page.getByRole("button", { name: "Open Workspace" }).click();
+	await expect(page).toHaveURL(OPENED);
+	await expect(page.getByPlaceholder("Write the Brief…")).toBeVisible();
+
+	await page.getByRole("link", { name: "New Workspace" }).click();
+	await page.getByLabel("Brief").fill("   ");
+	await page.getByRole("button", { name: "Open Workspace" }).click();
+	await expect(page).toHaveURL(OPENED);
+
+	await page.getByRole("link", { name: "New Workspace" }).click();
+	await named(page, "jack");
+	await page.getByLabel("Brief").fill("Follow me.");
+	await page.getByRole("button", { name: "Open Workspace" }).click();
+	await expect(page).toHaveURL(OPENED);
+
+	expect(declarations).toEqual([
+		expect.objectContaining({ brief: null, participant: null }),
+		expect.objectContaining({ brief: null, participant: null }),
+		expect.objectContaining({ brief: "Follow me.", participant: "jack" }),
+	]);
 });
 
 test("opening lands on the new Workspace, queued for its turn, and follows it", async ({
