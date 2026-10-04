@@ -1,6 +1,7 @@
 pub mod credential;
 pub mod delivery;
 pub mod github;
+pub mod manifest;
 pub mod webhook;
 
 use anyhow::{Context as _, Result, bail};

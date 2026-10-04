@@ -30,6 +30,24 @@ The CA lives on the `client` service's volume, so it survives `docker compose do
 
 The CLI connects to the operator API at `127.0.0.1:7718` by default. That API does not authenticate callers; Compose binds it to loopback. Use a tunnel if the control plane runs on another machine, and set `--control-plane` or `KESTREL_CONTROL_PLANE` to its URL. `docker compose logs -f kestrel` shows control plane and session diagnostics.
 
+## Create the GitHub App
+
+After creating an organization (for example with `kestrel start`), run:
+
+```sh
+kestrel integration create-github-app origin --repository OWNER/REPOSITORY
+```
+
+For a repository owned by a GitHub organization, add `--app-organization OWNER` so the private App belongs to that organization. You need permission to create and install Apps there.
+
+Open the printed URL in your browser, click **Create GitHub App**, and confirm its name on GitHub. Then follow the installation link and select the requested repository. GitHub returns you to Kestrel, which verifies the installation and registers the Integration. `kestrel integration list` shows it when setup is complete. You never download or paste the private key; Kestrel seals it and the generated webhook secret beside its database.
+
+Complete setup within one hour. The callback uses the browser, so localhost works without exposing the operator API. If you reach Kestrel through a tunnel or the browser Client, pass its loopback origin, for example `--callback-base https://localhost:7719`. Keep that address reachable until setup finishes. If GitHub does not return after installation, use the **finish setup after installing** link in the setup tab.
+
+By default, Kestrel polls GitHub every minute. If GitHub can reach your webhook listener, add `--webhook-base https://hooks.example.com`; Kestrel fills in the webhook path and subscribes to issues, issue comments, and pull requests. Expose the webhook listener (7717), keeping the operator listener private. The App requests contents, issues, and pull requests read/write, and metadata read. Each Kestrel installation creates its own App.
+
+A refused or interrupted code exchange cannot be replayed. Start a new flow if it fails; delete any unused App in GitHub's developer settings. A pending successful exchange survives a control-plane restart; revisit the setup tab's finish link within the hour.
+
 ## Start work in a repository
 
 Run this from a clone of the repository you want the agent to work on:

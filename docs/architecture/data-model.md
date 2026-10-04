@@ -98,3 +98,5 @@ Narration and detail expire 30 days after append. The work role sweeps hourly in
 1,000 entries, including sealed Workspaces; later sweeps continue the due set. Each replacement
 keeps its kind, seq and append time, clears `session_id`, and replaces the body with
 `{"type":"expired","expired_at":"…"}`. Shared state and its payloads remain.
+
+GitHub App setup lives in `github_app_flow` for one hour: a random state, a phase, and a sealed configuration. The callback claims state before exchanging the code. App credentials remain sealed there until repository installation is verified and the Integration is registered in the same transaction that removes the pending flow. `integration.signed` selects webhook delivery independently of the retained signing secret.

@@ -13,6 +13,7 @@ CREATE TABLE integration (
     outbound INTEGER NOT NULL,
     interval_ms INTEGER,
     signing_secret TEXT,
+    signed INTEGER NOT NULL DEFAULT 0,
     shared_secret_digest TEXT,
     poll_due_at TEXT,
     polled_through INTEGER,
@@ -50,3 +51,10 @@ CREATE TABLE event (
 ) STRICT;
 
 CREATE INDEX event_by_organization ON event (organization_id, time);
+
+CREATE TABLE github_app_flow (
+    state TEXT PRIMARY KEY,
+    phase TEXT NOT NULL CHECK (phase IN ('ready', 'exchanging', 'converted')),
+    expires_at TEXT NOT NULL,
+    configuration_sealed TEXT NOT NULL
+) STRICT;

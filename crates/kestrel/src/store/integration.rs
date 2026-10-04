@@ -31,7 +31,7 @@ macro_rules! integrations_where {
         concat!(
             "SELECT id, organization_id, name, kind, repository, api, app_id, installation_id,
                     private_key_sealed, bot_login, inbound, outbound, interval_ms,
-                    signing_secret IS NOT NULL AS signed, poll_due_at,
+                    signed, poll_due_at,
                     polled_through, comments_polled_through,
                     last_event_refusal_source, last_event_refusal_id, last_event_refusal_bytes,
                     last_event_refusal_reason, last_event_refusal_at
@@ -66,10 +66,31 @@ impl<'a> Integrations<'a> {
         carries: &[Direction],
         webhook_secret: Option<&str>,
     ) -> Result<Integration> {
+        self.register_with_id(
+            IntegrationId::generate(),
+            organization,
+            name,
+            connection,
+            carries,
+            webhook_secret,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn register_with_id(
+        &mut self,
+        id: IntegrationId,
+        organization: &Organization,
+        name: &str,
+        connection: Connection,
+        carries: &[Direction],
+        webhook_secret: Option<&str>,
+    ) -> Result<Integration> {
         let polled = matches!(&connection, Connection::Github(github) if !github.signed)
             && carries.contains(&Direction::Inbound);
         let integration = Integration {
-            id: IntegrationId::generate(),
+            id,
             organization: organization.id,
             name: name.to_owned(),
             connection,
@@ -102,8 +123,8 @@ impl<'a> Integrations<'a> {
             "INSERT INTO integration
                  (id, organization_id, name, kind, repository, api, app_id, installation_id,
                   private_key_sealed, bot_login, inbound, outbound, interval_ms, signing_secret,
-                  shared_secret_digest, poll_due_at, registered_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  shared_secret_digest, poll_due_at, registered_at, signed)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(integration.id.to_string())
         .bind(integration.organization.to_string())
@@ -126,6 +147,7 @@ impl<'a> Integrations<'a> {
         .bind(shared_secret_digest)
         .bind(integration.poll_due_at.map(due))
         .bind(Timestamp::now().to_string())
+        .bind(github.is_some_and(|github| github.signed))
         .execute(&mut *self.connection)
         .await
         .map_err(|error| match error.as_database_error() {
