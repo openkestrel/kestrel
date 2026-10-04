@@ -145,7 +145,7 @@ err> Paste the code here; it will not be shown:
 in> [hidden code]
 err> Checking Claude Code with one model call...
 err> Saved Claude Code sign-in in Profile jack, owned by Operator Jack.
-err> Connect GitHub: 1 GitHub App · 2 Personal access token · 3 Public repository URL
+err> Connect GitHub: 1 Create GitHub App · 2 Register existing GitHub App · 3 Public repository URL
 err> Repository access:
 in> 1
 err> Open this URL to create and install the GitHub App:
@@ -476,28 +476,23 @@ When the SSH destination is unavailable, request it at a terminal or print
 Client origin/port must produce the matching tunnel and browser URL. If local 7719 is
 already occupied, explain a selectable local port rather than silently opening another install.
 
-### Token alternative, hidden prompt and pipe
+### Existing-App fallback
+
+If the manifest flow fails, register an existing App using its App id, installation id
+and a private-key file. The implementation slice must finalize the registration flags
+against the existing App registration contract; this transcript's grammar is proposed.
+No personal-token registration path is offered.
 
 ```text
-$ kestrel integration github connect --token
-err> GitHub token; it will not be shown:
-in> [hidden token]
-err> Checking GitHub access...
+$ kestrel integration github register github --app-id 123 --installation-id 456 --private-key-file app.pem --repository example/widgets
+err> Checking GitHub App installation access...
 out> GitHub connected · Integration github · Organization Jack
 exit> 0
 ```
 
-```text
-$ kestrel integration github connect --token < github-token.txt
-err> Checking GitHub access...
-out> GitHub connected · Integration github · Organization Jack
-exit> 0
-```
-
-Proposed `--token` is a boolean selecting hidden input/stdin, not a secret-valued argument.
-Registering a token does not claim GitHub App identity; the token-backed Integration is
-the alternative the first-run spec already allows. Auth failure prints an evidence-based
-rejection and retry command, exit 4. Ctrl-C cancels waiting, not an App already created.
+The private key is read from the file, never passed as an argument value or printed.
+A failed App check gives evidence and inspection/retry steps, not a PAT fallback.
+Ctrl-C in the manifest flow cancels waiting, not an App already created.
 
 ## profile set: missing profile, existing profile and piped input
 
@@ -624,8 +619,9 @@ Proposed amendments to [the first-run spec](https://github.com/openkestrel/kestr
 3. Add `login --token` and `login --file PATH`; terminal token/key input is hidden,
    pipes supply tokens/keys, and a file path supplies existing login-file contents. Claude relay requires a terminal; Codex can
    wait for device authorization without one. Tokens do not travel in argument values.
-4. Treat `integration github connect --token` as an input mode, and derive a usable SSH tunnel from
-   known connection details. Explicitly label unknown SSH destinations as placeholders.
+4. Use `integration github connect` for the App manifest flow, with existing-App
+   registration as the fallback. Derive a usable SSH tunnel from known connection
+   details; explicitly label unknown SSH destinations as placeholders. No PAT path.
 5. A failed sign-in check may leave a saved unchecked value; say so and return the failure
    code. Low-level `profile set` remains a storage write, not an implied successful sign-in check.
 6. Use the stream/colour conventions above. Keep initial readiness to one blocking gap,
@@ -647,7 +643,11 @@ Other proposals above remain under review.
 - Live review: GitHub-specific commands use `kestrel integration github …`; the
   connect flow is `kestrel integration github connect`. Shared Integration commands
   remain under `kestrel integration`, including `list`.
-- Review conflict: the token alternative above contradicts ADR-0028, which rejects
-  retaining a personal-token path beside the App. Its inclusion in the first-run draft
-  and this prototype needs correction or an explicit reopening of that ADR. The
-  earlier agreement about hidden token input did not settle this identity conflict.
+- Live review: GitHub App identity is mandatory. Existing-App registration is the
+  fallback for a broken manifest flow. The original draft's PAT alternative is removed
+  in accordance with ADR-0028; the earlier hidden-input agreement is superseded for GitHub.
+- Live review: retain Brief / `--brief`, explain it as the initial prompt in help, and
+  ask “What should the Session do?” in the wizard. Interactive start collects it when
+  omitted; non-interactive start requires its flag.
+- Live review: keep a saved sign-in unchecked when its real model-call check cannot
+  complete because the service is unavailable. Disclose the partial save and exit 5.
