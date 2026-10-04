@@ -80,7 +80,7 @@ of the selected model before sign-in; it must not promise that signing in again 
 $ kestrel
 out> Not ready: no repository is available.
 out> Client: http://localhost:7719
-err> Next: kestrel github connect
+err> Next: kestrel integration github connect
 exit> 78
 ```
 
@@ -171,7 +171,7 @@ out> Client: http://localhost:7719
 exit> 0
 ```
 
-The relay subflow here is identical to `login`; GitHub is identical to `github connect`.
+The relay subflow here is identical to `login`; GitHub is identical to `integration github connect`.
 Setup changes take effect when each step is saved. The final prompt confirms the start
 plan only. A later refusal does not roll back saved setup. Initial setup completes only
 when the confirmed start succeeds; queued is not a claim the harness has begun working.
@@ -436,12 +436,12 @@ Review proposal: retain the saved value as unchecked and disclose the partial re
 typed failed check reports authentication failed, expired or not covered only with evidence,
 and exits 4. A subsequent start gets 78 only if this is its blocking setup gap.
 
-## github connect
+## integration github connect
 
 ### Local GitHub App
 
 ```text
-$ kestrel github connect
+$ kestrel integration github connect
 err> Open this URL to create and install the GitHub App:
 err>   http://localhost:7719/setup/github
 err> Waiting for the GitHub Integration... Ctrl-C cancels waiting.
@@ -460,7 +460,7 @@ original SSH host alias. Use the known SSH server address and current remote use
 preserve a non-default server port when reported. Never invent an alias.
 
 ```text
-$ kestrel github connect
+$ kestrel integration github connect
 err> GitHub setup needs a browser that can reach kestrel.
 err> In a second terminal on your laptop, run:
 err>   ssh -N -L 7719:127.0.0.1:7719 jack@203.0.113.10
@@ -479,7 +479,7 @@ already occupied, explain a selectable local port rather than silently opening a
 ### Token alternative, hidden prompt and pipe
 
 ```text
-$ kestrel github connect --token
+$ kestrel integration github connect --token
 err> GitHub token; it will not be shown:
 in> [hidden token]
 err> Checking GitHub access...
@@ -488,7 +488,7 @@ exit> 0
 ```
 
 ```text
-$ kestrel github connect --token < github-token.txt
+$ kestrel integration github connect --token < github-token.txt
 err> Checking GitHub access...
 out> GitHub connected · Integration github · Organization Jack
 exit> 0
@@ -624,7 +624,7 @@ Proposed amendments to [the first-run spec](https://github.com/openkestrel/kestr
 3. Add `login --token` and `login --file PATH`; terminal token/key input is hidden,
    pipes supply tokens/keys, and a file path supplies existing login-file contents. Claude relay requires a terminal; Codex can
    wait for device authorization without one. Tokens do not travel in argument values.
-4. Treat `github connect --token` as an input mode, and derive a usable SSH tunnel from
+4. Treat `integration github connect --token` as an input mode, and derive a usable SSH tunnel from
    known connection details. Explicitly label unknown SSH destinations as placeholders.
 5. A failed sign-in check may leave a saved unchecked value; say so and return the failure
    code. Low-level `profile set` remains a storage write, not an implied successful sign-in check.
@@ -643,3 +643,11 @@ details for this review; they must be locked or carried into the corresponding s
   the draft's vague `--manual`. Secret values never appear in command arguments.
 
 Other proposals above remain under review.
+
+- Live review: GitHub-specific commands use `kestrel integration github …`; the
+  connect flow is `kestrel integration github connect`. Shared Integration commands
+  remain under `kestrel integration`, including `list`.
+- Review conflict: the token alternative above contradicts ADR-0028, which rejects
+  retaining a personal-token path beside the App. Its inclusion in the first-run draft
+  and this prototype needs correction or an explicit reopening of that ADR. The
+  earlier agreement about hidden token input did not settle this identity conflict.
