@@ -1,0 +1,10 @@
+{
+  "id": 37229645631,
+  "head_sha": "499f7d1474b9da442f5a30b8fd0c669647c00783",
+  "event": "merge_group",
+  "created_at": "2026-10-04T19:47:59Z",
+  "run_started_at": "2026-10-04T19:47:59Z",
+  "updated_at": "2026-10-04T19:48:13Z",
+  "html_url": "https://github.com/openkestrel/kestrel/actions/runs/37229645631",
+  "conclusion": "success"
+}

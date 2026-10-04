@@ -1,0 +1,92 @@
+[
+  {
+    "name": "first-test",
+    "command": [
+      "mise",
+      "exec",
+      "--",
+      "env",
+      "CARGO_BUILD_JOBS=2",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "kestrel",
+      "--test",
+      "work",
+      "a_session_enqueued_is_claimed_dispatched_and_reaches_an_instance",
+      "--",
+      "--exact"
+    ],
+    "started_unix": 1791148429.93067,
+    "wall_seconds": 42.974,
+    "exit_code": 0
+  },
+  {
+    "name": "warm-test",
+    "command": [
+      "mise",
+      "exec",
+      "--",
+      "env",
+      "CARGO_BUILD_JOBS=2",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "kestrel",
+      "--test",
+      "work",
+      "a_session_enqueued_is_claimed_dispatched_and_reaches_an_instance",
+      "--",
+      "--exact"
+    ],
+    "started_unix": 1791148472.905786,
+    "wall_seconds": 1.789,
+    "exit_code": 0
+  },
+  {
+    "name": "noop-build",
+    "command": [
+      "mise",
+      "exec",
+      "--",
+      "env",
+      "CARGO_BUILD_JOBS=2",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "cargo",
+      "build",
+      "--locked",
+      "-p",
+      "kestrel"
+    ],
+    "started_unix": 1791148474.694911,
+    "wall_seconds": 0.237,
+    "exit_code": 0
+  },
+  {
+    "name": "whitespace-edit-build",
+    "command": [
+      "mise",
+      "exec",
+      "--",
+      "env",
+      "CARGO_BUILD_JOBS=2",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "cargo",
+      "build",
+      "--locked",
+      "-p",
+      "kestrel"
+    ],
+    "started_unix": 1791148474.932204,
+    "wall_seconds": 4.065,
+    "exit_code": 0
+  }
+]
