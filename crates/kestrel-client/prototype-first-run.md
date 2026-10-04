@@ -376,7 +376,7 @@ err> A Claude plan serves only your own work.
 err> Open this URL in your browser:
 err>   https://claude.ai/oauth/authorize?fixture=relay
 err> Sign-in relay failed before a sign-in was saved.
-err> Next: kestrel login claude --manual
+err> Next: kestrel login claude --token
 exit> 4
 ```
 
@@ -386,7 +386,7 @@ exit 4. Ctrl-C requests cancellation and prints `Sign-in cancelled; no sign-in w
 exit 130. Cancellation after a completed save instead says the sign-in was saved.
 
 ```text
-$ kestrel login claude --manual
+$ kestrel login claude --token
 err> A Claude plan serves only your own work.
 err> Paste the subscription token; it will not be shown:
 in> [hidden token]
@@ -396,14 +396,15 @@ exit> 0
 ```
 
 ```text
-$ kestrel login codex --manual < auth.json
+$ kestrel login codex --file auth.json
 err> Checking Codex with one model call...
 out> Signed in to Codex · Profile jack · Operator Jack
 exit> 0
 ```
 
-Proposed `--manual`: paste the selected method's token/key, or read its file contents from
-stdin. In a TTY, file methods ask for a file path; they do not request multiline hidden JSON.
+Reviewed naming: `--token` selects a hidden token/key prompt at a terminal or stdin
+otherwise; `--file PATH` reads an existing login file. Neither option starts a relay.
+Both import the selected method's material and run the real sign-in check.
 `kestrel login claude --method anthropic-api-key` prompts for a hidden key (or reads stdin),
 checks it, then prints `Signed in to Claude Code · Provider Credential ANTHROPIC_API_KEY · Organization Jack`.
 
@@ -412,7 +413,7 @@ checks it, then prints `Signed in to Claude Code · Provider Credential ANTHROPI
 ```text
 $ kestrel login claude </dev/null
 err> Claude Code's relayed sign-in needs a terminal to receive its code.
-err> Next: run kestrel login claude at a terminal, or supply a subscription token with kestrel login claude --manual < token.txt
+err> Next: run kestrel login claude at a terminal, or supply a subscription token with kestrel login claude --token < token.txt
 exit> 2
 ```
 
@@ -423,7 +424,7 @@ with `Next: kestrel start --operator <name>`.
 ### Check cannot establish authentication failure
 
 ```text
-$ kestrel login codex --manual < auth.json
+$ kestrel login codex --file auth.json
 err> Checking Codex with one model call...
 err> Sign-in saved in Profile jack, but its check could not complete: the model service is unavailable.
 err> State: unchecked. This does not establish that your sign-in has expired.
@@ -538,7 +539,7 @@ stderr, exit 2; do not create a Profile first. A missing Operator is exit 78 unl
 `--owner <name>` explicitly supplies another owner. An existing Profile is not re-owned.
 
 Low-level Profile writes do not pretend to have performed the catalogue's real sign-in
-check. Proposed output says saved; `login --manual` is the checked first-run path.
+check. Proposed output says saved; `login --token` or `login --file PATH` is the checked first-run path.
 
 ## Unreachable control plane and scope
 
@@ -620,8 +621,8 @@ Proposed amendments to [the first-run spec](https://github.com/openkestrel/kestr
 2. Review separates already-saved setup from pending start declarations. Declining the
    final confirmation retains setup and creates no Workspace. Given values and selected
    sign-in remain visible alongside the folded inference line.
-3. Add `login --manual`; terminal token/key input is hidden, file methods prompt for a
-   path, pipes supply values/file contents. Claude relay requires a terminal; Codex can
+3. Add `login --token` and `login --file PATH`; terminal token/key input is hidden,
+   pipes supply tokens/keys, and a file path supplies existing login-file contents. Claude relay requires a terminal; Codex can
    wait for device authorization without one. Tokens do not travel in argument values.
 4. Treat `github connect --token` as an input mode, and derive a usable SSH tunnel from
    known connection details. Explicitly label unknown SSH destinations as placeholders.
@@ -633,3 +634,12 @@ Proposed amendments to [the first-run spec](https://github.com/openkestrel/kestr
 These amendments need the human's reaction before changing the spec or closing the ticket.
 Route spelling, Sign-in Method ids and precise tunnel-port selection remain proposed contract
 details for this review; they must be locked or carried into the corresponding specification slice.
+
+## Live review so far
+
+- Non-interactive `start` requires explicit `--yes` before any writes, including setup.
+- Declining final confirmation retains saved setup and creates no Workspace or Session.
+- The checked import fallback is named `login --token` / `login --file PATH`, replacing
+  the draft's vague `--manual`. Secret values never appear in command arguments.
+
+Other proposals above remain under review.
