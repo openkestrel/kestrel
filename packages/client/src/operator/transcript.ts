@@ -207,9 +207,11 @@ export class FollowSession {
 				// oxlint-disable-next-line no-await-in-loop -- a reconnect waits for this attempt before deciding to make the next.
 				await this.consume(controller.signal);
 			} catch (error) {
+				// oxlint-disable-next-line typescript/no-unnecessary-condition -- stop() can set stopped while consume() awaits; TS narrowed it false for the loop.
 				if (this.stopped) return;
 				if (error instanceof Refused && error.status < 500) return;
 			}
+			// oxlint-disable-next-line typescript/no-unnecessary-condition -- stop() can set stopped while consume() awaits; TS narrowed it false for the loop.
 			if (this.stopped || this.options.mirror.sealed) return;
 			// oxlint-disable-next-line no-await-in-loop -- the backoff must grow between attempts.
 			await sleep(backoff);
@@ -258,6 +260,7 @@ export class FollowSession {
 			);
 		} catch {
 			// A lapsed or unknown follower registers again rather than being revived.
+			// oxlint-disable-next-line typescript/no-unnecessary-condition -- stop() can set stopped while the write awaits; TS narrowed it false at the guard above.
 			if (!this.stopped) this.controller?.abort();
 			return;
 		}

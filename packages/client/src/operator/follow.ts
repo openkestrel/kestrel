@@ -40,6 +40,7 @@ export async function followChanges(
 				}
 			}
 		} catch {}
+		// oxlint-disable-next-line typescript/no-unnecessary-condition -- the controller can abort while the stream awaits; TS narrowed aborted false for the loop.
 		if (signal.aborted) return;
 		// oxlint-disable-next-line no-await-in-loop -- the backoff must grow between attempts.
 		await new Promise((resolve) => setTimeout(resolve, backoff));
