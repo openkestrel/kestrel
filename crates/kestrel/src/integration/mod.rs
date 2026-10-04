@@ -3,13 +3,13 @@ pub mod delivery;
 pub mod github;
 pub mod webhook;
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 use jiff::{SignedDuration, Timestamp};
 use tracing::warn;
 
 use crate::declined::Declined;
 use crate::domain::{Connection, Direction, Event, EventRecordId, GithubConnection, Integration};
-use crate::integration::credential::Token;
+use crate::integration::credential::App;
 use crate::integration::github::{Github, Refused};
 use crate::store::Store;
 use crate::store::integration::Recorded;
@@ -26,7 +26,9 @@ pub enum Connecting<'a> {
     Github {
         repository: &'a str,
         api: &'a str,
-        token: &'a str,
+        app_id: i64,
+        installation: i64,
+        private_key: &'a str,
         interval: SignedDuration,
         signing_secret: Option<&'a str>,
     },
@@ -41,7 +43,11 @@ pub struct Polled {
     pub recorded: usize,
 }
 
-pub async fn register(store: &Store, registration: Registration<'_>) -> Result<Integration> {
+pub async fn register(
+    store: &Store,
+    github: &Github,
+    registration: Registration<'_>,
+) -> Result<Integration> {
     if registration.carries.is_empty() {
         bail!(Declined::Unacceptable(
             "an integration carries something: name a direction it carries".to_owned()
@@ -52,7 +58,9 @@ pub async fn register(store: &Store, registration: Registration<'_>) -> Result<I
         Connecting::Github {
             repository,
             api,
-            token,
+            app_id,
+            installation,
+            private_key,
             interval,
             signing_secret,
         } => {
@@ -62,11 +70,18 @@ pub async fn register(store: &Store, registration: Registration<'_>) -> Result<I
                         .to_owned()
                 ));
             }
+            let repository = github::repository(repository)?;
+            let credential = App::held(app_id, installation, private_key);
+            let bot_login = github
+                .app_bot_login(api, &credential)
+                .await
+                .context("learning the app's own identity")?;
             (
                 Connection::Github(GithubConnection {
-                    repository: github::repository(repository)?,
+                    repository,
                     api: api.to_owned(),
-                    credential: Token::held(token),
+                    credential,
+                    bot_login,
                     interval,
                     signed: signing_secret.is_some(),
                 }),

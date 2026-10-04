@@ -10,7 +10,9 @@ use std::time::Duration;
 use jiff::SignedDuration;
 use kestrel::domain::{Direction, Exit, Session, Workspace};
 use support::Kestrel;
-use support::github_stub::{self, GithubStub, RecordedRequest, ScriptedResponse};
+use support::github_stub::{
+    self, GithubStub, INSTALLATION_TOKEN, RecordedRequest, ScriptedResponse,
+};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 const REPOSITORY: &str = "jtmthf/kestrel";
@@ -176,7 +178,7 @@ async fn the_comment_is_posted_with_the_integrations_credential() {
             .headers
             .iter()
             .any(|(name, value)| name == "authorization"
-                && value == &format!("Bearer {}", support::TOKEN)),
+                && value == &format!("Bearer {INSTALLATION_TOKEN}")),
         "the comment went out without the integration's credential: {:?}",
         comment.headers
     );

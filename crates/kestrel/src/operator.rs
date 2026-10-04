@@ -1410,7 +1410,9 @@ struct IntegrationRegistration {
 enum ConnectionRegistration {
     Github {
         repository: String,
-        token: String,
+        app_id: i64,
+        installation: i64,
+        private_key: String,
         interval: Option<String>,
         webhook_secret: Option<String>,
         api: Option<String>,
@@ -1420,13 +1422,15 @@ enum ConnectionRegistration {
     },
 }
 
-/// Never the token or a webhook secret: what an Integration presents stays behind the boundary.
+/// Never the private key or a webhook secret: what an Integration presents stays behind the
+/// boundary. The bot login is not a secret — it is the name GitHub already shows in public.
 #[derive(Serialize)]
 struct IntegrationRecord {
     id: String,
     name: String,
     kind: &'static str,
     repository: Option<String>,
+    bot_login: Option<String>,
     carries: Vec<Direction>,
     polled_every: Option<String>,
     webhook_path: Option<String>,
@@ -1446,19 +1450,23 @@ impl From<Integration> for IntegrationRecord {
     fn from(integration: Integration) -> Self {
         let webhook_path = integration.webhook_path();
         let kind = integration.kind().as_str();
-        let (repository, polled_every, webhook_path) = match integration.connection {
-            Connection::Github(github) if github.signed => {
-                (Some(github.repository), None, Some(webhook_path))
-            }
+        let (repository, bot_login, polled_every, webhook_path) = match integration.connection {
+            Connection::Github(github) if github.signed => (
+                Some(github.repository),
+                Some(github.bot_login),
+                None,
+                Some(webhook_path),
+            ),
             Connection::Github(github) if !integration.carries.contains(&Direction::Inbound) => {
-                (Some(github.repository), None, None)
+                (Some(github.repository), Some(github.bot_login), None, None)
             }
             Connection::Github(github) => (
                 Some(github.repository),
+                Some(github.bot_login),
                 Some(format!("{:#}", github.interval)),
                 None,
             ),
-            Connection::Webhook => (None, None, Some(webhook_path)),
+            Connection::Webhook => (None, None, None, Some(webhook_path)),
         };
 
         Self {
@@ -1466,6 +1474,7 @@ impl From<Integration> for IntegrationRecord {
             name: integration.name,
             kind,
             repository,
+            bot_login,
             carries: integration.carries,
             polled_every,
             webhook_path,
@@ -1506,7 +1515,9 @@ async fn register_integration(
     let (connecting, carries) = match &registration.connection {
         ConnectionRegistration::Github {
             repository,
-            token,
+            app_id,
+            installation,
+            private_key,
             interval,
             webhook_secret,
             api,
@@ -1514,7 +1525,9 @@ async fn register_integration(
             Connecting::Github {
                 repository,
                 api: api.as_deref().unwrap_or(github::API),
-                token,
+                app_id: *app_id,
+                installation: *installation,
+                private_key,
                 interval: interval
                     .as_deref()
                     .map_or(Ok(SignedDuration::from_mins(1)), str::parse)
@@ -1529,8 +1542,10 @@ async fn register_integration(
             (Connecting::Webhook { secret }, &[Direction::Inbound][..])
         }
     };
+    let github = Github::dialling_out()?;
     let registered = integration::register(
         &control_plane.store,
+        &github,
         Registration {
             organization: &organization,
             name: &registration.name,

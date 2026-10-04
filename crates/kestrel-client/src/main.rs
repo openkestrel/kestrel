@@ -283,14 +283,21 @@ enum RegisterCommand {
         /// The repository it watches, as owner/name
         #[arg(long, value_name = "OWNER/NAME")]
         repository: String,
-        /// The credential it presents to GitHub
+        /// The GitHub App's ID
+        #[arg(long, env = "KESTREL_GITHUB_APP_ID", value_name = "ID")]
+        app_id: i64,
+        /// The ID of the installation the App was installed as
+        #[arg(long, env = "KESTREL_GITHUB_INSTALLATION_ID", value_name = "ID")]
+        installation: i64,
+        /// The App's private key: text, `@FILE`, or `-` for standard input
         #[arg(
             long,
-            env = "KESTREL_GITHUB_TOKEN",
-            value_name = "TOKEN",
-            hide_env_values = true
+            env = "KESTREL_GITHUB_PRIVATE_KEY",
+            value_name = "KEY",
+            hide_env_values = true,
+            allow_hyphen_values = true
         )]
-        token: String,
+        private_key: String,
         /// A direction it carries — inbound, outbound; repeat for both
         #[arg(
             long = "carries",
@@ -1009,7 +1016,9 @@ async fn run() -> Result<()> {
                 RegisterCommand::Github {
                     name,
                     repository,
-                    token,
+                    app_id,
+                    installation,
+                    private_key,
                     carries,
                     interval,
                     webhook_secret,
@@ -1018,7 +1027,9 @@ async fn run() -> Result<()> {
                     "kind": "github",
                     "name": name,
                     "repository": repository,
-                    "token": token,
+                    "app_id": app_id,
+                    "installation": installation,
+                    "private_key": given(&private_key)?,
                     "carries": carries,
                     "interval": interval,
                     "webhook_secret": webhook_secret,

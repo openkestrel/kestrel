@@ -14,7 +14,7 @@ nothing twice.
 | --- | --- | --- |
 | GitHub webhook | `POST /webhooks/{integration}` → `github::delivered` | HMAC `X-Hub-Signature-256` with the Integration's signing secret |
 | Generic webhook | `POST /webhooks/{integration}` → `webhook::received` | A shared secret whose digest is stored; binary or structured CloudEvents, or any other POST wrapped as `dev.kestrel.webhook.received` |
-| GitHub poll | `timer::polling` → `integration::poll` | The Integration's token, outbound. Used when the Integration has no signing secret. |
+| GitHub poll | `timer::polling` → `integration::poll` | The Integration's installation token, outbound, minted from its App credential. Used when the Integration has no signing secret. |
 | Schedule | `trigger::elapse` | Minted by kestrel, with no Integration |
 | Operator dispatch | `trigger::dispatch` → `dev.kestrel.dispatched` | The operator request ([ADR-0021](../adr/0021-a-push-is-an-event-kestrel-mints.md)) |
 

@@ -5,7 +5,10 @@ CREATE TABLE integration (
     kind TEXT NOT NULL CHECK (kind IN ('github', 'webhook')),
     repository TEXT,
     api TEXT,
-    credential TEXT,
+    app_id INTEGER,
+    installation_id INTEGER,
+    private_key_sealed TEXT,
+    bot_login TEXT,
     inbound INTEGER NOT NULL,
     outbound INTEGER NOT NULL,
     interval_ms INTEGER,
@@ -21,7 +24,9 @@ CREATE TABLE integration (
     registered_at TEXT NOT NULL,
     UNIQUE (organization_id, name),
     CHECK ((kind = 'github') = (repository IS NOT NULL AND api IS NOT NULL
-                                AND credential IS NOT NULL AND interval_ms IS NOT NULL)),
+                                AND app_id IS NOT NULL AND installation_id IS NOT NULL
+                                AND private_key_sealed IS NOT NULL AND bot_login IS NOT NULL
+                                AND interval_ms IS NOT NULL)),
     CHECK (kind = 'github' OR signing_secret IS NULL),
     CHECK ((kind = 'webhook') = (shared_secret_digest IS NOT NULL))
 ) STRICT;
