@@ -206,8 +206,9 @@ browser are each complete Clients of it, and each walks a person through the sam
 **Operator**, choose a harness and sign in, connect GitHub and choose a repository, write a Brief
 ([ADR-0049](docs/adr/0049-an-install-has-one-operator-and-by-default-one-organization.md)). The
 control plane answers what is missing and what fixes it, and both Clients render that answer. In the
-CLI, `kestrel start` asks for what it cannot infer and every prompt has a flag; errors name the
-command that fixes them, and the shell completes names.
+CLI, `kestrel start` asks for what it cannot infer and every prompt has a flag; errors offer a
+typed next step that each Client renders as a repair, inspection or retry
+([ADR-0052](docs/adr/0052-a-refusal-carries-its-next-steps.md)), and the shell completes names.
 
 The browser asks one focused question at a time and ends with a review before starting the first
 Session. Saving the Operator's name is one prerequisite, not the end of setup: returning before the

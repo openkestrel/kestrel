@@ -159,6 +159,10 @@ supervisor ([ADR-0026](../adr/0026-kestrel-carries-named-credentials-never-a-run
 
 An accepted ADR is a decision, not a description. These are decided and not yet built:
 
+- **Typed next steps** ([ADR-0052](../adr/0052-a-refusal-carries-its-next-steps.md)): refusal
+  sentences still determine some statuses and CLI corrections; readiness and structured Session
+  failure evidence do not yet carry the shared diagnostic contract.
+
 - **Integration identity** ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)): the
   GitHub Integration authenticates as a GitHub App and mints its own installation tokens. The
   agent's `gh` still uses a token an operator supplies, and an Integration does not yet refuse to
