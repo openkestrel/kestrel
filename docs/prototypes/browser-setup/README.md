@@ -1,6 +1,6 @@
 # Browser setup and fix-it states
 
-Throwaway prototype for [Prototype the browser setup flow and fix-it states](https://github.com/openkestrel/kestrel/issues/491), under [Map: Plan 0.4 — kestrel starts from one command](https://github.com/openkestrel/kestrel/issues/481). No design here is approved yet.
+Throwaway prototype for [Prototype the browser setup flow and fix-it states](https://github.com/openkestrel/kestrel/issues/491), under [Map: Plan 0.4 — kestrel starts from one command](https://github.com/openkestrel/kestrel/issues/481). The human chose variant A and resuming the remaining setup steps after the Operator’s name has been saved. The branch preserves all three variants as the review artifact.
 
 ## Run
 
@@ -43,15 +43,18 @@ Other fixtures cover:
 
 This represents recovery and navigation, not backend persistence, actual polling, real App manifest callbacks, secret storage or real sign-in verification. “Start Session” queues a fixture; its link opens the existing D workbench fixture. The workbench's independent fixture is not the just-created Session.
 
-## Questions for the human review
+## Confirmed decisions
 
-1. Which layout should setup use? Recommendation: A, with its explicit final review.
-2. Does leaving after saving the Operator's name resume the remaining setup, or immediately switch to fix-it states? Recommendation: resume the focused flow while prerequisites are missing, then use contextual fix-it states after readiness. The interrupted fixture currently demonstrates resuming.
+The human selected **A: focused question** and **resume the remaining setup steps**. Initial setup therefore cannot be keyed solely to the absence of an Operator. Naming the Operator is one saved prerequisite; returning before the first confirmed Session start continues the remaining setup, including Brief and review. Later gaps use contextual fix-it states and settings, rather than restarting initial setup.
 
-The second question exposes a discrepancy in [Spec: 0.4 — kestrel starts from one command](https://github.com/openkestrel/kestrel/issues/460): it says setup appears only while there is no Operator, although naming the Operator is the first step. Saving that name must not strand a returning person halfway through setup. The prototype's final review also lists the Operator among new declarations; the production preview must distinguish already-saved prerequisites from declarations still to apply. Amend only after the lifecycle decision is confirmed.
+The final production preview must distinguish prerequisites already saved from declarations still to apply. “Start Session” completes the initial journey when the start succeeds, not when the name is saved or the button is pressed. Storage and endpoint details belong in the subsequent specification task.
+
+[Spec: 0.4 — kestrel starts from one command](https://github.com/openkestrel/kestrel/issues/460) is amended to this lifecycle. `ROADMAP.md` records the chosen browser experience on a separate decision branch; prototype code remains here.
 
 ## Validation
 
 Client typecheck and production build passed. A headless Chromium walkthrough completed Codex device auth → repository → Brief → review → queued Session. All 22 fixtures rendered in all three layouts (66 combinations) without page errors. A 390px viewport showed no horizontal overflow. Desktop and narrow-screen screenshots are in this directory. The narrow checklist was collapsed after screenshot review; the final screenshot reflects that adjustment.
 
 No production backend or workspace test suite was run for this throwaway prototype. CI remains the repository's full gate.
+
+CI built the Client image successfully. The Client job failed on lint errors in the unchanged inherited workbench prototype, with none reported in the new setup files ([run](https://github.com/openkestrel/kestrel/actions/runs/37242953826)). This branch is an archived prototype, not a production merge candidate.
