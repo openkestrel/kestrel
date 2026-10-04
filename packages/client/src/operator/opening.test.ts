@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
+import { AN_EMPTY_DRAFT, type NewWorkspaceDraft } from "#/lib/new-workspace-draft";
 import type { Agent, Project } from "./generated";
 import {
+	newWorkspaceDeclaration,
 	resolvedBranch,
 	resolvedEnvironment,
 	resolvedModel,
@@ -44,5 +46,57 @@ describe("the resolved values the form shows", () => {
 	test("the Environment is the driver the work role recorded, or says none is dispatching", () => {
 		expect(resolvedEnvironment({ driver: "local-exec" })).toBe("local-exec");
 		expect(resolvedEnvironment(null)).toBe("No dispatch configuration is recorded.");
+	});
+});
+
+const a_draft: NewWorkspaceDraft = {
+	...AN_EMPTY_DRAFT,
+	project: "kestrel",
+	agent: "builder",
+};
+
+describe("the declaration a New Workspace submits", () => {
+	test("an empty or whitespace-only Brief names no Participant", () => {
+		expect(newWorkspaceDeclaration(a_draft, "")).toMatchObject({
+			brief: null,
+			participant: null,
+		});
+		expect(newWorkspaceDeclaration({ ...a_draft, brief: "  \n\t" }, "jack")).toMatchObject({
+			brief: null,
+			participant: null,
+		});
+	});
+
+	test("a supplied Brief keeps its exact content, written under its trimmed Participant", () => {
+		const declaration = newWorkspaceDeclaration(
+			{ ...a_draft, brief: "  Fix the flaky test.  " },
+			" jack ",
+		);
+		expect(declaration.brief).toBe("  Fix the flaky test.  ");
+		expect(declaration.participant).toBe("jack");
+	});
+
+	test("a continuation names the Workspace it continues and no branch of its own", () => {
+		expect(
+			newWorkspaceDeclaration(
+				{
+					...a_draft,
+					profile: "work",
+					branch: "kestrel/topic",
+					model: "scripted-max",
+					continues: "00000000-0000-0000-0000-0000000000ff",
+				},
+				"jack",
+			),
+		).toEqual({
+			project: "kestrel",
+			agent: "builder",
+			profile: "work",
+			branch: null,
+			model: "scripted-max",
+			brief: null,
+			participant: null,
+			continues: "00000000-0000-0000-0000-0000000000ff",
+		});
 	});
 });
