@@ -305,7 +305,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 						onDragOver={(event) => event.preventDefault()}
 						onDrop={(event) => {
 							event.preventDefault();
-							const dropped = event.dataTransfer.files[0];
+							const dropped = event.dataTransfer.files.item(0);
 							if (dropped) void dropped.text().then((text) => hold({ brief: text }));
 						}}
 						aria-invalid={placed("brief") !== undefined}

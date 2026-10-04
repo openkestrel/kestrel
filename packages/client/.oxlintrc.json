@@ -13,6 +13,7 @@
 		"react/rules-of-hooks": "error",
 		"react/exhaustive-deps": "error",
 		"typescript/no-explicit-any": "error",
+		"typescript/no-unnecessary-condition": "error",
 		"shadcn/no-restyle": [
 			"error",
 			{
