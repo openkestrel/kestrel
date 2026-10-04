@@ -91,6 +91,11 @@ waiting, or unbriefed, or ended while its harness is still leaving. A workspace 
 exists waits on it rather than starting another.
 _Avoid_: slot, current session, holding session
 
+**Dependency**:
+A queued session's declared wait on another session of its organization, made when the queued
+session is enqueued. It is dispatched only once every session it depends on has ended successfully.
+_Avoid_: blocker, prerequisite, needs
+
 **Active-Work Slot**:
 One unit of the control plane's capacity for sessions doing work at once, in a pool shared by
 every Organization. A session mid-turn, trailing, or blocked on an approval occupies one; a queued,
