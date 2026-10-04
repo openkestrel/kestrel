@@ -402,6 +402,7 @@ struct WorkspaceDeclaration {
     thought_level: Option<String>,
     brief: Option<String>,
     participant: Option<String>,
+    depends_on: Option<Vec<String>>,
 }
 
 impl WorkspaceDeclaration {
@@ -431,6 +432,7 @@ struct SessionDeclaration {
     model: Option<String>,
     mode: Option<String>,
     thought_level: Option<String>,
+    depends_on: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -712,11 +714,18 @@ struct SessionRecord {
     connected_at: Option<Timestamp>,
     supervisor_version: Option<String>,
     usage: Option<domain::Usage>,
+    depends_on: Vec<SessionReferenceRecord>,
     tools: Vec<crate::live_work::RunningTool>,
     units: Vec<crate::live_work::RunningUnit>,
     message_buffering: bool,
     thought_buffering: bool,
     last_activity_at: Option<Timestamp>,
+}
+
+#[derive(Serialize)]
+struct SessionReferenceRecord {
+    id: String,
+    name: String,
 }
 
 #[derive(Serialize)]
@@ -923,6 +932,14 @@ impl SessionRecord {
             connected_at: session.connected.as_ref().map(|connected| connected.at),
             supervisor_version: session.connected.map(|connected| connected.version),
             usage: session.usage,
+            depends_on: session
+                .depends_on
+                .into_iter()
+                .map(|blocker| SessionReferenceRecord {
+                    id: blocker.id.to_string(),
+                    name: blocker.name,
+                })
+                .collect(),
             tools: Vec::new(),
             units: Vec::new(),
             message_buffering: false,
@@ -2320,6 +2337,7 @@ async fn open_workspace(
             declared: declaration.declared(),
             brief: declaration.brief.as_deref(),
             participant: declaration.participant.as_deref(),
+            depends_on: declaration.depends_on.as_deref().unwrap_or_default(),
         },
     )
     .await
@@ -2581,6 +2599,7 @@ async fn enqueue_session(
         workspace.id,
         declaration.agent.as_deref(),
         declaration.declared(),
+        declaration.depends_on.as_deref().unwrap_or_default(),
     )
     .await
     .map_err(workspace_refusal)?;

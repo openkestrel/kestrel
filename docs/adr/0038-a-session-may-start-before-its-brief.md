@@ -17,4 +17,5 @@ An unbriefed Session is its Workspace's Unfinished Session. It holds no Active-W
 ## Consequences
 
 - An operator can hold Instances with Sessions that never work. The live Instance limit and the idle seal bound this. Nothing else does before `0.4`'s Policy.
+- An unbriefed open that declares Dependencies (ADR-0052) stays queued, holding no Instance, until they are met.
 - `workspace open` and the browser's New Workspace form share one write, and `--brief` is optional on both. `session enqueue` only starts later Sessions in a Workspace that is already open (ADR-0031).

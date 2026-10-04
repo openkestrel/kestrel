@@ -111,6 +111,7 @@ fn human(out: &mut impl Write, view: &View, records: &[&Value], width: usize) ->
                     let value = match *field {
                         "tools" => running(record, field, "status"),
                         "units" => running(record, field, "kind"),
+                        "depends_on" => names(record, field),
                         _ => rendered(at(record, field)),
                     };
                     let mut lines = value.lines();
@@ -216,6 +217,16 @@ fn running(record: &Value, field: &str, beside: &str) -> String {
                 .join("\n")
         })
         .unwrap_or_default()
+}
+
+fn names(record: &Value, field: &str) -> String {
+    let names: Vec<Value> = at(record, field)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|named| named.get("name").cloned())
+        .collect();
+    rendered(Some(&Value::Array(names)))
 }
 
 fn cells(record: &Value, fields: &[&str]) -> Vec<String> {

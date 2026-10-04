@@ -1668,14 +1668,14 @@ impl Kestrel {
     /// What `session enqueue` still lets through directly, with nothing ever posted to the
     /// Workspace: a Session its first Turn has no instruction for.
     pub async fn enqueue_session_with_nothing_posted(&self, workspace: WorkspaceId) -> Session {
-        work::enqueue(&self.store, workspace, None, Declared::default())
+        work::enqueue(&self.store, workspace, None, Declared::default(), &[])
             .await
             .expect("the session should enqueue")
     }
 
     pub async fn try_enqueue_session(&self, workspace: WorkspaceId) -> anyhow::Result<Session> {
         self.instructed(workspace).await?;
-        work::enqueue(&self.store, workspace, None, Declared::default()).await
+        work::enqueue(&self.store, workspace, None, Declared::default(), &[]).await
     }
 
     pub async fn enqueue_session_as(&self, workspace: WorkspaceId, agent: &str) -> Session {
@@ -1690,7 +1690,14 @@ impl Kestrel {
         agent: &str,
     ) -> anyhow::Result<Session> {
         self.instructed(workspace).await?;
-        work::enqueue(&self.store, workspace, Some(agent), Declared::default()).await
+        work::enqueue(
+            &self.store,
+            workspace,
+            Some(agent),
+            Declared::default(),
+            &[],
+        )
+        .await
     }
 
     pub async fn enqueue_session_naming(
@@ -1717,6 +1724,7 @@ impl Kestrel {
                 model: model.map(str::to_owned),
                 ..Declared::default()
             },
+            &[],
         )
         .await
     }
@@ -1729,7 +1737,7 @@ impl Kestrel {
         self.instructed(workspace)
             .await
             .expect("the message should post");
-        work::enqueue(&self.store, workspace, None, declared)
+        work::enqueue(&self.store, workspace, None, declared, &[])
             .await
             .expect("the session should enqueue")
     }
