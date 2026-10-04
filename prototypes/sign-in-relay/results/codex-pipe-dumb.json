@@ -1,0 +1,16 @@
+{
+  "harness": "codex",
+  "cols": 240,
+  "term": "dumb",
+  "pipe": true,
+  "elapsed": 8.95,
+  "bytes": 476,
+  "exited_before_deadline": false,
+  "exit_code": 137,
+  "invalid_code_sent": false,
+  "cleanup_ok": true,
+  "terminal": "",
+  "token_seen": false,
+  "credential_file": null,
+  "output": "\nWelcome to Codex [v0.156.1]\nOpenAI's command-line coding agent\n\nFollow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   <URL redacted>\n\n2. Enter this one-time code (expires in 15 minutes)\n   <DEVICE CODE redacted>\n\nContinue only if you started this login in Codex. If a website or another person gave you this code, cancel.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"
+}

@@ -1,0 +1,16 @@
+{
+  "harness": "claude",
+  "cols": 240,
+  "term": "dumb",
+  "pipe": true,
+  "elapsed": 8.84,
+  "bytes": 0,
+  "exited_before_deadline": false,
+  "exit_code": 137,
+  "invalid_code_sent": false,
+  "cleanup_ok": true,
+  "terminal": "",
+  "token_seen": false,
+  "credential_file": null,
+  "output": ""
+}

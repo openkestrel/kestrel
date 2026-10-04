@@ -1,0 +1,28 @@
+{
+  "harness": "codex",
+  "cols": 240,
+  "term": "xterm-256color",
+  "pipe": false,
+  "elapsed": 133.33,
+  "bytes": 514,
+  "exited_before_deadline": true,
+  "exit_code": 0,
+  "cleanup_ok": true,
+  "credential_file": {
+    "keys": [
+      "OPENAI_API_KEY",
+      "auth_mode",
+      "last_refresh",
+      "tokens"
+    ],
+    "auth_mode": "chatgpt",
+    "token_keys": [
+      "access_token",
+      "account_id",
+      "id_token",
+      "refresh_token"
+    ],
+    "nonempty_tokens": true
+  },
+  "output": "[live output suppressed]"
+}
