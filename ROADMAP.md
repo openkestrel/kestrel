@@ -214,6 +214,13 @@ Session. Saving the Operator's name is one prerequisite, not the end of setup: r
 first confirmed start succeeds resumes the remaining steps. Later gaps use contextual fix-it states
 and settings ([browser setup decision](https://github.com/openkestrel/kestrel/issues/491)).
 
+The CLI asks "What should the Session do?" and keeps `--brief` for its initial prompt. A start
+without a terminal names all missing inputs it can establish and requires `--yes` before any
+write. Its review distinguishes already-saved setup from the start plan; declining creates no
+Workspace or Session and retains setup. Results go to stdout, prompts, progress and errors to
+stderr, and redirected output uses no colour or terminal animations
+([CLI first-run decision](https://github.com/openkestrel/kestrel/issues/493)).
+
 **Signing in is kestrel's job.** kestrel ships a catalogue of how each harness signs in
 ([ADR-0046](docs/adr/0046-kestrel-ships-a-catalogue-of-how-each-harness-signs-in.md)), relays a
 person's own subscription sign-in to whichever Client they are using, including a terminal on a
@@ -221,6 +228,13 @@ remote machine ([ADR-0047](docs/adr/0047-kestrel-relays-a-persons-own-sign-in.md
 sign-in with a real call when it is saved. The default image carries every catalogued harness and
 says so in a label, so kestrel never offers one it cannot run
 ([ADR-0048](docs/adr/0048-the-environment-image-carries-every-catalogued-harness.md)).
+
+`kestrel login --token` imports an existing token or key through hidden input or stdin;
+`kestrel login --file PATH` imports a login file. Both name their harness and check the sign-in.
+If the model service is unavailable, the saved sign-in remains unchecked and the Client reports
+that partial result. GitHub uses `kestrel integration github connect` and always acts as an App
+([ADR-0028](docs/adr/0028-an-integration-lends-a-run-its-identity.md)); registering an existing App
+is the fallback for the manifest flow, never a personal access token.
 
 ### 0.5 — kestrel asks before it acts
 
