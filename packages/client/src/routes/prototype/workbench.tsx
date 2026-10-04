@@ -1,9 +1,9 @@
 // PROTOTYPE (#492): the workbench on AI Elements, fed by fixtures. /prototype/workbench?variant=A&font=inter&theme=light
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { DiffView, FilesView, SessionsQueue, WorkspacesList } from "#/components/workbench/prototype/parts";
 import { FONTS, type Font, MONOS, type Mono, PrototypeSwitcher, type Theme } from "#/components/workbench/prototype/switcher";
-import { InspectorE, PaletteE, RailE } from "#/components/workbench/prototype/variant-e";
+import { type Collapsed, InspectorE, PaletteE, RailE, Sidebars, useSidebarKeys } from "#/components/workbench/prototype/variant-e";
 import { ChangesView, WorkspacesD } from "#/components/workbench/prototype/variant-d";
 import { VARIANTS } from "#/components/workbench/prototype/variants";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
@@ -39,10 +39,14 @@ function PrototypeWorkbench() {
 	const refined = search.variant === "D" || search.variant === "E";
 	const aspirational = search.variant === "E";
 	const [palette, setPalette] = useState(false);
+	const [collapsed, setCollapsed] = useState<Collapsed>({});
+	const toggle = useCallback((side: keyof Collapsed) => setCollapsed((all) => ({ ...all, [side]: !all[side] })), []);
+	useSidebarKeys(toggle);
 
 	return (
-		<>
+		<Sidebars.Provider value={{ collapsed, toggle }}>
 			<Workbench
+				collapsed={aspirational ? collapsed : undefined}
 				key={search.variant}
 				initial={search.pane}
 				workspaces={
@@ -68,7 +72,7 @@ function PrototypeWorkbench() {
 				theme={search.theme}
 				onChange={(next) => void navigate({ search: (prev) => ({ ...prev, ...next }), replace: true })}
 			/>
-		</>
+		</Sidebars.Provider>
 	);
 }
 

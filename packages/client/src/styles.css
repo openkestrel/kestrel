@@ -189,3 +189,11 @@
 @utility grid-cols-key-value {
   grid-template-columns: auto 1fr;
 }
+
+/* PROTOTYPE (#492): slimmer inline code than Streamdown's default chip. */
+[data-streamdown="inline-code"] {
+    font-size: 0.875em;
+    padding: 0.0625em 0.3em;
+    border-radius: 0.25rem;
+    background: color-mix(in oklab, var(--muted) 70%, transparent);
+}

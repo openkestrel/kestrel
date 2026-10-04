@@ -18,6 +18,8 @@ import {
 	LayersIcon,
 	ListChecksIcon,
 	LoaderIcon,
+	PanelLeftIcon,
+	PanelRightIcon,
 	PauseIcon,
 	PlusIcon,
 	SearchIcon,
@@ -30,7 +32,7 @@ import {
 	XIcon,
 	ZapIcon,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
 import {
 	Confirmation,
 	ConfirmationAccepted,
@@ -67,22 +69,30 @@ import {
 	CommandList,
 	CommandShortcut,
 } from "#/components/ui/command";
-import {
-	Questionnaire,
-	QuestionnaireActions,
-	QuestionnaireChoice,
-	QuestionnaireChoiceDescription,
-	QuestionnaireChoices,
-	QuestionnaireDescription,
-	QuestionnaireItem,
-	QuestionnaireSubmit,
-	QuestionnaireTitle,
-} from "#/components/ui/questionnaire";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
 import { cn } from "#/lib/utils";
 import { type ActivityGroup, FLOW, type Said } from "./fixtures";
 import { ModelPicker, UsageContext, useTicking } from "./parts";
 import { ActivityView, AgentMessage, ChangesView, Commands, HeldLine, PersonMessage } from "./variant-d";
+
+export type Collapsed = { workspaces?: boolean; work?: boolean };
+export const Sidebars = createContext<{ collapsed: Collapsed; toggle: (side: keyof Collapsed) => void }>({
+	collapsed: {},
+	toggle: () => {},
+});
+
+export function useSidebarKeys(toggle: (side: keyof Collapsed) => void) {
+	useEffect(() => {
+		const onKey = (event: KeyboardEvent) => {
+			if (event.key.toLowerCase() !== "b" && event.code !== "KeyB") return;
+			if (!(event.metaKey || event.ctrlKey)) return;
+			event.preventDefault();
+			toggle(event.altKey ? "work" : "workspaces");
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [toggle]);
+}
 
 type Source = "github" | "linear" | "slack" | "schedule" | "operator";
 
@@ -501,34 +511,59 @@ function ApprovalView() {
 	);
 }
 
+const CHOICES = [
+	{ value: "here", label: "Fix it here", hint: "One more commit on jack/flaky-usage" },
+	{ value: "linear", label: "Open a Linear issue", hint: "Through the Linear Integration, labelled ci" },
+	{ value: "leave", label: "Leave it", hint: "" },
+];
+
+// A one-part Question answers inline; Questionnaire is kept for a Question with several parts.
 function QuestionView() {
+	const [answer, setAnswer] = useState<string | null>(null);
+	const [own, setOwn] = useState("");
+	const chosen = CHOICES.find((choice) => choice.value === answer);
 	return (
-		<div className="rounded-lg border p-3">
-			<p className="mb-2 flex items-center gap-2 text-xs">
+		<div className="grid gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 px-3 py-2.5">
+			<p className="flex items-center gap-2 text-xs">
 				<SparklesIcon aria-hidden className="size-3.5 text-sky-600" />
 				<span className="font-medium">Question</span>
 				<span className="text-muted-foreground">opencode proceeds on its own judgment in 14m</span>
 			</p>
-			<Questionnaire onSubmit={(event) => event.preventDefault()}>
-				<QuestionnaireItem name="rounding">
-					<QuestionnaireTitle>Rounding finished_at can't produce None, but it does skew cost. What should I do about it?</QuestionnaireTitle>
-					<QuestionnaireDescription>Sam raised it; it isn't the cause of the flake.</QuestionnaireDescription>
-					<QuestionnaireChoices>
-						<QuestionnaireChoice value="here">
-							Fix it in this Workspace
-							<QuestionnaireChoiceDescription>One more commit on jack/flaky-usage</QuestionnaireChoiceDescription>
-						</QuestionnaireChoice>
-						<QuestionnaireChoice value="linear">
-							Open a Linear issue for it
-							<QuestionnaireChoiceDescription>Through the Linear Integration, labelled ci</QuestionnaireChoiceDescription>
-						</QuestionnaireChoice>
-						<QuestionnaireChoice value="leave">Leave it</QuestionnaireChoice>
-					</QuestionnaireChoices>
-				</QuestionnaireItem>
-				<QuestionnaireActions>
-					<QuestionnaireSubmit>Answer</QuestionnaireSubmit>
-				</QuestionnaireActions>
-			</Questionnaire>
+			<p className="text-sm">
+				Rounding <code className="font-mono text-[0.875em]">finished_at</code> can't produce None, but it skews
+				cost. What should I do about it?
+			</p>
+			{chosen ? (
+				<p className="flex items-center gap-1.5 text-sm">
+					<CheckIcon aria-hidden className="size-3.5 text-emerald-600" />
+					You answered: {chosen.label}
+					<button type="button" onClick={() => setAnswer(null)} className="text-muted-foreground text-xs underline-offset-2 hover:underline">
+						change
+					</button>
+				</p>
+			) : (
+				<div className="flex flex-wrap items-center gap-1.5">
+					{CHOICES.map((choice, index) => (
+						<button
+							key={choice.value}
+							type="button"
+							title={choice.hint || undefined}
+							onClick={() => setAnswer(choice.value)}
+							className="inline-flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-xs hover:bg-accent"
+						>
+							<kbd className="font-sans text-[0.625rem] text-muted-foreground">{index + 1}</kbd>
+							{choice.label}
+						</button>
+					))}
+					<input
+						value={own}
+						onChange={(event) => setOwn(event.target.value)}
+						placeholder="or answer in your own words"
+						aria-label="Answer in your own words"
+						className="min-w-40 flex-1 rounded-md border bg-background px-2 py-1 text-xs outline-none focus:border-ring"
+					/>
+				</div>
+			)}
 		</div>
 	);
 }
@@ -706,11 +741,28 @@ const MAIN_TABS = [
 	{ id: "campaign", label: "Stabilize CI", phase: null, icon: <WorkflowIcon aria-hidden className="size-3.5" /> },
 ];
 
+function SidebarToggle({ side }: { side: keyof Collapsed }) {
+	const { collapsed, toggle } = useContext(Sidebars);
+	const Icon = side === "workspaces" ? PanelLeftIcon : PanelRightIcon;
+	return (
+		<button
+			type="button"
+			aria-pressed={!collapsed[side]}
+			aria-label={side === "workspaces" ? "Toggle the sidebar (⌘B)" : "Toggle the inspector (⌘⌥B)"}
+			onClick={() => toggle(side)}
+			className="hidden shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground workbench:block"
+		>
+			<Icon className="size-4" />
+		</button>
+	);
+}
+
 export function MainE() {
 	const [tab, setTab] = useState("usage");
 	return (
 		<Tabs value={tab} onValueChange={setTab} className="flex h-full min-h-0 flex-col gap-0">
-			<div className="flex shrink-0 items-center border-b">
+			<div className="flex shrink-0 items-center border-b px-1">
+				<SidebarToggle side="workspaces" />
 				<TabsList variant="line" className="h-10 min-w-0 justify-start gap-0 overflow-x-auto rounded-none bg-transparent p-0" aria-label="Open tabs">
 					{MAIN_TABS.map((one) => (
 						<TabsTrigger key={one.id} value={one.id} className="h-10 max-w-48 flex-none gap-1.5 rounded-none px-3 text-xs">
@@ -723,6 +775,8 @@ export function MainE() {
 				<button type="button" aria-label="Open a Workspace" className="ml-1 rounded-md p-1.5 text-muted-foreground hover:bg-accent">
 					<PlusIcon className="size-3.5" />
 				</button>
+				<span className="flex-1" />
+				<SidebarToggle side="work" />
 			</div>
 			<TabsContent value="usage" className="flex min-h-0 flex-1 flex-col">
 				<WorkspaceHeader />
