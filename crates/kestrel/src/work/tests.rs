@@ -729,3 +729,223 @@ async fn a_finished_report_keeps_the_exit_that_already_stands() {
     );
     assert_eq!(fixture.entries().await, before);
 }
+
+async fn observe_for_idle_hint(fixture: &Fixture, repositories: Vec<crate::instance::Observed>) {
+    fixture
+        .report_on(Some(1), Report::Checkout { repositories })
+        .await
+        .unwrap();
+}
+
+async fn recorded_idle_hints(store: &Store) -> Vec<crate::compute::IdleHint> {
+    let mut hints = Vec::new();
+    crate::instance::deliver_idle_hints(store, |hint| {
+        hints.push(hint.clone());
+        Ok(())
+    })
+    .await
+    .unwrap();
+    hints
+}
+
+#[tokio::test]
+async fn idle_hint_follows_a_committed_ending_once_with_the_seal_deadline() {
+    let fixture = Fixture::new().await;
+    observe_for_idle_hint(&fixture, vec![]).await;
+    fixture
+        .report_on(
+            Some(2),
+            Report::Finished {
+                exit: Exit::Succeeded,
+                usage: None,
+            },
+        )
+        .await
+        .unwrap();
+    complete(&fixture.store, &fixture.session).await.unwrap();
+    let workspace = fixture
+        .store
+        .read()
+        .await
+        .unwrap()
+        .workspaces()
+        .get(fixture.session.workspace)
+        .await
+        .unwrap();
+    let reopened = Store::open(fixture.data_dir.path()).await.unwrap();
+    let hints = recorded_idle_hints(&reopened).await;
+    assert_eq!(
+        hints,
+        vec![crate::compute::IdleHint {
+            instance: INSTANCE.to_owned(),
+            idle_since: workspace.last_active_at,
+            archive_deadline: workspace.last_active_at + workspace::IDLE,
+        }]
+    );
+    assert!(recorded_idle_hints(&fixture.store).await.is_empty());
+}
+
+#[tokio::test]
+async fn idle_hint_is_not_queued_when_a_pending_session_takes_over() {
+    let fixture = Fixture::new().await;
+    observe_for_idle_hint(&fixture, vec![]).await;
+    let mut tx = fixture.store.begin().await.unwrap();
+    let workspace = tx
+        .workspaces()
+        .get(fixture.session.workspace)
+        .await
+        .unwrap();
+    let agent = tx
+        .agents()
+        .named(&workspace.organization, "builder")
+        .await
+        .unwrap();
+    tx.workspaces()
+        .add_pending_session(
+            &workspace,
+            &crate::store::workspace::PendingSession {
+                agent,
+                declared: Declared::default(),
+                trigger: "next".to_owned(),
+                brief: "Continue the work".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    complete(&fixture.store, &fixture.session).await.unwrap();
+    let mut tx = fixture.store.read().await.unwrap();
+    assert_eq!(
+        tx.workspaces()
+            .unfinished_session(&workspace)
+            .await
+            .unwrap()
+            .unwrap()
+            .session
+            .state,
+        SessionState::Queued
+    );
+    drop(tx);
+    assert!(recorded_idle_hints(&fixture.store).await.is_empty());
+}
+
+#[tokio::test]
+async fn idle_hint_requires_a_reported_recoverable_checkout() {
+    for observed in [
+        None,
+        Some(vec![crate::instance::Observed {
+            repository: "https://github.com/acme/repo".to_owned(),
+            git: crate::instance::Git::Read {
+                branch: Some("work".to_owned()),
+                untracked: 1,
+                uncommitted: 0,
+                stashes: 0,
+                unpushed: 0,
+            },
+        }]),
+    ] {
+        let fixture = Fixture::new().await;
+        if let Some(observed) = observed {
+            observe_for_idle_hint(&fixture, observed).await;
+        }
+        complete(&fixture.store, &fixture.session).await.unwrap();
+        assert!(recorded_idle_hints(&fixture.store).await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn idle_hint_delivery_error_preserves_the_outcome_and_workspace() {
+    let fixture = Fixture::new().await;
+    observe_for_idle_hint(&fixture, vec![]).await;
+    let exit = fail(&fixture.store, &fixture.session, "the harness failed")
+        .await
+        .unwrap();
+    let before = fixture
+        .store
+        .read()
+        .await
+        .unwrap()
+        .workspaces()
+        .get(fixture.session.workspace)
+        .await
+        .unwrap();
+    let mut calls = 0;
+    crate::instance::deliver_idle_hints(&fixture.store, |_| {
+        calls += 1;
+        Err(std::io::Error::other("driver unavailable"))
+    })
+    .await
+    .unwrap();
+    assert_eq!(calls, 1);
+    let mut tx = fixture.store.read().await.unwrap();
+    let ended = tx.workspaces().session(fixture.session.id).await.unwrap();
+    assert_eq!(ended.state, SessionState::Ended);
+    assert_eq!(ended.exit, Some(exit));
+    let after = tx
+        .workspaces()
+        .get(fixture.session.workspace)
+        .await
+        .unwrap();
+    assert_eq!(after.state, before.state);
+    assert_eq!(after.last_active_at, before.last_active_at);
+    assert_eq!(
+        tx.workspaces().instance(after.id).await.unwrap().as_deref(),
+        Some(INSTANCE)
+    );
+    drop(tx);
+    assert!(recorded_idle_hints(&fixture.store).await.is_empty());
+}
+
+#[tokio::test]
+async fn idle_hint_is_discarded_if_work_arrives_or_the_instance_is_archived() {
+    for archive in [false, true] {
+        let fixture = Fixture::new().await;
+        observe_for_idle_hint(&fixture, vec![]).await;
+        complete(&fixture.store, &fixture.session).await.unwrap();
+        if archive {
+            workspace::seal(&fixture.store, fixture.session.workspace)
+                .await
+                .unwrap();
+        } else {
+            enqueue(
+                &fixture.store,
+                fixture.session.workspace,
+                None,
+                Declared::default(),
+            )
+            .await
+            .unwrap();
+        }
+        assert!(recorded_idle_hints(&fixture.store).await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn idle_hint_does_not_escape_a_rolled_back_ending() {
+    let fixture = Fixture::new().await;
+    observe_for_idle_hint(&fixture, vec![]).await;
+    let mut tx = fixture.store.begin().await.unwrap();
+    ending(&mut tx, &fixture.session, Exit::Succeeded)
+        .await
+        .unwrap();
+    drop(tx);
+    assert!(recorded_idle_hints(&fixture.store).await.is_empty());
+}
+
+#[test]
+fn idle_hint_is_ignored_by_both_drivers() {
+    use crate::compute::{Docker, Driver, IdleHint, LocalExec};
+    let now = Timestamp::now();
+    for driver in [
+        Driver::Docker(Docker::provisioning_from("unused")),
+        Driver::LocalExec(LocalExec::running("unused")),
+    ] {
+        driver
+            .idle_hint(&IdleHint {
+                instance: format!("{}/not-provisioned", driver.name()),
+                idle_since: now,
+                archive_deadline: now + workspace::IDLE,
+            })
+            .unwrap();
+    }
+}

@@ -15,7 +15,7 @@ use crate::work;
 
 /// Generous, because kestrel has no signal that a human is watching a Workspace: duration is
 /// standing in for presence.
-const IDLE: SignedDuration = SignedDuration::from_hours(24);
+pub(crate) const IDLE: SignedDuration = SignedDuration::from_hours(24);
 
 pub struct Open<'a> {
     pub project: &'a str,
