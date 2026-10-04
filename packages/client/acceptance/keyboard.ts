@@ -35,7 +35,7 @@ await row.waitFor();
 const workspace = ((await row.getAttribute("href")) ?? "").split("/").at(-1) ?? "";
 await tabTo(page, row, `the running Session row (${workspace})`);
 await press(page, "Enter");
-await page.waitForURL(new RegExp(`/workspaces/${workspace}$`));
+await page.waitForURL((url) => url.pathname.endsWith(`/workspaces/${workspace}`));
 
 const panes = page.getByRole("tablist", { name: "Panes" });
 const narrow = await panes.isVisible();

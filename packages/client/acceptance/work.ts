@@ -44,7 +44,7 @@ for (const scope of ["Unpublished", "Changed", "Staged"]) {
 await work.getByRole("tab", { name: "Files", exact: true }).click();
 await capture("files-root");
 for (const segment of [...directory.split("/"), ...file.split("/")]) {
-	const entry = work.getByRole("button", { name: new RegExp(`^${segment}`) });
+	const entry = work.getByRole("button", { name: segment });
 	if (
 		await entry
 			.first()
