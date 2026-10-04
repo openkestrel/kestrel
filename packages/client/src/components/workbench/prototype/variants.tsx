@@ -19,6 +19,7 @@ import { Shimmer } from "#/components/ai-elements/shimmer";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "#/components/ui/collapsible";
 import { cn } from "#/lib/utils";
 import { elapsed } from "#/operator/transcript-view";
+import { VariantD } from "./variant-d";
 import { type ActivityGroup, FLOW, type Narrated, RUNNING } from "./fixtures";
 import {
 	BubbleMessage,
@@ -323,4 +324,5 @@ export const VARIANTS = {
 	A: { name: "Cards", Pane: VariantA },
 	B: { name: "Steps", Pane: VariantB },
 	C: { name: "Folded", Pane: VariantC },
+	D: { name: "Steps, refined", Pane: VariantD },
 } as const;

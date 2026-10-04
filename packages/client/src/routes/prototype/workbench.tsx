@@ -2,7 +2,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { DiffView, FilesView, SessionsQueue, WorkspacesList } from "#/components/workbench/prototype/parts";
-import { FONTS, type Font, PrototypeSwitcher, type Theme } from "#/components/workbench/prototype/switcher";
+import { FONTS, type Font, MONOS, type Mono, PrototypeSwitcher, type Theme } from "#/components/workbench/prototype/switcher";
+import { ChangesView, WorkspacesD } from "#/components/workbench/prototype/variant-d";
 import { VARIANTS } from "#/components/workbench/prototype/variants";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
 import { PaneHeading, Workbench } from "#/components/workbench/workbench";
@@ -11,8 +12,9 @@ type Variant = keyof typeof VARIANTS;
 
 export const Route = createFileRoute("/prototype/workbench")({
 	validateSearch: (search: Record<string, unknown>) => ({
-		variant: (search.variant && String(search.variant) in VARIANTS ? String(search.variant) : "A") as Variant,
-		font: (search.font && String(search.font) in FONTS ? String(search.font) : "inter") as Font,
+		variant: (search.variant && String(search.variant) in VARIANTS ? String(search.variant) : "D") as Variant,
+		font: (search.font && String(search.font) in FONTS ? String(search.font) : "geist") as Font,
+		mono: (search.mono && String(search.mono) in MONOS ? String(search.mono) : "jetbrains") as Mono,
 		theme: (search.theme === "dark" ? "dark" : "light") as Theme,
 		pane: (search.pane === "workspaces" || search.pane === "work" ? search.pane : "transcript") as
 			| "workspaces"
@@ -31,7 +33,9 @@ function PrototypeWorkbench() {
 		const root = document.documentElement;
 		root.dataset.theme = search.theme;
 		root.style.setProperty("--prototype-sans", FONTS[search.font].family);
-	}, [search.theme, search.font]);
+		root.style.setProperty("--prototype-mono", MONOS[search.mono].family);
+	}, [search.theme, search.font, search.mono]);
+	const refined = search.variant === "D";
 
 	return (
 		<>
@@ -41,17 +45,18 @@ function PrototypeWorkbench() {
 				workspaces={
 					<>
 						<PaneHeading>Workspaces</PaneHeading>
-						<WorkspacesList />
+						{refined ? <WorkspacesD /> : <WorkspacesList />}
 					</>
 				}
 				transcript={<Pane />}
-				work={<WorkPane />}
+				work={<WorkPane refined={refined} />}
 			/>
 			<PrototypeSwitcher
 				variants={Object.keys(VARIANTS) as Variant[]}
 				current={search.variant}
 				name={name}
 				font={search.font}
+				mono={search.mono}
 				theme={search.theme}
 				onChange={(next) => void navigate({ search: (prev) => ({ ...prev, ...next }), replace: true })}
 			/>
@@ -61,7 +66,7 @@ function PrototypeWorkbench() {
 
 const VIEWS = ["Work", "Diff", "Files", "Sessions", "People"] as const;
 
-function WorkPane() {
+function WorkPane({ refined }: { refined: boolean }) {
 	const [view, setView] = useState<(typeof VIEWS)[number]>("Diff");
 	return (
 		<>
@@ -70,12 +75,12 @@ function WorkPane() {
 				<TabsList className="w-full shrink-0 justify-start" aria-label="Work views">
 					{VIEWS.map((value) => (
 						<TabsTrigger key={value} value={value}>
-							{value}
+							{refined && value === "Diff" ? "Changes" : value}
 						</TabsTrigger>
 					))}
 				</TabsList>
 				<TabsContent value="Diff" className="min-h-0 flex-1 overflow-y-auto">
-					<DiffView />
+					{refined ? <ChangesView /> : <DiffView />}
 				</TabsContent>
 				<TabsContent value="Files" className="min-h-0 flex-1 overflow-y-auto">
 					<FilesView />

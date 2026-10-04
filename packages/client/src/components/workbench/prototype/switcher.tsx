@@ -10,6 +10,13 @@ export const FONTS = {
 } as const;
 
 export type Font = keyof typeof FONTS;
+
+export const MONOS = {
+	jetbrains: { label: "JetBrains Mono", family: "'JetBrains Mono Variable'" },
+	geist: { label: "Geist Mono", family: "'Geist Mono Variable'" },
+} as const;
+
+export type Mono = keyof typeof MONOS;
 export type Theme = "light" | "dark";
 
 export function PrototypeSwitcher<Key extends string>({
@@ -17,6 +24,7 @@ export function PrototypeSwitcher<Key extends string>({
 	current,
 	name,
 	font,
+	mono,
 	theme,
 	onChange,
 }: {
@@ -24,8 +32,9 @@ export function PrototypeSwitcher<Key extends string>({
 	current: Key;
 	name: string;
 	font: Font;
+	mono: Mono;
 	theme: Theme;
-	onChange: (next: { variant?: Key; font?: Font; theme?: Theme }) => void;
+	onChange: (next: { variant?: Key; font?: Font; mono?: Mono; theme?: Theme }) => void;
 }) {
 	const step = (by: number) => {
 		const index = variants.indexOf(current);
@@ -66,6 +75,18 @@ export function PrototypeSwitcher<Key extends string>({
 				className="rounded-full bg-white/15 px-2 py-1"
 			>
 				{Object.entries(FONTS).map(([key, value]) => (
+					<option key={key} value={key} className="text-black">
+						{value.label}
+					</option>
+				))}
+			</select>
+			<select
+				aria-label="Monospace"
+				value={mono}
+				onChange={(event) => onChange({ mono: event.target.value as Mono })}
+				className="rounded-full bg-white/15 px-2 py-1"
+			>
+				{Object.entries(MONOS).map(([key, value]) => (
 					<option key={key} value={key} className="text-black">
 						{value.label}
 					</option>
