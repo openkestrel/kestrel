@@ -1,5 +1,5 @@
 import { AxeBuilder } from "@axe-core/playwright";
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page, type Route } from "@playwright/test";
 
 test.beforeAll(async ({ request }) => {
 	await request.post("/operator/organizations", { data: { name: "acme" } });
@@ -32,6 +32,22 @@ async function opened(request: APIRequestContext): Promise<Workspace> {
 
 async function named(page: Page, name: string): Promise<void> {
 	await page.getByLabel("Your name").fill(name);
+}
+
+async function draftedByJack(page: Page, brief: string): Promise<void> {
+	await page.goto(FORM);
+	await page.getByLabel("Brief").fill(brief);
+	await named(page, "jack");
+}
+
+async function stubOpen(page: Page, answer: (route: Route) => Promise<void>): Promise<void> {
+	await page.route(
+		(url) => url.pathname === "/operator/organizations/acme/workspaces",
+		async (route) => {
+			if (route.request().method() !== "POST") return route.continue();
+			await answer(route);
+		},
+	);
 }
 
 test("the only Project and Agent are preselected, with the resolved values beside them", async ({
@@ -84,20 +100,13 @@ test("the Options disclosure opens by keyboard and holds the override, Profile a
 test("a refusal lands next to its field, opens the disclosure, and keeps every input", async ({
 	page,
 }) => {
-	await page.goto(FORM);
-	await page.getByLabel("Brief").fill("Ship the parser.");
-	await named(page, "jack");
-
-	await page.route(
-		(url) => url.pathname === "/operator/organizations/acme/workspaces",
-		async (route) => {
-			if (route.request().method() !== "POST") return route.continue();
-			await route.fulfill({
-				status: 422,
-				contentType: "application/json",
-				body: JSON.stringify({ message: "that branch is taken", field: "branch" }),
-			});
-		},
+	await draftedByJack(page, "Ship the parser.");
+	await stubOpen(page, (route) =>
+		route.fulfill({
+			status: 422,
+			contentType: "application/json",
+			body: JSON.stringify({ message: "that branch is taken", field: "branch" }),
+		}),
 	);
 
 	await page.getByRole("button", { name: "Open Workspace" }).click();
@@ -113,20 +122,13 @@ test("a refusal lands next to its field, opens the disclosure, and keeps every i
 });
 
 test("a refusal with no field lands at the top, and keeps every input", async ({ page }) => {
-	await page.goto(FORM);
-	await page.getByLabel("Brief").fill("Ship the parser.");
-	await named(page, "jack");
-
-	await page.route(
-		(url) => url.pathname === "/operator/organizations/acme/workspaces",
-		async (route) => {
-			if (route.request().method() !== "POST") return route.continue();
-			await route.fulfill({
-				status: 422,
-				contentType: "application/json",
-				body: JSON.stringify({ message: "the queue is full" }),
-			});
-		},
+	await draftedByJack(page, "Ship the parser.");
+	await stubOpen(page, (route) =>
+		route.fulfill({
+			status: 422,
+			contentType: "application/json",
+			body: JSON.stringify({ message: "the queue is full" }),
+		}),
 	);
 
 	await page.getByRole("button", { name: "Open Workspace" }).click();
@@ -139,17 +141,8 @@ test("a refusal with no field lands at the top, and keeps every input", async ({
 });
 
 test("a transport failure lands at the top, and keeps every input", async ({ page }) => {
-	await page.goto(FORM);
-	await page.getByLabel("Brief").fill("Ship the parser.");
-	await named(page, "jack");
-
-	await page.route(
-		(url) => url.pathname === "/operator/organizations/acme/workspaces",
-		async (route) => {
-			if (route.request().method() !== "POST") return route.continue();
-			await route.abort("failed");
-		},
-	);
+	await draftedByJack(page, "Ship the parser.");
+	await stubOpen(page, (route) => route.abort("failed"));
 
 	await page.getByRole("button", { name: "Open Workspace" }).click();
 
