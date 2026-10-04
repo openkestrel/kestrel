@@ -28,7 +28,13 @@ macro_rules! sessions_where {
                     supervisor, enqueued_at, started_at, ended_at, lease_expires_at, connected_at,
                     supervisor_version, model, mode, thought_level, worked_model, title,
                     config_options, changing_options, commands, interrupting_participant,
-                    interrupting_at, context_used, context_size, cost_amount, cost_currency",
+                    interrupting_at, context_used, context_size, cost_amount, cost_currency,
+                    (SELECT json_group_array(json_object('id', b.id, 'name', b.name))
+                     FROM (SELECT b.id, b.name
+                           FROM session_dependency AS d
+                           JOIN session AS b ON b.id = d.blocker_id
+                           WHERE d.session_id = session.id
+                           ORDER BY b.enqueued_at, b.id) AS b) AS depends_on",
             $columns,
             "
              FROM session
@@ -634,6 +640,7 @@ impl<'a> Workspaces<'a> {
                 lease_expires_at: None,
                 connected: None,
                 usage: None,
+                depends_on: Vec::new(),
             };
 
             let inserted = sqlx::query(
@@ -2536,6 +2543,7 @@ fn session(row: &SqliteRow) -> Result<Session> {
             None => None,
         },
         usage: usage(row),
+        depends_on: read_json(row, "depends_on")?,
     })
 }
 

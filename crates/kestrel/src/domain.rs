@@ -720,6 +720,24 @@ pub struct Session {
     pub lease_expires_at: Option<Timestamp>,
     pub connected: Option<Connected>,
     pub usage: Option<Usage>,
+    pub depends_on: Vec<Blocker>,
+}
+
+impl Session {
+    /// Why nothing could ever wait on this Session, when it can no longer end successfully.
+    pub fn never_succeeds(&self) -> Option<String> {
+        match (&self.state, &self.exit) {
+            (SessionState::Unreachable, _) => Some("is unreachable".to_owned()),
+            (_, Some(Exit::Failed { because })) => Some(format!("failed: {because}")),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Blocker {
+    pub id: SessionId,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

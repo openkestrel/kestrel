@@ -572,6 +572,10 @@ enum WorkspaceCommand {
         /// The name the Brief is written under. Without it, it is the operator's
         #[arg(long)]
         as_participant: Option<String>,
+        /// A Session it waits on until that one ends successfully, by generated name,
+        /// identifier, any unambiguous prefix of its identifier, or `latest`; repeatable
+        #[arg(long, value_name = "SESSION")]
+        depends_on: Vec<String>,
     },
     /// List every Workspace in the Organization
     List,
@@ -703,6 +707,10 @@ enum SessionCommand {
         /// The thought level it works at, or none for its Agent's or Harness's default
         #[arg(long)]
         thought_level: Option<String>,
+        /// A Session it waits on until that one ends successfully, by generated name,
+        /// identifier, any unambiguous prefix of its identifier, or `latest`; repeatable
+        #[arg(long, value_name = "SESSION")]
+        depends_on: Vec<String>,
     },
     /// List every Session in a Workspace
     List {
@@ -1272,6 +1280,7 @@ async fn run() -> Result<()> {
             mode,
             thought_level,
             as_participant,
+            depends_on,
         }) => {
             let organization = scoping.resolve().await?.organization;
             let brief = brief.as_deref().map(given).transpose()?;
@@ -1289,6 +1298,7 @@ async fn run() -> Result<()> {
                         "thought_level": thought_level,
                         "brief": brief,
                         "participant": as_participant,
+                        "depends_on": depends_on,
                     }),
                 )
                 .await?;
@@ -1543,6 +1553,7 @@ async fn run() -> Result<()> {
             model,
             mode,
             thought_level,
+            depends_on,
         }) => {
             let organization = scoping.resolve().await?.organization;
             show(
@@ -1561,6 +1572,7 @@ async fn run() -> Result<()> {
                         "model": model,
                         "mode": mode,
                         "thought_level": thought_level,
+                        "depends_on": depends_on,
                     }),
                 )
                 .await?,

@@ -26,6 +26,7 @@ pub struct Open<'a> {
     pub declared: Declared,
     pub brief: Option<&'a str>,
     pub participant: Option<&'a str>,
+    pub depends_on: &'a [String],
 }
 
 pub(crate) struct Resolved<'a> {
@@ -47,8 +48,10 @@ pub async fn open(
 ) -> Result<(Workspace, Session)> {
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
+    let blockers = work::blockers(&mut tx, &organization, open.depends_on).await?;
     let resolved = resolved(&mut tx, &organization, open).await?;
     let (workspace, session) = opened_in(&mut tx, &organization, &resolved).await?;
+    let session = work::record_dependencies(&mut tx, session, &blockers).await?;
     tx.commit().await?;
 
     Ok((workspace, session))
@@ -78,6 +81,7 @@ pub async fn open_without_a_session(
             declared: Declared::default(),
             brief: None,
             participant: None,
+            depends_on: &[],
         },
     )
     .await?;
@@ -232,7 +236,7 @@ async fn resolved<'a>(
     })
 }
 
-fn named<T>(field: &'static str, named: Result<T>) -> Result<T> {
+pub(crate) fn named<T>(field: &'static str, named: Result<T>) -> Result<T> {
     named.map_err(|error| match error.downcast::<Declined>() {
         Ok(declined) => {
             let kind = match &declined {
@@ -831,6 +835,7 @@ mod tests {
             lease_expires_at: None,
             connected: None,
             usage: None,
+            depends_on: Vec::new(),
         }
     }
 

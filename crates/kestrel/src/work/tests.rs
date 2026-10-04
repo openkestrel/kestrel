@@ -49,7 +49,7 @@ impl Fixture {
         )
         .await
         .unwrap();
-        let queued = enqueue(&store, workspace.id, None, Declared::default())
+        let queued = enqueue(&store, workspace.id, None, Declared::default(), &[])
             .await
             .unwrap();
         let session = {
@@ -912,6 +912,7 @@ async fn idle_hint_is_discarded_if_work_arrives_or_the_instance_is_archived() {
                 fixture.session.workspace,
                 None,
                 Declared::default(),
+                &[],
             )
             .await
             .unwrap();

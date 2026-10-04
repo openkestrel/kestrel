@@ -274,6 +274,7 @@ mod tests {
             lease_expires_at: None,
             connected: None,
             usage: None,
+            depends_on: Vec::new(),
         }
     }
 
