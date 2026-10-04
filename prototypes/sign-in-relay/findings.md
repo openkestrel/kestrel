@@ -80,14 +80,26 @@ held a JSON auth file with `auth_mode: chatgpt` and nonempty `access_token`,
 `refresh_token`, `id_token` and `account_id` fields. Only field names and presence
 were recorded; the credential and container were removed.
 
-Claude completion is pending. Do not interpret the malformed-code probes as
-proof of token extraction or a successful Claude login.
+Claude also completed with the person returning the browser's code to the
+probe. The PTY decoder detected the `sk-ant-oat` token in the rendered output;
+the command exited naturally with status 0 after 430 seconds including the
+person's browser interaction. The driver submitted the code with carriage return
+and subsequently sent another Enter. Only token presence was recorded, not its
+value. The container was removed. This proves a successful real sign-in and
+detectable token output, not an inference call with that token.
+
+These are one successful live run per pinned tool on arm64. Repetition across
+versions and amd64 belongs in the ignored vendor smoke tests, not deterministic
+CI tests.
 
 ## Consequences for the plan
 
-The shared relay lifecycle is feasible through the prompt stage; the parsing and
+Both pinned sign-in commands completed in fresh, short-lived containers with no
+published ports. ADR-0047 needs no fallback-only retreat on this evidence. The
+parsing and
 interaction belong to per-tool adapters. Claude needs terminal decoding and an
-explicit failed/retry transition. Codex polls and accepts no code on stdin. A
+explicit failed/retry transition and continuation input if it does not exit after
+showing its token. Codex polls and accepts no code on stdin. A
 relay should never publish raw terminal output: it can contain a token.
 
 Pin the versions tested, pass only URL/code/state to a Client, intercept credential

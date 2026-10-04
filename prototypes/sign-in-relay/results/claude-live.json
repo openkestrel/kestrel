@@ -1,0 +1,13 @@
+{
+  "harness": "claude",
+  "cols": 240,
+  "term": "xterm-256color",
+  "pipe": false,
+  "elapsed": 429.81,
+  "bytes": 3827,
+  "exited_before_deadline": true,
+  "exit_code": 0,
+  "cleanup_ok": true,
+  "token_seen": true,
+  "output": "[live output suppressed]"
+}
