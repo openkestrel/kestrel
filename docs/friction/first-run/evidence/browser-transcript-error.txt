@@ -1,0 +1,47 @@
+Workspaces
+Slots 0/2
+Instances 0 (no limit)
+docker
+New Workspace
+Needs attention
+rapid-thistle-vrsaqobm
+Attention
+kestrel/01a108a5-9883-7811-bd87-98c0b6449053
+pull requests unavailable
+no Instance
+Needs attention
+lucky-willow-dxvcykvb
+Attention
+kestrel/01a108a6-1fa8-74f2-889e-95997ac0d7c8
+pull requests unavailable
+no Instance
+rapid-thistle-vrsaqobm
+The Session failed: the organization audit holds no provider credential, and this session's harness was given no other way to reach a model.
+
+mighty-owl-rgqewsgl
+
+Ended
+Model
+model the harness's default
+One line
+Steps
+Full
+Transcript
+
+audit-project on kestrel/01a108a5-9883-7811-bd87-98c0b6449053
+
+Post
+Interrupt
+no name yet change
+
+Work
+Work
+Diff
+Files
+Sessions
+People
+declared branch kestrel/01a108a5-9883-7811-bd87-98c0b6449053
+pull requests unavailable
+
+No Instance is running, so there is no live work reading. Its work is on the branch kestrel/01a108a5-9883-7811-bd87-98c0b6449053.
+Injected requests: 6

@@ -1,0 +1,51 @@
+Workspaces
+Slots 0/2
+Instances 0 (no limit)
+docker
+New Workspace
+Needs attention
+rapid-thistle-vrsaqobm
+Attention
+kestrel/01a108a5-9883-7811-bd87-98c0b6449053
+pull requests unavailable
+no Instance
+Needs attention
+lucky-willow-dxvcykvb
+Attention
+kestrel/01a108a6-1fa8-74f2-889e-95997ac0d7c8
+pull requests unavailable
+no Instance
+New Workspace
+The browser Client failed
+Project
+Choose a Project
+
+Its repositories and base branch are the work's.
+
+Agent
+Choose an Agent
+audit-agent
+bad-agent
+
+Its harness and model are the Session's.
+
+Options
+Repositories
+Base branch
+Harness
+Model
+the harness's default
+Environment
+docker
+Without a Brief, the Session starts preparing at once and waits for its first message.
+Brief
+
+Type, paste, or drop a file; it is read here and never uploaded. Empty is fine: the Session then waits for your first message.
+
+Your name
+
+Remembered in this browser; your Brief is written under it.
+
+Open Workspace
+Work
+Injected requests: 2

@@ -1,0 +1,9 @@
+starting work with
+  organization  audit  (given as --organization)
+  project       audit-project  (given as --project)
+  repository    https://github.com/octocat/Hello-World.git  (given as --repository)
+  branch        master  (given as --branch)
+  agent         audit-agent  (given as --agent)
+  harness       opencode  (the harness audit-agent is declared on; --harness overrides it)
+  model         none  (the model audit-agent is declared with; --model overrides it)
+  credentials   none  (none is held, so a Session reaches a model only through a harness logged in otherwise; --credential overrides it)

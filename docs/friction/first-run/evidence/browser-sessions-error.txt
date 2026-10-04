@@ -1,0 +1,50 @@
+Workspaces
+Slots 0/2
+Instances 0 (no limit)
+docker
+New Workspace
+Needs attention
+rapid-thistle-vrsaqobm
+Attention
+kestrel/01a108a5-9883-7811-bd87-98c0b6449053
+pull requests unavailable
+no Instance
+Needs attention
+lucky-willow-dxvcykvb
+Attention
+kestrel/01a108a6-1fa8-74f2-889e-95997ac0d7c8
+pull requests unavailable
+no Instance
+rapid-thistle-vrsaqobm
+
+rapid-thistle-vrsaqobm
+
+no session
+Model
+model the harness's default
+Followers
+watching 1 anonymous
+One line
+Steps
+Full
+
+audit-agent joined
+
+Reply with audit complete. Do not edit files.
+
+Session ended
+
+Post
+Interrupt
+no name yet change
+
+Work
+Work
+Diff
+Files
+Sessions
+People
+audit sessions unavailable
+Status
+503
+Injected requests: 3

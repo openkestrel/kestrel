@@ -1,0 +1,55 @@
+Workspaces
+Slots 0/2
+Instances 0 (no limit)
+docker
+New Workspace
+Needs attention
+rapid-thistle-vrsaqobm
+Attention
+kestrel/01a108a5-9883-7811-bd87-98c0b6449053
+pull requests unavailable
+no Instance
+Needs attention
+lucky-willow-dxvcykvb
+Attention
+kestrel/01a108a6-1fa8-74f2-889e-95997ac0d7c8
+pull requests unavailable
+no Instance
+lucky-willow-dxvcykvb
+The Session failed: the organization audit holds no provider credential, and this session's harness was given no other way to reach a model.
+
+crisp-sparrow-ceourcns
+
+Ended
+Model
+model the harness's default
+Followers
+watching audit-operator
+One line
+Steps
+Full
+
+audit-agent joined
+
+audit-operator joined
+
+Reply with audit complete. Do not edit files.
+
+Session ended
+
+Session failed: the organization audit holds no provider credential, and this session's harness was given no other way to reach a model
+
+Post
+Interrupt
+writing as audit-operator change
+
+Work
+Work
+Diff
+Files
+Sessions
+People
+repositories
+the Workspace lucky-willow-dxvcykvb has no Instance to read; its work is on the branch kestrel/01a108a6-1fa8-74f2-889e-95997ac0d7c8
+Status
+422

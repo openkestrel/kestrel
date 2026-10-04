@@ -1,0 +1,15 @@
+Workspaces
+Slots 0/2
+Instances 0 (no limit)
+docker
+New Workspace
+
+No Workspace is open.
+
+Transcript
+No Workspace is chosen
+
+Choose a Workspace to follow its Transcript.
+
+Work
+Injected requests: 2

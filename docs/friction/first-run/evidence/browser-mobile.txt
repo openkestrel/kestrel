@@ -1,0 +1,30 @@
+Workspaces
+Transcript
+Work
+lucky-willow-dxvcykvb
+The Session failed: the organization audit holds no provider credential, and this session's harness was given no other way to reach a model.
+
+crisp-sparrow-ceourcns
+
+Ended
+Model
+model the harness's default
+Followers
+watching audit-operator
+One line
+Steps
+Full
+
+audit-agent joined
+
+audit-operator joined
+
+Reply with audit complete. Do not edit files.
+
+Session ended
+
+Session failed: the organization audit holds no provider credential, and this session's harness was given no other way to reach a model
+
+Post
+Interrupt
+writing as audit-operator change

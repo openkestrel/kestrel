@@ -1,0 +1,3 @@
+Organizations
+
+No Organization exists yet. kestrel start declares one.

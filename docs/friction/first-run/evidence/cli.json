@@ -1,0 +1,3017 @@
+[
+  {
+    "label": "--help",
+    "args": [
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Reach a kestrel control plane over its operator boundary.\n\nUsage: kestrel [OPTIONS] <COMMAND>\n\nCommands:\n  start         Go from whatever the control plane holds to a Session carrying a Brief, declaring what is missing from what this clone says, and explaining every value before applying it\n  apply         Preview and apply one Project, Agent and Trigger declaration document\n  organization  Declare and list Organizations\n  project       Declare and list Projects\n  agent         Declare and list Agents\n  credential    Hold, list and forget the Provider Credentials an Organization's Sessions reach a model with\n  profile       Declare Subscription Profiles, and hold, list and forget the logins in them\n  integration   Register and list Integrations: credentialed connections to external systems\n  event         Read the Events recorded for an Organization\n  trigger       Declare, inspect, test and control Triggers\n  workspace     Read Workspaces\n  session       Show, enqueue, list and stop Sessions\n  instance      List the Instances held for work that exists nowhere else, and release them\n  queue         Read the queue: the limits, one row per occupant with its phase, and one per queued Session\n  status        Print the resolved scope, where each value came from, what exists in it, and what to session next\n  exit-codes    Print every exit code, what it means, and when a script should branch on it\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n  -V, --version              Print version\n\nExit codes: `kestrel exit-codes` lists each one, what it means, and when to branch on it.\n",
+    "stderr": ""
+  },
+  {
+    "label": "start --help",
+    "args": [
+      "start",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Go from whatever the control plane holds to a Session carrying a Brief, declaring what is missing from what this clone says, and explaining every value before applying it\n\nUsage: kestrel start [OPTIONS] --brief <BRIEF>\n\nOptions:\n      --brief <BRIEF>          The Brief the Workspace starts with; `@FILE` reads it from a file and `-` from standard input\n      --repository <URL>       A repository the work happens against; repeat for many. Without it, the clone's origin\n      --branch <BRANCH>        The branch the work happens on. Without it, a Project's own, then origin's default, then the branch checked out\n      --project <PROJECT>      The Project, declared if missing. Without it, the one declaring the repositories, then the repository's name\n      --agent <AGENT>          The Agent, declared if missing. Without it, the only one, then its harness's name\n      --harness <HARNESS>      The Harness a declared Agent is driven by. Without it, the declared Agent's, then kestrel's default\n      --model <MODEL>          The model a declared Agent works with. Without it, its Harness's default\n      --credential <VARIABLE>  A Provider Credential for the Organization to hold, read from the environment variable of this name; repeat for many\n  -y, --yes                    Apply the plan without asking. A start asks only when standard input and standard error are both a terminal\n      --control-plane <URL>    The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>    The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]        Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                   Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "apply --help",
+    "args": [
+      "apply",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Preview and apply one Project, Agent and Trigger declaration document\n\nUsage: kestrel apply [OPTIONS] --file <FILE>\n\nOptions:\n  -f, --file <FILE>          The declaration file, or `-` for standard input\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "organization --help",
+    "args": [
+      "organization",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Declare and list Organizations\n\nUsage: kestrel organization [OPTIONS] <COMMAND>\n\nCommands:\n  declare  Declare an Organization, or change its live Instance limit\n  list     List every Organization, one JSON record a line\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "organization declare --help",
+    "args": [
+      "organization",
+      "declare",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Declare an Organization, or change its live Instance limit\n\nUsage: kestrel organization declare [OPTIONS] <NAME>\n\nArguments:\n  <NAME>  The name it is referred to by\n\nOptions:\n      --max-live-instances <MAX_LIVE_INSTANCES>\n          The most Instances the Organization may keep live at once\n      --control-plane <URL>\n          The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>\n          The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]\n          Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help\n          Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "organization list --help",
+    "args": [
+      "organization",
+      "list",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "List every Organization, one JSON record a line\n\nUsage: kestrel organization list [OPTIONS]\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "project --help",
+    "args": [
+      "project",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Declare and list Projects\n\nUsage: kestrel project [OPTIONS] <COMMAND>\n\nCommands:\n  declare  Declare a Project, or make the one by this name what this declaration describes\n  list     List every Project in the Organization, one JSON record a line\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "project declare --help",
+    "args": [
+      "project",
+      "declare",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Declare a Project, or make the one by this name what this declaration describes\n\nUsage: kestrel project declare [OPTIONS] --repository <URL> --branch <BRANCH> <NAME>\n\nArguments:\n  <NAME>  The name it is referred to by\n\nOptions:\n      --repository <URL>     A repository the work happens against; repeat for many\n      --branch <BRANCH>      The branch the work happens on\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "project list --help",
+    "args": [
+      "project",
+      "list",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "List every Project in the Organization, one JSON record a line\n\nUsage: kestrel project list [OPTIONS]\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "agent --help",
+    "args": [
+      "agent",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Declare and list Agents\n\nUsage: kestrel agent [OPTIONS] <COMMAND>\n\nCommands:\n  declare  Declare an Agent, or make the one by this name what this declaration describes\n  model    Change the model an Agent works with, leaving every Session in flight on the one it has\n  list     List every Agent in the Organization, one JSON record a line\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "agent declare --help",
+    "args": [
+      "agent",
+      "declare",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Declare an Agent, or make the one by this name what this declaration describes\n\nUsage: kestrel agent declare [OPTIONS] <NAME>\n\nArguments:\n  <NAME>  The name it is referred to by\n\nOptions:\n      --harness <HARNESS>    The Harness that drives it [default: opencode]\n      --model <MODEL>        The model it works with; left out, it names none and its Harness's default is the answer\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "agent model --help",
+    "args": [
+      "agent",
+      "model",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Change the model an Agent works with, leaving every Session in flight on the one it has\n\nUsage: kestrel agent model [OPTIONS] <NAME>\n\nArguments:\n  <NAME>  The name it is referred to by\n\nOptions:\n      --model <MODEL>        The model it works with; left out, it names none and its Harness's default is the answer\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "agent list --help",
+    "args": [
+      "agent",
+      "list",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "List every Agent in the Organization, one JSON record a line\n\nUsage: kestrel agent list [OPTIONS]\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "credential --help",
+    "args": [
+      "credential",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Hold, list and forget the Provider Credentials an Organization's Sessions reach a model with\n\nUsage: kestrel credential [OPTIONS] <COMMAND>\n\nCommands:\n  set     Hold a Provider Credential against an Organization, read from standard input\n  list    List what the Organization holds, by the variable each is read from and never by value\n  forget  Forget a Provider Credential the Organization holds\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n\nManage a Provider Credential with `kestrel credential set <variable>` and `kestrel credential forget <variable>`.\n",
+    "stderr": ""
+  },
+  {
+    "label": "credential set --help",
+    "args": [
+      "credential",
+      "set",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Hold a Provider Credential against an Organization, read from standard input\n\nUsage: kestrel credential set [OPTIONS] <VARIABLE>\n\nArguments:\n  <VARIABLE>  The environment variable a Harness reads it from\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "credential list --help",
+    "args": [
+      "credential",
+      "list",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "List what the Organization holds, by the variable each is read from and never by value\n\nUsage: kestrel credential list [OPTIONS]\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "credential forget --help",
+    "args": [
+      "credential",
+      "forget",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Forget a Provider Credential the Organization holds\n\nUsage: kestrel credential forget [OPTIONS] <VARIABLE>\n\nArguments:\n  <VARIABLE>  The environment variable it is read from\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "profile --help",
+    "args": [
+      "profile",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Declare Subscription Profiles, and hold, list and forget the logins in them\n\nUsage: kestrel profile [OPTIONS] <COMMAND>\n\nCommands:\n  declare  Declare a Subscription Profile: a person's login to a subscribed Harness\n  set      Hold a login in a profile, read from standard input\n  list     List every profile in the Organization with what each holds, one JSON record a line\n  forget   Forget a login a profile holds\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "profile declare --help",
+    "args": [
+      "profile",
+      "declare",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Declare a Subscription Profile: a person's login to a subscribed Harness\n\nUsage: kestrel profile declare [OPTIONS] --owner <OWNER> <NAME>\n\nArguments:\n  <NAME>  The name a Workspace or Trigger names it by\n\nOptions:\n      --owner <OWNER>        The person it belongs to, which never changes\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "profile set --help",
+    "args": [
+      "profile",
+      "set",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Hold a login in a profile, read from standard input\n\nUsage: kestrel profile set [OPTIONS] <--variable <NAME>|--file <PATH>> <NAME>\n\nArguments:\n  <NAME>  The profile it is held in\n\nOptions:\n      --variable <NAME>      An environment variable the Harness is spawned with\n      --file <PATH>          A file beneath the agent's home, handed back after each Session so a refreshed login persists\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "profile list --help",
+    "args": [
+      "profile",
+      "list",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "List every profile in the Organization with what each holds, one JSON record a line\n\nUsage: kestrel profile list [OPTIONS]\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "profile forget --help",
+    "args": [
+      "profile",
+      "forget",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Forget a login a profile holds\n\nUsage: kestrel profile forget [OPTIONS] <--variable <NAME>|--file <PATH>> <NAME>\n\nArguments:\n  <NAME>  The profile it is held in\n\nOptions:\n      --variable <NAME>      An environment variable the Harness is spawned with\n      --file <PATH>          A file beneath the agent's home, handed back after each Session so a refreshed login persists\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "integration --help",
+    "args": [
+      "integration",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Register and list Integrations: credentialed connections to external systems\n\nUsage: kestrel integration [OPTIONS] <COMMAND>\n\nCommands:\n  register             Register an Integration\n  list                 List every Integration in the Organization, one JSON record a line\n  acknowledge-refusal  Acknowledge the latest oversized Event refused by an Integration\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "integration register --help",
+    "args": [
+      "integration",
+      "register",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Register an Integration\n\nUsage: kestrel integration register [OPTIONS] <COMMAND>\n\nCommands:\n  github   A connection to GitHub, watching one repository\n  webhook  A generic endpoint any producer can POST CloudEvents to\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "integration register github --help",
+    "args": [
+      "integration",
+      "register",
+      "github",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "A connection to GitHub, watching one repository\n\nUsage: kestrel integration register github [OPTIONS] --repository <OWNER/NAME> --token <TOKEN> <NAME>\n\nArguments:\n  <NAME>  The name it is referred to by\n\nOptions:\n      --repository <OWNER/NAME>  The repository it watches, as owner/name\n      --token <TOKEN>            The credential it presents to GitHub [env: KESTREL_GITHUB_TOKEN]\n      --carries <DIRECTION>      A direction it carries \u2014 inbound, outbound; repeat for both [default: inbound outbound]\n      --interval <DURATION>      How often the poll asks GitHub what has happened [default: 1m]\n      --webhook-secret <SECRET>  The secret GitHub signs webhook deliveries with; given one, kestrel receives the repository's events by webhook and stops polling for them [env: KESTREL_GITHUB_WEBHOOK_SECRET]\n      --control-plane <URL>      The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>      The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]          Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                     Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "integration register webhook --help",
+    "args": [
+      "integration",
+      "register",
+      "webhook",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "A generic endpoint any producer can POST CloudEvents to\n\nUsage: kestrel integration register webhook [OPTIONS] --secret <SECRET> <NAME>\n\nArguments:\n  <NAME>  The name it is referred to by\n\nOptions:\n      --secret <SECRET>      The secret a sender presents as `Authorization: Bearer <secret>` [env: KESTREL_WEBHOOK_SECRET]\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "integration list --help",
+    "args": [
+      "integration",
+      "list",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "List every Integration in the Organization, one JSON record a line\n\nUsage: kestrel integration list [OPTIONS]\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "integration acknowledge-refusal --help",
+    "args": [
+      "integration",
+      "acknowledge-refusal",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Acknowledge the latest oversized Event refused by an Integration\n\nUsage: kestrel integration acknowledge-refusal [OPTIONS] <NAME>\n\nArguments:\n  <NAME>  \n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "event --help",
+    "args": [
+      "event",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Read the Events recorded for an Organization\n\nUsage: kestrel event [OPTIONS] <COMMAND>\n\nCommands:\n  list  List the Events recorded for the Organization, most recent first, one JSON record a line\n  show  Show one Event's whole envelope and payload\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "event list --help",
+    "args": [
+      "event",
+      "list",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "List the Events recorded for the Organization, most recent first, one JSON record a line\n\nUsage: kestrel event list [OPTIONS]\n\nOptions:\n      --limit <LIMIT>        How many to list at most [default: 50]\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "event show --help",
+    "args": [
+      "event",
+      "show",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Show one Event's whole envelope and payload\n\nUsage: kestrel event show [OPTIONS] <RECORD>\n\nArguments:\n  <RECORD>  The Event's record identifier\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "trigger --help",
+    "args": [
+      "trigger",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Declare, inspect, test and control Triggers\n\nUsage: kestrel trigger [OPTIONS] <COMMAND>\n\nCommands:\n  apply     Make the Organization's applied Triggers what a declaration file says, printing the diff\n  declare   Declare a Trigger, or make the named one what this declaration describes\n  list      List every Trigger in the Organization, one JSON record a line\n  show      Show a Trigger\n  test      Say whether a Trigger matches an Event and what it would render, starting no work\n  dispatch  Start a Trigger's work on an issue now, whether or not its filter matches anything\n  disable   Stop a Trigger firing, without forgetting it\n  enable    Let a disabled Trigger fire again\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "trigger apply --help",
+    "args": [
+      "trigger",
+      "apply",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Make the Organization's applied Triggers what a declaration file says, printing the diff\n\nUsage: kestrel trigger apply [OPTIONS] --file <FILE>\n\nOptions:\n  -f, --file <FILE>          The declaration file, or `-` for standard input\n      --dry-run              Print the diff without making it\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "trigger declare --help",
+    "args": [
+      "trigger",
+      "declare",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Declare a Trigger, or make the named one what this declaration describes\n\nUsage: kestrel trigger declare [OPTIONS] --brief <BRIEF> --project <PROJECT> --agent <AGENT> <NAME>\n\nArguments:\n  <NAME>  The name it is referred to by\n\nOptions:\n      --filter <JSON>\n          The Events it matches: a CloudEvents filter as JSON; `@FILE` reads it from a file and `-` from standard input\n      --every <DURATION>\n          Fire on an interval counted from the declaration, in place of a filter\n      --cron <EXPRESSION>\n          Fire on a five-field cron expression, in place of a filter or an interval\n      --zone <ZONE>\n          The IANA time zone the cron expression is read in, such as UTC or America/New_York\n      --brief <BRIEF>\n          The Brief a firing hands its Workspace, rendered over an Event; `@FILE` reads it from a file and `-` from standard input\n      --branch <BRANCH>\n          The branch a firing's work happens on, rendered from the Event\n      --correlation <CORRELATION>\n          The key that finds an open Workspace for this work, rendered from the Event\n      --on-miss <OPEN|IGNORE>\n          What to do when correlation finds no open Workspace: open or ignore\n      --on-open-workspace <CONTINUE|NEW-SESSION>\n          What to do when correlation finds an open Workspace: continue its waiting Session, or start a new Session with this Trigger's Agent once the unfinished one lets go\n      --project <PROJECT>\n          The Project a firing's work happens against\n      --agent <AGENT>\n          The Agent a firing starts work with\n      --allow <AGENT>\n          Another Agent an agent:<name> label may choose instead; repeat for many\n      --profile <PROFILE>\n          The Subscription Profile a firing's Sessions use\n      --control-plane <URL>\n          The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>\n          The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]\n          Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help\n          Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "trigger list --help",
+    "args": [
+      "trigger",
+      "list",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "List every Trigger in the Organization, one JSON record a line\n\nUsage: kestrel trigger list [OPTIONS]\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "trigger show --help",
+    "args": [
+      "trigger",
+      "show",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Show a Trigger\n\nUsage: kestrel trigger show [OPTIONS] <NAME>\n\nArguments:\n  <NAME>  \n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "trigger test --help",
+    "args": [
+      "trigger",
+      "test",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Say whether a Trigger matches an Event and what it would render, starting no work\n\nUsage: kestrel trigger test [OPTIONS] <NAME>\n\nArguments:\n  <NAME>  \n\nOptions:\n      --event <EVENT>              The Event's record; absent tests the next elapsing of a scheduled Trigger\n      --integration <INTEGRATION>  The GitHub Integration the issue is read through\n      --issue <NUMBER>             Test against the Event a dispatch of this issue would record, recording nothing\n  -f, --file <FILE>                Test the Trigger as a declaration file declares it rather than as it was applied; `-` for standard input\n      --instruction <INSTRUCTION>  The instruction a dispatch supplies for the Brief to render; `@FILE` reads it from a file and `-` from standard input\n      --agent <AGENT>              An Agent the Trigger allows, in place of the one it or a label would choose\n      --control-plane <URL>        The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>        The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]            Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                       Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "trigger dispatch --help",
+    "args": [
+      "trigger",
+      "dispatch",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Start a Trigger's work on an issue now, whether or not its filter matches anything\n\nUsage: kestrel trigger dispatch [OPTIONS] --integration <INTEGRATION> --issue <NUMBER> <NAME>\n\nArguments:\n  <NAME>  The Trigger whose work starts\n\nOptions:\n      --integration <INTEGRATION>  The GitHub Integration the issue is read through, and its Outcome said back through\n      --issue <NUMBER>             The issue to work on\n      --instruction <INSTRUCTION>  The instruction the Brief reads as `instruction`; `@FILE` reads it from a file and `-` from standard input\n      --agent <AGENT>              An Agent the Trigger allows, in place of the one it or a label would choose\n      --control-plane <URL>        The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>        The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]            Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                       Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "trigger disable --help",
+    "args": [
+      "trigger",
+      "disable",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Stop a Trigger firing, without forgetting it\n\nUsage: kestrel trigger disable [OPTIONS] <NAME>\n\nArguments:\n  <NAME>  \n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "trigger enable --help",
+    "args": [
+      "trigger",
+      "enable",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Let a disabled Trigger fire again\n\nUsage: kestrel trigger enable [OPTIONS] <NAME>\n\nArguments:\n  <NAME>  \n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace --help",
+    "args": [
+      "workspace",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Read Workspaces\n\nUsage: kestrel workspace [OPTIONS] <COMMAND>\n\nCommands:\n  open        Open a Workspace against a Project and an Agent, and enqueue its first Session\n  list        List every Workspace in the Organization\n  changes     \n  commits     \n  stashes     \n  work        \n  files       List one directory of a Workspace's live Instance, each entry marked tracked, untracked or ignored; with no path, its repositories\n  read        Write a file in a Workspace's live Instance to standard output, byte for byte\n  show        Show a Workspace\n  post        Add a participant's message; starts a Session or queues its next Turn\n  message     Change a Held Message before a Turn takes it\n  seal        Seal a Workspace: readable ever after, and never reopened\n  transcript  Read a Workspace's Transcript, one JSON entry a line, and the cursor a later read resumes from\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace open --help",
+    "args": [
+      "workspace",
+      "open",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Open a Workspace against a Project and an Agent, and enqueue its first Session\n\nUsage: kestrel workspace open [OPTIONS] --project <PROJECT> --agent <AGENT>\n\nOptions:\n      --project <PROJECT>\n          The Project its work happens against\n      --agent <AGENT>\n          The Agent that participates in it\n      --profile <PROFILE>\n          The Subscription Profile its Sessions use\n      --branch <BRANCH>\n          The branch its work happens on\n      --continues <WORKSPACE>\n          The sealed Workspace this one carries on from, by generated name, identifier, any unambiguous prefix of its identifier, or `latest`\n      --brief <BRIEF>\n          The Brief the Workspace starts with; `@FILE` reads it from a file and `-` from standard input\n      --model <MODEL>\n          The model the first Session runs on. Without it, the Agent's\n      --mode <MODE>\n          The mode the first Session runs in. Without it, the Agent's\n      --thought-level <THOUGHT_LEVEL>\n          The thought level the first Session runs at. Without it, the Agent's\n      --as-participant <AS_PARTICIPANT>\n          The name the Brief is written under. Without it, it is the operator's\n      --control-plane <URL>\n          The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>\n          The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]\n          Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help\n          Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace list --help",
+    "args": [
+      "workspace",
+      "list",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "List every Workspace in the Organization\n\nUsage: kestrel workspace list [OPTIONS]\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace changes --help",
+    "args": [
+      "workspace",
+      "changes",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Usage: kestrel workspace changes [OPTIONS] <WORKSPACE> [COMMIT] [-- <PATHS>...]\n\nArguments:\n  <WORKSPACE>  \n  [COMMIT]     \n  [PATHS]...   \n\nOptions:\n      --staged               \n      --changed              \n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace commits --help",
+    "args": [
+      "workspace",
+      "commits",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Usage: kestrel workspace commits [OPTIONS] <WORKSPACE>\n\nArguments:\n  <WORKSPACE>  \n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace stashes --help",
+    "args": [
+      "workspace",
+      "stashes",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Usage: kestrel workspace stashes [OPTIONS] <WORKSPACE>\n\nArguments:\n  <WORKSPACE>  \n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace work --help",
+    "args": [
+      "workspace",
+      "work",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Usage: kestrel workspace work [OPTIONS] <WORKSPACE>\n\nArguments:\n  <WORKSPACE>  \n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace files --help",
+    "args": [
+      "workspace",
+      "files",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "List one directory of a Workspace's live Instance, each entry marked tracked, untracked or ignored; with no path, its repositories\n\nUsage: kestrel workspace files [OPTIONS] <WORKSPACE> [PATH]\n\nArguments:\n  <WORKSPACE>  \n  [PATH]       `<repo>/<path>`\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace read --help",
+    "args": [
+      "workspace",
+      "read",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Write a file in a Workspace's live Instance to standard output, byte for byte\n\nUsage: kestrel workspace read [OPTIONS] <WORKSPACE> <PATH>\n\nArguments:\n  <WORKSPACE>  \n  <PATH>       `<repo>/<path>`\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace show --help",
+    "args": [
+      "workspace",
+      "show",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Show a Workspace\n\nUsage: kestrel workspace show [OPTIONS] <WORKSPACE>\n\nArguments:\n  <WORKSPACE>  Its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace post --help",
+    "args": [
+      "workspace",
+      "post",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Add a participant's message; starts a Session or queues its next Turn\n\nUsage: kestrel workspace post [OPTIONS] --as-participant <AS_PARTICIPANT> <WORKSPACE> <MESSAGE>\n\nArguments:\n  <WORKSPACE>  Its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`\n  <MESSAGE>    What the participant says\n\nOptions:\n      --as-participant <AS_PARTICIPANT>\n          The participant saying the message\n      --control-plane <URL>\n          The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>\n          The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]\n          Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help\n          Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace message --help",
+    "args": [
+      "workspace",
+      "message",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Change a Held Message before a Turn takes it\n\nUsage: kestrel workspace message [OPTIONS] <COMMAND>\n\nCommands:\n  edit      Replace a Held Message's text; only its author's name is accepted\n  withdraw  Take a Held Message back, so no Turn sees it; only its author's name is accepted\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace message edit --help",
+    "args": [
+      "workspace",
+      "message",
+      "edit",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Replace a Held Message's text; only its author's name is accepted\n\nUsage: kestrel workspace message edit [OPTIONS] --as-participant <AS_PARTICIPANT> <WORKSPACE> <ID> <MESSAGE>\n\nArguments:\n  <WORKSPACE>  Its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`\n  <ID>         The id the post answered with\n  <MESSAGE>    What the message now says\n\nOptions:\n      --as-participant <AS_PARTICIPANT>\n          The participant that wrote the message, and only that one\n      --control-plane <URL>\n          The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>\n          The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]\n          Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help\n          Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace message withdraw --help",
+    "args": [
+      "workspace",
+      "message",
+      "withdraw",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Take a Held Message back, so no Turn sees it; only its author's name is accepted\n\nUsage: kestrel workspace message withdraw [OPTIONS] --as-participant <AS_PARTICIPANT> <WORKSPACE> <ID>\n\nArguments:\n  <WORKSPACE>  Its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`\n  <ID>         The id the post answered with\n\nOptions:\n      --as-participant <AS_PARTICIPANT>\n          The participant that wrote the message, and only that one\n      --control-plane <URL>\n          The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>\n          The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]\n          Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help\n          Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace seal --help",
+    "args": [
+      "workspace",
+      "seal",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Seal a Workspace: readable ever after, and never reopened\n\nUsage: kestrel workspace seal [OPTIONS] <WORKSPACE>\n\nArguments:\n  <WORKSPACE>  Its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "workspace transcript --help",
+    "args": [
+      "workspace",
+      "transcript",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Read a Workspace's Transcript, one JSON entry a line, and the cursor a later read resumes from\n\nUsage: kestrel workspace transcript [OPTIONS] <WORKSPACE>\n\nArguments:\n  <WORKSPACE>  Its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`\n\nOptions:\n      --cursor <CURSOR>\n          Resume after the cursor a previous read ended with\n      --follow\n          Keep reading as entries are appended, until the Workspace is sealed\n      --as-participant <AS_PARTICIPANT>\n          Join the Workspace's presence as this person while following\n      --kinds <KINDS>\n          [default: shared_state]\n      --no-summaries\n          \n      --control-plane <URL>\n          The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>\n          The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]\n          Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help\n          Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "session --help",
+    "args": [
+      "session",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Show, enqueue, list and stop Sessions\n\nUsage: kestrel session [OPTIONS] <COMMAND>\n\nCommands:\n  enqueue    Enqueue a Session in a Workspace, for the work role to claim and dispatch\n  list       List every Session in a Workspace\n  show       Show a Session\n  interrupt  Cancel a Session's working turn without ending it, so held messages go to the agent at once\n  stop       End a Session: it succeeds between turns, and fails mid-turn or before it started\n  option     Change one of a Session's options between Turns\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "session enqueue --help",
+    "args": [
+      "session",
+      "enqueue",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Enqueue a Session in a Workspace, for the work role to claim and dispatch\n\nUsage: kestrel session enqueue [OPTIONS] --workspace <WORKSPACE>\n\nOptions:\n      --workspace <WORKSPACE>          The Workspace it executes on behalf of, by generated name, identifier, any unambiguous prefix of its identifier, or `latest`\n      --agent <AGENT>                  The Agent it runs, or the one the Workspace's latest Session ran\n      --model <MODEL>                  The model it works with, or none for its Agent's or Harness's default\n      --mode <MODE>                    The mode it works in, or none for its Agent's or Harness's default\n      --thought-level <THOUGHT_LEVEL>  The thought level it works at, or none for its Agent's or Harness's default\n      --control-plane <URL>            The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>            The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]                Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                           Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "session list --help",
+    "args": [
+      "session",
+      "list",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "List every Session in a Workspace\n\nUsage: kestrel session list [OPTIONS] --workspace <WORKSPACE>\n\nOptions:\n      --workspace <WORKSPACE>  The Workspace the Sessions execute on behalf of, by generated name, identifier, any unambiguous prefix of its identifier, or `latest`\n      --control-plane <URL>    The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>    The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]        Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                   Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "session show --help",
+    "args": [
+      "session",
+      "show",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Show a Session\n\nUsage: kestrel session show [OPTIONS] <SESSION>\n\nArguments:\n  <SESSION>  Its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "session interrupt --help",
+    "args": [
+      "session",
+      "interrupt",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Cancel a Session's working turn without ending it, so held messages go to the agent at once\n\nUsage: kestrel session interrupt [OPTIONS] --as-participant <AS_PARTICIPANT> <SESSION>\n\nArguments:\n  <SESSION>  Its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`\n\nOptions:\n      --as-participant <AS_PARTICIPANT>\n          The participant asking\n      --control-plane <URL>\n          The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>\n          The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]\n          Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help\n          Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "session stop --help",
+    "args": [
+      "session",
+      "stop",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "End a Session: it succeeds between turns, and fails mid-turn or before it started\n\nUsage: kestrel session stop [OPTIONS] <SESSION>\n\nArguments:\n  <SESSION>  Its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "session option --help",
+    "args": [
+      "session",
+      "option",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Change one of a Session's options between Turns\n\nUsage: kestrel session option [OPTIONS] <COMMAND>\n\nCommands:\n  set  Set an option, by the id the harness gave it or by its category\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "session option set --help",
+    "args": [
+      "session",
+      "option",
+      "set",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Set an option, by the id the harness gave it or by its category\n\nUsage: kestrel session option set [OPTIONS] --as-participant <AS_PARTICIPANT> <SESSION> <OPTION> <VALUE>\n\nArguments:\n  <SESSION>  Its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`\n  <OPTION>   The option's id, or one of the categories model, mode or thought_level\n  <VALUE>    The value to set, as the harness offers it\n\nOptions:\n      --as-participant <AS_PARTICIPANT>\n          The person making the change\n      --control-plane <URL>\n          The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>\n          The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]\n          Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help\n          Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "instance --help",
+    "args": [
+      "instance",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "List the Instances held for work that exists nowhere else, and release them\n\nUsage: kestrel instance [OPTIONS] <COMMAND>\n\nCommands:\n  list     List every Instance kept because it may hold the only copy of its Workspace's work, and why\n  release  Destroy a Workspace's Instance, discarding whatever it holds that was never pushed\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "instance list --help",
+    "args": [
+      "instance",
+      "list",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "List every Instance kept because it may hold the only copy of its Workspace's work, and why\n\nUsage: kestrel instance list [OPTIONS]\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "instance release --help",
+    "args": [
+      "instance",
+      "release",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Destroy a Workspace's Instance, discarding whatever it holds that was never pushed\n\nUsage: kestrel instance release [OPTIONS] <WORKSPACE>\n\nArguments:\n  <WORKSPACE>  The Workspace whose Instance it is, by generated name, identifier, any unambiguous prefix of its identifier, or `latest`\n\nOptions:\n      --as-participant <AS_PARTICIPANT>\n          The participant releasing it [default: operator]\n      --control-plane <URL>\n          The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>\n          The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]\n          Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help\n          Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "queue --help",
+    "args": [
+      "queue",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Read the queue: the limits, one row per occupant with its phase, and one per queued Session\n\nUsage: kestrel queue [OPTIONS]\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "status --help",
+    "args": [
+      "status",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Print the resolved scope, where each value came from, what exists in it, and what to session next\n\nUsage: kestrel status [OPTIONS]\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "exit-codes --help",
+    "args": [
+      "exit-codes",
+      "--help"
+    ],
+    "exit": 0,
+    "stdout": "Print every exit code, what it means, and when a script should branch on it\n\nUsage: kestrel exit-codes [OPTIONS]\n\nOptions:\n      --control-plane <URL>  The control plane's operator boundary [env: KESTREL_CONTROL_PLANE=] [default: http://127.0.0.1:7718]\n      --organization <NAME>  The Organization this invocation applies to; without it, a committed .kestrel/organization between the working directory and its repository root, then the only Organization [env: KESTREL_ORGANIZATION=]\n      --json [<FIELDS>]      Emit these fields and no others, as JSON, one record a line; without it a terminal gets the presentation chosen for the command and anything else gets it tab-delimited\n  -h, --help                 Print help\n",
+    "stderr": ""
+  },
+  {
+    "label": "invalid flag start",
+    "args": [
+      "start",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel start [OPTIONS] --brief <BRIEF>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default start",
+    "args": [
+      "start"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --brief <BRIEF>\n\nUsage: kestrel start --brief <BRIEF>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag apply",
+    "args": [
+      "apply",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel apply [OPTIONS] --file <FILE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default apply",
+    "args": [
+      "apply"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --file <FILE>\n\nUsage: kestrel apply --file <FILE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag organization declare",
+    "args": [
+      "organization",
+      "declare",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel organization declare [OPTIONS] <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default organization declare",
+    "args": [
+      "organization",
+      "declare"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <NAME>\n\nUsage: kestrel organization declare <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag organization list",
+    "args": [
+      "organization",
+      "list",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel organization list [OPTIONS]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default organization list",
+    "args": [
+      "organization",
+      "list"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "label": "invalid flag project declare",
+    "args": [
+      "project",
+      "declare",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel project declare [OPTIONS] --repository <URL> --branch <BRANCH> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default project declare",
+    "args": [
+      "project",
+      "declare"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --repository <URL>\n  --branch <BRANCH>\n  <NAME>\n\nUsage: kestrel project declare --repository <URL> --branch <BRANCH> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag project list",
+    "args": [
+      "project",
+      "list",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel project list [OPTIONS]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default project list",
+    "args": [
+      "project",
+      "list"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and none exists; declare one with `kestrel organization declare default`\n"
+  },
+  {
+    "label": "invalid flag agent declare",
+    "args": [
+      "agent",
+      "declare",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel agent declare [OPTIONS] <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default agent declare",
+    "args": [
+      "agent",
+      "declare"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <NAME>\n\nUsage: kestrel agent declare <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag agent model",
+    "args": [
+      "agent",
+      "model",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel agent model [OPTIONS] <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default agent model",
+    "args": [
+      "agent",
+      "model"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <NAME>\n\nUsage: kestrel agent model <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag agent list",
+    "args": [
+      "agent",
+      "list",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel agent list [OPTIONS]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default agent list",
+    "args": [
+      "agent",
+      "list"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and none exists; declare one with `kestrel organization declare default`\n"
+  },
+  {
+    "label": "invalid flag credential set",
+    "args": [
+      "credential",
+      "set",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel credential set [OPTIONS] <VARIABLE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default credential set",
+    "args": [
+      "credential",
+      "set"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <VARIABLE>\n\nUsage: kestrel credential set <VARIABLE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag credential list",
+    "args": [
+      "credential",
+      "list",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel credential list [OPTIONS]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default credential list",
+    "args": [
+      "credential",
+      "list"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and none exists; declare one with `kestrel organization declare default`\n"
+  },
+  {
+    "label": "invalid flag credential forget",
+    "args": [
+      "credential",
+      "forget",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel credential forget [OPTIONS] <VARIABLE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default credential forget",
+    "args": [
+      "credential",
+      "forget"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <VARIABLE>\n\nUsage: kestrel credential forget <VARIABLE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag profile declare",
+    "args": [
+      "profile",
+      "declare",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel profile declare [OPTIONS] --owner <OWNER> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default profile declare",
+    "args": [
+      "profile",
+      "declare"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --owner <OWNER>\n  <NAME>\n\nUsage: kestrel profile declare --owner <OWNER> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag profile set",
+    "args": [
+      "profile",
+      "set",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel profile set [OPTIONS] <--variable <NAME>|--file <PATH>> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default profile set",
+    "args": [
+      "profile",
+      "set"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <--variable <NAME>|--file <PATH>>\n  <NAME>\n\nUsage: kestrel profile set <--variable <NAME>|--file <PATH>> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag profile list",
+    "args": [
+      "profile",
+      "list",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel profile list [OPTIONS]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default profile list",
+    "args": [
+      "profile",
+      "list"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and none exists; declare one with `kestrel organization declare default`\n"
+  },
+  {
+    "label": "invalid flag profile forget",
+    "args": [
+      "profile",
+      "forget",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel profile forget [OPTIONS] <--variable <NAME>|--file <PATH>> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default profile forget",
+    "args": [
+      "profile",
+      "forget"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <--variable <NAME>|--file <PATH>>\n  <NAME>\n\nUsage: kestrel profile forget <--variable <NAME>|--file <PATH>> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag integration register github",
+    "args": [
+      "integration",
+      "register",
+      "github",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel integration register github [OPTIONS] --repository <OWNER/NAME> --token <TOKEN> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default integration register github",
+    "args": [
+      "integration",
+      "register",
+      "github"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --repository <OWNER/NAME>\n  --token <TOKEN>\n  <NAME>\n\nUsage: kestrel integration register github --repository <OWNER/NAME> --token <TOKEN> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag integration register webhook",
+    "args": [
+      "integration",
+      "register",
+      "webhook",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel integration register webhook [OPTIONS] --secret <SECRET> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default integration register webhook",
+    "args": [
+      "integration",
+      "register",
+      "webhook"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --secret <SECRET>\n  <NAME>\n\nUsage: kestrel integration register webhook --secret <SECRET> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag integration list",
+    "args": [
+      "integration",
+      "list",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel integration list [OPTIONS]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default integration list",
+    "args": [
+      "integration",
+      "list"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and none exists; declare one with `kestrel organization declare default`\n"
+  },
+  {
+    "label": "invalid flag integration acknowledge-refusal",
+    "args": [
+      "integration",
+      "acknowledge-refusal",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel integration acknowledge-refusal [OPTIONS] <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default integration acknowledge-refusal",
+    "args": [
+      "integration",
+      "acknowledge-refusal"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <NAME>\n\nUsage: kestrel integration acknowledge-refusal <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag event list",
+    "args": [
+      "event",
+      "list",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel event list [OPTIONS]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default event list",
+    "args": [
+      "event",
+      "list"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and none exists; declare one with `kestrel organization declare default`\n"
+  },
+  {
+    "label": "invalid flag event show",
+    "args": [
+      "event",
+      "show",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel event show [OPTIONS] <RECORD>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default event show",
+    "args": [
+      "event",
+      "show"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <RECORD>\n\nUsage: kestrel event show <RECORD>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag trigger apply",
+    "args": [
+      "trigger",
+      "apply",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel trigger apply [OPTIONS] --file <FILE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default trigger apply",
+    "args": [
+      "trigger",
+      "apply"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --file <FILE>\n\nUsage: kestrel trigger apply --file <FILE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag trigger declare",
+    "args": [
+      "trigger",
+      "declare",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel trigger declare [OPTIONS] --brief <BRIEF> --project <PROJECT> --agent <AGENT> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default trigger declare",
+    "args": [
+      "trigger",
+      "declare"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --brief <BRIEF>\n  --project <PROJECT>\n  --agent <AGENT>\n  --filter <JSON>\n  <NAME>\n\nUsage: kestrel trigger declare --brief <BRIEF> --project <PROJECT> --agent <AGENT> --filter <JSON> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag trigger list",
+    "args": [
+      "trigger",
+      "list",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel trigger list [OPTIONS]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default trigger list",
+    "args": [
+      "trigger",
+      "list"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and none exists; declare one with `kestrel organization declare default`\n"
+  },
+  {
+    "label": "invalid flag trigger show",
+    "args": [
+      "trigger",
+      "show",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel trigger show [OPTIONS] <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default trigger show",
+    "args": [
+      "trigger",
+      "show"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <NAME>\n\nUsage: kestrel trigger show <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag trigger test",
+    "args": [
+      "trigger",
+      "test",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel trigger test [OPTIONS] <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default trigger test",
+    "args": [
+      "trigger",
+      "test"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <NAME>\n\nUsage: kestrel trigger test <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag trigger dispatch",
+    "args": [
+      "trigger",
+      "dispatch",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel trigger dispatch [OPTIONS] --integration <INTEGRATION> --issue <NUMBER> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default trigger dispatch",
+    "args": [
+      "trigger",
+      "dispatch"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --integration <INTEGRATION>\n  --issue <NUMBER>\n  <NAME>\n\nUsage: kestrel trigger dispatch --integration <INTEGRATION> --issue <NUMBER> <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag trigger disable",
+    "args": [
+      "trigger",
+      "disable",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel trigger disable [OPTIONS] <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default trigger disable",
+    "args": [
+      "trigger",
+      "disable"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <NAME>\n\nUsage: kestrel trigger disable <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag trigger enable",
+    "args": [
+      "trigger",
+      "enable",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel trigger enable [OPTIONS] <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default trigger enable",
+    "args": [
+      "trigger",
+      "enable"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <NAME>\n\nUsage: kestrel trigger enable <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag workspace open",
+    "args": [
+      "workspace",
+      "open",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel workspace open [OPTIONS] --project <PROJECT> --agent <AGENT>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default workspace open",
+    "args": [
+      "workspace",
+      "open"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --project <PROJECT>\n  --agent <AGENT>\n\nUsage: kestrel workspace open --project <PROJECT> --agent <AGENT>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag workspace list",
+    "args": [
+      "workspace",
+      "list",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel workspace list [OPTIONS]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default workspace list",
+    "args": [
+      "workspace",
+      "list"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and none exists; declare one with `kestrel organization declare default`\n"
+  },
+  {
+    "label": "invalid flag workspace changes",
+    "args": [
+      "workspace",
+      "changes",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel workspace changes [OPTIONS] <WORKSPACE> [COMMIT] [-- <PATHS>...]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default workspace changes",
+    "args": [
+      "workspace",
+      "changes"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <WORKSPACE>\n\nUsage: kestrel workspace changes <WORKSPACE> [COMMIT] [-- <PATHS>...]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag workspace commits",
+    "args": [
+      "workspace",
+      "commits",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel workspace commits [OPTIONS] <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default workspace commits",
+    "args": [
+      "workspace",
+      "commits"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <WORKSPACE>\n\nUsage: kestrel workspace commits <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag workspace stashes",
+    "args": [
+      "workspace",
+      "stashes",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel workspace stashes [OPTIONS] <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default workspace stashes",
+    "args": [
+      "workspace",
+      "stashes"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <WORKSPACE>\n\nUsage: kestrel workspace stashes <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag workspace work",
+    "args": [
+      "workspace",
+      "work",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel workspace work [OPTIONS] <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default workspace work",
+    "args": [
+      "workspace",
+      "work"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <WORKSPACE>\n\nUsage: kestrel workspace work <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag workspace files",
+    "args": [
+      "workspace",
+      "files",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel workspace files [OPTIONS] <WORKSPACE> [PATH]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default workspace files",
+    "args": [
+      "workspace",
+      "files"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <WORKSPACE>\n\nUsage: kestrel workspace files <WORKSPACE> [PATH]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag workspace read",
+    "args": [
+      "workspace",
+      "read",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel workspace read [OPTIONS] <WORKSPACE> <PATH>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default workspace read",
+    "args": [
+      "workspace",
+      "read"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <WORKSPACE>\n  <PATH>\n\nUsage: kestrel workspace read <WORKSPACE> <PATH>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag workspace show",
+    "args": [
+      "workspace",
+      "show",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel workspace show [OPTIONS] <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default workspace show",
+    "args": [
+      "workspace",
+      "show"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <WORKSPACE>\n\nUsage: kestrel workspace show <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag workspace post",
+    "args": [
+      "workspace",
+      "post",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel workspace post [OPTIONS] --as-participant <AS_PARTICIPANT> <WORKSPACE> <MESSAGE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default workspace post",
+    "args": [
+      "workspace",
+      "post"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --as-participant <AS_PARTICIPANT>\n  <WORKSPACE>\n  <MESSAGE>\n\nUsage: kestrel workspace post --as-participant <AS_PARTICIPANT> <WORKSPACE> <MESSAGE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag workspace message edit",
+    "args": [
+      "workspace",
+      "message",
+      "edit",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel workspace message edit [OPTIONS] --as-participant <AS_PARTICIPANT> <WORKSPACE> <ID> <MESSAGE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default workspace message edit",
+    "args": [
+      "workspace",
+      "message",
+      "edit"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --as-participant <AS_PARTICIPANT>\n  <WORKSPACE>\n  <ID>\n  <MESSAGE>\n\nUsage: kestrel workspace message edit --as-participant <AS_PARTICIPANT> <WORKSPACE> <ID> <MESSAGE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag workspace message withdraw",
+    "args": [
+      "workspace",
+      "message",
+      "withdraw",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel workspace message withdraw [OPTIONS] --as-participant <AS_PARTICIPANT> <WORKSPACE> <ID>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default workspace message withdraw",
+    "args": [
+      "workspace",
+      "message",
+      "withdraw"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --as-participant <AS_PARTICIPANT>\n  <WORKSPACE>\n  <ID>\n\nUsage: kestrel workspace message withdraw --as-participant <AS_PARTICIPANT> <WORKSPACE> <ID>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag workspace seal",
+    "args": [
+      "workspace",
+      "seal",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel workspace seal [OPTIONS] <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default workspace seal",
+    "args": [
+      "workspace",
+      "seal"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <WORKSPACE>\n\nUsage: kestrel workspace seal <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag workspace transcript",
+    "args": [
+      "workspace",
+      "transcript",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel workspace transcript [OPTIONS] <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default workspace transcript",
+    "args": [
+      "workspace",
+      "transcript"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <WORKSPACE>\n\nUsage: kestrel workspace transcript <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag session enqueue",
+    "args": [
+      "session",
+      "enqueue",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel session enqueue [OPTIONS] --workspace <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default session enqueue",
+    "args": [
+      "session",
+      "enqueue"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --workspace <WORKSPACE>\n\nUsage: kestrel session enqueue --workspace <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag session list",
+    "args": [
+      "session",
+      "list",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel session list [OPTIONS] --workspace <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default session list",
+    "args": [
+      "session",
+      "list"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --workspace <WORKSPACE>\n\nUsage: kestrel session list --workspace <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag session show",
+    "args": [
+      "session",
+      "show",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel session show [OPTIONS] <SESSION>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default session show",
+    "args": [
+      "session",
+      "show"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <SESSION>\n\nUsage: kestrel session show <SESSION>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag session interrupt",
+    "args": [
+      "session",
+      "interrupt",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel session interrupt [OPTIONS] --as-participant <AS_PARTICIPANT> <SESSION>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default session interrupt",
+    "args": [
+      "session",
+      "interrupt"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --as-participant <AS_PARTICIPANT>\n  <SESSION>\n\nUsage: kestrel session interrupt --as-participant <AS_PARTICIPANT> <SESSION>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag session stop",
+    "args": [
+      "session",
+      "stop",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel session stop [OPTIONS] <SESSION>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default session stop",
+    "args": [
+      "session",
+      "stop"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <SESSION>\n\nUsage: kestrel session stop <SESSION>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag session option set",
+    "args": [
+      "session",
+      "option",
+      "set",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel session option set [OPTIONS] --as-participant <AS_PARTICIPANT> <SESSION> <OPTION> <VALUE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default session option set",
+    "args": [
+      "session",
+      "option",
+      "set"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --as-participant <AS_PARTICIPANT>\n  <SESSION>\n  <OPTION>\n  <VALUE>\n\nUsage: kestrel session option set --as-participant <AS_PARTICIPANT> <SESSION> <OPTION> <VALUE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag instance list",
+    "args": [
+      "instance",
+      "list",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel instance list [OPTIONS]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default instance list",
+    "args": [
+      "instance",
+      "list"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and none exists; declare one with `kestrel organization declare default`\n"
+  },
+  {
+    "label": "invalid flag instance release",
+    "args": [
+      "instance",
+      "release",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\n  tip: to pass '--definitely-invalid' as a value, use '-- --definitely-invalid'\n\nUsage: kestrel instance release [OPTIONS] <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default instance release",
+    "args": [
+      "instance",
+      "release"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  <WORKSPACE>\n\nUsage: kestrel instance release <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "invalid flag queue",
+    "args": [
+      "queue",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel queue [OPTIONS]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default queue",
+    "args": [
+      "queue"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and none exists; declare one with `kestrel organization declare default`\n"
+  },
+  {
+    "label": "invalid flag status",
+    "args": [
+      "status",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel status [OPTIONS]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default status",
+    "args": [
+      "status"
+    ],
+    "exit": 0,
+    "stdout": "http://127.0.0.1:17818\t--control-plane\t-\t-\t-\tkestrel organization declare <name>\n",
+    "stderr": ""
+  },
+  {
+    "label": "invalid flag exit-codes",
+    "args": [
+      "exit-codes",
+      "--definitely-invalid"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument '--definitely-invalid' found\n\nUsage: kestrel exit-codes [OPTIONS]\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "missing/default exit-codes",
+    "args": [
+      "exit-codes"
+    ],
+    "exit": 0,
+    "stdout": "0\tsuccess\tThe command did what it was asked.\tCarry on; stdout holds what the command produced.\n1\tfailure\tThe Client failed on this machine, such as writing its output.\tStop; the operation may have taken effect.\n2\tusage\tThe invocation is invalid: a command, flag, argument or input.\tFix the command line; unchanged, it fails the same way.\n3\tunresolved\tSomething named matches nothing, or more than one thing.\tName it exactly, or declare it first.\n4\trejected\tThe control plane understood the request and declined it.\tChange the request; repeated, it is declined again.\n5\tunavailable\tThe control plane could not be reached, or could not answer.\tRetry later; the operation may have taken effect.\n",
+    "stderr": ""
+  },
+  {
+    "label": "bare",
+    "args": [],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: 'kestrel' requires a subcommand but one was not provided\n  [subcommands: start, apply, organization, project, agent, credential, profile, integration, event, trigger, workspace, session, instance, queue, status, exit-codes]\n\nUsage: kestrel [OPTIONS] <COMMAND>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "offline",
+    "args": [
+      "status"
+    ],
+    "exit": 5,
+    "stdout": "",
+    "stderr": "Error: reaching the control plane at http://127.0.0.1:17999/\n\nCaused by:\n    0: error sending request for url (http://127.0.0.1:17999/operator/organizations)\n    1: client error (Connect)\n    2: tcp connect error\n    3: Connection refused (os error 61)\n"
+  },
+  {
+    "label": "fresh-status-json",
+    "args": [
+      "status",
+      "--json"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "Error: --json names the fields to emit, comma-separated: --json id,name\n"
+  },
+  {
+    "label": "organization declare audit",
+    "args": [
+      "organization",
+      "declare",
+      "audit"
+    ],
+    "exit": 0,
+    "stdout": "01a108a5-2b39-77b2-9a2d-5822cea7cf43\n",
+    "stderr": ""
+  },
+  {
+    "label": "empty project list",
+    "args": [
+      "project",
+      "list"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "label": "empty agent list",
+    "args": [
+      "agent",
+      "list"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "label": "empty credential list",
+    "args": [
+      "credential",
+      "list"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "label": "empty profile list",
+    "args": [
+      "profile",
+      "list"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "label": "empty integration list",
+    "args": [
+      "integration",
+      "list"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "label": "empty event list",
+    "args": [
+      "event",
+      "list"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "label": "empty trigger list",
+    "args": [
+      "trigger",
+      "list"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "label": "empty workspace list",
+    "args": [
+      "workspace",
+      "list"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "label": "empty session list",
+    "args": [
+      "session",
+      "list"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: the following required arguments were not provided:\n  --workspace <WORKSPACE>\n\nUsage: kestrel session list --workspace <WORKSPACE>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "empty instance list",
+    "args": [
+      "instance",
+      "list"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "label": "empty queue",
+    "args": [
+      "queue"
+    ],
+    "exit": 0,
+    "stdout": "active-work slots  limit 2; 0 occupied\nlive instances     unbounded; 0 counted\nenvironment        docker\n",
+    "stderr": ""
+  },
+  {
+    "label": "not-found workspace show missing",
+    "args": [
+      "workspace",
+      "show",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no workspace in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "not-found session show missing",
+    "args": [
+      "session",
+      "show",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no session in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "not-found trigger show missing",
+    "args": [
+      "trigger",
+      "show",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no trigger named missing in the organization audit\n"
+  },
+  {
+    "label": "not-found instance release missing",
+    "args": [
+      "instance",
+      "release",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no workspace in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "not-found event show missing",
+    "args": [
+      "event",
+      "show",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no event missing\n"
+  },
+  {
+    "label": "not-found agent model missing unknown",
+    "args": [
+      "agent",
+      "model",
+      "missing",
+      "unknown"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "error: unexpected argument 'unknown' found\n\nUsage: kestrel agent model [OPTIONS] <NAME>\n\nFor more information, try '--help'.\n"
+  },
+  {
+    "label": "not-found profile set missing --variable AUDIT_LOGIN",
+    "args": [
+      "profile",
+      "set",
+      "missing",
+      "--variable",
+      "AUDIT_LOGIN"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no subscription profile named missing in the organization audit\nTry: kestrel profile declare missing --owner \"$(id -un)\" --organization audit\n"
+  },
+  {
+    "label": "agent declare audit-agent --harness opencode",
+    "args": [
+      "agent",
+      "declare",
+      "audit-agent",
+      "--harness",
+      "opencode"
+    ],
+    "exit": 0,
+    "stdout": "01a108a5-2c23-7372-9ee2-449dbc719b09\n",
+    "stderr": ""
+  },
+  {
+    "label": "project declare audit-project --repository https://github.com/octocat/Hello-World.git --branch master",
+    "args": [
+      "project",
+      "declare",
+      "audit-project",
+      "--repository",
+      "https://github.com/octocat/Hello-World.git",
+      "--branch",
+      "master"
+    ],
+    "exit": 0,
+    "stdout": "01a108a5-2c30-78e2-b2df-5d8c926f1b25\n",
+    "stderr": ""
+  },
+  {
+    "label": "cli-session-start",
+    "args": [
+      "start",
+      "--organization",
+      "audit",
+      "--project",
+      "audit-project",
+      "--agent",
+      "audit-agent",
+      "--repository",
+      "https://github.com/octocat/Hello-World.git",
+      "--branch",
+      "master",
+      "--brief",
+      "Reply with audit complete. Do not edit files.",
+      "--yes",
+      "--json"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "Error: --json names the fields to emit, comma-separated: --json id,name\n"
+  },
+  {
+    "label": "runtime-error apply -f /nonexistent/audit.yaml",
+    "args": [
+      "apply",
+      "-f",
+      "/nonexistent/audit.yaml"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "Error: reading the declaration file /nonexistent/audit.yaml\n\nCaused by:\n    No such file or directory (os error 2)\n"
+  },
+  {
+    "label": "runtime-error organization declare bad name",
+    "args": [
+      "organization",
+      "declare",
+      "bad name"
+    ],
+    "exit": 0,
+    "stdout": "01a108a7-efea-74f1-9789-f8de1f273573\n",
+    "stderr": ""
+  },
+  {
+    "label": "runtime-error project declare bad-project --repository not-a-url --branch main",
+    "args": [
+      "project",
+      "declare",
+      "bad-project",
+      "--repository",
+      "not-a-url",
+      "--branch",
+      "main"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error agent declare bad-agent --harness missing",
+    "args": [
+      "agent",
+      "declare",
+      "bad-agent",
+      "--harness",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error agent model missing --model missing",
+    "args": [
+      "agent",
+      "model",
+      "missing",
+      "--model",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error credential set AUDIT",
+    "args": [
+      "credential",
+      "set",
+      "AUDIT"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error credential forget MISSING",
+    "args": [
+      "credential",
+      "forget",
+      "MISSING"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error profile declare bad profile --owner audit",
+    "args": [
+      "profile",
+      "declare",
+      "bad profile",
+      "--owner",
+      "audit"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error profile forget missing --variable AUDIT",
+    "args": [
+      "profile",
+      "forget",
+      "missing",
+      "--variable",
+      "AUDIT"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error integration acknowledge-refusal missing",
+    "args": [
+      "integration",
+      "acknowledge-refusal",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error trigger apply -f /nonexistent/audit.yaml",
+    "args": [
+      "trigger",
+      "apply",
+      "-f",
+      "/nonexistent/audit.yaml"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error trigger declare bad-trigger --filter {} --brief audit --project missing --agent missing",
+    "args": [
+      "trigger",
+      "declare",
+      "bad-trigger",
+      "--filter",
+      "{}",
+      "--brief",
+      "audit",
+      "--project",
+      "missing",
+      "--agent",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error trigger test missing",
+    "args": [
+      "trigger",
+      "test",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error trigger dispatch missing --integration missing --issue 1",
+    "args": [
+      "trigger",
+      "dispatch",
+      "missing",
+      "--integration",
+      "missing",
+      "--issue",
+      "1"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error trigger disable missing",
+    "args": [
+      "trigger",
+      "disable",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error trigger enable missing",
+    "args": [
+      "trigger",
+      "enable",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error workspace open --project missing --agent missing",
+    "args": [
+      "workspace",
+      "open",
+      "--project",
+      "missing",
+      "--agent",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error workspace changes missing",
+    "args": [
+      "workspace",
+      "changes",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error workspace commits missing",
+    "args": [
+      "workspace",
+      "commits",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error workspace stashes missing",
+    "args": [
+      "workspace",
+      "stashes",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error workspace work missing",
+    "args": [
+      "workspace",
+      "work",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error workspace files missing",
+    "args": [
+      "workspace",
+      "files",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error workspace read missing missing",
+    "args": [
+      "workspace",
+      "read",
+      "missing",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error workspace post missing --as-participant audit audit",
+    "args": [
+      "workspace",
+      "post",
+      "missing",
+      "--as-participant",
+      "audit",
+      "audit"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error workspace message edit missing 1 audit --as-participant audit",
+    "args": [
+      "workspace",
+      "message",
+      "edit",
+      "missing",
+      "1",
+      "audit",
+      "--as-participant",
+      "audit"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error workspace message withdraw missing 1 --as-participant audit",
+    "args": [
+      "workspace",
+      "message",
+      "withdraw",
+      "missing",
+      "1",
+      "--as-participant",
+      "audit"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error workspace seal missing",
+    "args": [
+      "workspace",
+      "seal",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error workspace transcript missing",
+    "args": [
+      "workspace",
+      "transcript",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error session enqueue --workspace missing",
+    "args": [
+      "session",
+      "enqueue",
+      "--workspace",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error session list --workspace missing",
+    "args": [
+      "session",
+      "list",
+      "--workspace",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error session interrupt missing --as-participant audit",
+    "args": [
+      "session",
+      "interrupt",
+      "missing",
+      "--as-participant",
+      "audit"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error session stop missing",
+    "args": [
+      "session",
+      "stop",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "runtime-error session option set missing model missing --as-participant audit",
+    "args": [
+      "session",
+      "option",
+      "set",
+      "missing",
+      "model",
+      "missing",
+      "--as-participant",
+      "audit"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: no Organization is in scope and 2 exist: audit, bad name; inspect the intended scope with `kestrel status --organization audit` or `kestrel status --organization 'bad name'`, then pass its --organization flag\n"
+  },
+  {
+    "label": "scoped-runtime-error apply -f /nonexistent/audit.yaml",
+    "args": [
+      "apply",
+      "-f",
+      "/nonexistent/audit.yaml"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "Error: reading the declaration file /nonexistent/audit.yaml\n\nCaused by:\n    No such file or directory (os error 2)\n"
+  },
+  {
+    "label": "scoped-runtime-error organization declare bad name",
+    "args": [
+      "organization",
+      "declare",
+      "bad name"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "Error: --organization scopes nothing here; this command names its record directly\n"
+  },
+  {
+    "label": "scoped-runtime-error project declare bad-project --repository not-a-url --branch main",
+    "args": [
+      "project",
+      "declare",
+      "bad-project",
+      "--repository",
+      "not-a-url",
+      "--branch",
+      "main"
+    ],
+    "exit": 0,
+    "stdout": "01a108a8-78d5-7c91-ab55-89af210aa4aa\n",
+    "stderr": ""
+  },
+  {
+    "label": "scoped-runtime-error agent declare bad-agent --harness missing",
+    "args": [
+      "agent",
+      "declare",
+      "bad-agent",
+      "--harness",
+      "missing"
+    ],
+    "exit": 0,
+    "stdout": "01a108a8-78e2-7451-8bc6-c67e1f958ed1\n",
+    "stderr": ""
+  },
+  {
+    "label": "scoped-runtime-error agent model missing --model missing",
+    "args": [
+      "agent",
+      "model",
+      "missing",
+      "--model",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no agent named missing in the organization audit\nTry: kestrel agent declare missing --organization audit\n"
+  },
+  {
+    "label": "scoped-runtime-error credential set AUDIT",
+    "args": [
+      "credential",
+      "set",
+      "AUDIT"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "Error: a provider credential is read from standard input, and nothing was on it\n"
+  },
+  {
+    "label": "scoped-runtime-error credential forget MISSING",
+    "args": [
+      "credential",
+      "forget",
+      "MISSING"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: the organization audit holds no provider credential named MISSING\nTry: kestrel credential set MISSING --organization audit\n"
+  },
+  {
+    "label": "scoped-runtime-error profile declare bad profile --owner audit",
+    "args": [
+      "profile",
+      "declare",
+      "bad profile",
+      "--owner",
+      "audit"
+    ],
+    "exit": 0,
+    "stdout": "01a108a8-7903-7e63-9029-14da3d33a2c4\n",
+    "stderr": ""
+  },
+  {
+    "label": "scoped-runtime-error profile forget missing --variable AUDIT",
+    "args": [
+      "profile",
+      "forget",
+      "missing",
+      "--variable",
+      "AUDIT"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no subscription profile named missing in the organization audit\nTry: kestrel profile declare missing --owner \"$(id -un)\" --organization audit\n"
+  },
+  {
+    "label": "scoped-runtime-error integration acknowledge-refusal missing",
+    "args": [
+      "integration",
+      "acknowledge-refusal",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no integration named missing in the organization audit\n"
+  },
+  {
+    "label": "scoped-runtime-error trigger apply -f /nonexistent/audit.yaml",
+    "args": [
+      "trigger",
+      "apply",
+      "-f",
+      "/nonexistent/audit.yaml"
+    ],
+    "exit": 2,
+    "stdout": "",
+    "stderr": "Error: reading the declaration file /nonexistent/audit.yaml\n\nCaused by:\n    No such file or directory (os error 2)\n"
+  },
+  {
+    "label": "scoped-runtime-error trigger declare bad-trigger --filter {} --brief audit --project missing --agent missing",
+    "args": [
+      "trigger",
+      "declare",
+      "bad-trigger",
+      "--filter",
+      "{}",
+      "--brief",
+      "audit",
+      "--project",
+      "missing",
+      "--agent",
+      "missing"
+    ],
+    "exit": 4,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: a trigger filter: a filter has exactly one key, and {} has 0\n"
+  },
+  {
+    "label": "scoped-runtime-error trigger test missing",
+    "args": [
+      "trigger",
+      "test",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no trigger named missing in the organization audit\n"
+  },
+  {
+    "label": "scoped-runtime-error trigger dispatch missing --integration missing --issue 1",
+    "args": [
+      "trigger",
+      "dispatch",
+      "missing",
+      "--integration",
+      "missing",
+      "--issue",
+      "1"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no trigger named missing in the organization audit\n"
+  },
+  {
+    "label": "scoped-runtime-error trigger disable missing",
+    "args": [
+      "trigger",
+      "disable",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no trigger named missing in the organization audit\n"
+  },
+  {
+    "label": "scoped-runtime-error trigger enable missing",
+    "args": [
+      "trigger",
+      "enable",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no trigger named missing in the organization audit\n"
+  },
+  {
+    "label": "scoped-runtime-error workspace open --project missing --agent missing",
+    "args": [
+      "workspace",
+      "open",
+      "--project",
+      "missing",
+      "--agent",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no project named missing in the organization audit\nTry: kestrel project declare missing --repository \"$(git remote get-url origin)\" --branch \"$(git branch --show-current)\" --organization audit\n"
+  },
+  {
+    "label": "scoped-runtime-error workspace changes missing",
+    "args": [
+      "workspace",
+      "changes",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no workspace in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "scoped-runtime-error workspace commits missing",
+    "args": [
+      "workspace",
+      "commits",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no workspace in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "scoped-runtime-error workspace stashes missing",
+    "args": [
+      "workspace",
+      "stashes",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no workspace in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "scoped-runtime-error workspace work missing",
+    "args": [
+      "workspace",
+      "work",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no workspace in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "scoped-runtime-error workspace files missing",
+    "args": [
+      "workspace",
+      "files",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no workspace in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "scoped-runtime-error workspace read missing missing",
+    "args": [
+      "workspace",
+      "read",
+      "missing",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no workspace in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "scoped-runtime-error workspace post missing --as-participant audit audit",
+    "args": [
+      "workspace",
+      "post",
+      "missing",
+      "--as-participant",
+      "audit",
+      "audit"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no workspace in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "scoped-runtime-error workspace message edit missing 1 audit --as-participant audit",
+    "args": [
+      "workspace",
+      "message",
+      "edit",
+      "missing",
+      "1",
+      "audit",
+      "--as-participant",
+      "audit"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no workspace in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "scoped-runtime-error workspace message withdraw missing 1 --as-participant audit",
+    "args": [
+      "workspace",
+      "message",
+      "withdraw",
+      "missing",
+      "1",
+      "--as-participant",
+      "audit"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no workspace in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "scoped-runtime-error workspace seal missing",
+    "args": [
+      "workspace",
+      "seal",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no workspace in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "scoped-runtime-error workspace transcript missing",
+    "args": [
+      "workspace",
+      "transcript",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused the read: no workspace in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "scoped-runtime-error session enqueue --workspace missing",
+    "args": [
+      "session",
+      "enqueue",
+      "--workspace",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no workspace in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "scoped-runtime-error session list --workspace missing",
+    "args": [
+      "session",
+      "list",
+      "--workspace",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no workspace in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "scoped-runtime-error session interrupt missing --as-participant audit",
+    "args": [
+      "session",
+      "interrupt",
+      "missing",
+      "--as-participant",
+      "audit"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no session in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "scoped-runtime-error session stop missing",
+    "args": [
+      "session",
+      "stop",
+      "missing"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no session in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  },
+  {
+    "label": "scoped-runtime-error session option set missing model missing --as-participant audit",
+    "args": [
+      "session",
+      "option",
+      "set",
+      "missing",
+      "model",
+      "missing",
+      "--as-participant",
+      "audit"
+    ],
+    "exit": 3,
+    "stdout": "",
+    "stderr": "Error: the control plane refused: no session in the organization audit matches missing; name it by its generated name, its identifier, or `latest`\n"
+  }
+]
