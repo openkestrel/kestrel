@@ -96,7 +96,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 	const placed = (field: string): string | undefined =>
 		refused?.field === field ? refused.message : missing[field];
 	const at_the_top =
-		opening.error !== undefined &&
+		opening.isError &&
 		!(opening.error instanceof Refused && PLACED_FIELDS.has(opening.error.field ?? ""));
 
 	if (draft === undefined || projects.isPending || agents.isPending || profiles.isPending) {
