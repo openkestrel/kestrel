@@ -51,6 +51,7 @@ use kestrel::domain::{
     Templates, Trigger, Turn, Workspace, WorkspaceId,
 };
 use kestrel::instance;
+use kestrel::integration::github::Github;
 use kestrel::integration::{self, Connecting, Registration};
 use kestrel::link::credential::Secret;
 use kestrel::link::{self, Instruction};
@@ -72,8 +73,38 @@ use tokio_util::sync::CancellationToken;
 
 const PATIENCE: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Distinctive enough that a test can assert it is nowhere it should not be.
-pub const TOKEN: &str = "ghp_kestrel_should_never_say_this_out_loud";
+/// The GitHub App credential every fixture registers an Integration with. The key is
+/// distinctive enough that a test can assert it is nowhere it should not be.
+pub const APP_ID: i64 = 1;
+pub const INSTALLATION_ID: i64 = 2;
+pub const PRIVATE_KEY: &str = "-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEA+v3GAQtFnP1Q7mAAhcSSrPOcbvvtEqTOD4TnrRg7gI1EHVbI
+0BdCwuR5swqewUyabBxfG1DFInwMiS5AqhP1NSsA7Mdf3BDAj6MABuW8mjUEnkyL
+RD+84cVy7Wgl56hfbrSAQ/BYhRNP48Rg14t0LeNMiofhLt+A4KQhb7CLAXs8QNgR
+l8L0iSvGgpQhjeHCFaqgm5Ez+iGnm22Xe1EmHd1MgdVyXVII1sJSC5iDmOjg2JAB
+eGS7i74/a1mjgC6FffsPPQ6c0FfVjinfFV5Lh65lfpV/dNJTEna10WY8eFXq9YPe
+vE1oxRTbI8/cPYPUEhWSk0WzJTf9QJCd2ywZcwIDAQABAoIBABqxCTEMO1N2Jviq
+sfOH05db8ttkpDIS360L0713McC6hS9fjsx+ZMWoGX8eVoK0/EkZ/U1A2i4QJh8i
+kZLku3Nzhs4nZ7zV9TxxN6wEG3oEwGB7QGY6JwKVhmLT7BAGOlviCy/ua+N/CcRt
+mmThujG1Fes3hw1+jEyXd8zSZ/34oKXStPIV/yzZ6rIL8QlqraBRSEgBR5XeS2pb
+dZQ5x0blEfnMFiesb6gLO101DajYdq2RB2ClnkDuYXnejQ5FN7CYCmMDUaaW9BFs
+SmqhylXU6w265UMqcqlRMqi0ynkSeYqdRCth/1n46918/Nj85kiNfOHpkdrrSqPa
+dnLd5KkCgYEA/4zxXfEieP54VDcigBFtr1QYbGvo2jHe0waedsKyhELeORcDfoAG
+Ym8RzpmRZZ3okEKULEBkxJ4gIYZwHIyKVPcPsy4ovO8COCiJyH3CBiU6aDc4BSXd
+Cnugq/FOA409Hbh1MAfnpG1Ec6ksdVkHP85TSAW4/OxJrXt+Alh2GdkCgYEA+27H
+I7npu+HvUSoMyA80w9a2o0nO5aZ49lBF0/ISqrhBCC6riIHUrtqgWuCz6Cd6gEyI
+E2FcEoezhCnt/ibj3XKGYq+usqYVLpnc2RaVYpTk+saMu6t6HGQ5rG8cRksrgyEm
+A85XmS9FWEaKQ+gdLXR93OUQa8lV1ksjh5JYkisCgYB0eRqxhGv/1YumZpK06Dyj
+wqJ3GB/DAyPZ7pRe8JJIsely/8g56cP/LTxie5/HPtd2mMHMAXVsH93pKcsDWBLc
+ctaXBhzPL+hFDETwOlEqV+FtCm3f+sfqNTqf45V5DPCkESRoRdIQITUnuh1nRrKF
+JFbU5rbPoCpchYKDMypw0QKBgQDI9LU9HK5veBjqag1lKKInlEjNIYS3j+JGG8pz
+p5q70CBKBeMba4ktZ5eaitW/yy3htUldFAee187m5wxMgZDFwW8fGQMrzgpIALm+
+2In1DMQmmuKIbHlgj8p4wyV6GUJhv/C+QgFJcbqe32JK/A218tFV587EF1r/t3Zi
+ONmJmQKBgQDtThzguDibmNa0Ebctytq1BMjEt8FnGe32gEba28GdgZZjM47hca0B
+Ax8ECK4JhZG/0uoJtjPuII1U8vS261Xmeqg72AxcC85BLTnQawUjmboq9gYauuoa
+1IRY80HLvWrZU/GZ13KF5CQyX8mSTDWs0Nmz8mNTkTl4QAYyizpRTg==
+-----END RSA PRIVATE KEY-----
+";
 
 /// The Provider Credential every fixture holds: a Session reaches no model without one, and the
 /// scripted agent's `Confides` script says it can see this one.
@@ -664,6 +695,7 @@ impl Kestrel {
     ) -> anyhow::Result<Integration> {
         integration::register(
             &self.store,
+            &Github::dialling_out()?,
             Registration {
                 organization,
                 name,
@@ -671,7 +703,9 @@ impl Kestrel {
                 connecting: Connecting::Github {
                     repository,
                     api,
-                    token: TOKEN,
+                    app_id: APP_ID,
+                    installation: INSTALLATION_ID,
+                    private_key: PRIVATE_KEY,
                     interval,
                     signing_secret: None,
                 },
@@ -690,6 +724,7 @@ impl Kestrel {
     ) -> Integration {
         integration::register(
             &self.store,
+            &Github::dialling_out().expect("a github client"),
             Registration {
                 organization,
                 name,
@@ -697,7 +732,9 @@ impl Kestrel {
                 connecting: Connecting::Github {
                     repository,
                     api,
-                    token: TOKEN,
+                    app_id: APP_ID,
+                    installation: INSTALLATION_ID,
+                    private_key: PRIVATE_KEY,
                     interval: SignedDuration::from_millis(1),
                     signing_secret: Some(signing_secret),
                 },
@@ -715,6 +752,7 @@ impl Kestrel {
     ) -> Integration {
         integration::register(
             &self.store,
+            &Github::dialling_out().expect("a github client"),
             Registration {
                 organization,
                 name,

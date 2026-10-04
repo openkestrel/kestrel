@@ -137,6 +137,35 @@ pub fn page(events: &[serde_json::Value]) -> ScriptedResponse {
     ScriptedResponse::ok(serde_json::Value::Array(events.to_vec()).to_string())
 }
 
+/// The installation token the stub hands out when a mint is not scripted for a specific test:
+/// distinctive enough that a test can assert it is nowhere it should not be.
+pub const INSTALLATION_TOKEN: &str = "ghs_kestrel_should_never_say_this_out_loud";
+
+/// What `POST /app/installations/{id}/access_tokens` answers, good for `good_for` from the
+/// moment it is minted: a test scripts a short lifetime to make a cached token go stale on
+/// demand, rather than waiting out a real installation token's real hour.
+pub fn minted_token(token: &str, good_for: jiff::SignedDuration) -> ScriptedResponse {
+    ScriptedResponse::ok(
+        serde_json::json!({
+            "token": token,
+            "expires_at": (jiff::Timestamp::now() + good_for).to_string(),
+        })
+        .to_string(),
+    )
+}
+
+/// What `POST /app/installations/{id}/access_tokens` answers by default, good for an hour so a
+/// test exercising something else never has to think about it.
+fn minted_installation_token() -> ScriptedResponse {
+    minted_token(INSTALLATION_TOKEN, jiff::SignedDuration::from_hours(1))
+}
+
+/// What `GET /app` answers by default: a GitHub App's own identity, learned once at
+/// registration.
+fn default_app_record() -> ScriptedResponse {
+    ScriptedResponse::ok(serde_json::json!({ "slug": "kestrel" }).to_string())
+}
+
 /// An exhausted quota, with a reset that has already passed so a test is not held at it.
 pub fn rate_limited() -> ScriptedResponse {
     ScriptedResponse::answering(403)
@@ -288,6 +317,15 @@ fn respond(
         })
         .max_by_key(|endpoint| endpoint.path.len())
         .and_then(|endpoint| endpoint.responses.pop_front());
+    let scripted = scripted.or_else(|| {
+        if method == "POST" && url.contains("/access_tokens") {
+            Some(minted_installation_token())
+        } else if method == "GET" && url.ends_with("/app") {
+            Some(default_app_record())
+        } else {
+            None
+        }
+    });
     let scripted = scripted.or_else(|| {
         if method != "GET" {
             return None;

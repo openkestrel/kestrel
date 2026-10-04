@@ -3906,10 +3906,18 @@
             "type": "string",
             "description": "The repository it watches, as owner/name."
           },
-          "token": {
+          "app_id": {
+            "type": "integer",
+            "description": "The GitHub App's ID."
+          },
+          "installation": {
+            "type": "integer",
+            "description": "The ID of the installation the App was installed as."
+          },
+          "private_key": {
             "type": "string",
             "writeOnly": true,
-            "description": "The credential it presents to GitHub."
+            "description": "The App's private key, PEM-encoded."
           },
           "carries": {
             "type": "array",
@@ -3948,7 +3956,9 @@
           "kind",
           "name",
           "repository",
-          "token"
+          "app_id",
+          "installation",
+          "private_key"
         ]
       },
       "WebhookRegistration": {
@@ -4007,6 +4017,13 @@
             ],
             "description": "The repository a GitHub Integration watches."
           },
+          "bot_login": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The App's own bot account, `<slug>[bot]`, learned from GitHub when a GitHub Integration was registered."
+          },
           "carries": {
             "type": "array",
             "items": {
@@ -4043,6 +4060,7 @@
           "name",
           "kind",
           "repository",
+          "bot_login",
           "carries",
           "polled_every",
           "webhook_path",

@@ -7,7 +7,7 @@ use kestrel::domain::{
     Connection, Direction, GithubConnection, Integration, IntegrationId, OrganizationId,
     SessionCommand, SessionState,
 };
-use kestrel::integration::credential::Token;
+use kestrel::integration::credential::App;
 use kestrel::integration::github::Github;
 use kestrel::link::Instruction;
 use kestrel::log::{Entry, Message};
@@ -17,7 +17,7 @@ use support::Kestrel;
 use support::github_stub::{self, GithubStub};
 use support::scripted_agent::Script;
 use support::supervisor::Supervisor;
-use support::{A_PROVIDER_KEY, PROVIDER_KEY};
+use support::{A_PROVIDER_KEY, APP_ID, INSTALLATION_ID, PRIVATE_KEY, PROVIDER_KEY};
 
 const REPOSITORY: &str = "jtmthf/kestrel";
 const MAINTAINER: &str = "jack";
@@ -573,7 +573,8 @@ async fn a_comment_backlog_larger_than_ten_pages_loses_nothing() {
         connection: Connection::Github(GithubConnection {
             repository: REPOSITORY.to_owned(),
             api: stub.base_url(),
-            credential: Token::held("not-a-secret"),
+            credential: App::held(APP_ID, INSTALLATION_ID, PRIVATE_KEY),
+            bot_login: "kestrel[bot]".to_owned(),
             interval: SignedDuration::from_secs(1),
             signed: false,
         }),

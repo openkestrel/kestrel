@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use support::client::{self, Client};
 use support::github_stub::{self, GithubStub};
 use support::supervisor;
-use support::{Kestrel, SERIALIZED, TOKEN};
+use support::{Kestrel, PRIVATE_KEY, SERIALIZED};
 
 async fn an_open_workspace(kestrel: &Kestrel, said: usize) -> (String, kestrel::domain::Session) {
     let organization = kestrel.declare_organization("acme").await;
@@ -705,8 +705,12 @@ async fn a_trigger_applied_after_an_event_never_fires_for_that_event() {
                 "acme",
                 "--repository",
                 "jtmthf/kestrel",
-                "--token",
-                TOKEN,
+                "--app-id",
+                "1",
+                "--installation",
+                "2",
+                "--private-key",
+                PRIVATE_KEY,
                 "--api",
                 &stub.base_url(),
                 "--interval",
@@ -3573,8 +3577,12 @@ async fn a_client_registers_and_lists_integrations_without_saying_their_secrets(
             "acme",
             "--repository",
             "jtmthf/kestrel",
-            "--token",
-            TOKEN,
+            "--app-id",
+            "1",
+            "--installation",
+            "2",
+            "--private-key",
+            PRIVATE_KEY,
             "--api",
             &stub.base_url(),
             "--interval",
@@ -3630,7 +3638,10 @@ async fn a_client_registers_and_lists_integrations_without_saying_their_secrets(
     );
     assert_eq!(webhook[0]["last_event_refusal"], Value::Null);
     let said = listed.out.join("\n");
-    assert!(!said.contains(TOKEN), "the listing spelled the token out");
+    assert!(
+        !said.contains(PRIVATE_KEY),
+        "the listing spelled the private key out"
+    );
     assert!(
         !said.contains("a-shared-secret"),
         "the listing spelled the webhook secret out"
@@ -3646,6 +3657,7 @@ async fn a_client_registers_and_lists_integrations_without_saying_their_secrets(
 #[tokio::test]
 async fn an_integration_is_registered_with_what_it_is_declared_to_carry() {
     let kestrel = Kestrel::boot().await;
+    let stub = GithubStub::start();
     kestrel.declare_organization("acme").await;
 
     let (status, signed) = declared(
@@ -3655,7 +3667,10 @@ async fn an_integration_is_registered_with_what_it_is_declared_to_carry() {
             "kind": "github",
             "name": "hub",
             "repository": "jtmthf/kestrel",
-            "token": TOKEN,
+            "app_id": 1,
+            "installation": 2,
+            "private_key": PRIVATE_KEY,
+            "api": stub.base_url(),
             "carries": ["outbound"],
             "webhook_secret": "a-signing-secret",
         }),
@@ -3667,7 +3682,7 @@ async fn an_integration_is_registered_with_what_it_is_declared_to_carry() {
     assert_eq!(signed["polled_every"], Value::Null);
     assert!(signed["webhook_path"].is_string(), "{signed}");
     assert!(!signed.to_string().contains("a-signing-secret"));
-    assert!(!signed.to_string().contains(TOKEN));
+    assert!(!signed.to_string().contains(PRIVATE_KEY));
 
     kestrel.teardown().await;
 }
@@ -3707,7 +3722,14 @@ async fn a_registration_that_describes_no_usable_integration_is_refused() {
         ),
         (
             integrations_of("acme"),
-            json!({ "kind": "github", "name": "hub", "repository": "kestrel", "token": TOKEN }),
+            json!({
+                "kind": "github",
+                "name": "hub",
+                "repository": "kestrel",
+                "app_id": 1,
+                "installation": 2,
+                "private_key": PRIVATE_KEY,
+            }),
             StatusCode::UNPROCESSABLE_ENTITY,
         ),
         (
@@ -3716,7 +3738,9 @@ async fn a_registration_that_describes_no_usable_integration_is_refused() {
                 "kind": "github",
                 "name": "hub",
                 "repository": "jtmthf/kestrel",
-                "token": TOKEN,
+                "app_id": 1,
+                "installation": 2,
+                "private_key": PRIVATE_KEY,
                 "interval": "whenever",
             }),
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -3727,7 +3751,9 @@ async fn a_registration_that_describes_no_usable_integration_is_refused() {
                 "kind": "github",
                 "name": "hub",
                 "repository": "jtmthf/kestrel",
-                "token": TOKEN,
+                "app_id": 1,
+                "installation": 2,
+                "private_key": PRIVATE_KEY,
                 "carries": [],
             }),
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -3737,8 +3763,8 @@ async fn a_registration_that_describes_no_usable_integration_is_refused() {
         let (status, refusal) = declared(&kestrel, path, registration).await;
         assert_eq!(status, *expected, "{registration} was answered {refusal}");
         assert!(
-            !refusal.to_string().contains(TOKEN),
-            "a refusal spelled the token out: {refusal}"
+            !refusal.to_string().contains(PRIVATE_KEY),
+            "a refusal spelled the private key out: {refusal}"
         );
     }
     let taken = client(

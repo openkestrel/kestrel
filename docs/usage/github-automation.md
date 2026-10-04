@@ -7,7 +7,9 @@ A GitHub integration records repository events and can post results back to an i
 ```sh
 kestrel integration register github origin \
   --repository openkestrel/kestrel \
-  --token ghp_your_token
+  --app-id 123456 \
+  --installation 789012 \
+  --private-key @path/to/private-key.pem
 ```
 
 Kestrel polls for events every minute. The first poll reads one page, establishing a starting point rather than replaying the repository's history. If GitHub can reach the control plane, add `--webhook-secret` and configure the repository webhook at the path shown by `kestrel integration list` (`/webhooks/<integration id>`, content type `application/json`). With a webhook secret, Kestrel uses deliveries instead of polling and verifies `X-Hub-Signature-256`.

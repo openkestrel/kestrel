@@ -1143,8 +1143,12 @@ fn secrets_set_through_the_client_appear_in_no_log_line() {
         "hub",
         "--repository",
         "jtmthf/kestrel",
-        "--token",
-        support::TOKEN,
+        "--app-id",
+        "1",
+        "--installation",
+        "2",
+        "--private-key",
+        support::PRIVATE_KEY,
         "--api",
         &stub.base_url(),
         "--webhook-secret",
@@ -1164,7 +1168,7 @@ fn secrets_set_through_the_client_appear_in_no_log_line() {
     );
     for (name, secret) in [
         ("the provider key", provider_key),
-        ("the token", support::TOKEN),
+        ("the private key", support::PRIVATE_KEY),
         ("the signing secret", signing_secret),
     ] {
         assert!(!printed.contains(secret), "the client printed {name}");
@@ -1181,8 +1185,12 @@ fn watching(kestrel: &Booted, stub: &GithubStub, interval: &str) {
         "hub",
         "--repository",
         "jtmthf/kestrel",
-        "--token",
-        support::TOKEN,
+        "--app-id",
+        "1",
+        "--installation",
+        "2",
+        "--private-key",
+        support::PRIVATE_KEY,
         "--api",
         &stub.base_url(),
         "--interval",
@@ -1226,11 +1234,11 @@ fn the_client_lists_what_a_poll_recorded_and_the_credential_appears_in_neither_i
         "an event listing that does not say what happened:\n{listed}"
     );
     assert!(
-        !listed.contains(support::TOKEN),
+        !listed.contains(support::PRIVATE_KEY),
         "the listing spelled the credential out"
     );
     assert!(
-        !said.contains(support::TOKEN),
+        !said.contains(support::PRIVATE_KEY),
         "a log line spelled the credential out"
     );
     assert!(
@@ -1253,8 +1261,12 @@ fn a_dispatch_starts_a_triggers_work_on_the_issue_it_names() {
         "hub",
         "--repository",
         "jtmthf/kestrel",
-        "--token",
-        support::TOKEN,
+        "--app-id",
+        "1",
+        "--installation",
+        "2",
+        "--private-key",
+        support::PRIVATE_KEY,
         "--api",
         &stub.base_url(),
         "--carries",
