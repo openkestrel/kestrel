@@ -1,0 +1,10 @@
+{
+  "id": 37169733884,
+  "head_sha": "a6b29919f4263307316695a37929d821a02cdd0a",
+  "event": "pull_request",
+  "created_at": "2026-10-04T02:00:45Z",
+  "run_started_at": "2026-10-04T02:00:45Z",
+  "updated_at": "2026-10-04T02:08:14Z",
+  "html_url": "https://github.com/openkestrel/kestrel/actions/runs/37169733884",
+  "conclusion": "success"
+}
