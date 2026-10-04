@@ -28,6 +28,7 @@ pub struct Start {
 
 #[derive(Deserialize, Serialize)]
 struct Flow {
+    app_name: String,
     organization: String,
     registration: Start,
     integration: IntegrationId,
@@ -77,6 +78,7 @@ pub async fn start(store: &Store, organization: &str, mut registration: Start) -
         state.as_str()
     );
     let flow = Flow {
+        app_name: format!("kestrel-{}", &Secret::mint().as_str()[..24]),
         organization: organization.into(),
         registration,
         integration: IntegrationId::generate(),
@@ -132,7 +134,7 @@ pub async fn page(store: &Store, state: &str) -> Result<String> {
         |owner| format!("https://github.com/organizations/{owner}/settings/apps/new"),
     );
     let manifest = json!({
-        "name": format!("kestrel-{}", flow.registration.name),
+        "name": flow.app_name,
         "url": "https://github.com/openkestrel/kestrel",
         "public": false,
         "redirect_url": format!("{base}{CALLBACK}"),

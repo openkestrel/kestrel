@@ -55,6 +55,10 @@ async fn manifest_setup_registers_a_usable_app_without_returning_secrets() {
             .replace("&gt;", ">")
             .replace("&amp;", "&");
         let manifest: Value = serde_json::from_str(&manifest).unwrap();
+        let app_name = manifest["name"].as_str().unwrap();
+        assert!(app_name.starts_with("kestrel-"));
+        assert_eq!(app_name.len(), 32);
+        assert!(!app_name.contains(&state[..24]));
         assert_eq!(
             manifest["default_permissions"],
             json!({"contents": "write", "issues": "write", "pull_requests": "write", "metadata": "read"})
