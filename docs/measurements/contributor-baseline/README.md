@@ -61,6 +61,14 @@ mise exec -- env CARGO_BUILD_JOBS=2 GIT_CONFIG_GLOBAL=/dev/null \
   a_session_enqueued_is_claimed_dispatched_and_reaches_an_instance -- --exact
 ```
 
+To reproduce the follow-up measurements, replace the final focused-test command above with the following. The measured commit predates this report and script, so fetch the artifact PR and restore only its script; the Rust source remains at the pinned commit. This additionally requires Python 3.
+
+```sh
+git fetch origin refs/pull/518/head
+git restore --source=FETCH_HEAD -- docs/measurements/contributor-baseline/measure-followups.py
+python3 docs/measurements/contributor-baseline/measure-followups.py
+```
+
 The measured Cargo portion from empty target to a first passing test is **180.934 s (3m01s)**: 89.77 + 48.19 + 42.974. Including the measured local clone adds 0.16 s. This is summed command time, excluding trust/version checks, checkout, human pauses and this session's investigation gaps; it is not end-to-end onboarding wall time. The explicit build and `--no-run` steps separate the costs; contributors can invoke the focused test directly, but that path was not separately timed. This test needs no Docker, browser or provider sign-in.
 
 Traps verified against this checkout:
