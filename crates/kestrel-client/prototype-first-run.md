@@ -479,12 +479,12 @@ already occupied, explain a selectable local port rather than silently opening a
 ### Existing-App fallback
 
 If the manifest flow fails, register an existing App using its App id, installation id
-and a private-key file. The implementation slice must finalize the registration flags
-against the existing App registration contract; this transcript's grammar is proposed.
+and a private-key file. Registration reuses the existing App fields and file-input syntax under the reviewed
+GitHub command namespace.
 No personal-token registration path is offered.
 
 ```text
-$ kestrel integration github register github --app-id 123 --installation-id 456 --private-key-file app.pem --repository example/widgets
+$ kestrel integration github register github --app-id 123 --installation 456 --private-key @app.pem --repository example/widgets
 err> Checking GitHub App installation access...
 out> GitHub connected · Integration github · Organization Jack
 exit> 0
@@ -601,14 +601,14 @@ If only arbitrary harness prose exists, display it as diagnostic evidence and of
 of the Session; do not classify a sign-in as expired, not covered or failed from that prose.
 These `Next:` lines are part of a successful Session read on stdout, not CLI refusals.
 
-## Decisions for live review
+## Reviewed specification amendments
 
 The settled [refusal decision](https://github.com/openkestrel/kestrel/issues/490#issuecomment-5985132323)
 already owns exit mappings, evidence, scope and typed next steps. The
 [release decision](https://github.com/openkestrel/kestrel/issues/496) still owns packaging,
 installation and version selection; these transcripts make no release-policy choice.
 
-Proposed amendments to [the first-run spec](https://github.com/openkestrel/kestrel/issues/460):
+Agreed amendments to [the first-run spec](https://github.com/openkestrel/kestrel/issues/460):
 
 1. `start` may collect the Brief at a terminal. Without a terminal it aggregates all known
    missing inputs and requires explicit `--yes` before any setup write. Present behavior
@@ -627,9 +627,9 @@ Proposed amendments to [the first-run spec](https://github.com/openkestrel/kestr
 6. Use the stream/colour conventions above. Keep initial readiness to one blocking gap,
    while non-TTY start lists all missing information it can establish.
 
-These amendments need the human's reaction before changing the spec or closing the ticket.
-Route spelling, Sign-in Method ids and precise tunnel-port selection remain proposed contract
-details for this review; they must be locked or carried into the corresponding specification slice.
+The maintainer agreed to these amendments in the live review. Route spelling and
+Sign-in Method ids are specification-slice details, not commitments made by the fixture
+URLs above. Existing-App registration reuses the existing App fields and file-input syntax.
 
 ## Live review so far
 
@@ -638,7 +638,8 @@ details for this review; they must be locked or carried into the corresponding s
 - The checked import fallback is named `login --token` / `login --file PATH`, replacing
   the draft's vague `--manual`. Secret values never appear in command arguments.
 
-Other proposals above remain under review.
+The output conventions were accepted in live review. This artifact records the settled
+CLI direction; production implementation belongs to the specification slices.
 
 - Live review: GitHub-specific commands use `kestrel integration github …`; the
   connect flow is `kestrel integration github connect`. Shared Integration commands
@@ -651,3 +652,5 @@ Other proposals above remain under review.
   omitted; non-interactive start requires its flag.
 - Live review: keep a saved sign-in unchecked when its real model-call check cannot
   complete because the service is unavailable. Disclose the partial save and exit 5.
+
+- Live review: adopt the stdout/stderr, colour and redirected-output conventions above.
