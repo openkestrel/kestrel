@@ -20,6 +20,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "#/component
 import { cn } from "#/lib/utils";
 import { elapsed } from "#/operator/transcript-view";
 import { VariantD } from "./variant-d";
+import { MainE } from "./variant-e";
 import { type ActivityGroup, FLOW, type Narrated, RUNNING } from "./fixtures";
 import {
 	BubbleMessage,
@@ -325,4 +326,5 @@ export const VARIANTS = {
 	B: { name: "Steps", Pane: VariantB },
 	C: { name: "Folded", Pane: VariantC },
 	D: { name: "Steps, refined", Pane: VariantD },
+	E: { name: "Aspirational", Pane: MainE },
 } as const;

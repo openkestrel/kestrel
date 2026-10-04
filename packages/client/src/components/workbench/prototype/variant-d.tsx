@@ -64,7 +64,7 @@ const KIND_ICON: Record<string, typeof WrenchIcon> = {
 	execute: SquareTerminalIcon,
 };
 
-function KindIcon({ kind, className }: { kind: string; className?: string }) {
+export function KindIcon({ kind, className }: { kind: string; className?: string }) {
 	const Icon = KIND_ICON[kind] ?? WrenchIcon;
 	return <Icon aria-hidden className={cn("size-3.5 shrink-0", className)} />;
 }
@@ -89,7 +89,7 @@ function kindsIn(activity: ActivityGroup) {
 	return [...new Set(activity.entries.flatMap((entry) => (entry.kind === "tool" ? [entry.toolKind] : [])))];
 }
 
-function Row({
+export function Row({
 	icon,
 	label,
 	trailing,
@@ -184,7 +184,7 @@ function RunningRow({ tool }: { tool: (typeof RUNNING)[number] }) {
 	);
 }
 
-function ActivityView({ activity }: { activity: ActivityGroup }) {
+export function ActivityView({ activity }: { activity: ActivityGroup }) {
 	const live = !activity.closed;
 	const [open, setOpen] = useState(live);
 	const duration =
@@ -214,7 +214,7 @@ function ActivityView({ activity }: { activity: ActivityGroup }) {
 	);
 }
 
-function Byline({ name, time, agent }: { name: string; time: string; agent?: boolean }) {
+export function Byline({ name, time, agent }: { name: string; time: string; agent?: boolean }) {
 	return (
 		<p className="mb-1 flex items-baseline gap-2 text-xs">
 			<span className={cn("font-medium", agent ? "text-muted-foreground" : "text-foreground")}>{name}</span>
@@ -223,7 +223,7 @@ function Byline({ name, time, agent }: { name: string; time: string; agent?: boo
 	);
 }
 
-function PersonMessage({ said }: { said: Pick<Said, "participant" | "text" | "at"> }) {
+export function PersonMessage({ said }: { said: Pick<Said, "participant" | "text" | "at"> }) {
 	return (
 		<div>
 			<Byline name={said.participant === ME ? "you" : said.participant} time={said.at} />
@@ -234,7 +234,7 @@ function PersonMessage({ said }: { said: Pick<Said, "participant" | "text" | "at
 	);
 }
 
-function AgentMessage({ said, changed }: { said: Said; changed?: { path: string; added: number; removed: number }[] }) {
+export function AgentMessage({ said, changed }: { said: Said; changed?: { path: string; added: number; removed: number }[] }) {
 	return (
 		<div>
 			<Byline name={said.participant} time={said.at} agent />
@@ -288,7 +288,7 @@ function Header() {
 	);
 }
 
-function HeldLine() {
+export function HeldLine() {
 	const [held, setHeld] = useState(HELD);
 	if (held.length === 0) return null;
 	return (
@@ -316,7 +316,7 @@ function HeldLine() {
 	);
 }
 
-function Commands() {
+export function Commands() {
 	const { textInput } = usePromptInputController();
 	const typed = textInput.value;
 	if (!typed.startsWith("/") || typed.includes(" ")) return null;
