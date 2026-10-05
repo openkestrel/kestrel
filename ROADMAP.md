@@ -206,8 +206,21 @@ browser are each complete Clients of it, and each walks a person through the sam
 **Operator**, choose a harness and sign in, connect GitHub and choose a repository, write a Brief
 ([ADR-0049](docs/adr/0049-an-install-has-one-operator-and-by-default-one-organization.md)). The
 control plane answers what is missing and what fixes it, and both Clients render that answer. In the
-CLI, `kestrel start` asks for what it cannot infer and every prompt has a flag; errors name the
-command that fixes them, and the shell completes names.
+CLI, `kestrel start` asks for what it cannot infer and every prompt has a flag; errors offer a
+typed next step that each Client renders as a repair, inspection or retry
+([ADR-0052](docs/adr/0052-a-refusal-carries-its-next-steps.md)), and the shell completes names.
+
+The browser asks one focused question at a time and ends with a review before starting the first
+Session. Saving the Operator's name is one prerequisite, not the end of setup: returning before the
+first confirmed start succeeds resumes the remaining steps. Later gaps use contextual fix-it states
+and settings ([browser setup decision](https://github.com/openkestrel/kestrel/issues/491)).
+
+The CLI asks "What should the Session do?" and keeps `--brief` for its initial prompt. A start
+without a terminal names all missing inputs it can establish and requires `--yes` before any
+write. Its review distinguishes already-saved setup from the start plan; declining creates no
+Workspace or Session and retains setup. Results go to stdout, prompts, progress and errors to
+stderr, and redirected output uses no colour or terminal animations
+([CLI first-run decision](https://github.com/openkestrel/kestrel/issues/493)).
 
 **Signing in is kestrel's job.** kestrel ships a catalogue of how each harness signs in
 ([ADR-0046](docs/adr/0046-kestrel-ships-a-catalogue-of-how-each-harness-signs-in.md)), relays a
@@ -216,6 +229,13 @@ remote machine ([ADR-0047](docs/adr/0047-kestrel-relays-a-persons-own-sign-in.md
 sign-in with a real call when it is saved. The default image carries every catalogued harness and
 says so in a label, so kestrel never offers one it cannot run
 ([ADR-0048](docs/adr/0048-the-environment-image-carries-every-catalogued-harness.md)).
+
+`kestrel login --token` imports an existing token or key through hidden input or stdin;
+`kestrel login --file PATH` imports a login file. Both name their harness and check the sign-in.
+If the model service is unavailable, the saved sign-in remains unchecked and the Client reports
+that partial result. GitHub uses `kestrel integration github connect` and always acts as an App
+([ADR-0028](docs/adr/0028-an-integration-lends-a-run-its-identity.md)); registering an existing App
+is the fallback for the manifest flow, never a personal access token.
 
 ### 0.5 — kestrel asks before it acts
 

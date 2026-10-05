@@ -6,3 +6,11 @@ CREATE TABLE instance_archive (
     workspace_id TEXT NOT NULL REFERENCES workspace (id),
     queued_at TEXT NOT NULL
 ) STRICT;
+
+CREATE TABLE instance_idle_hint (
+    organization_id TEXT NOT NULL REFERENCES organization (id),
+    workspace_id TEXT PRIMARY KEY REFERENCES workspace (id),
+    instance TEXT NOT NULL,
+    idle_since TEXT NOT NULL,
+    archive_deadline TEXT NOT NULL
+) STRICT;

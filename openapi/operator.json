@@ -1127,6 +1127,7 @@
           "201": { "description": "The opened Workspace and its first Session.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Opened" } } } },
           "400": { "$ref": "#/components/responses/Refused" },
           "404": { "$ref": "#/components/responses/Refused" },
+          "409": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
           "503": { "$ref": "#/components/responses/Refused" }
         }
@@ -3427,6 +3428,11 @@
           "participant": {
             "type": ["string", "null"],
             "description": "The name the Brief is written under. Omitted, its source is the operator and no one joins."
+          },
+          "depends_on": {
+            "type": ["array", "null"],
+            "items": { "type": "string" },
+            "description": "Sessions of the Organization the new Session waits on, each named as a Session is anywhere else. It is dispatched only once every one has ended successfully. One the Organization does not have is refused with 404, and one that ended without success or is unreachable with 409; either refusal leaves nothing behind. No request adds a Dependency to a Session that already exists."
           }
         },
         "required": ["project", "agent"]
@@ -3620,7 +3626,12 @@
           "agent": { "type": ["string", "null"], "description": "Omitted, the Agent of the Workspace's latest Session." },
           "model": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." },
           "mode": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." },
-          "thought_level": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." }
+          "thought_level": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." },
+          "depends_on": {
+            "type": ["array", "null"],
+            "items": { "type": "string" },
+            "description": "Sessions of the Organization the new Session waits on, each named as a Session is anywhere else. It is dispatched only once every one has ended successfully. One the Organization does not have is refused with 404, and one that ended without success or is unreachable with 409; either refusal leaves nothing behind. No request adds a Dependency to a Session that already exists."
+          }
         }
       },
       "Session": {
@@ -3661,9 +3672,18 @@
           "units": { "type": "array", "description": "Adapter units still running, such as a Claude background task; they keep a trailing Session trailing.", "items": { "$ref": "#/components/schemas/RunningUnit" } },
           "message_buffering": { "type": "boolean" },
           "thought_buffering": { "type": "boolean" },
-          "last_activity_at": { "type": ["string", "null"], "format": "date-time", "description": "When the trailing Session's agent last showed activity; null in every other state." }
+          "last_activity_at": { "type": ["string", "null"], "format": "date-time", "description": "When the trailing Session's agent last showed activity; null in every other state." },
+          "depends_on": { "type": "array", "description": "The Sessions this one was declared to wait on, whether or not they have ended.", "items": { "$ref": "#/components/schemas/SessionReference" } }
         },
-        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "changing_options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "units", "message_buffering", "thought_buffering", "last_activity_at"]
+        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "changing_options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "units", "message_buffering", "thought_buffering", "last_activity_at", "depends_on"]
+      },
+      "SessionReference": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" }
+        },
+        "required": ["id", "name"]
       },
       "SessionOption": {
         "type": "object",
@@ -3906,10 +3926,18 @@
             "type": "string",
             "description": "The repository it watches, as owner/name."
           },
-          "token": {
+          "app_id": {
+            "type": "integer",
+            "description": "The GitHub App's ID."
+          },
+          "installation": {
+            "type": "integer",
+            "description": "The ID of the installation the App was installed as."
+          },
+          "private_key": {
             "type": "string",
             "writeOnly": true,
-            "description": "The credential it presents to GitHub."
+            "description": "The App's private key, PEM-encoded."
           },
           "carries": {
             "type": "array",
@@ -3942,20 +3970,15 @@
             ],
             "default": "https://api.github.com",
             "description": "The GitHub API it reaches."
-          },
-          "bot_login": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The login the Integration says as on GitHub. What it says is never taken as input or as a command."
           }
         },
         "required": [
           "kind",
           "name",
           "repository",
-          "token"
+          "app_id",
+          "installation",
+          "private_key"
         ]
       },
       "WebhookRegistration": {
@@ -4014,6 +4037,13 @@
             ],
             "description": "The repository a GitHub Integration watches."
           },
+          "bot_login": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The App's own bot account, `<slug>[bot]`, learned from GitHub when a GitHub Integration was registered."
+          },
           "carries": {
             "type": "array",
             "items": {
@@ -4034,13 +4064,6 @@
             ],
             "description": "Where on the link its events are delivered, when they are delivered rather than polled."
           },
-          "bot_login": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The login the Integration says as on GitHub."
-          },
           "last_event_refusal": {
             "oneOf": [
               {
@@ -4057,10 +4080,10 @@
           "name",
           "kind",
           "repository",
+          "bot_login",
           "carries",
           "polled_every",
           "webhook_path",
-          "bot_login",
           "last_event_refusal"
         ]
       },

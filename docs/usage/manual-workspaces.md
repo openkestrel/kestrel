@@ -64,6 +64,25 @@ kestrel session enqueue --workspace latest --agent reviewer
 
 The session's agent, harness, and model appear in `kestrel session show`. Stop a session with `kestrel session stop <session>`: one waiting between turns succeeds; one stopped mid-turn or before starting fails.
 
+## Make a session wait on another
+
+`workspace open` and `session enqueue` take `--depends-on <session>`, repeated for each session the new one waits on. It stays queued, holding no instance, until every one of them has ended successfully, then takes its original place in the queue. If one ends without success, the waiting session becomes unreachable: it never runs and is not counted as a failure. A dependency is declared only when its session is queued; no command adds one later. A session that does not exist in the organization, or that has already failed or become unreachable, is refused and nothing is opened or queued.
+
+A session waiting between turns has not ended, so a session depending on it waits until it is stopped, its workspace is sealed, or its instance is archived; each of those ends it successfully. To see a dependency wait:
+
+```sh
+kestrel workspace open --project kestrel --agent builder --brief "Add the endpoint"
+kestrel session list --workspace latest        # note the session's name, once it is waiting
+kestrel workspace open --project kestrel --agent builder \
+  --brief "Document the endpoint" --depends-on <first session>
+kestrel queue                                  # the second session is waiting on the first
+kestrel queue --json name,position,reasons
+kestrel session stop <first session>           # it was waiting, so it succeeds
+kestrel queue                                  # the second session is ready in its place
+```
+
+Stopping the first session mid-turn instead fails it, and the second becomes unreachable. `kestrel session show <second session>` names what it waited on under `depends on`.
+
 ## Restarts and recovery
 
 A workspace and its transcript survive a control plane restart. An in-flight session ends with a recorded failure, while its instance and checkout remain available for another session. If an instance is missing, the next attempt reports that local unpublished work may have been lost; a later session can provision a fresh instance from the remote branch.

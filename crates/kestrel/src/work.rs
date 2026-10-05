@@ -5,10 +5,10 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::declined::Declined;
+use crate::declined::{Declined, FieldRefusal, Kind};
 use crate::domain::{
-    ChangingOption, Declared, Exit, HeldMessage, Session, SessionCommand, SessionId, SessionOption,
-    SessionState, Turn, Usage, Workspace, WorkspaceId,
+    ChangingOption, Declared, Exit, HeldMessage, Organization, Session, SessionCommand, SessionId,
+    SessionOption, SessionState, Turn, Usage, Workspace, WorkspaceId,
 };
 use crate::instance::Observed;
 use crate::integration::delivery;
@@ -221,10 +221,12 @@ pub async fn enqueue(
     workspace: WorkspaceId,
     agent: Option<&str>,
     declared: Declared,
+    depends_on: &[String],
 ) -> Result<Session> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(workspace).await?;
     workspace.accepts("session")?;
+    let blockers = blockers(&mut tx, &workspace.organization, depends_on).await?;
 
     if let Some(holding) = workspace::unfinished_session(&mut tx, &workspace)
         .await?
@@ -244,9 +246,60 @@ pub async fn enqueue(
         .workspaces()
         .enqueue_session(&workspace, named.as_ref(), declared)
         .await?;
+    let session = record_dependencies(&mut tx, session, &blockers).await?;
     tx.commit().await?;
 
     Ok(session)
+}
+
+/// Resolved before the dependent is enqueued, so `latest` never names the dependent itself.
+pub(crate) async fn blockers(
+    tx: &mut Tx<'_>,
+    organization: &Organization,
+    references: &[String],
+) -> Result<Vec<Session>> {
+    let mut blockers: Vec<Session> = Vec::new();
+    for reference in references {
+        let blocker = workspace::named(
+            "depends_on",
+            tx.workspaces()
+                .resolved_session(organization, reference)
+                .await,
+        )?;
+        if let Some(why) = blocker.never_succeeds() {
+            let named = if *reference == blocker.name {
+                format!("the session {reference}")
+            } else {
+                format!("the session {reference} ({})", blocker.name)
+            };
+            return Err(FieldRefusal {
+                field: "depends_on",
+                message: format!("{named} {why}, so nothing can wait on it"),
+                kind: Kind::Taken,
+            }
+            .into());
+        }
+        if !blockers.iter().any(|known| known.id == blocker.id) {
+            blockers.push(blocker);
+        }
+    }
+
+    Ok(blockers)
+}
+
+pub(crate) async fn record_dependencies(
+    tx: &mut Tx<'_>,
+    session: Session,
+    blockers: &[Session],
+) -> Result<Session> {
+    if blockers.is_empty() {
+        return Ok(session);
+    }
+    for blocker in blockers {
+        tx.workspaces().declare_blocked(&session, blocker).await?;
+    }
+
+    tx.workspaces().session(session.id).await
 }
 
 pub async fn has_had_session(store: &Store, workspace: WorkspaceId) -> Result<bool> {
@@ -1121,6 +1174,7 @@ pub(crate) async fn ending(tx: &mut Tx<'_>, session: &Session, exit: Exit) -> Re
             cascade_unreachable(tx, session.id).await?;
         }
         continue_pending(tx, session.workspace).await?;
+        crate::instance::queue_idle_hint(tx, session.workspace).await?;
         exit
     } else {
         tx.workspaces()

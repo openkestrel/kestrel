@@ -3,6 +3,7 @@ use jiff::Timestamp;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 
+use crate::compute::IdleHint;
 use crate::domain::{
     Agent, ChangingOption, Checkout, Connected, Cost, Declared, Exit, HeldMessage, Interrupting,
     Organization, OrganizationId, Preparing, Project, Session, SessionCommand, SessionId,
@@ -27,7 +28,13 @@ macro_rules! sessions_where {
                     supervisor, enqueued_at, started_at, ended_at, lease_expires_at, connected_at,
                     supervisor_version, model, mode, thought_level, worked_model, title,
                     config_options, changing_options, commands, interrupting_participant,
-                    interrupting_at, context_used, context_size, cost_amount, cost_currency",
+                    interrupting_at, context_used, context_size, cost_amount, cost_currency,
+                    (SELECT json_group_array(json_object('id', b.id, 'name', b.name))
+                     FROM (SELECT b.id, b.name
+                           FROM session_dependency AS d
+                           JOIN session AS b ON b.id = d.blocker_id
+                           WHERE d.session_id = session.id
+                           ORDER BY b.enqueued_at, b.id) AS b) AS depends_on",
             $columns,
             "
              FROM session
@@ -633,6 +640,7 @@ impl<'a> Workspaces<'a> {
                 lease_expires_at: None,
                 connected: None,
                 usage: None,
+                depends_on: Vec::new(),
             };
 
             let inserted = sqlx::query(
@@ -1455,6 +1463,50 @@ impl<'a> Workspaces<'a> {
         self.touched.session(session);
 
         Ok(())
+    }
+
+    pub(crate) async fn queue_idle_hint(
+        &mut self,
+        workspace: &Workspace,
+        hint: &IdleHint,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO instance_idle_hint (organization_id, workspace_id, instance, idle_since, archive_deadline)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (workspace_id) DO UPDATE SET
+                 instance = excluded.instance, idle_since = excluded.idle_since,
+                 archive_deadline = excluded.archive_deadline",
+        )
+        .bind(workspace.organization.id.to_string())
+        .bind(workspace.id.to_string())
+        .bind(&hint.instance)
+        .bind(hint.idle_since.to_string())
+        .bind(hint.archive_deadline.to_string())
+        .execute(&mut *self.connection)
+        .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn take_idle_hints(&mut self) -> Result<Vec<(WorkspaceId, IdleHint)>> {
+        sqlx::query(
+            "DELETE FROM instance_idle_hint WHERE workspace_id IN
+                 (SELECT workspace_id FROM instance_idle_hint ORDER BY idle_since LIMIT 32)
+             RETURNING workspace_id, instance, idle_since, archive_deadline",
+        )
+        .fetch_all(&mut *self.connection)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok((
+                row.get::<String, _>("workspace_id").parse()?,
+                IdleHint {
+                    instance: row.get("instance"),
+                    idle_since: row.get::<String, _>("idle_since").parse()?,
+                    archive_deadline: row.get::<String, _>("archive_deadline").parse()?,
+                },
+            ))
+        })
+        .collect()
     }
 
     pub async fn instance(&mut self, workspace: WorkspaceId) -> Result<Option<String>> {
@@ -2491,6 +2543,7 @@ fn session(row: &SqliteRow) -> Result<Session> {
             None => None,
         },
         usage: usage(row),
+        depends_on: read_json(row, "depends_on")?,
     })
 }
 

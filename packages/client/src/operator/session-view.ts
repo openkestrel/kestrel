@@ -17,7 +17,7 @@ export function sessionTitle(session: Session | undefined, workspace: Workspace)
 export function modelLine(session: Session | undefined): string {
 	const requested = session?.model ?? "the harness's default";
 	const running = session?.worked_model;
-	if (running && running !== session?.model) return `requested ${requested} · running ${running}`;
+	if (running && running !== session.model) return `requested ${requested} · running ${running}`;
 	return `model ${running ?? requested}`;
 }
 

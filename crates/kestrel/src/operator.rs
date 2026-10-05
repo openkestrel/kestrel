@@ -402,6 +402,7 @@ struct WorkspaceDeclaration {
     thought_level: Option<String>,
     brief: Option<String>,
     participant: Option<String>,
+    depends_on: Option<Vec<String>>,
 }
 
 impl WorkspaceDeclaration {
@@ -431,6 +432,7 @@ struct SessionDeclaration {
     model: Option<String>,
     mode: Option<String>,
     thought_level: Option<String>,
+    depends_on: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -712,11 +714,18 @@ struct SessionRecord {
     connected_at: Option<Timestamp>,
     supervisor_version: Option<String>,
     usage: Option<domain::Usage>,
+    depends_on: Vec<SessionReferenceRecord>,
     tools: Vec<crate::live_work::RunningTool>,
     units: Vec<crate::live_work::RunningUnit>,
     message_buffering: bool,
     thought_buffering: bool,
     last_activity_at: Option<Timestamp>,
+}
+
+#[derive(Serialize)]
+struct SessionReferenceRecord {
+    id: String,
+    name: String,
 }
 
 #[derive(Serialize)]
@@ -923,6 +932,14 @@ impl SessionRecord {
             connected_at: session.connected.as_ref().map(|connected| connected.at),
             supervisor_version: session.connected.map(|connected| connected.version),
             usage: session.usage,
+            depends_on: session
+                .depends_on
+                .into_iter()
+                .map(|blocker| SessionReferenceRecord {
+                    id: blocker.id.to_string(),
+                    name: blocker.name,
+                })
+                .collect(),
             tools: Vec::new(),
             units: Vec::new(),
             message_buffering: false,
@@ -1410,28 +1427,30 @@ struct IntegrationRegistration {
 enum ConnectionRegistration {
     Github {
         repository: String,
-        token: String,
+        app_id: i64,
+        installation: i64,
+        private_key: String,
         interval: Option<String>,
         webhook_secret: Option<String>,
         api: Option<String>,
-        bot_login: Option<String>,
     },
     Webhook {
         secret: String,
     },
 }
 
-/// Never the token or a webhook secret: what an Integration presents stays behind the boundary.
+/// Never the private key or a webhook secret: what an Integration presents stays behind the
+/// boundary. The bot login is not a secret — it is the name GitHub already shows in public.
 #[derive(Serialize)]
 struct IntegrationRecord {
     id: String,
     name: String,
     kind: &'static str,
     repository: Option<String>,
+    bot_login: Option<String>,
     carries: Vec<Direction>,
     polled_every: Option<String>,
     webhook_path: Option<String>,
-    bot_login: Option<String>,
     last_event_refusal: Option<EventRefusalRecord>,
 }
 
@@ -1448,23 +1467,23 @@ impl From<Integration> for IntegrationRecord {
     fn from(integration: Integration) -> Self {
         let webhook_path = integration.webhook_path();
         let kind = integration.kind().as_str();
-        let (repository, polled_every, webhook_path, bot_login) = match integration.connection {
+        let (repository, bot_login, polled_every, webhook_path) = match integration.connection {
             Connection::Github(github) if github.signed => (
                 Some(github.repository),
+                Some(github.bot_login),
                 None,
                 Some(webhook_path),
-                github.bot_login,
             ),
             Connection::Github(github) if !integration.carries.contains(&Direction::Inbound) => {
-                (Some(github.repository), None, None, github.bot_login)
+                (Some(github.repository), Some(github.bot_login), None, None)
             }
             Connection::Github(github) => (
                 Some(github.repository),
+                Some(github.bot_login),
                 Some(format!("{:#}", github.interval)),
                 None,
-                github.bot_login,
             ),
-            Connection::Webhook => (None, None, Some(webhook_path), None),
+            Connection::Webhook => (None, None, None, Some(webhook_path)),
         };
 
         Self {
@@ -1472,10 +1491,10 @@ impl From<Integration> for IntegrationRecord {
             name: integration.name,
             kind,
             repository,
+            bot_login,
             carries: integration.carries,
             polled_every,
             webhook_path,
-            bot_login,
             last_event_refusal: integration.last_event_refusal.map(Into::into),
         }
     }
@@ -1513,16 +1532,19 @@ async fn register_integration(
     let (connecting, carries) = match &registration.connection {
         ConnectionRegistration::Github {
             repository,
-            token,
+            app_id,
+            installation,
+            private_key,
             interval,
             webhook_secret,
             api,
-            bot_login,
         } => (
             Connecting::Github {
                 repository,
                 api: api.as_deref().unwrap_or(github::API),
-                token,
+                app_id: *app_id,
+                installation: *installation,
+                private_key,
                 interval: interval
                     .as_deref()
                     .map_or(Ok(SignedDuration::from_mins(1)), str::parse)
@@ -1530,7 +1552,6 @@ async fn register_integration(
                         Refused::Unprocessable(format!("an interval is a duration: {error}"))
                     })?,
                 signing_secret: webhook_secret.as_deref(),
-                bot_login: bot_login.as_deref(),
             },
             &[Direction::Inbound, Direction::Outbound][..],
         ),
@@ -1538,8 +1559,10 @@ async fn register_integration(
             (Connecting::Webhook { secret }, &[Direction::Inbound][..])
         }
     };
+    let github = Github::dialling_out()?;
     let registered = integration::register(
         &control_plane.store,
+        &github,
         Registration {
             organization: &organization,
             name: &registration.name,
@@ -2314,6 +2337,7 @@ async fn open_workspace(
             declared: declaration.declared(),
             brief: declaration.brief.as_deref(),
             participant: declaration.participant.as_deref(),
+            depends_on: declaration.depends_on.as_deref().unwrap_or_default(),
         },
     )
     .await
@@ -2575,6 +2599,7 @@ async fn enqueue_session(
         workspace.id,
         declaration.agent.as_deref(),
         declaration.declared(),
+        declaration.depends_on.as_deref().unwrap_or_default(),
     )
     .await
     .map_err(workspace_refusal)?;

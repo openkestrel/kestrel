@@ -93,13 +93,13 @@ function following(workspace: string, participant: string): { lines: string[]; e
 	);
 	followers.push(child);
 	const lines: string[] = [];
-	child.stdout?.setEncoding("utf8");
-	child.stdout?.on("data", (chunk: string) => {
+	child.stdout.setEncoding("utf8");
+	child.stdout.on("data", (chunk: string) => {
 		lines.push(...chunk.split("\n").filter((line) => line.trim() !== ""));
 	});
 	const errors: string[] = [];
-	child.stderr?.setEncoding("utf8");
-	child.stderr?.on("data", (chunk: string) => {
+	child.stderr.setEncoding("utf8");
+	child.stderr.on("data", (chunk: string) => {
 		errors.push(...chunk.split("\n").filter((line) => line.trim() !== ""));
 	});
 	return { lines, errors };

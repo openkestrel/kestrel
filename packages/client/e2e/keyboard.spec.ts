@@ -215,8 +215,8 @@ test("Shift+Tab cycles a mode with an announcement, and Escape leaves the compos
 				json: {
 					...body,
 					unfinished_session: {
-						id: running?.id,
-						name: running?.name,
+						id: running.id,
+						name: running.name,
 						state: "working",
 						preparing: null,
 					},
@@ -235,7 +235,7 @@ test("Shift+Tab cycles a mode with an announcement, and Escape leaves the compos
 		},
 	);
 	await page.route(
-		(url) => url.pathname === `/operator/organizations/${ORGANIZATION}/sessions/${running?.id}`,
+		(url) => url.pathname === `/operator/organizations/${ORGANIZATION}/sessions/${running.id}`,
 		async (route) => {
 			await route.fulfill({
 				status: 200,

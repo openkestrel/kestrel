@@ -7,7 +7,7 @@ use kestrel::domain::{
     Connection, Direction, GithubConnection, Integration, IntegrationId, OrganizationId,
     SessionCommand, SessionState,
 };
-use kestrel::integration::credential::Token;
+use kestrel::integration::credential::App;
 use kestrel::integration::github::Github;
 use kestrel::link::Instruction;
 use kestrel::log::{Entry, Message};
@@ -17,7 +17,7 @@ use support::Kestrel;
 use support::github_stub::{self, GithubStub};
 use support::scripted_agent::Script;
 use support::supervisor::Supervisor;
-use support::{A_PROVIDER_KEY, PROVIDER_KEY};
+use support::{A_PROVIDER_KEY, APP_ID, INSTALLATION_ID, PRIVATE_KEY, PROVIDER_KEY};
 
 const REPOSITORY: &str = "jtmthf/kestrel";
 const MAINTAINER: &str = "jack";
@@ -573,10 +573,10 @@ async fn a_comment_backlog_larger_than_ten_pages_loses_nothing() {
         connection: Connection::Github(GithubConnection {
             repository: REPOSITORY.to_owned(),
             api: stub.base_url(),
-            credential: Token::held("not-a-secret"),
+            credential: App::held(APP_ID, INSTALLATION_ID, PRIVATE_KEY),
+            bot_login: "kestrel[bot]".to_owned(),
             interval: SignedDuration::from_secs(1),
             signed: false,
-            bot_login: None,
         }),
         carries: vec![Direction::Inbound],
         poll_due_at: None,
@@ -695,6 +695,43 @@ async fn watching_a_named_actor(kestrel: &Kestrel, stub: &GithubStub) {
                 {"exact": {"source": format!("https://github.com/{REPOSITORY}")}},
                 {"exact": {"type": "com.github.issue_comment.created"}},
                 {"exact": {"data.user.login": MAINTAINER}},
+                {"prefix": {"data.body": "@kestrel"}},
+            ]})
+            .to_string(),
+            "kestrel",
+            "builder",
+            &support::templates("Work on {{ event.subject }}", None, Some("the release")),
+        )
+        .await;
+    kestrel
+        .register_integration(
+            "acme",
+            "github",
+            REPOSITORY,
+            &stub.base_url(),
+            &[Direction::Inbound],
+            SignedDuration::from_millis(1),
+        )
+        .await;
+}
+
+/// A Trigger that names no author, so a Workspace it opened admits whatever the Event says: the
+/// own-identity guard is the only thing left that can keep kestrel's voice out.
+async fn watching_any_author(kestrel: &Kestrel, stub: &GithubStub) {
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(&organization, "kestrel", &[], "main")
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    kestrel
+        .declare_trigger_rendering(
+            "acme",
+            "delegated",
+            &serde_json::json!({"all": [
+                {"exact": {"source": format!("https://github.com/{REPOSITORY}")}},
+                {"exact": {"type": "com.github.issue_comment.created"}},
                 {"prefix": {"data.body": "@kestrel"}},
             ]})
             .to_string(),
@@ -838,7 +875,7 @@ async fn a_comment_from_the_integration_s_own_identity_is_never_heard_as_input()
         )]),
     );
     let kestrel = Kestrel::boot().await;
-    watching_a_named_actor(&kestrel, &stub).await;
+    watching_any_author(&kestrel, &stub).await;
     let workspace = workspaces(&kestrel, 1).await.remove(0);
     kestrel
         .claim_session()

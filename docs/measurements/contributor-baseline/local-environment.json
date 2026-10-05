@@ -1,0 +1,21 @@
+{
+  "commit": "499f7d1474b9da442f5a30b8fd0c669647c00783",
+  "measured_date_utc": "2026-10-04",
+  "cpu": "Apple M2",
+  "logical_cpus": 8,
+  "memory_bytes": 17179869184,
+  "architecture": "arm64",
+  "os": "macOS 27.0.1 (26A434)",
+  "rustc": "1.96.0 (ac68faa20 2026-05-25)",
+  "cargo": "1.96.0 (30a34c682 2026-05-25)",
+  "mise": "2026.9.14",
+  "cargo_build_jobs": 2,
+  "profile": "dev/test defaults, unoptimized + debuginfo",
+  "conditions": "empty target, existing Cargo registry and installed toolchain, shared host; sequential commands; one sample per workload",
+  "clean_build_wall_seconds": 89.77,
+  "test_build_wall_seconds": 48.19,
+  "local_clone_wall_seconds": 0.16,
+  "target_kib_after_clean_build": 1634692,
+  "target_kib_after_test_compile": 2734040,
+  "target_kib_after_all_measurements": 3819740
+}

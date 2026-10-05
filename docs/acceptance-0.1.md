@@ -63,7 +63,8 @@ one.
 
 ```sh
 kestrel integration register github origin --organization acme \
-  --repository jtmthf/kestrel --token "$(gh auth token)"
+  --repository jtmthf/kestrel --app-id "$APP_ID" --installation "$INSTALLATION_ID" \
+  --private-key @path/to/private-key.pem
 kestrel trigger declare ready --organization acme --repository jtmthf/kestrel \
   --label ready-for-agent --project kestrel --agent builder
 ```

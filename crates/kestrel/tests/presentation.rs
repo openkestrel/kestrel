@@ -5,7 +5,8 @@ mod support;
 
 use serde_json::Value;
 use support::client::{self, Invocation, ran_on_a_terminal};
-use support::{Kestrel, TOKEN};
+use support::github_stub::GithubStub;
+use support::{Kestrel, PRIVATE_KEY};
 
 const REPOSITORY: &str = "https://github.com/jtmthf/kestrel";
 
@@ -199,6 +200,7 @@ async fn json_without_a_field_list_is_refused_rather_than_guessed_at() {
 async fn standard_output_carries_the_value_and_standard_error_carries_the_rest() {
     let kestrel = an_organization_holding_two_agents().await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let stub = GithubStub::start();
 
     let read = piped(
         &kestrel,
@@ -214,8 +216,14 @@ async fn standard_output_carries_the_value_and_standard_error_carries_the_rest()
             "hub",
             "--repository",
             "jtmthf/kestrel",
-            "--token",
-            TOKEN,
+            "--app-id",
+            "1",
+            "--installation",
+            "2",
+            "--private-key",
+            PRIVATE_KEY,
+            "--api",
+            &stub.base_url(),
         ],
     )
     .await;

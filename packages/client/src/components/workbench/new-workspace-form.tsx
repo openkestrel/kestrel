@@ -19,6 +19,7 @@ import {
 import type { WorkspaceDeclaration } from "#/operator/generated";
 import {
 	agentsQuery,
+	newWorkspaceDeclaration,
 	openWorkspace,
 	profilesQuery,
 	projectsQuery,
@@ -95,7 +96,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 	const placed = (field: string): string | undefined =>
 		refused?.field === field ? refused.message : missing[field];
 	const at_the_top =
-		opening.error !== undefined &&
+		opening.isError &&
 		!(opening.error instanceof Refused && PLACED_FIELDS.has(opening.error.field ?? ""));
 
 	if (draft === undefined || projects.isPending || agents.isPending || profiles.isPending) {
@@ -124,25 +125,17 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 
 	const submit = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
+		const declaration = newWorkspaceDeclaration(draft, name);
 		const absent: Record<string, string> = {};
 		if (draft.project === "") absent.project = "Choose a Project.";
 		if (draft.agent === "") absent.agent = "Choose an Agent.";
-		if (name.trim() === "") absent.participant = "Your name is needed before sending.";
+		if (declaration.brief !== null && name.trim() === "") {
+			absent.participant = "Your name is needed before sending.";
+		}
 		setMissing(absent);
 		if (Object.keys(absent).length > 0) return;
 
-		opening.mutate({
-			project: draft.project,
-			agent: draft.agent,
-			profile: draft.profile === "" ? null : draft.profile,
-			// A continuation runs on the branch of the Workspace it continues and names none of its own.
-			branch:
-				draft.continues !== "" ? null : draft.branch.trim() === "" ? null : draft.branch.trim(),
-			model: draft.model.trim() === "" ? null : draft.model.trim(),
-			brief: draft.brief.trim() === "" ? null : draft.brief,
-			participant: name.trim(),
-			continues: draft.continues === "" ? null : draft.continues,
-		});
+		opening.mutate(declaration);
 	};
 
 	return (
@@ -312,7 +305,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 						onDragOver={(event) => event.preventDefault()}
 						onDrop={(event) => {
 							event.preventDefault();
-							const dropped = event.dataTransfer.files[0];
+							const dropped = event.dataTransfer.files.item(0);
 							if (dropped) void dropped.text().then((text) => hold({ brief: text }));
 						}}
 						aria-invalid={placed("brief") !== undefined}

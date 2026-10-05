@@ -188,6 +188,11 @@ Instance it executed on as `<driver>/<name>`.
 
 - **Unpublished Work** is judged from the last `checkout` report (`workspace.observed`,
   `instance::unpublished`). A checkout nobody reported on counts as holding work.
+- **Idle hints** are queued with a Session's ending when no unfinished Session remains and the
+  Instance is recoverable by the same unpublished-work check used for cap pressure. The work role
+  delivers committed hints after rechecking the Instance and idle time, carrying its handle,
+  `last_active_at`, and that time plus the seal sweep's idle window. Delivery errors are logged
+  and consumed. Docker and LocalExec ignore the hint; the supervisor stays on its link.
 - **Leaving a Workspace.** Sealing or `instance release` moves the Instance into `instance_archive`
   in the same transaction; the dispatch loop destroys it later, so a work role that is down at seal
   time still finds it.

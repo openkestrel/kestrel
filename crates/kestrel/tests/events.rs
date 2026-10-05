@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use jiff::SignedDuration;
 use kestrel::domain::{Direction, Event};
-use support::github_stub::{self, GithubStub, ScriptedResponse};
-use support::{Kestrel, TOKEN};
+use support::Kestrel;
+use support::github_stub::{self, GithubStub, INSTALLATION_TOKEN, ScriptedResponse};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 const REPOSITORY: &str = "jtmthf/kestrel";
@@ -52,11 +52,20 @@ async fn recorded(kestrel: &Kestrel, count: usize) -> Vec<Event> {
     }
 }
 
+/// How many of a stub's requests were a poll, rather than the one-off `GET /app` a
+/// registration makes to learn the Integration's bot login.
+fn polls(stub: &GithubStub) -> usize {
+    stub.requests()
+        .iter()
+        .filter(|request| request.url.contains("/issues"))
+        .count()
+}
+
 async fn polled(stub: &GithubStub, times: usize) {
     let deadline = tokio::time::Instant::now() + PATIENCE;
 
     loop {
-        let asked = stub.requests().len();
+        let asked = polls(stub);
         if asked >= times {
             return;
         }
@@ -143,8 +152,9 @@ async fn an_integration_that_carries_only_outbound_is_never_polled() {
 
     polled(&polling, 3).await;
 
-    assert!(
-        outbound_only.requests().is_empty(),
+    assert_eq!(
+        polls(&outbound_only),
+        0,
         "an integration that carries nothing inbound was polled"
     );
 
@@ -220,7 +230,7 @@ async fn polling_resumes_after_a_restart_without_re_recording_what_it_already_sa
     recorded(&kestrel, 1).await;
 
     let kestrel = kestrel.kill_and_restart().await;
-    let asked = stub.requests().len();
+    let asked = polls(&stub);
     stub.script(page);
     polled(&stub, asked + 1).await;
 
@@ -356,19 +366,70 @@ async fn the_organizations_credential_is_what_the_poll_presents() {
     recorded(&kestrel, 1).await;
 
     let asked = stub.requests();
-    let authorization = asked[0]
+    let poll = asked
+        .iter()
+        .find(|request| {
+            request
+                .url
+                .starts_with("/repos/jtmthf/kestrel/issues/events")
+        })
+        .expect("the poll should have asked for issue events");
+    let authorization = poll
         .headers
         .iter()
         .find(|(name, _)| name == "authorization")
         .map(|(_, value)| value.as_str())
         .expect("the poll should authenticate");
-    assert_eq!(authorization, format!("Bearer {TOKEN}"));
-    assert!(
-        asked[0]
-            .url
-            .starts_with("/repos/jtmthf/kestrel/issues/events"),
-        "the poll asked for {}",
-        asked[0].url
+    assert_eq!(authorization, format!("Bearer {INSTALLATION_TOKEN}"));
+
+    kestrel.teardown().await;
+}
+
+/// An installation token lasts an hour; kestrel never keeps polling on one minted that long
+/// ago. Rather than waiting out a real hour, the stub mints one good for less than
+/// `EXPIRY_MARGIN`, so it already reads as stale by the time anything asks for it again.
+#[tokio::test]
+async fn an_installation_token_nearing_expiry_is_replaced_before_it_is_used_again() {
+    let stub = GithubStub::start();
+    stub.script_answer(
+        "POST",
+        "/access_tokens",
+        github_stub::minted_token("first-installation-token", SignedDuration::from_secs(30)),
+    );
+    stub.script_answer(
+        "POST",
+        "/access_tokens",
+        github_stub::minted_token("second-installation-token", SignedDuration::from_hours(1)),
+    );
+    let kestrel = Kestrel::boot().await;
+    watching(&kestrel, &stub, BOTH).await;
+
+    polled(&stub, 4).await;
+
+    let authorizations: Vec<String> = stub
+        .requests()
+        .iter()
+        .filter(|request| {
+            request
+                .url
+                .starts_with("/repos/jtmthf/kestrel/issues/events")
+        })
+        .filter_map(|request| {
+            request
+                .headers
+                .iter()
+                .find(|(name, _)| name == "authorization")
+        })
+        .map(|(_, value)| value.clone())
+        .collect();
+
+    assert_eq!(
+        authorizations,
+        vec![
+            "Bearer first-installation-token",
+            "Bearer second-installation-token"
+        ],
+        "a token nearing expiry was not replaced before its next use"
     );
 
     kestrel.teardown().await;

@@ -24,6 +24,7 @@ futures-core = "0.3"
 getrandom = { version = "0.4", features = ["std"] }
 hmac = "0.13"
 jiff = { version = "0.2", features = ["serde"] }
+jsonwebtoken = "9"
 libc = "0.2"
 minijinja = { version = "2.24", features = ["fuel"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }

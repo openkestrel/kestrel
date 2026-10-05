@@ -164,6 +164,7 @@ pub const SESSION: View = View::Detail(&[
     "connected_at",
     "supervisor_version",
     "usage",
+    "depends_on",
     "tools",
     "units",
     "last_activity_at",

@@ -283,14 +283,21 @@ enum RegisterCommand {
         /// The repository it watches, as owner/name
         #[arg(long, value_name = "OWNER/NAME")]
         repository: String,
-        /// The credential it presents to GitHub
+        /// The GitHub App's ID
+        #[arg(long, env = "KESTREL_GITHUB_APP_ID", value_name = "ID")]
+        app_id: i64,
+        /// The ID of the installation the App was installed as
+        #[arg(long, env = "KESTREL_GITHUB_INSTALLATION_ID", value_name = "ID")]
+        installation: i64,
+        /// The App's private key: text, `@FILE`, or `-` for standard input
         #[arg(
             long,
-            env = "KESTREL_GITHUB_TOKEN",
-            value_name = "TOKEN",
-            hide_env_values = true
+            env = "KESTREL_GITHUB_PRIVATE_KEY",
+            value_name = "KEY",
+            hide_env_values = true,
+            allow_hyphen_values = true
         )]
-        token: String,
+        private_key: String,
         /// A direction it carries — inbound, outbound; repeat for both
         #[arg(
             long = "carries",
@@ -312,10 +319,6 @@ enum RegisterCommand {
         webhook_secret: Option<String>,
         #[arg(long, env = "KESTREL_GITHUB_API", hide = true)]
         api: Option<String>,
-        /// The login the Integration's own identity says as on GitHub, so what it says is never
-        /// taken as input or as a command
-        #[arg(long, value_name = "LOGIN")]
-        bot_login: Option<String>,
     },
     /// A generic endpoint any producer can POST CloudEvents to
     Webhook {
@@ -576,6 +579,10 @@ enum WorkspaceCommand {
         /// The name the Brief is written under. Without it, it is the operator's
         #[arg(long)]
         as_participant: Option<String>,
+        /// A Session it waits on until that one ends successfully, by generated name,
+        /// identifier, any unambiguous prefix of its identifier, or `latest`; repeatable
+        #[arg(long, value_name = "SESSION")]
+        depends_on: Vec<String>,
     },
     /// List every Workspace in the Organization
     List,
@@ -707,6 +714,10 @@ enum SessionCommand {
         /// The thought level it works at, or none for its Agent's or Harness's default
         #[arg(long)]
         thought_level: Option<String>,
+        /// A Session it waits on until that one ends successfully, by generated name,
+        /// identifier, any unambiguous prefix of its identifier, or `latest`; repeatable
+        #[arg(long, value_name = "SESSION")]
+        depends_on: Vec<String>,
     },
     /// List every Session in a Workspace
     List {
@@ -1013,22 +1024,24 @@ async fn run() -> Result<()> {
                 RegisterCommand::Github {
                     name,
                     repository,
-                    token,
+                    app_id,
+                    installation,
+                    private_key,
                     carries,
                     interval,
                     webhook_secret,
                     api,
-                    bot_login,
                 } => json!({
                     "kind": "github",
                     "name": name,
                     "repository": repository,
-                    "token": token,
+                    "app_id": app_id,
+                    "installation": installation,
+                    "private_key": given(&private_key)?,
                     "carries": carries,
                     "interval": interval,
                     "webhook_secret": webhook_secret,
                     "api": api,
-                    "bot_login": bot_login,
                 }),
                 RegisterCommand::Webhook { name, secret } => {
                     json!({ "kind": "webhook", "name": name, "secret": secret })
@@ -1278,6 +1291,7 @@ async fn run() -> Result<()> {
             mode,
             thought_level,
             as_participant,
+            depends_on,
         }) => {
             let organization = scoping.resolve().await?.organization;
             let brief = brief.as_deref().map(given).transpose()?;
@@ -1295,6 +1309,7 @@ async fn run() -> Result<()> {
                         "thought_level": thought_level,
                         "brief": brief,
                         "participant": as_participant,
+                        "depends_on": depends_on,
                     }),
                 )
                 .await?;
@@ -1549,6 +1564,7 @@ async fn run() -> Result<()> {
             model,
             mode,
             thought_level,
+            depends_on,
         }) => {
             let organization = scoping.resolve().await?.organization;
             show(
@@ -1567,6 +1583,7 @@ async fn run() -> Result<()> {
                         "model": model,
                         "mode": mode,
                         "thought_level": thought_level,
+                        "depends_on": depends_on,
                     }),
                 )
                 .await?,

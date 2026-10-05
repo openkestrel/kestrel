@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::cron::Cron;
 use crate::filter::{Attribute, Filter};
-use crate::integration::credential::Token;
+use crate::integration::credential::App;
 use crate::template::Template;
 
 macro_rules! identifiers {
@@ -234,13 +234,12 @@ pub enum Connection {
 pub struct GithubConnection {
     pub repository: String,
     pub api: String,
-    pub credential: Token,
+    pub credential: App,
+    /// The App's own bot account, `<slug>[bot]`, learned from GitHub when it was registered.
+    pub bot_login: String,
     pub interval: SignedDuration,
     /// Delivered by a signed webhook rather than polled.
     pub signed: bool,
-    /// The login the Integration's own identity says as on GitHub. Recorded so its voice is
-    /// never taken as input or as a command (ADR-0028).
-    pub bot_login: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -723,6 +722,24 @@ pub struct Session {
     pub lease_expires_at: Option<Timestamp>,
     pub connected: Option<Connected>,
     pub usage: Option<Usage>,
+    pub depends_on: Vec<Blocker>,
+}
+
+impl Session {
+    /// Why nothing could ever wait on this Session, when it can no longer end successfully.
+    pub fn never_succeeds(&self) -> Option<String> {
+        match (&self.state, &self.exit) {
+            (SessionState::Unreachable, _) => Some("is unreachable".to_owned()),
+            (_, Some(Exit::Failed { because })) => Some(format!("failed: {because}")),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Blocker {
+    pub id: SessionId,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

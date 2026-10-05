@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::fmt;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Response, StatusCode};
 use serde::de::DeserializeOwned;
@@ -10,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use crate::declined::Declined;
-use crate::domain::{GithubConnection, Integration, Occurrence};
+use crate::domain::{GithubConnection, Integration, IntegrationId, Occurrence};
+use crate::integration::credential::App;
 use crate::readiness::{Delegation, Readiness, WorkState};
 
 pub const API: &str = "https://api.github.com";
@@ -88,8 +91,22 @@ pub struct Seen {
     pub through: Option<i64>,
 }
 
+/// An installation token this process has already minted, good until another request needs
+/// one closer to its real expiry than `EXPIRY_MARGIN` allows.
+struct Minted {
+    token: String,
+    expires_at: Timestamp,
+}
+
+/// How much slack a cached installation token keeps before its real expiry: minted fresh
+/// rather than risking it expiring between a request going out and GitHub answering it.
+const EXPIRY_MARGIN: i64 = 60;
+
 pub struct Github {
     client: reqwest::Client,
+    /// Installation tokens this process has minted, by Integration: GitHub charges nothing
+    /// extra for reusing one, and letting each expire unused would mint one per request.
+    tokens: Mutex<HashMap<IntegrationId, Minted>>,
 }
 
 impl Github {
@@ -100,7 +117,88 @@ impl Github {
                 .user_agent(concat!("kestrel/", env!("CARGO_PKG_VERSION")))
                 .build()
                 .context("building the client kestrel polls github with")?,
+            tokens: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// The installation token this Integration currently presents: the one already cached,
+    /// unless it is close enough to expiry that a request starting now might outlive it.
+    async fn token(
+        &self,
+        integration: &Integration,
+        github: &GithubConnection,
+    ) -> Result<String, Refused> {
+        let fresh_enough = Timestamp::now() + SignedDuration::from_secs(EXPIRY_MARGIN);
+        if let Some(minted) = self
+            .tokens
+            .lock()
+            .expect("the token cache is not poisoned")
+            .get(&integration.id)
+            && minted.expires_at > fresh_enough
+        {
+            return Ok(minted.token.clone());
+        }
+
+        let minted = self.mint(github).await?;
+        let token = minted.token.clone();
+        self.tokens
+            .lock()
+            .expect("the token cache is not poisoned")
+            .insert(integration.id, minted);
+
+        Ok(token)
+    }
+
+    /// Exchanges a freshly signed App JWT for an installation token, scoped to exactly the
+    /// installation the Integration was registered against.
+    async fn mint(&self, github: &GithubConnection) -> Result<Minted, Refused> {
+        let jwt = app_jwt(&github.credential).map_err(Refused::Failed)?;
+        let response = self
+            .client
+            .post(format!(
+                "{}/app/installations/{}/access_tokens",
+                github.api.trim_end_matches('/'),
+                github.credential.installation
+            ))
+            .header("accept", "application/vnd.github+json")
+            .header("x-github-api-version", VERSION)
+            .bearer_auth(jwt)
+            .send()
+            .await
+            .map_err(|error| {
+                Refused::Failed(anyhow!(
+                    "an installation token could not be minted: {error}"
+                ))
+            })?;
+
+        let minted: MintedToken = answered(response, "an installation token").await?;
+        Ok(Minted {
+            token: minted.token,
+            expires_at: minted.expires_at,
+        })
+    }
+
+    /// What GitHub calls the App's own identity: its bot account's login, `<slug>[bot]`,
+    /// learned once at registration so later work can recognise what the Integration itself
+    /// said. The only caller of this signs no cached token, since no Integration exists yet to
+    /// cache one against.
+    pub async fn app_bot_login(&self, api: &str, app: &App) -> Result<String> {
+        let jwt = app_jwt(app)?;
+        let response = self
+            .client
+            .get(format!("{}/app", api.trim_end_matches('/')))
+            .header("accept", "application/vnd.github+json")
+            .header("x-github-api-version", VERSION)
+            .bearer_auth(jwt)
+            .send()
+            .await
+            .context("the app's own identity could not be read")?;
+
+        let app_record: AppRecord = answered(response, "the app's own identity")
+            .await
+            .map_err(|refused| anyhow!("{refused}"))?;
+
+        Ok(format!("{}[bot]", app_record.slug))
     }
 
     /// Everything on the watched repository since the Integration was last polled through,
@@ -113,7 +211,7 @@ impl Github {
         let mut through = integration.polled_through;
 
         for page in 1..=PAGES {
-            let reported = self.page(github, &repository, page).await?;
+            let reported = self.page(integration, &repository, page).await?;
             let short = reported.len() < PER_PAGE;
             let ids = reported
                 .iter()
@@ -162,11 +260,12 @@ impl Github {
             let response = self
                 .request(
                     reqwest::Method::GET,
-                    github,
+                    integration,
                     &format!(
                         "repos/{repository}/issues/comments?sort=created&direction=desc&per_page={PER_PAGE}&page={page}"
                     ),
                 )
+                .await?
                 .send()
                 .await
                 .map_err(|error| {
@@ -207,16 +306,17 @@ impl Github {
 
     async fn page(
         &self,
-        github: &GithubConnection,
+        integration: &Integration,
         repository: &str,
         page: usize,
     ) -> Result<Vec<serde_json::Value>, Refused> {
         let response = self
             .request(
                 reqwest::Method::GET,
-                github,
+                integration,
                 &format!("repos/{repository}/issues/events?per_page={PER_PAGE}&page={page}"),
             )
+            .await?
             .send()
             .await
             .map_err(|error| {
@@ -239,9 +339,10 @@ impl Github {
         let response = self
             .request(
                 reqwest::Method::POST,
-                github,
+                integration,
                 &format!("repos/{repository}/issues/{subject}/comments"),
             )
+            .await?
             .json(&Body { body })
             .send()
             .await
@@ -269,11 +370,12 @@ impl Github {
         let response = self
             .request(
                 reqwest::Method::GET,
-                github,
+                integration,
                 &format!(
                     "repos/{repository}/issues/{subject}/comments?per_page={PER_PAGE}&since={since}"
                 ),
             )
+            .await?
             .send()
             .await
             .map_err(|error| {
@@ -300,9 +402,10 @@ impl Github {
         let response = self
             .request(
                 reqwest::Method::GET,
-                github,
+                integration,
                 &format!("repos/{repository}/issues/{number}"),
             )
+            .await?
             .send()
             .await
             .map_err(|error| {
@@ -322,9 +425,10 @@ impl Github {
         let response = self
             .request(
                 reqwest::Method::GET,
-                github,
+                integration,
                 &format!("repos/{repository}/pulls/{number}"),
             )
+            .await?
             .send()
             .await
             .map_err(|error| {
@@ -383,12 +487,13 @@ impl Github {
                     let response = self
                         .request(
                             reqwest::Method::GET,
-                            github,
+                            integration,
                             &format!(
                                 "repos/{}/issues/comments/{id}",
                                 repository(&github.repository).map_err(Refused::Failed)?
                             ),
                         )
+                        .await?
                         .send()
                         .await
                         .map_err(|error| {
@@ -438,9 +543,10 @@ impl Github {
             let response = self
                 .request(
                     reqwest::Method::GET,
-                    github,
+                    integration,
                     &format!("repos/{repository}/issues/{number}/dependencies/blocked_by?per_page={PER_PAGE}&page={page}"),
                 )
+                .await?
                 .send()
                 .await
                 .map_err(|error| Refused::Failed(anyhow!("the blockers on {work_item} could not be read: {error}")))?;
@@ -479,21 +585,65 @@ impl Github {
         )))
     }
 
-    fn request(
+    async fn request(
         &self,
         method: reqwest::Method,
-        github: &GithubConnection,
+        integration: &Integration,
         path: &str,
-    ) -> reqwest::RequestBuilder {
-        self.client
+    ) -> Result<reqwest::RequestBuilder, Refused> {
+        let github = integration.github().map_err(Refused::Failed)?;
+        let token = self.token(integration, github).await?;
+
+        Ok(self
+            .client
             .request(
                 method,
                 format!("{}/{path}", github.api.trim_end_matches('/')),
             )
             .header("accept", "application/vnd.github+json")
             .header("x-github-api-version", VERSION)
-            .bearer_auth(github.credential.presented_to_the_external_system())
+            .bearer_auth(token))
     }
+}
+
+#[derive(Serialize)]
+struct AppClaims {
+    iat: i64,
+    exp: i64,
+    iss: i64,
+}
+
+/// Signed fresh for every mint: GitHub accepts an App JWT for ten minutes at most, well short
+/// of the hour an installation token lasts, so nothing is gained by caching the JWT itself.
+fn app_jwt(app: &App) -> Result<String> {
+    let now = Timestamp::now().as_second();
+    let claims = AppClaims {
+        // A few seconds behind the control plane's own clock, as GitHub's docs ask, so a
+        // JWT is never rejected for arriving at a moment that, to GitHub, is still its past.
+        iat: now - 60,
+        exp: now + 540,
+        iss: app.id,
+    };
+    let key = jsonwebtoken::EncodingKey::from_rsa_pem(app.private_key().as_bytes())
+        .context("a github app's private key does not read as PEM")?;
+
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &claims,
+        &key,
+    )
+    .context("a github app jwt could not be signed")
+}
+
+#[derive(Deserialize)]
+struct MintedToken {
+    token: String,
+    expires_at: Timestamp,
+}
+
+#[derive(Deserialize)]
+struct AppRecord {
+    slug: String,
 }
 
 async fn answered<T: DeserializeOwned>(response: Response, asked_for: &str) -> Result<T, Refused> {
@@ -726,13 +876,10 @@ pub fn authored_by_own(integration: &Integration, occurrence: &Occurrence) -> bo
     let Ok(github) = integration.github() else {
         return false;
     };
-    let Some(own) = github.bot_login.as_deref() else {
-        return false;
-    };
 
     EventData::new(occurrence)
         .actor()
-        .is_some_and(|actor| actor.eq_ignore_ascii_case(own))
+        .is_some_and(|actor| actor.eq_ignore_ascii_case(&github.bot_login))
 }
 
 /// What an operator's dispatch of `issue` mints: about the issue, as anything GitHub said of it is.
@@ -957,10 +1104,10 @@ mod tests {
         GithubConnection {
             repository: "jtmthf/kestrel".to_owned(),
             api: API.to_owned(),
-            credential: crate::integration::credential::Token::held("nothing"),
+            credential: App::held(1, 2, "not a pem, but nothing here signs with it"),
+            bot_login: "kestrel[bot]".to_owned(),
             interval: jiff::SignedDuration::from_secs(60),
             signed: true,
-            bot_login: None,
         }
     }
 
@@ -1020,7 +1167,7 @@ mod tests {
     #[test]
     fn the_integration_recognises_its_own_voice_by_author() {
         let mut watched = watching();
-        watched.bot_login = Some("kestrel[bot]".to_owned());
+        watched.bot_login = "kestrel[bot]".to_owned();
         let integration = Integration {
             id: crate::domain::IntegrationId::generate(),
             organization: crate::domain::OrganizationId::generate(),
@@ -1032,14 +1179,25 @@ mod tests {
             comments_polled_through: None,
             last_event_refusal: None,
         };
-        let mut occurrence = commented("done as the work asked");
-        occurrence.data["user"]["login"] = serde_json::json!("Kestrel[Bot]");
+        for shape in [
+            serde_json::json!({ "actor": { "login": "Kestrel[Bot]" } }),
+            serde_json::json!({ "user": { "login": "Kestrel[Bot]" } }),
+            serde_json::json!({ "sender": { "login": "Kestrel[Bot]" } }),
+            serde_json::json!({ "comment": { "user": { "login": "Kestrel[Bot]" } } }),
+        ] {
+            let mut occurrence = commented("done as the work asked");
+            occurrence.data = shape.clone();
 
-        assert!(authored_by_own(&integration, &occurrence));
+            assert!(
+                authored_by_own(&integration, &occurrence),
+                "the shape {shape} was not recognised"
+            );
+        }
 
-        occurrence.data["user"]["login"] = serde_json::json!("jtmthf");
-
-        assert!(!authored_by_own(&integration, &occurrence));
+        assert!(!authored_by_own(
+            &integration,
+            &commented("said by someone else")
+        ));
     }
 
     fn commented(body: &str) -> Occurrence {

@@ -7,12 +7,13 @@
 		"suspicious": "error",
 		"perf": "error"
 	},
-	"ignorePatterns": ["src/routeTree.gen.ts", "src/operator/generated"],
+	"ignorePatterns": ["src/routeTree.gen.ts", "src/operator/generated", "acceptance"],
 	"rules": {
 		"react/react-in-jsx-scope": "off",
 		"react/rules-of-hooks": "error",
 		"react/exhaustive-deps": "error",
 		"typescript/no-explicit-any": "error",
+		"typescript/no-unnecessary-condition": "error",
 		"shadcn/no-restyle": [
 			"error",
 			{

@@ -62,7 +62,7 @@ export function currentUnit(session: Session | null | undefined): string | undef
 	if (!session) return undefined;
 	const running =
 		session.tools.find((tool) => tool.status !== "completed" && tool.status !== "failed") ??
-		session.tools[0];
+		session.tools.at(0);
 	if (running) return running.title;
 	if (session.preparing) return preparingStep(session.preparing);
 	if (session.thought_buffering) return "thinking";
