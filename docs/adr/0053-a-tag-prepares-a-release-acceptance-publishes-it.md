@@ -24,7 +24,9 @@ images. Published version tags and artifacts are immutable: failed acceptance le
 in draft, and a reviewed patch release supplies the next candidate. The `0.4` gate accepts the
 successful tagged `0.4.x` release rather than requiring replacement of a failed `v0.4.0`.
 
-This supersedes only ADR-0008's amd64-only publication consequence; its dynamic-linking decision
-stands. Native builds buy coverage of both host architectures without carrying an emulation-based
-release build pipeline. Separating artifact preparation from release publication keeps acceptance
-honest while giving it the exact artifacts people will install.
+This supersedes ADR-0008's amd64-only publication consequence and ADR-0027's publication timing
+and image tag policy. ADR-0008's dynamic-linking decision and ADR-0027's CI gate, merge queue,
+cache trust and clean-checkout build decisions stand. Native builds buy coverage of both host
+architectures without carrying an emulation-based release build pipeline. Separating artifact
+preparation from release publication keeps acceptance honest while giving it the exact artifacts
+people will install.
