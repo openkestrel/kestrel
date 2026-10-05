@@ -4,15 +4,13 @@ A GitHub integration records repository events and can post results back to an i
 
 ## Register the repository
 
+Create the App through Kestrel:
+
 ```sh
-kestrel integration register github origin \
-  --repository openkestrel/kestrel \
-  --app-id 123456 \
-  --installation 789012 \
-  --private-key @path/to/private-key.pem
+kestrel integration create-github-app origin --repository openkestrel/kestrel --app-organization openkestrel
 ```
 
-Kestrel polls for events every minute. The first poll reads one page, establishing a starting point rather than replaying the repository's history. If GitHub can reach the control plane, add `--webhook-secret` and configure the repository webhook at the path shown by `kestrel integration list` (`/webhooks/<integration id>`, content type `application/json`). With a webhook secret, Kestrel uses deliveries instead of polling and verifies `X-Hub-Signature-256`.
+Follow the printed URL to create and install the App. See [Create the GitHub App](../../USAGE.md#create-the-github-app) for localhost callbacks and optional public webhooks. Kestrel polls every minute when no webhook base is supplied; the first poll establishes a starting point instead of replaying repository history. Existing Apps can still be registered with `kestrel integration register github` and their App ID, installation ID, and private key.
 
 Kestrel learns the App's own login (`<slug>[bot]`) when the Integration is registered and never takes what that identity said — kestrel's comments and its agents' alike — as input or as a command, whatever a trigger's filter admits.
 

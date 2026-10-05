@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod app_flow;
 pub mod integration;
 pub mod organization;
 pub mod profile;
@@ -164,6 +165,10 @@ impl Tx<'_> {
 
     pub fn queue(&mut self) -> Queue<'_> {
         Queue::over(&mut self.transaction, &mut self.touched)
+    }
+
+    pub fn app_flows(&mut self) -> app_flow::AppFlows<'_> {
+        app_flow::AppFlows::over(&mut self.transaction, self.keyring)
     }
 
     pub fn integrations(&mut self) -> Integrations<'_> {

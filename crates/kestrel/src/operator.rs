@@ -62,6 +62,7 @@ pub const PROFILE_VARIABLE: &str =
 /// One segment, with the path's slashes percent-encoded in it.
 pub const PROFILE_FILE: &str =
     "/operator/organizations/{organization}/profiles/{profile}/files/{path}";
+pub const GITHUB_APP: &str = "/operator/organizations/{organization}/github-app";
 pub const INTEGRATIONS: &str = "/operator/organizations/{organization}/integrations";
 pub const EVENT_REFUSAL: &str =
     "/operator/organizations/{organization}/integrations/{integration}/event-refusal";
@@ -259,6 +260,10 @@ pub fn router(
             put(hold_profile_file).delete(forget_profile_file),
         )
         .route(INTEGRATIONS, get(integrations).post(register_integration))
+        .route(GITHUB_APP, post(start_github_app))
+        .route(integration::manifest::PAGE, get(github_app_page))
+        .route(integration::manifest::CALLBACK, get(github_app_callback))
+        .route(integration::manifest::INSTALLED, get(github_app_installed))
         .route(EVENT_REFUSAL, delete(acknowledge_event_refusal))
         .route(EVENTS, get(events))
         .route(EVENT, get(event))
@@ -1412,6 +1417,67 @@ async fn forget_profile_file(
     profile::forget(&control_plane.store, &organization, &profile, &entry).await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct GithubAppQuery {
+    state: String,
+    code: Option<String>,
+}
+
+async fn start_github_app(
+    State(control_plane): State<ControlPlane>,
+    Path(organization): Path<String>,
+    registration: Result<Json<integration::manifest::Start>, JsonRejection>,
+) -> Result<(StatusCode, Json<serde_json::Value>), Refused> {
+    let Json(registration) = registration?;
+    named(&registration.name)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            integration::manifest::start(&control_plane.store, &organization, registration).await?,
+        ),
+    ))
+}
+
+fn setup_page(html: String) -> Response {
+    const POLICY: &str = "default-src 'none'; form-action https://github.com; frame-ancestors 'none'; base-uri 'none'";
+    let headers = [
+        ("cache-control", "no-store"),
+        ("referrer-policy", "no-referrer"),
+        ("content-security-policy", POLICY),
+    ];
+    (headers, axum::response::Html(html)).into_response()
+}
+
+async fn github_app_page(
+    State(cp): State<ControlPlane>,
+    Query(query): Query<GithubAppQuery>,
+) -> Result<Response, Refused> {
+    Ok(setup_page(
+        integration::manifest::page(&cp.store, &query.state).await?,
+    ))
+}
+
+async fn github_app_callback(
+    State(cp): State<ControlPlane>,
+    Query(query): Query<GithubAppQuery>,
+) -> Result<Response, Refused> {
+    let code = query
+        .code
+        .ok_or_else(|| Refused::Unprocessable("GitHub did not supply a manifest code".into()))?;
+    Ok(setup_page(
+        integration::manifest::callback(&cp.store, &Github::dialling_out()?, &query.state, &code)
+            .await?,
+    ))
+}
+
+async fn github_app_installed(
+    State(cp): State<ControlPlane>,
+    Query(query): Query<GithubAppQuery>,
+) -> Result<Response, Refused> {
+    integration::manifest::installed(&cp.store, &Github::dialling_out()?, &query.state).await?;
+    Ok(setup_page("<!doctype html><title>GitHub App ready</title><h1>The GitHub Integration is ready</h1><p>You can close this tab.</p>".into()))
 }
 
 #[derive(Deserialize)]

@@ -110,6 +110,74 @@ pub struct Github {
 }
 
 impl Github {
+    pub async fn convert_manifest(
+        &self,
+        api: &str,
+        code: &str,
+    ) -> Result<super::manifest::CreatedApp> {
+        let response = self
+            .client
+            .post(format!(
+                "{}/app-manifests/{code}/conversions",
+                api.trim_end_matches('/')
+            ))
+            .header("accept", "application/vnd.github+json")
+            .header("x-github-api-version", VERSION)
+            .send()
+            .await
+            .map_err(|_| anyhow!("the GitHub manifest exchange could not be reached"))?;
+        if !response.status().is_success() {
+            bail!(
+                "GitHub refused the manifest exchange ({})",
+                response.status()
+            );
+        }
+        response
+            .json()
+            .await
+            .map_err(|_| anyhow!("GitHub returned an invalid App configuration"))
+    }
+
+    pub async fn repository_installation(
+        &self,
+        api: &str,
+        app: &App,
+        repository: &str,
+    ) -> Result<i64> {
+        #[derive(Deserialize)]
+        struct Installation {
+            id: i64,
+            app_id: i64,
+        }
+        let response = self
+            .client
+            .get(format!(
+                "{}/repos/{repository}/installation",
+                api.trim_end_matches('/')
+            ))
+            .header("accept", "application/vnd.github+json")
+            .header("x-github-api-version", VERSION)
+            .bearer_auth(app_jwt(app)?)
+            .send()
+            .await
+            .context("checking the App installation")?;
+        if !response.status().is_success() {
+            bail!(Declined::Unacceptable(
+                "install the App on the requested repository before finishing setup".into()
+            ));
+        }
+        let installation: Installation = response
+            .json()
+            .await
+            .context("reading the App installation")?;
+        if installation.app_id != app.id || installation.id <= 0 {
+            bail!(Declined::Unacceptable(
+                "the repository installation does not belong to this App".into()
+            ));
+        }
+        Ok(installation.id)
+    }
+
     pub fn dialling_out() -> Result<Self> {
         Ok(Self {
             client: reqwest::Client::builder()

@@ -265,6 +265,23 @@ impl ProfileEntry {
 
 #[derive(Debug, Subcommand)]
 enum IntegrationCommand {
+    /// Create a GitHub App and register its repository Integration through the browser
+    CreateGithubApp {
+        name: String,
+        /// Create the private App under this GitHub organization instead of your personal account
+        #[arg(long)]
+        app_organization: Option<String>,
+        #[arg(long)]
+        repository: String,
+        /// Browser-reachable loopback origin (defaults to the control-plane URL)
+        #[arg(long)]
+        callback_base: Option<String>,
+        /// Public HTTPS origin of the webhook listener; omit to poll GitHub
+        #[arg(long)]
+        webhook_base: Option<String>,
+        #[arg(long, env = "KESTREL_GITHUB_API", hide = true)]
+        api: Option<String>,
+    },
     /// Register an Integration
     #[command(subcommand)]
     Register(RegisterCommand),
@@ -1017,6 +1034,27 @@ async fn run() -> Result<()> {
             let organization = scoping.resolve().await?.organization;
             api.delete(&entry.path(&organization, &name), &json!({}))
                 .await?;
+        }
+        Command::Integration(IntegrationCommand::CreateGithubApp {
+            name,
+            app_organization,
+            repository,
+            callback_base,
+            webhook_base,
+            api: github_api,
+        }) => {
+            let organization = scoping.resolve().await?.organization;
+            let result = api
+                .post(
+                    &["organizations", &organization, "github-app"],
+                    &json!({
+                        "name": name, "repository": repository,
+                        "callback_base": callback_base.unwrap_or_else(|| control_plane.to_string()),
+                        "webhook_base": webhook_base, "api": github_api, "app_organization": app_organization,
+                    }),
+                )
+                .await?;
+            show(&presentation, &view::View::Value("url"), &result)?;
         }
         Command::Integration(IntegrationCommand::Register(register)) => {
             let organization = scoping.resolve().await?.organization;
