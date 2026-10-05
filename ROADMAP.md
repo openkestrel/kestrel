@@ -254,6 +254,30 @@ at a time. Filter syntax is checked before any write; errors go to stderr and no
 Field projection through `--json id,name` is removed. Users can still pipe the complete JSON to jq
 ([papercut scope decision](https://github.com/openkestrel/kestrel/issues/494)).
 
+**Contributing is a second DevEx track.** On the contributor baseline's workloads and comparable
+conditions, `0.4` targets a median of at most 120 seconds from an empty target to the first passing
+supervisor-backed test (downloads excluded), 3 seconds for a warm repeat, and 300 seconds for an
+executed Rust CI job. Each median uses three comparable runs; CI cache conditions are recorded and
+reused gates are excluded. A focused test after editing one test module is also measured against
+the original topology, so consolidation's rebuild cost is visible. Missing a budget keeps the
+contributor slice open for investigation; timing does not become a per-run CI failure. This track
+has its own validation and does not change the browser-only and SSH CLI-only operator acceptance
+journeys ([contributor targets decision](https://github.com/openkestrel/kestrel/issues/495)).
+
+The ordinary control-plane integration tests compile as one binary; heavy suites remain separately
+selectable. Fixtures are independent under ordinary `cargo test`, and CI keeps nextest's
+process-per-test isolation. Executable helpers are prepared once per invocation with Cargo
+establishing freshness; direct `cargo test` needs no manual prebuild. Workspace code defaults to
+line-table debuginfo and dependencies to none, with a documented full-debug override. Existing
+nextest and caching stay; mold, sccache and cargo-hakari wait for measurements that justify them.
+
+The test harness keeps its boot and lifecycle core. Common fixtures replace duplicated setup,
+and necessary SQL fault injection and observation sit behind a small typed interface. Affected
+tests migrate and replaced wrappers are removed; wholesale replacement of the operation layer
+with scenario entry points is deferred. A one-page `CONTRIBUTING.md` covers pinned tools, one
+passing test, narrow checks and filtering, helper preparation, target-directory isolation,
+hermetic Git fixtures, the full-debug override and CI as the full gate.
+
 ### 0.5 — kestrel asks before it acts
 
 kestrel does work you would not have let it do unsupervised: policy enforced at the execution layer
