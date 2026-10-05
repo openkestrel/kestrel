@@ -202,6 +202,18 @@ certificate to trust: a tab holds one event stream and subscribes over requests
 plane that cannot start says why in one line, and the Client says it is not running rather than
 waiting for it to be healthy.
 
+Image capability checks resolve the configured image again before reporting availability or
+accepting work, caching labels by immutable image identity. Missing images and daemon inspection
+failures leave the control plane reachable and report unavailable, without a stale positive result
+or an automatic pull. An incompatible store names the cause and an explicitly destructive reset
+command; startup never deletes saved data. The operator API root names the configured Client URL
+([first-run images decision](https://github.com/openkestrel/kestrel/issues/532)).
+
+The browser polls sign-in relay progress so each tab retains one SSE connection. Transcript
+subscriptions resume from their own cursors; Organization notices cause a refetch after reconnect.
+Plain-HTTP verification covers five followed tabs with ordinary requests, respecting ADR-0045's
+accepted connection limit ([first-run images decision](https://github.com/openkestrel/kestrel/issues/532)).
+
 **Every surface guides, and none is required.** The operator API is the one surface; the CLI and the
 browser are each complete Clients of it, and each walks a person through the same steps: name the
 **Operator**, choose a harness and sign in, connect GitHub and choose a repository, write a Brief
