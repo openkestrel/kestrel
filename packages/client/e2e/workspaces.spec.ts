@@ -249,7 +249,9 @@ test("queued Sessions have unknown order without dispatch configuration, and not
 	const first = await opened(request, "do the first thing");
 	await page.goto(`/organizations/${ORGANIZATION}`);
 
-	await expect(page.locator("[data-queue-header]")).toContainText("Slots 0 (no limit)");
+	await expect(page.locator("[data-queue-header]")).toContainText(
+		"Slots no dispatch configuration recorded · 0 occupied",
+	);
 	await expect(page.locator("[data-queue-header]")).toContainText("Instances 0 (no limit)");
 
 	const queuedRow = rows(page).filter({ hasText: first.name });
@@ -261,6 +263,55 @@ test("queued Sessions have unknown order without dispatch configuration, and not
 	const second = await opened(request, "do the second thing");
 	await expect(rows(page).filter({ hasText: second.name })).toContainText("Queued");
 	await expect(rows(page).filter({ hasText: first.name })).toContainText("Queued");
+});
+
+test("the queue header names the local occupants and counted Instances", async ({ page }) => {
+	const reads = new Reads();
+	reads.workspaces = [workspace(5)];
+	reads.queue = queue({
+		work_role: { active_work_slots: 2, serialized_harnesses: [], driver: "local" },
+		active_work: {
+			limit: 2,
+			occupied: 3,
+			occupants: [
+				{
+					name: "noble-falcon-xeszjeod",
+					workspace: id(5),
+					agent: "builder",
+					phase: "working",
+					enqueued_at: "2026-09-30T10:00:00Z",
+				},
+				{
+					name: "merry-fox-mohmpkmk",
+					workspace: id(6),
+					agent: "builder",
+					phase: "trailing",
+					enqueued_at: "2026-09-30T10:00:00Z",
+				},
+			],
+			elsewhere: 1,
+		},
+		instances: { limit: 2, count: 2, counted: ["local-1", "local-2"] },
+	});
+	await reads.install(page);
+
+	await page.setViewportSize({ width: 375, height: 667 });
+	await page.goto(`/organizations/${ORGANIZATION}`);
+
+	const header = page.locator("[data-queue-header]");
+	await expect(header).toContainText(
+		"Slots 3/2: noble-falcon-xeszjeod, merry-fox-mohmpkmk · 1 elsewhere",
+	);
+	await expect(header).toContainText("Instances 2/2: local-1, local-2");
+	await expect(header).toContainText("local");
+
+	const width = await page.evaluate(() => ({
+		document: document.documentElement.scrollWidth,
+		body: document.body.scrollWidth,
+		viewport: window.innerWidth,
+	}));
+	expect(width.document, "the page scrolls horizontally").toBeLessThanOrEqual(width.viewport);
+	expect(width.body, "the body scrolls horizontally").toBeLessThanOrEqual(width.viewport);
 });
 
 test("attention outranks working, waiting and queued", async ({ page }) => {

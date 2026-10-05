@@ -6,6 +6,7 @@ import { buttonVariants } from "#/components/ui/button";
 import { Skeleton } from "#/components/ui/skeleton";
 import type { Queue } from "#/operator/generated";
 import { queueQuery, workspacesQuery } from "#/operator/queries";
+import { instancesLine, slotsLine } from "#/operator/queue-limits";
 import { order } from "#/operator/workspace-list";
 import { PaneHeading } from "./workbench";
 import { WorkspaceRowView } from "./workspace-row";
@@ -53,22 +54,16 @@ export function WorkspacesPane({ organization }: { organization: string }) {
 function QueueHeader({ queue }: { queue: Queue | undefined }) {
 	if (!queue) return null;
 
-	const slots = queue.active_work;
-	const instances = queue.instances;
-
 	return (
 		<div
 			data-queue-header
-			className="flex flex-wrap gap-x-3 border-b px-3 py-2 text-muted-foreground text-xs"
+			className="flex flex-wrap gap-x-3 gap-y-0.5 border-b px-3 py-2 text-muted-foreground text-xs"
 		>
-			<span data-slots>
-				Slots {slots.occupied}
-				{slots.limit === null ? " (no limit)" : `/${slots.limit}`}
-				{slots.elsewhere > 0 ? ` · ${slots.elsewhere} elsewhere` : ""}
+			<span data-slots className="min-w-0 wrap-break-word">
+				{slotsLine(queue)}
 			</span>
-			<span data-instances>
-				Instances {instances.count}
-				{instances.limit === null ? " (no limit)" : `/${instances.limit}`}
+			<span data-instances className="min-w-0 wrap-break-word">
+				{instancesLine(queue)}
 			</span>
 			{queue.work_role && <span data-driver>{queue.work_role.driver}</span>}
 		</div>
