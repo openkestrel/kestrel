@@ -159,6 +159,11 @@ supervisor ([ADR-0026](../adr/0026-kestrel-carries-named-credentials-never-a-run
 
 An accepted ADR is a decision, not a description. These are decided and not yet built:
 
+- **Release preparation and acceptance** ([ADR-0053](../adr/0053-a-tag-prepares-a-release-acceptance-publishes-it.md)):
+  tag publishing still races Conformance, covers only two images on amd64, and has no draft-release
+  acceptance gate, CLI distribution or generated digest-pinned release Compose. Main still moves
+  `latest`; the decided release process reserves it for accepted releases.
+
 - **Typed next steps** ([ADR-0052](../adr/0052-a-refusal-carries-its-next-steps.md)): refusal
   sentences still determine some statuses and CLI corrections; readiness and structured Session
   failure evidence do not yet carry the shared diagnostic contract.

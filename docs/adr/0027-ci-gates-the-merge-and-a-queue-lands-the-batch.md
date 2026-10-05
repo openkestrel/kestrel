@@ -3,6 +3,11 @@
 > **Amended by [ADR-0042](0042-a-tree-that-passed-the-gate-is-not-run-again.md).** A queue entry
 > whose exact tree passed the gate within the day is not run again; every other entry still is.
 
+> **Publication timing and image tag policy superseded by
+> [ADR-0053](0053-a-tag-prepares-a-release-acceptance-publishes-it.md).** Main publishes `main` and
+> commit-SHA tags; checked tagged artifacts prepare a draft release, and acceptance alone moves
+> `latest`. The CI gate, merge queue, cache trust and clean-checkout build decisions stand.
+
 kestrel's own changes arrive several at a time: a person keeps three or four worktrees in flight, each
 opens a pull request, and integrating them is a serial chore — merge one, `main` moves, rebase the
 next, wait for its checks again. The waiting was not the expensive part; the recurring re-validation
@@ -58,7 +63,8 @@ Four platform constraints shape the design, and each is recorded because a reade
 - The arm64 image check runs on an arm64 machine instead of emulating one, which removes most of its
   runtime.
 - `publish` keeps its from-a-clean-checkout build and its reproducibility, and runs when the image's
-  inputs change and on tags, so `latest` tracks the image inputs rather than every push.
+  inputs change and on tags, so `latest` tracks the image inputs rather than every push. The
+  publication timing and tag policy in this consequence are superseded by ADR-0053.
 - Change detection has a default: a path matching no job's inputs runs everything. A required check
   that silently does not run is worse than a slow one.
 - The gate is a repository ruleset on the default branch, applied once through the API, because

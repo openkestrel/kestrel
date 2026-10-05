@@ -1,5 +1,8 @@
 # The control plane ships dynamically linked
 
+The amd64-only publication consequence is superseded by
+[ADR-0053](0053-a-tag-prepares-a-release-acceptance-publishes-it.md); the linking decision stands.
+
 The `kestrel` image is a dynamically linked binary on `debian:trixie-slim`. Rung `0.1` does not
 ship a static musl build, and `FROM scratch` is not where the image is heading.
 
