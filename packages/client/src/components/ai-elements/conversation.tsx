@@ -73,6 +73,7 @@ export const ConversationScrollButton = ({
 	return (
 		!isAtBottom && (
 			<Button
+				aria-label="Scroll to bottom"
 				className={cn(
 					"absolute bottom-4 left-[50%] translate-x-[-50%] rounded-full dark:bg-background dark:hover:bg-muted",
 					className,
@@ -83,7 +84,7 @@ export const ConversationScrollButton = ({
 				variant="outline"
 				{...props}
 			>
-				<ArrowDownIcon className="size-4" />
+				<ArrowDownIcon aria-hidden className="size-4" />
 			</Button>
 		)
 	);

@@ -12,6 +12,7 @@ import {
 	toolState,
 } from "#/operator/transcript-view";
 import { PayloadText } from "./payload-text";
+import { ScrollablePre } from "./scrollable-pre";
 
 export type Disclosure = "line" | "steps" | "full";
 
@@ -114,7 +115,9 @@ function content(entry: Delivered, mode: Disclosure, row: Row): ReactNode {
 					summary={<p className="text-muted-foreground">{text}</p>}
 					detail={
 						typeof value.text === "string" ? (
-							<pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">{value.text}</pre>
+							<ScrollablePre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">
+								{value.text}
+							</ScrollablePre>
 						) : null
 					}
 				/>
@@ -242,9 +245,9 @@ function Field({ label, value, ...row }: { label: string; value: unknown } & Row
 			{reference ? (
 				<PayloadText {...row} reference={reference} />
 			) : (
-				<pre className="max-h-64 overflow-auto rounded-md border p-2 text-xs">
+				<ScrollablePre className="max-h-64 overflow-auto rounded-md border p-2 text-xs">
 					{JSON.stringify(value, null, 2)}
-				</pre>
+				</ScrollablePre>
 			)}
 		</div>
 	);

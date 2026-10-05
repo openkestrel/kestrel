@@ -6,6 +6,7 @@ import { size } from "#/operator/format";
 import type { PayloadReference } from "#/operator/generated";
 import { transcriptPayloadQuery } from "#/operator/queries";
 import { Refused } from "#/operator/transport";
+import { ScrollablePre } from "./scrollable-pre";
 
 export function PayloadText({
 	organization,
@@ -41,5 +42,9 @@ export function PayloadText({
 		);
 	}
 
-	return <pre className="max-h-64 overflow-auto rounded-md border p-2 text-xs">{payload.data}</pre>;
+	return (
+		<ScrollablePre className="max-h-64 overflow-auto rounded-md border p-2 text-xs">
+			{payload.data}
+		</ScrollablePre>
+	);
 }
