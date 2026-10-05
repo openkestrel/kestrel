@@ -631,7 +631,6 @@ async fn authenticated(
     Ok((linked, digest))
 }
 
-/// A Session whose lease has lapsed is refused as if it had ended, since the sweep is about to end it.
 async fn carried(
     control_plane: &ControlPlane,
     linked: &Linked,

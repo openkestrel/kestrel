@@ -137,14 +137,14 @@ The stream polls `Store` every 100 ms; nothing notifies it.
 ## Reports
 
 `work::Report`, one per POST. `connected` and `heartbeat` are about the Instance; every other report
-names its Session, which must be one the Instance carries (unended, lease not passed), or it is
+names its Session, which must be one the Instance carries (unended on that Instance), or it is
 answered `410` and the supervisor lets that Session go. Each is applied in one transaction with its
 effects (ADR-0004).
 
 | Report | Numbered | Effect |
 | --- | --- | --- |
 | `connected {version}` | no | Records the supervisor version on the Instance and its live Sessions; an unbriefed one stops provisioning. |
-| `heartbeat` | no | Records the supervisor reached the link; extends the live Sessions' leases to now + 2 min, never one already passed. |
+| `heartbeat {session?}` | no | Records the supervisor reached the link; extends only the named live Session's lease on that Instance to now + 2 min, even if its due time has passed. |
 | `stderr {lines}` | no | Logged to the operator, never the Transcript. |
 | `ready` | no | An unbriefed Session's harness is up and its conversation open: records `harness_ready`. |
 | `started` | yes | Appends `SessionStarted`. |
@@ -197,9 +197,10 @@ answers `503` with `Retry-After: 1`.
 - The lease is what outlives a control-plane restart. A supervisor keeps its harness and
   conversation across a lost link and reconnects with its instruction cursor and unacknowledged
   reports ([ADR-0024](../adr/0024-a-run-spans-prompt-turns.md)).
-- The lease sweep ends any Working or Waiting Session whose lease has passed, as failed.
+- Only the lease sweep judges a lease passed: it ends a live Session as failed in the transaction that finds its expiry.
+- Each pass records its time in Store. After a gap over 10 s, restart included, it persists the gap and extends live leases to at least 30 s from now before judging expiry (ADR-0054). A Session that still expires names the gap and whether its supervisor reached the link afterward.
 - A supervisor that has not reached the link for longer than the lease ends the Session's harness
-  and lets the Session go, since the control plane has already let it go. It keeps redialing for
+  and lets the Session go, even if the control plane later grants grace. Heartbeats then carry no Session and cannot renew its lease. It keeps redialing for
   as long as the Instance lives.
 - A supervisor the work role holds that exits fails the Session it was carrying at once. After a
   restart, one that has died is found by its lease and replaced before the next Session.

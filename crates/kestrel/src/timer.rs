@@ -299,13 +299,41 @@ async fn sweep(
     let mut expired = Vec::new();
     let mut closed = Vec::new();
 
-    for session in tx.workspaces().expired_leases(Timestamp::now()).await? {
+    let now = Timestamp::now();
+    if let Some(gap) = tx.lease_sweep().record_pass(now).await? {
+        warn!(start = %gap.start, end = %gap.end, "the control plane was not running");
+        tx.workspaces().grace_leases(now + work::GRACE).await?;
+    }
+    let gap = tx.lease_sweep().gap().await?;
+    for session in tx.workspaces().expired_leases(now).await? {
+        let mut exit = work::expired_lease();
+        if let Some(gap) = gap
+            && session.lease_expires_at.is_some_and(|at| at >= gap.end)
+        {
+            let reached = if let Some(instance) = session.instance.as_deref() {
+                tx.workspaces()
+                    .supervisor(instance)
+                    .await?
+                    .and_then(|supervisor| supervisor.reached_at)
+            } else {
+                None
+            };
+            let because = if reached.is_some_and(|at| at > gap.end) {
+                format!(
+                    "the supervisor came back after the control plane was not running from {} to {}, no longer carrying the session",
+                    gap.start, gap.end
+                )
+            } else {
+                format!(
+                    "the control plane was not running from {} to {}, and the supervisor did not reach it within 30 s after",
+                    gap.start, gap.end
+                )
+            };
+            exit = Exit::Failed { because };
+        }
         work::close_lost_units(&mut tx, &session, summaries).await?;
         closed.push(session.clone());
-        expired.push((
-            session.id,
-            work::ending(&mut tx, &session, work::expired_lease()).await?,
-        ));
+        expired.push((session.id, work::ending(&mut tx, &session, exit).await?));
     }
     tx.commit().await?;
 
