@@ -409,7 +409,8 @@ words from drifting.
 - Only a session whose workspace belongs to a **campaign** may enqueue work. A campaign-less session
   enqueues nothing.
 - A queued session is dispatched **at most once**. A lease that expires marks its session failed and
-  never re-dispatches it.
+  never re-dispatches it. Time the control plane was not running is not held against a lease
+  beyond a bounded grace after it returns.
 - A session may be **waiting** with its ACP conversation and instance intact. Waiting holds no
   active-work slot; the next prompt continues that same session. A turn ending does not end a
   session.
