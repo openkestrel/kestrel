@@ -32,6 +32,13 @@ plane adds the Session's harness, image and sign-in context and marks only the s
 used as needing attention. Expired and not-covered states require evidence establishing those
 diagnoses; arbitrary harness prose is diagnostic text, not authority to change sign-in state.
 
+The control plane records a non-secret identity and revision of the sign-in material actually
+handed to a Session. A delayed failure marks current saved material as needing attention only
+when that revision is still current; replacing the material does not erase the historical Session
+diagnosis. Attribution follows the material supplied at execution, rather than assuming that the
+material present at enqueue was used. This refinement was agreed in
+[Specify the refusal contract's 0.4 build tickets](https://github.com/openkestrel/kestrel/issues/521).
+
 ## Considered options
 
 - **Clients infer fixes from refusal kinds.** This duplicates repair knowledge and can make the
