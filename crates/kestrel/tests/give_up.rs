@@ -1,7 +1,3 @@
-//! A supervisor carries a Session through a control plane that comes back. Past the Session's lease
-//! the control plane has let it go, so the supervisor ends its harness and keeps redialling for
-//! its Instance, and a control plane that returns takes no word for a lease it let lapse.
-
 mod support;
 
 use std::time::Duration;
@@ -140,10 +136,8 @@ async fn a_lease_that_passes_while_the_control_plane_is_away_ends_the_harness_an
     kestrel.teardown().await;
 }
 
-/// A control plane coming back takes no supervisor's word for a Session whose lease it has let
-/// lapse: a heartbeat holds nothing out for it, and a report about it is gone.
 #[tokio::test]
-async fn a_session_whose_lease_has_passed_is_not_held_out_again() {
+async fn an_overdue_lease_accepts_reports_until_the_sweep_ends_its_session() {
     let kestrel = Kestrel::boot_serving_alone().await;
     let workspace = a_workspace(&kestrel).await;
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
@@ -165,7 +159,7 @@ async fn a_session_whose_lease_has_passed_is_not_held_out_again() {
     assert_eq!(alive.status(), StatusCode::ACCEPTED);
     assert!(kestrel.session(session.id).await.lease_expires_at <= Some(Timestamp::now()));
 
-    let refused = link
+    let accepted = link
         .report(
             &on.instance,
             Some(&on.credential),
@@ -176,12 +170,8 @@ async fn a_session_whose_lease_has_passed_is_not_held_out_again() {
             },
         )
         .await;
-    assert_eq!(refused.status(), StatusCode::GONE);
-    let said = refused.text().await.expect("a refusal says why");
-    assert!(
-        said.contains("lease"),
-        "the refusal is not about the lease: {said}"
-    );
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+    assert!(kestrel.session(session.id).await.started_at.is_some());
 
     let kestrel = kestrel.kill_and_restart().await;
     let ended = until(&kestrel, session.id, "was swept", |session| {
@@ -194,11 +184,24 @@ async fn a_session_whose_lease_has_passed_is_not_held_out_again() {
         ended.exit
     );
 
+    let refused = Link::to(&kestrel.link())
+        .report(
+            &on.instance,
+            Some(&on.credential),
+            &Reported {
+                session: Some(session.id),
+                seq: Some(2),
+                report: Report::Started,
+            },
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::GONE);
+
     kestrel.teardown().await;
 }
 
 #[tokio::test]
-async fn a_session_refused_on_a_heartbeat_is_let_go_without_dropping_the_link() {
+async fn a_live_session_with_an_overdue_lease_is_renewed_without_dropping_the_link() {
     let kestrel = Kestrel::boot_serving_alone().await;
     let workspace = a_workspace(&kestrel).await;
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
@@ -207,7 +210,6 @@ async fn a_session_refused_on_a_heartbeat_is_let_go_without_dropping_the_link() 
         Supervisor::provision_playing(&kestrel.link(), &on, Script::ReportsThenWaits);
     supervisor.wait_until_it_says("reported connected").await;
     kestrel.start(&session, supervisor.harness()).await;
-    // Its last report before the turn waits forever, so from here only a heartbeat speaks of it.
     supervisor
         .wait_until_it_says(&format!("reported usage for {}", session.id))
         .await;
@@ -215,12 +217,21 @@ async fn a_session_refused_on_a_heartbeat_is_let_go_without_dropping_the_link() 
     kestrel
         .lease_until(&session, Timestamp::now() - SignedDuration::from_secs(1))
         .await;
-    supervisor.lets_go_of(session.id).await;
+    let renewed = until(
+        &kestrel,
+        session.id,
+        "renewed its overdue lease",
+        |session| session.lease_expires_at > Some(Timestamp::now() + SignedDuration::from_secs(60)),
+    )
+    .await;
+    assert_eq!(renewed.state, SessionState::Working);
+    assert!(supervisor.is_still_running(Duration::from_secs(1)).await);
     assert!(
         !supervisor.said("lost the link"),
-        "a refused session took the link down with it; the supervisor said:\n{}",
+        "renewing an overdue lease took the link down; the supervisor said:\n{}",
         supervisor.everything_it_said()
     );
 
+    supervisor.destroy();
     kestrel.teardown().await;
 }

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::harness::{Conversation, Harness, Turn};
 use crate::link::{Answer, AnswerBody, Checkout, Down, Exit, Instruction, Link, Read, Report};
@@ -55,10 +55,18 @@ impl Diagnostics for Stderr {
 struct Supervising {
     cursor: Option<String>,
     carrying: Option<Carrying>,
+    heartbeat_session: watch::Sender<Option<String>>,
     checkout: Option<Checkout>,
     summary: Option<Vec<link::WorkRepository>>,
     interrupt_deadline: Duration,
     quiet_period: Duration,
+}
+
+impl Supervising {
+    fn take_carrying(&mut self) -> Option<Carrying> {
+        self.heartbeat_session.send_replace(None);
+        self.carrying.take()
+    }
 }
 
 /// One Session's part of the supervisor's life. The conversation goes on whether or not the link
@@ -137,16 +145,18 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
     let link = Arc::new(link);
     let (stderr, written) = mpsc::unbounded_channel();
     let home = set(variables, "HOME").map(PathBuf::from);
+    let (heartbeat_session, carried_session) = watch::channel(None);
     let mut supervising = Supervising {
         cursor: set(variables, "KESTREL_INSTRUCTIONS_AFTER").map(str::to_owned),
         carrying: None,
+        heartbeat_session,
         checkout: None,
         summary: None,
         interrupt_deadline: interrupt_deadline(variables),
         quiet_period: quiet_period(variables),
     };
 
-    let alive = tokio::spawn(saying_it_is_alive(Arc::clone(&link)));
+    let alive = tokio::spawn(saying_it_is_alive(Arc::clone(&link), carried_session));
     let mut relaying = tokio::spawn(relaying_stderr(Arc::clone(&link), written));
     let status = supervised(
         &link,
@@ -157,7 +167,7 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
         diagnostics,
     )
     .await;
-    if let Some(carrying) = supervising.carrying.take() {
+    if let Some(carrying) = supervising.take_carrying() {
         carrying
             .let_go("this instance is off the link for good", diagnostics)
             .await;
@@ -194,12 +204,15 @@ async fn report_state(link: &Link, carrying: &Carrying) -> Result<(), link::Erro
     }
 }
 
-async fn saying_it_is_alive(link: Arc<Link>) {
+async fn saying_it_is_alive(link: Arc<Link>, session: watch::Receiver<Option<String>>) {
     loop {
         tokio::time::sleep(HEARTBEAT_EVERY).await;
         // Whether the link is there at all is the attending loop's to notice and reconnect
         // through; this one says what it can, whenever it can.
-        let _ = link.report(&Report::Heartbeat, None, None).await;
+        let carried = session.borrow().clone();
+        let _ = link
+            .report(&Report::Heartbeat, carried.as_deref(), None)
+            .await;
     }
 }
 
@@ -250,10 +263,8 @@ fn lapsed(link: &Link, supervising: &Supervising, give_up_after: Option<Duration
         && give_up_after.is_some_and(|bound| link.unreached_for() >= bound)
 }
 
-/// A control plane gone past the lease has already let the Session go, so nothing is waiting for
-/// the work its harness would be kept open for. The supervisor stays, for the Instance.
 async fn give_up(link: &Link, supervising: &mut Supervising, diagnostics: &dyn Diagnostics) {
-    let Some(carrying) = supervising.carrying.take() else {
+    let Some(carrying) = supervising.take_carrying() else {
         return;
     };
     let because = format!(
@@ -345,12 +356,12 @@ async fn attend(
             match carried(link, home, carrying, diagnostics).await {
                 Ok(true) => {}
                 Ok(false) => {
-                    if let Some(carrying) = supervising.carrying.take() {
+                    if let Some(carrying) = supervising.take_carrying() {
                         carrying.let_go("it is over", diagnostics).await;
                     }
                 }
                 Err(link::Error::Session(why)) => {
-                    if let Some(carrying) = supervising.carrying.take() {
+                    if let Some(carrying) = supervising.take_carrying() {
                         carrying.let_go(&why, diagnostics).await;
                     }
                 }
@@ -467,7 +478,7 @@ async fn let_go_if_refused(
 ) -> Result<(), link::Error> {
     match reported {
         Err(link::Error::Session(why)) => {
-            if let Some(carrying) = supervising.carrying.take() {
+            if let Some(carrying) = supervising.take_carrying() {
                 carrying.let_go(&why, diagnostics).await;
             }
             Ok(())
@@ -648,7 +659,7 @@ async fn instructed(
         // Stopped is told after the session has already ended, so whatever a turn last refreshed
         // was already handed back before this arrived; only the local copy is left to clean up.
         Instruction::Stop if carrying_it => {
-            if let Some(carrying) = supervising.carrying.take() {
+            if let Some(carrying) = supervising.take_carrying() {
                 carrying.let_go("it was stopped", diagnostics).await;
             }
         }
@@ -767,11 +778,14 @@ async fn start_carrying(
 ) {
     // A Session's start follows the last one's stop down the stream, so one still carried here is
     // over.
-    if let Some(carrying) = supervising.carrying.take() {
+    if let Some(carrying) = supervising.take_carrying() {
         carrying
             .let_go("another session started", diagnostics)
             .await;
     }
+    supervising
+        .heartbeat_session
+        .send_replace(Some(session.clone()));
     let working = prompt.is_some();
     supervising.checkout = Some(checkout.clone());
     let mut carrying = Carrying {

@@ -4,3 +4,11 @@ ALTER TABLE session DROP COLUMN heartbeat_at;
 ALTER TABLE session ADD COLUMN lease_expires_at TEXT;
 
 CREATE INDEX session_lease_due ON session (lease_expires_at) WHERE lease_expires_at IS NOT NULL;
+
+CREATE TABLE lease_sweep (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    last_pass_at TEXT NOT NULL,
+    gap_start TEXT,
+    gap_end TEXT,
+    CHECK ((gap_start IS NULL) = (gap_end IS NULL))
+) STRICT;

@@ -293,7 +293,7 @@
       "post": {
         "operationId": "report",
         "summary": "Report something about an Instance, or the Session it carries, to the control plane.",
-        "description": "Delivery is at-least-once: a supervisor that loses the answer to a report sends it again under the same seq, and the control plane takes it once. Seqs are counted within the Session a report names; one that skips a report the Session has yet to make is refused. A report about a Session the Instance no longer carries \u2014 it has ended, or its lease has passed \u2014 is answered 410, and the supervisor lets that Session go.",
+        "description": "Delivery is at-least-once: a supervisor that loses the answer to a report sends it again under the same seq, and the control plane takes it once. Seqs are counted within the Session a report names; one that skips a report the Session has yet to make is refused. A report about a Session the Instance no longer carries \u2014 it has ended or belongs to another Instance \u2014 is answered 410, and the supervisor lets that Session go.",
         "parameters": [
           {
             "$ref": "#/components/parameters/instance"
@@ -1106,6 +1106,11 @@
         "properties": {
           "kind": {
             "const": "heartbeat"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The live Session this supervisor carries; absent when it carries none."
           }
         },
         "required": [

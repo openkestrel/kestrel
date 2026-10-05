@@ -2422,6 +2422,14 @@ impl Stopped {
             .expect("the session should show")
     }
 
+    pub async fn last_lease_sweep(&self, at: Timestamp) {
+        let pool = database(self.data_dir.path()).await;
+        sqlx::query("INSERT INTO lease_sweep (id, last_pass_at) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET last_pass_at = excluded.last_pass_at")
+            .bind(format!("{at:.9}"))
+            .execute(&pool).await.unwrap();
+        pool.close().await;
+    }
+
     /// A due time set while nothing is keeping time, so what fires it afterwards is a control
     /// plane that could only have read it back.
     pub async fn lease_until(&self, session: &Session, expires_at: Timestamp) {

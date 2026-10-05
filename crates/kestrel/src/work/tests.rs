@@ -513,28 +513,30 @@ async fn connection_and_heartbeat_reports_ignore_numbers_and_do_not_consume_them
 }
 
 #[tokio::test]
-async fn a_heartbeat_never_revives_a_lease_that_has_passed_and_its_session_is_gone() {
+async fn a_report_is_accepted_after_its_lease_passes_until_the_sweep_ends_it() {
     let fixture = Fixture::new().await;
-    let lapsed = Timestamp::now() - SignedDuration::from_secs(1);
     let mut tx = fixture.store.begin().await.unwrap();
     tx.workspaces()
-        .hold_lease(&fixture.session, lapsed)
+        .hold_lease(
+            &fixture.session,
+            Timestamp::now() - SignedDuration::from_secs(1),
+        )
         .await
         .unwrap();
     tx.commit().await.unwrap();
 
-    fixture.report(None, Report::Heartbeat).await.unwrap();
-
-    let recorded = session(&fixture.store, fixture.session.id).await.unwrap();
-    assert!(recorded.lease_expires_at.unwrap() <= Timestamp::now());
-    assert!(matches!(
-        fixture.report(Some(1), Report::Started).await,
-        Err(ReportRefused::Gone(gone)) if gone == fixture.session.id
-    ));
+    fixture.report(Some(1), Report::Started).await.unwrap();
+    assert!(
+        session(&fixture.store, fixture.session.id)
+            .await
+            .unwrap()
+            .started_at
+            .is_some()
+    );
 }
 
 #[tokio::test]
-async fn a_supervisor_that_exits_after_its_sessions_lease_lapsed_fails_it_for_its_lease() {
+async fn a_supervisor_that_exits_after_its_sessions_lease_lapsed_fails_it_for_the_exit() {
     let fixture = Fixture::new().await;
     let mut tx = fixture.store.begin().await.unwrap();
     tx.workspaces()
@@ -556,7 +558,12 @@ async fn a_supervisor_that_exits_after_its_sessions_lease_lapsed_fails_it_for_it
     .unwrap();
 
     let recorded = session(&fixture.store, fixture.session.id).await.unwrap();
-    assert_eq!(recorded.exit, Some(expired_lease()));
+    assert_eq!(
+        recorded.exit,
+        Some(Exit::Failed {
+            because: "the supervisor exited unreported".to_owned()
+        })
+    );
 }
 
 #[tokio::test]
@@ -949,4 +956,68 @@ fn idle_hint_is_ignored_by_both_drivers() {
             })
             .unwrap();
     }
+}
+
+#[tokio::test]
+async fn a_heartbeat_renews_only_the_live_session_it_names_on_its_instance() {
+    let fixture = Fixture::new().await;
+    let before = session(&fixture.store, fixture.session.id)
+        .await
+        .unwrap()
+        .lease_expires_at;
+    for (instance, named) in [
+        (INSTANCE, None),
+        (
+            INSTANCE,
+            Some("00000000-0000-0000-0000-000000000001".parse().unwrap()),
+        ),
+        ("local-exec/another", Some(fixture.session.id)),
+    ] {
+        report(
+            &fixture.store,
+            instance,
+            Reported {
+                session: named,
+                seq: None,
+                report: Report::Heartbeat,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            session(&fixture.store, fixture.session.id)
+                .await
+                .unwrap()
+                .lease_expires_at,
+            before
+        );
+    }
+    let mut tx = fixture.store.begin().await.unwrap();
+    tx.workspaces()
+        .hold_lease(
+            &fixture.session,
+            Timestamp::now() - SignedDuration::from_secs(1),
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    fixture.report(None, Report::Heartbeat).await.unwrap();
+    assert!(
+        session(&fixture.store, fixture.session.id)
+            .await
+            .unwrap()
+            .lease_expires_at
+            > Some(Timestamp::now())
+    );
+    fail(&fixture.store, &fixture.session, "stopped")
+        .await
+        .unwrap();
+    fixture.report(None, Report::Heartbeat).await.unwrap();
+    assert!(
+        session(&fixture.store, fixture.session.id)
+            .await
+            .unwrap()
+            .lease_expires_at
+            .is_none()
+    );
 }
