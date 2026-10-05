@@ -194,8 +194,9 @@ the image did not carry, and a login read from standard input until Ctrl-D. Each
 behind an error that named none of it, and the documents that would have helped were spread across
 four files. A rung nobody can start does not get dogfooded.
 
-**`docker compose up` is the only step.** Compose pulls published images rather than building
-kestrel from source, and the browser Client is served over plain HTTP on loopback, so there is no
+**`docker compose up` is the only step.** The release's pull-only `compose.yaml` pins published
+images by multiarch manifest digest; main's development Compose keeps source builds. The browser
+Client is served over plain HTTP on loopback, so there is no
 certificate to trust: a tab holds one event stream and subscribes over requests
 ([ADR-0045](docs/adr/0045-a-browser-tab-holds-one-stream-and-subscribes-over-requests.md)). A control
 plane that cannot start says why in one line, and the Client says it is not running rather than
@@ -229,6 +230,18 @@ remote machine ([ADR-0047](docs/adr/0047-kestrel-relays-a-persons-own-sign-in.md
 sign-in with a real call when it is saved. The default image carries every catalogued harness and
 says so in a label, so kestrel never offers one it cannot run
 ([ADR-0048](docs/adr/0048-the-environment-image-carries-every-catalogued-harness.md)).
+
+**A tag prepares a release; acceptance publishes it.** A reviewed release PR sets the shared
+product version and curated changelog, and the maintainer tags its merged commit. Automated release
+checks, including Conformance, pass before preparing draft-release artifacts: four native-built
+Linux amd64/arm64 images (`kestrel`, `kestrel-client`, `kestrel-env`, `kestrel-dev`), the `kestrel` CLI
+for Linux and macOS on both architectures, and generated pull-only Compose. The control-plane
+image carries the CLI too. Fresh-machine acceptance runs once from the browser alone and once
+from the CLI alone over SSH against the same tagged `0.4.x` candidate, after the `0.3` gate passes.
+Only success authorizes publication, moving `latest` and advancing the ROADMAP marker. Published
+version tags and artifacts stay immutable; a failed candidate remains draft and fixes land in a
+reviewed patch release. Main uses `main` and commit-SHA image tags
+([ADR-0053](docs/adr/0053-a-tag-prepares-a-release-acceptance-publishes-it.md)).
 
 `kestrel login --token` imports an existing token or key through hidden input or stdin;
 `kestrel login --file PATH` imports a login file. Both name their harness and check the sign-in.
