@@ -237,6 +237,23 @@ that partial result. GitHub uses `kestrel integration github connect` and always
 ([ADR-0028](docs/adr/0028-an-integration-lends-a-run-its-identity.md)); registering an existing App
 is the fallback for the manifest flow, never a personal access token.
 
+**Polish covers routine use, not only setup.** Failed declaration and queue reads say they failed
+and offer recovery; an unavailable Transcript never looks like empty history. Recovery actions,
+help, branch and People wording, keyboard navigation and moderate accessibility findings are part
+of `0.4`. Integration updates, credential rotation and switching from polling to webhooks also
+belong here, with their lifecycle rules decided against the GitHub App contract. Existing `0.3`
+acceptance blockers keep their owners and must pass that gate; unverified cancellation and repository
+validation observations require evidence before they become feature commitments
+([papercut scope decision](https://github.com/openkestrel/kestrel/issues/494)).
+
+**The CLI emits complete JSON.** `--json` returns an object for one resource and an array for a
+collection, including `[]` when empty; following emits one JSON object per line. `--jq EXPR` uses
+embedded jaq to filter that same response without installing another tool: strings print without
+quotes, other values as JSON, collections are filtered as a whole and followed streams one record
+at a time. Filter syntax is checked before any write; errors go to stderr and no results is success.
+Field projection through `--json id,name` is removed. Users can still pipe the complete JSON to jq
+([papercut scope decision](https://github.com/openkestrel/kestrel/issues/494)).
+
 ### 0.5 — kestrel asks before it acts
 
 kestrel does work you would not have let it do unsupervised: policy enforced at the execution layer
