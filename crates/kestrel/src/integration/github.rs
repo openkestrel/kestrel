@@ -54,7 +54,9 @@ pub fn at_or_after(event: &Occurrence, origin: &Occurrence) -> bool {
 pub const MENTION: &str = "@kestrel";
 const AGENT: &str = "agent=";
 
-/// Every outcome comment carries it, so kestrel never hears its own comment as a follow-up.
+/// Every outcome comment carries it, so a delivery that never learned whether its comment
+/// landed can recognise that it already did. It never marks what may be heard: kestrel knows
+/// its own voice by author (ADR-0028).
 pub const MARKER: &str = "<!-- kestrel session ";
 
 const VERSION: &str = "2022-11-28";
@@ -283,7 +285,7 @@ impl Github {
 
             for (comment, id) in reported.into_iter().zip(ids) {
                 through = through.max(Some(id));
-                if Some(id) > integration.comments_polled_through && !said_by_kestrel(&comment) {
+                if Some(id) > integration.comments_polled_through {
                     newest_first
                         .push(comment_occurrence(&comment, github).map_err(Refused::Failed)?);
                 }
@@ -698,13 +700,6 @@ fn comment_id(comment: &serde_json::Value) -> Result<i64> {
         .context("a GitHub issue comment has no integer id")
 }
 
-fn said_by_kestrel(comment: &serde_json::Value) -> bool {
-    comment
-        .get("body")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|body| body.contains(MARKER))
-}
-
 fn occurrence(event: &serde_json::Value, github: &GithubConnection) -> Result<Occurrence> {
     let issue = event
         .get("issue")
@@ -874,6 +869,19 @@ pub struct Command<'a> {
     pub instruction: Option<&'a str>,
 }
 
+/// Whether the Event records what the Integration's own identity said, by author rather than
+/// by provenance markers. Its voice feeds no Session and fires no Trigger, whatever a Trigger's
+/// filter admits (ADR-0028).
+pub fn authored_by_own(integration: &Integration, occurrence: &Occurrence) -> bool {
+    let Ok(github) = integration.github() else {
+        return false;
+    };
+
+    EventData::new(occurrence)
+        .actor()
+        .is_some_and(|actor| actor.eq_ignore_ascii_case(&github.bot_login))
+}
+
 /// What an operator's dispatch of `issue` mints: about the issue, as anything GitHub said of it is.
 pub fn dispatched(
     github: &GithubConnection,
@@ -892,8 +900,8 @@ pub fn dispatched(
     }
 }
 
-/// One webhook delivery, named in GitHub's webhook vocabulary, or nothing for a comment kestrel
-/// itself left. A comment keeps the id a poll gives it, so the two ways of learning it dedup.
+/// One webhook delivery, named in GitHub's webhook vocabulary. A comment keeps the id a poll
+/// gives it, so the two ways of learning it dedup.
 pub fn delivered(
     github: &GithubConnection,
     event: &str,
@@ -911,10 +919,6 @@ pub fn delivered(
             github.repository
         );
     }
-    if event == "issue_comment" && payload.get("comment").is_some_and(said_by_kestrel) {
-        return Ok(None);
-    }
-
     let action = payload.get("action").and_then(serde_json::Value::as_str);
     let id = match (event, action) {
         ("issue_comment", Some("created")) => format!(
@@ -1145,18 +1149,55 @@ mod tests {
     }
 
     #[test]
-    fn a_comment_kestrel_left_is_not_heard_back() {
+    fn a_comment_kestrel_left_is_recorded_like_any_other() {
         let payload = serde_json::json!({
             "action": "created",
             "comment": { "id": 99, "body": "done\n<!-- kestrel session 1 -->" },
             "issue": { "number": 43 }
         });
 
-        assert!(
-            delivered(&watching(), "issue_comment", "d-3", payload)
-                .unwrap()
-                .is_none()
-        );
+        let occurrence = delivered(&watching(), "issue_comment", "d-3", payload)
+            .unwrap()
+            .expect("self-recognition is the follow-up and trigger paths', not ingest's");
+
+        assert_eq!(occurrence.r#type, COMMENTED);
+        assert_eq!(occurrence.id, "comment:99");
+    }
+
+    #[test]
+    fn the_integration_recognises_its_own_voice_by_author() {
+        let mut watched = watching();
+        watched.bot_login = "kestrel[bot]".to_owned();
+        let integration = Integration {
+            id: crate::domain::IntegrationId::generate(),
+            organization: crate::domain::OrganizationId::generate(),
+            name: "github".to_owned(),
+            connection: crate::domain::Connection::Github(watched),
+            carries: vec![crate::domain::Direction::Inbound],
+            poll_due_at: None,
+            polled_through: None,
+            comments_polled_through: None,
+            last_event_refusal: None,
+        };
+        for shape in [
+            serde_json::json!({ "actor": { "login": "Kestrel[Bot]" } }),
+            serde_json::json!({ "user": { "login": "Kestrel[Bot]" } }),
+            serde_json::json!({ "sender": { "login": "Kestrel[Bot]" } }),
+            serde_json::json!({ "comment": { "user": { "login": "Kestrel[Bot]" } } }),
+        ] {
+            let mut occurrence = commented("done as the work asked");
+            occurrence.data = shape.clone();
+
+            assert!(
+                authored_by_own(&integration, &occurrence),
+                "the shape {shape} was not recognised"
+            );
+        }
+
+        assert!(!authored_by_own(
+            &integration,
+            &commented("said by someone else")
+        ));
     }
 
     fn commented(body: &str) -> Occurrence {

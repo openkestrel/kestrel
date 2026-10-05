@@ -138,7 +138,9 @@ Triggers:
 - A comment that is an `@kestrel` command belongs to the Triggers and is skipped here.
 - A plain remark feeds an open Workspace only if the Trigger that opened it would admit the author.
   It is posted as a message ([Sessions](sessions.md#the-unfinished-session)).
-- Comments carrying kestrel's own delivery marker are never read as input.
+- A comment whose author is the Integration's own recorded bot login feeds nothing, by author
+  rather than by kestrel's delivery marker ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)).
+  Trigger matching excludes its Events in the same way.
 
 ## Pull requests
 

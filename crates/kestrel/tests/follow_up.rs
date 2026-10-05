@@ -715,6 +715,43 @@ async fn watching_a_named_actor(kestrel: &Kestrel, stub: &GithubStub) {
         .await;
 }
 
+/// A Trigger that names no author, so a Workspace it opened admits whatever the Event says: the
+/// own-identity guard is the only thing left that can keep kestrel's voice out.
+async fn watching_any_author(kestrel: &Kestrel, stub: &GithubStub) {
+    let organization = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(&organization, "kestrel", &[], "main")
+        .await;
+    kestrel
+        .declare_agent(&organization, "builder", "opencode", None)
+        .await;
+    kestrel
+        .declare_trigger_rendering(
+            "acme",
+            "delegated",
+            &serde_json::json!({"all": [
+                {"exact": {"source": format!("https://github.com/{REPOSITORY}")}},
+                {"exact": {"type": "com.github.issue_comment.created"}},
+                {"prefix": {"data.body": "@kestrel"}},
+            ]})
+            .to_string(),
+            "kestrel",
+            "builder",
+            &support::templates("Work on {{ event.subject }}", None, Some("the release")),
+        )
+        .await;
+    kestrel
+        .register_integration(
+            "acme",
+            "github",
+            REPOSITORY,
+            &stub.base_url(),
+            &[Direction::Inbound],
+            SignedDuration::from_millis(1),
+        )
+        .await;
+}
+
 /// The maintainer's command, which is the comment that opens the workspace.
 fn the_command(stub: &GithubStub) {
     stub.script_answer(
@@ -828,7 +865,46 @@ async fn a_remark_from_the_trigger_actor_feeds_an_open_workspace() {
 }
 
 #[tokio::test]
-async fn a_comment_kestrel_left_is_never_heard_as_input() {
+async fn a_comment_from_the_integration_s_own_identity_is_never_heard_as_input() {
+    let stub = GithubStub::start();
+    stub.script_answer(
+        "GET",
+        COMMENTS,
+        github_stub::page(&[github_stub::issue_comment(
+            10, ISSUE, MAINTAINER, "@kestrel",
+        )]),
+    );
+    let kestrel = Kestrel::boot().await;
+    watching_any_author(&kestrel, &stub).await;
+    let workspace = workspaces(&kestrel, 1).await.remove(0);
+    kestrel
+        .claim_session()
+        .await
+        .expect("the command should have opened a session");
+
+    stub.script_answer(
+        "GET",
+        COMMENTS,
+        github_stub::page(&[github_stub::issue_comment(
+            11,
+            ISSUE,
+            "kestrel[bot]",
+            "what kestrel said\n\n<!-- kestrel session 01a0 turn 1 -->",
+        )]),
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    assert!(
+        !kestrel.has_pending_messages(workspace.id).await,
+        "kestrel heard its own comment as input"
+    );
+    assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_marker_does_not_silence_a_comment_from_an_operator() {
     let stub = GithubStub::start();
     stub.script_answer(
         "GET",
@@ -844,7 +920,6 @@ async fn a_comment_kestrel_left_is_never_heard_as_input() {
         .claim_session()
         .await
         .expect("the command should have opened a session");
-
     stub.script_answer(
         "GET",
         COMMENTS,
@@ -855,13 +930,8 @@ async fn a_comment_kestrel_left_is_never_heard_as_input() {
             "what kestrel said\n\n<!-- kestrel session 01a0 turn 1 -->",
         )]),
     );
-    tokio::time::sleep(Duration::from_secs(2)).await;
 
-    assert!(
-        !kestrel.has_pending_messages(workspace.id).await,
-        "kestrel heard its own comment as input"
-    );
-    assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
+    pending_arrived(&kestrel, workspace.id).await;
 
     kestrel.teardown().await;
 }
