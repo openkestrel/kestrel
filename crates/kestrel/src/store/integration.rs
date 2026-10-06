@@ -28,9 +28,10 @@ pub enum Recorded {
 macro_rules! integrations_where {
     ($tail:literal) => {
         concat!(
-            "SELECT id, organization_id, name, kind, repository, api, app_id, installation_id,
+            "SELECT id, organization_id, name, kind, repository, repository_id, api, app_id,
+                    installation_id,
                     private_key_sealed, bot_login, inbound, outbound, interval_ms,
-                    poll_due_at, deliveries_read_from,
+                    poll_due_at, deliveries_read_from, last_polled_at,
                     last_event_refusal_source, last_event_refusal_id, last_event_refusal_bytes,
                     last_event_refusal_reason, last_event_refusal_at
              FROM integration
@@ -98,6 +99,7 @@ impl<'a> Integrations<'a> {
             // on the repository rather than waiting an interval to find out.
             poll_due_at: polled.then_some(registered_at),
             deliveries_read_from: polled.then_some(registered_at),
+            last_polled_at: polled.then_some(registered_at),
             last_event_refusal: None,
         };
         let github = integration.github().ok();
@@ -119,16 +121,18 @@ impl<'a> Integrations<'a> {
 
         sqlx::query(
             "INSERT INTO integration
-                 (id, organization_id, name, kind, repository, api, app_id, installation_id,
-                  private_key_sealed, bot_login, inbound, outbound, interval_ms, signing_secret,
-                  shared_secret_digest, poll_due_at, deliveries_read_from, registered_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (id, organization_id, name, kind, repository, repository_id, api, app_id,
+                  installation_id, private_key_sealed, bot_login, inbound, outbound, interval_ms,
+                  signing_secret, shared_secret_digest, poll_due_at, deliveries_read_from,
+                  last_polled_at, registered_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(integration.id.to_string())
         .bind(integration.organization.to_string())
         .bind(&integration.name)
         .bind(integration.kind().as_str())
         .bind(github.map(|github| &github.repository))
+        .bind(github.map(|github| github.repository_id))
         .bind(github.map(|github| &github.api))
         .bind(github.map(|github| github.credential.id))
         .bind(github.map(|github| github.credential.installation))
@@ -149,6 +153,7 @@ impl<'a> Integrations<'a> {
                 .deliveries_read_from
                 .map(|from| from.to_string()),
         )
+        .bind(integration.last_polled_at.map(|at| at.to_string()))
         .bind(registered_at.to_string())
         .execute(&mut *self.connection)
         .await
@@ -338,12 +343,15 @@ impl<'a> Integrations<'a> {
         &mut self,
         integration: &Integration,
         read_from: Timestamp,
+        at: Timestamp,
         due_again_at: Timestamp,
     ) -> Result<()> {
         sqlx::query(
-            "UPDATE integration SET deliveries_read_from = ?, poll_due_at = ? WHERE id = ?",
+            "UPDATE integration SET deliveries_read_from = ?, last_polled_at = ?, poll_due_at = ?
+             WHERE id = ?",
         )
         .bind(read_from.to_string())
+        .bind(at.to_string())
         .bind(due(due_again_at))
         .bind(integration.id.to_string())
         .execute(&mut *self.connection)
@@ -368,8 +376,6 @@ impl<'a> Integrations<'a> {
         Ok(())
     }
 
-    /// Deliveries GitHub no longer keeps were never read, so their Events are lost rather than
-    /// refused one by one.
     pub async fn deliveries_lost(
         &mut self,
         integration: &Integration,
@@ -394,21 +400,25 @@ impl<'a> Integrations<'a> {
         Ok(())
     }
 
-    pub async fn knows(
+    pub async fn known(
         &mut self,
         integration: &Integration,
         source: &str,
-        id: &str,
-    ) -> Result<bool> {
-        Ok(
-            sqlx::query("SELECT 1 FROM event WHERE organization_id = ? AND source = ? AND id = ?")
-                .bind(integration.organization.to_string())
-                .bind(source)
-                .bind(id)
-                .fetch_optional(&mut *self.connection)
-                .await?
-                .is_some(),
+        ids: &[&str],
+    ) -> Result<std::collections::HashSet<String>> {
+        sqlx::query(
+            "SELECT id FROM event
+             WHERE organization_id = ? AND source = ? AND id IN (SELECT value FROM json_each(?))",
         )
+        .bind(integration.organization.to_string())
+        .bind(source)
+        .bind(serde_json::to_string(ids)?)
+        .fetch_all(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading which deliveries {} has recorded", integration.name))?
+        .iter()
+        .map(|row| Ok(row.get("id")))
+        .collect()
     }
 
     pub async fn events(
@@ -747,6 +757,7 @@ fn integration(row: &SqliteRow, keyring: &Keyring) -> Result<Integration> {
                 credential: App::held(row.get("app_id"), row.get("installation_id"), &private_key),
                 bot_login: row.get("bot_login"),
                 interval: SignedDuration::from_millis(row.get("interval_ms")),
+                repository_id: row.get("repository_id"),
             })
         }
         IntegrationKind::Webhook => Connection::Webhook,
@@ -760,6 +771,7 @@ fn integration(row: &SqliteRow, keyring: &Keyring) -> Result<Integration> {
         carries,
         poll_due_at: timestamp(row, "poll_due_at")?,
         deliveries_read_from: timestamp(row, "deliveries_read_from")?,
+        last_polled_at: timestamp(row, "last_polled_at")?,
         last_event_refusal: event_refusal(row)?,
     })
 }

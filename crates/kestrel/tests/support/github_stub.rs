@@ -45,7 +45,6 @@ impl ScriptedResponse {
     }
 }
 
-/// What a GitHub App's hook is sent: the `X-GitHub-Event` name and the webhook payload.
 #[derive(Debug, Clone)]
 pub struct Delivery {
     pub event: String,
@@ -200,13 +199,13 @@ pub fn rate_limited() -> ScriptedResponse {
         )
 }
 
-/// One entry in the App's Delivery log. It is made when the stub is next asked for the log, so a
-/// test may deliver before kestrel has registered the Integration that reads it.
+/// Made when the stub is next asked for the log, so a test may deliver before kestrel registers.
 struct Logged {
     id: i64,
     guid: String,
     delivered_at: Option<jiff::Timestamp>,
     installation_id: Option<i64>,
+    repository_id: i64,
     delivery: Delivery,
 }
 
@@ -305,20 +304,19 @@ impl GithubStub {
         }
     }
 
-    /// Logs a Delivery for the harness's installation and answers its GUID, the
-    /// `X-GitHub-Delivery` a webhook carrying it would name.
+    /// Answers the GUID, which a webhook carrying it would name in `X-GitHub-Delivery`.
     pub fn deliver(&self, delivery: Delivery) -> String {
-        self.log_delivery(delivery, None, Some(INSTALLATION))
+        self.log_delivery(delivery, None, Some(INSTALLATION), REPOSITORY_ID)
     }
 
     /// As GitHub logs a Delivery made at `at`, rather than when it is next asked.
     pub fn deliver_at(&self, delivery: Delivery, at: jiff::Timestamp) -> String {
-        self.log_delivery(delivery, Some(at), Some(INSTALLATION))
+        self.log_delivery(delivery, Some(at), Some(INSTALLATION), REPOSITORY_ID)
     }
 
     /// As GitHub logs a Delivery whose webhook already carried `guid`.
     pub fn deliver_as(&self, delivery: Delivery, guid: &str) {
-        self.log_delivery(delivery, None, Some(INSTALLATION));
+        self.log_delivery(delivery, None, Some(INSTALLATION), REPOSITORY_ID);
         let mut log = self
             .log
             .lock()
@@ -326,9 +324,8 @@ impl GithubStub {
         log.last_mut().expect("just logged").guid = guid.to_owned();
     }
 
-    /// A Delivery for another installation of the same App.
-    pub fn deliver_elsewhere(&self, delivery: Delivery, installation: i64) -> String {
-        self.log_delivery(delivery, None, Some(installation))
+    pub fn deliver_to(&self, delivery: Delivery, installation: i64, repository_id: i64) -> String {
+        self.log_delivery(delivery, None, Some(installation), repository_id)
     }
 
     fn log_delivery(
@@ -336,6 +333,7 @@ impl GithubStub {
         delivery: Delivery,
         at: Option<jiff::Timestamp>,
         installation_id: Option<i64>,
+        repository_id: i64,
     ) -> String {
         let mut log = self
             .log
@@ -348,6 +346,7 @@ impl GithubStub {
             guid: guid.clone(),
             delivered_at: at,
             installation_id,
+            repository_id,
             delivery,
         });
         guid
@@ -415,6 +414,14 @@ fn respond(
             Some(minted_installation_token())
         } else if method == "GET" && url.ends_with("/app") {
             Some(default_app_record())
+        } else if method == "GET"
+            && url
+                .strip_prefix("/repos/")
+                .is_some_and(|named| named.split('/').count() == 2)
+        {
+            Some(ScriptedResponse::ok(
+                serde_json::json!({ "id": REPOSITORY_ID }).to_string(),
+            ))
         } else {
             None
         }
@@ -465,11 +472,11 @@ fn respond(
     let _ = request.respond(response);
 }
 
-/// The installation the harness registers its GitHub Integrations against.
 const INSTALLATION: i64 = 2;
+/// What `GET /repos/{owner}/{name}` answers for any repository.
+pub const REPOSITORY_ID: i64 = 1;
 
-/// Newest first, as GitHub lists it, a page at a time with the next named by cursor. What has not
-/// been listed before is made now, in the order it was delivered.
+/// What has not been listed before is made now, in the order it was delivered.
 fn listed(log: &mut [Logged], url: &str, host: &str) -> ScriptedResponse {
     let parameter = |name: &str| {
         url.split(['?', '&'])
@@ -504,7 +511,7 @@ fn listed(log: &mut [Logged], url: &str, host: &str) -> ScriptedResponse {
                 "event": logged.delivery.event,
                 "action": logged.delivery.payload.get("action"),
                 "installation_id": logged.installation_id,
-                "repository_id": 1,
+                "repository_id": logged.repository_id,
             })
         })
         .collect();

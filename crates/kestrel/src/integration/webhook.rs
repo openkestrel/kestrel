@@ -363,6 +363,7 @@ mod tests {
             carries: vec![Direction::Inbound],
             poll_due_at: None,
             deliveries_read_from: None,
+            last_polled_at: None,
             last_event_refusal: None,
         }
     }

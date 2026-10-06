@@ -4,6 +4,7 @@ CREATE TABLE integration (
     name TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('github', 'webhook')),
     repository TEXT,
+    repository_id INTEGER,
     api TEXT,
     app_id INTEGER,
     installation_id INTEGER,
@@ -16,6 +17,7 @@ CREATE TABLE integration (
     shared_secret_digest TEXT,
     poll_due_at TEXT,
     deliveries_read_from TEXT,
+    last_polled_at TEXT,
     last_event_refusal_source TEXT,
     last_event_refusal_id TEXT,
     last_event_refusal_bytes INTEGER,
@@ -23,7 +25,8 @@ CREATE TABLE integration (
     last_event_refusal_at TEXT,
     registered_at TEXT NOT NULL,
     UNIQUE (organization_id, name),
-    CHECK ((kind = 'github') = (repository IS NOT NULL AND api IS NOT NULL
+    CHECK ((kind = 'github') = (repository IS NOT NULL AND repository_id IS NOT NULL
+                                AND api IS NOT NULL
                                 AND app_id IS NOT NULL AND installation_id IS NOT NULL
                                 AND private_key_sealed IS NOT NULL AND bot_login IS NOT NULL
                                 AND interval_ms IS NOT NULL)),

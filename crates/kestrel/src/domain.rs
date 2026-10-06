@@ -195,8 +195,10 @@ pub struct Integration {
     pub connection: Connection,
     pub carries: Vec<Direction>,
     pub poll_due_at: Option<Timestamp>,
-    /// Where the next poll starts reading: every Delivery made earlier has been read.
+    /// By GitHub's clock: every Delivery made earlier has been read.
     pub deliveries_read_from: Option<Timestamp>,
+    /// By kestrel's clock, when a poll last read every new Delivery.
+    pub last_polled_at: Option<Timestamp>,
     pub last_event_refusal: Option<EventRefusal>,
 }
 
@@ -238,6 +240,7 @@ pub struct GithubConnection {
     /// The App's own bot account, `<slug>[bot]`, learned from GitHub when it was registered.
     pub bot_login: String,
     pub interval: SignedDuration,
+    pub repository_id: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -25,8 +25,7 @@ pub struct Registration<'a> {
 }
 
 pub enum Connecting<'a> {
-    /// Polled whether or not it has a `signing_secret`; with one, a Delivery GitHub can
-    /// reach kestrel with is also recorded on arrival.
+    /// Polled either way; a `signing_secret` also records a Delivery that reaches the webhook.
     Github {
         repository: &'a str,
         api: &'a str,
@@ -80,6 +79,10 @@ pub async fn register(
                 .app_bot_login(api, &credential)
                 .await
                 .context("learning the app's own identity")?;
+            let repository_id = github
+                .repository_id(api, &credential, &repository)
+                .await
+                .context("learning the repository's id")?;
             (
                 Connection::Github(GithubConnection {
                     repository,
@@ -87,6 +90,7 @@ pub async fn register(
                     credential,
                     bot_login,
                     interval,
+                    repository_id,
                 }),
                 signing_secret,
             )
@@ -155,25 +159,23 @@ pub async fn event(store: &Store, id: EventRecordId) -> Result<Event> {
     store.begin().await?.integrations().event(id).await
 }
 
-/// GitHub keeps a Delivery for three days: one older than that which no poll read is gone.
 const RETENTION: SignedDuration = SignedDuration::from_hours(72);
-/// A Delivery is listed a few seconds after it is made, so each poll reads back over the end
-/// of the last one; what it reads again it recognises rather than records twice.
-const LISTING_LAG: SignedDuration = SignedDuration::from_mins(1);
+/// Each poll reads back over the end of the last, by GitHub's clock, for a Delivery listed late.
+const OVERLAP: SignedDuration = SignedDuration::from_mins(1);
 
-/// One poll of one Integration: its App's Deliveries since it last read them. Every Event the poll
-/// read and where the next one starts are written in one transaction, and a poll that cannot read
-/// every new Delivery records none of them and starts from the same place next time (ADR-0011).
+/// A poll that cannot read every new Delivery records none of them and moves nothing (ADR-0011).
 pub async fn poll(store: &Store, github: &Github, integration: &Integration) -> Result<Polled> {
     let interval = integration.github()?.interval;
-    let from = integration
-        .deliveries_read_from
-        .context("a polled integration knows where its reading starts")?;
+    let (Some(from), Some(last_polled_at)) =
+        (integration.deliveries_read_from, integration.last_polled_at)
+    else {
+        bail!("integration {} is not polled", integration.name);
+    };
     let started = Timestamp::now();
     let read = read(store, github, integration, from).await;
     let mut tx = store.begin().await?;
 
-    let (occurrences, ran_out) = match read {
+    let read = match read {
         Ok(read) => read,
         Err(refused) => {
             warn!(
@@ -189,7 +191,7 @@ pub async fn poll(store: &Store, github: &Github, integration: &Integration) -> 
         }
     };
     let mut recorded = 0;
-    for occurrence in &occurrences {
+    for occurrence in &read.occurrences {
         match tx
             .integrations()
             .record_event(integration, occurrence)
@@ -206,15 +208,14 @@ pub async fn poll(store: &Store, github: &Github, integration: &Integration) -> 
             }
         }
     }
-    if ran_out && from < started - RETENTION {
-        let github = integration.github()?;
+    if read.ran_out && last_polled_at < started - RETENTION {
         tx.integrations()
             .deliveries_lost(
                 integration,
-                &github::source(github),
+                &read.source,
                 &format!(
-                    "GitHub keeps deliveries for three days, and those made after {from} that no \
-                     poll read are gone"
+                    "no poll succeeded between {last_polled_at} and {started}, and GitHub keeps \
+                     deliveries for three days, so some may have been lost"
                 ),
             )
             .await?;
@@ -222,50 +223,64 @@ pub async fn poll(store: &Store, github: &Github, integration: &Integration) -> 
     tx.integrations()
         .polled(
             integration,
-            from.max(started - LISTING_LAG),
+            read.newest
+                .map_or(from, |newest| from.max(newest - OVERLAP)),
+            started,
             started + interval,
         )
         .await?;
     tx.commit().await?;
 
     Ok(Polled {
-        seen: occurrences.len(),
+        seen: read.occurrences.len(),
         recorded,
     })
 }
 
-/// Only a Delivery not yet recorded has its payload fetched: one that reached the webhook, or an
-/// earlier poll, already has its Event.
+struct Read {
+    source: String,
+    occurrences: Vec<Occurrence>,
+    newest: Option<Timestamp>,
+    ran_out: bool,
+}
+
+/// A Delivery the webhook or an earlier poll already recorded has no payload fetched.
 async fn read(
     store: &Store,
     github: &Github,
     integration: &Integration,
     from: Timestamp,
-) -> Result<(Vec<Occurrence>, bool), Refused> {
+) -> Result<Read, Refused> {
     let listing = github.deliveries(integration, from).await?;
     let source = github::source(integration.github().map_err(Refused::Failed)?);
+    let guids: Vec<&str> = listing
+        .listed
+        .iter()
+        .map(|listed| listed.guid.as_str())
+        .collect();
+    let known = async {
+        store
+            .read()
+            .await?
+            .integrations()
+            .known(integration, &source, &guids)
+            .await
+    }
+    .await
+    .map_err(Refused::Failed)?;
     let mut occurrences = Vec::new();
-
     for listed in &listing.listed {
-        let known = async {
-            store
-                .read()
-                .await?
-                .integrations()
-                .knows(integration, &source, &listed.guid)
-                .await
-        }
-        .await
-        .map_err(Refused::Failed)?;
-        if known {
-            continue;
-        }
-        if let Some(occurrence) = github.delivery(integration, listed).await? {
-            occurrences.push(occurrence);
+        if !known.contains(&listed.guid) {
+            occurrences.push(github.delivery(integration, listed).await?);
         }
     }
 
-    Ok((occurrences, listing.ran_out))
+    Ok(Read {
+        source,
+        occurrences,
+        newest: listing.newest,
+        ran_out: listing.ran_out,
+    })
 }
 
 /// A rate limit names the moment it lifts, and asking again before then spends a request on

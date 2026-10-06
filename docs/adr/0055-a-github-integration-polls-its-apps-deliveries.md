@@ -28,13 +28,19 @@ either way. Nothing switches between them, so nothing falls between them or is r
 
 - **A polled Event is the webhook's Event.** Its type and payload are the Delivery's, so
   [ADR-0011](0011-cloudevents-is-the-events-shape.md)'s promise that a Trigger survives the move
-  between polling and a webhook holds for every type the App subscribes to.
+  between polling and a webhook holds for every type the App subscribes to. Only its `time` can
+  differ: a webhook request carries no `delivered_at`, so one recorded on arrival is timed by its
+  arrival, within a second or so of the `delivered_at` a poll would have read.
 - **A hook nobody can reach is still active.** Its URL is the control plane's own webhook path
   under `--webhook-base` when there is one, otherwise under `https://unreachable.invalid`. GitHub
   refuses a loopback or `localhost` hook URL, but accepts a public name without resolving it.
   Making the hook reachable later changes only its URL.
-- **GitHub's 3-day retention is the horizon.** Deliveries older than that are gone. The Integration
-  says so, and kestrel never rebuilds the missing Events from a resource read.
+- **The poll keeps GitHub's time.** Where it reads from next is a minute before the newest
+  `delivered_at` it listed, so neither clock skew nor a Delivery listed a few seconds late falls
+  between two polls.
+- **GitHub's 3-day retention is the horizon.** Deliveries older than that are gone. When no poll
+  has succeeded for longer, the Integration says some may have been lost, and kestrel never
+  rebuilds the missing Events from a resource read.
 - **This rests on GitHub behaviour the documentation does not state.** The #506 spike found that an
   App hook stayed active through a quarter hour of failed Deliveries (longer is unproven), that
   GitHub neither limits nor reports a limit on requests made as the App at polling rates, and that

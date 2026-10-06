@@ -58,19 +58,22 @@ impl fmt::Display for Refused {
     }
 }
 
-/// One entry in the App's Delivery log. A redelivery is listed again under the same `guid`.
+/// A redelivery is listed again under the same `guid`.
 #[derive(Debug, Deserialize)]
 pub struct Listed {
     pub id: i64,
     pub guid: String,
     pub delivered_at: Timestamp,
     pub installation_id: Option<i64>,
+    pub repository_id: Option<i64>,
 }
 
 pub struct Listing {
-    /// Oldest first, one per `guid`, only this Integration's installation's.
+    /// Oldest first, one per `guid`, only this Integration's repository's.
     pub listed: Vec<Listed>,
-    /// The log ran out before reaching where the poll started reading, so older ones are gone.
+    /// By GitHub's clock, whoever's Delivery it was.
+    pub newest: Option<Timestamp>,
+    /// The log ended before reaching where the poll started reading.
     pub ran_out: bool,
 }
 
@@ -133,14 +136,14 @@ impl Github {
             app_id: i64,
         }
         let response = self
-            .client
-            .get(format!(
-                "{}/repos/{repository}/installation",
-                api.trim_end_matches('/')
-            ))
-            .header("accept", "application/vnd.github+json")
-            .header("x-github-api-version", VERSION)
-            .bearer_auth(app_jwt(app)?)
+            .as_app(
+                reqwest::Method::GET,
+                app,
+                &format!(
+                    "{}/repos/{repository}/installation",
+                    api.trim_end_matches('/')
+                ),
+            )?
             .send()
             .await
             .context("checking the App installation")?;
@@ -190,7 +193,7 @@ impl Github {
             return Ok(minted.token.clone());
         }
 
-        let minted = self.mint(github).await?;
+        let minted = self.mint(&github.api, &github.credential).await?;
         let token = minted.token.clone();
         self.tokens
             .lock()
@@ -202,18 +205,18 @@ impl Github {
 
     /// Exchanges a freshly signed App JWT for an installation token, scoped to exactly the
     /// installation the Integration was registered against.
-    async fn mint(&self, github: &GithubConnection) -> Result<Minted, Refused> {
-        let jwt = app_jwt(&github.credential).map_err(Refused::Failed)?;
+    async fn mint(&self, api: &str, app: &App) -> Result<Minted, Refused> {
         let response = self
-            .client
-            .post(format!(
-                "{}/app/installations/{}/access_tokens",
-                github.api.trim_end_matches('/'),
-                github.credential.installation
-            ))
-            .header("accept", "application/vnd.github+json")
-            .header("x-github-api-version", VERSION)
-            .bearer_auth(jwt)
+            .as_app(
+                reqwest::Method::POST,
+                app,
+                &format!(
+                    "{}/app/installations/{}/access_tokens",
+                    api.trim_end_matches('/'),
+                    app.installation
+                ),
+            )
+            .map_err(Refused::Failed)?
             .send()
             .await
             .map_err(|error| {
@@ -234,13 +237,12 @@ impl Github {
     /// said. The only caller of this signs no cached token, since no Integration exists yet to
     /// cache one against.
     pub async fn app_bot_login(&self, api: &str, app: &App) -> Result<String> {
-        let jwt = app_jwt(app)?;
         let response = self
-            .client
-            .get(format!("{}/app", api.trim_end_matches('/')))
-            .header("accept", "application/vnd.github+json")
-            .header("x-github-api-version", VERSION)
-            .bearer_auth(jwt)
+            .as_app(
+                reqwest::Method::GET,
+                app,
+                &format!("{}/app", api.trim_end_matches('/')),
+            )?
             .send()
             .await
             .context("the app's own identity could not be read")?;
@@ -252,8 +254,35 @@ impl Github {
         Ok(format!("{}[bot]", app_record.slug))
     }
 
-    /// The App's Delivery log back to `from`. GitHub lists it newest first, for every
-    /// installation the App has.
+    /// GitHub's id for the repository, which is how its Delivery log names it.
+    pub async fn repository_id(&self, api: &str, app: &App, repository: &str) -> Result<i64> {
+        #[derive(Deserialize)]
+        struct Named {
+            id: i64,
+        }
+
+        let token = self
+            .mint(api, app)
+            .await
+            .map_err(|refused| anyhow!("{refused}"))?
+            .token;
+        let response = self
+            .client
+            .get(format!("{}/repos/{repository}", api.trim_end_matches('/')))
+            .header("accept", "application/vnd.github+json")
+            .header("x-github-api-version", VERSION)
+            .bearer_auth(token)
+            .send()
+            .await
+            .with_context(|| format!("{repository} could not be read"))?;
+        let named: Named = answered(response, repository)
+            .await
+            .map_err(|refused| anyhow!("{refused}"))?;
+
+        Ok(named.id)
+    }
+
+    /// GitHub lists the log newest first, across every installation and repository the App has.
     pub async fn deliveries(
         &self,
         integration: &Integration,
@@ -264,18 +293,26 @@ impl Github {
             "{}/app/hook/deliveries?per_page={PER_PAGE}",
             github.api.trim_end_matches('/')
         );
+        let mut newest = None;
         let mut newest_first: Vec<Listed> = Vec::new();
 
         loop {
-            let response = self.as_app(github, &url)?.send().await.map_err(|error| {
-                Refused::Failed(anyhow!("the app's deliveries could not be listed: {error}"))
-            })?;
+            let response = self
+                .as_app(reqwest::Method::GET, &github.credential, &url)
+                .map_err(Refused::Failed)?
+                .send()
+                .await
+                .map_err(|error| {
+                    Refused::Failed(anyhow!("the app's deliveries could not be listed: {error}"))
+                })?;
             let next = next_page(response.headers());
             let page: Vec<Listed> = answered(response, "the app's deliveries").await?;
+            newest = newest.or_else(|| page.iter().map(|listed| listed.delivered_at).max());
             let reached = page.iter().any(|listed| listed.delivered_at < from);
             newest_first.extend(page.into_iter().filter(|listed| {
                 listed.delivered_at >= from
                     && listed.installation_id == Some(github.credential.installation)
+                    && listed.repository_id == Some(github.repository_id)
             }));
             match next {
                 Some(next) if !reached => url = next,
@@ -286,6 +323,7 @@ impl Github {
                     newest_first.sort_by_key(|listed| (listed.delivered_at, listed.id));
                     return Ok(Listing {
                         listed: newest_first,
+                        newest,
                         ran_out: !reached,
                     });
                 }
@@ -293,13 +331,11 @@ impl Github {
         }
     }
 
-    /// The Event a listed Delivery carries, or nothing when it is about another repository
-    /// the App is installed on.
     pub async fn delivery(
         &self,
         integration: &Integration,
         listed: &Listed,
-    ) -> Result<Option<Occurrence>, Refused> {
+    ) -> Result<Occurrence, Refused> {
         #[derive(Deserialize)]
         struct Delivered {
             event: String,
@@ -314,13 +350,15 @@ impl Github {
         let asked_for = format!("the delivery {}", listed.guid);
         let response = self
             .as_app(
-                github,
+                reqwest::Method::GET,
+                &github.credential,
                 &format!(
                     "{}/app/hook/deliveries/{}",
                     github.api.trim_end_matches('/'),
                     listed.id
                 ),
-            )?
+            )
+            .map_err(Refused::Failed)?
             .send()
             .await
             .map_err(|error| Refused::Failed(anyhow!("{asked_for} could not be read: {error}")))?;
@@ -329,9 +367,6 @@ impl Github {
             .request
             .payload
             .ok_or_else(|| Refused::Failed(anyhow!("{asked_for} carries no payload")))?;
-        if elsewhere(github, &payload).is_some() {
-            return Ok(None);
-        }
 
         delivered(
             github,
@@ -340,21 +375,21 @@ impl Github {
             payload,
             listed.delivered_at,
         )
-        .map(Some)
         .map_err(Refused::Failed)
     }
 
     fn as_app(
         &self,
-        github: &GithubConnection,
+        method: reqwest::Method,
+        app: &App,
         url: &str,
-    ) -> Result<reqwest::RequestBuilder, Refused> {
+    ) -> Result<reqwest::RequestBuilder> {
         Ok(self
             .client
-            .get(url)
+            .request(method, url)
             .header("accept", "application/vnd.github+json")
             .header("x-github-api-version", VERSION)
-            .bearer_auth(app_jwt(&github.credential).map_err(Refused::Failed)?))
+            .bearer_auth(app_jwt(app)?))
     }
 
     /// The comment kestrel leaves on the issue the work came from. What comes back is where
@@ -718,7 +753,6 @@ fn number(header: Option<&HeaderValue>) -> Option<i64> {
     header?.to_str().ok()?.trim().parse().ok()
 }
 
-/// GitHub names the next page of a list it pages by cursor in a `Link` header.
 fn next_page(headers: &HeaderMap) -> Option<String> {
     headers
         .get("link")?
@@ -869,8 +903,7 @@ pub fn dispatched(
     }
 }
 
-/// One Delivery, named in GitHub's webhook vocabulary, whether it arrived by webhook or was
-/// read from the App's Delivery log: its `guid` is the Event's id either way.
+/// Its `guid` is the Event's id whether it arrived by webhook or was read from the Delivery log.
 pub fn delivered(
     github: &GithubConnection,
     event: &str,
@@ -878,7 +911,12 @@ pub fn delivered(
     payload: serde_json::Value,
     time: Timestamp,
 ) -> Result<Occurrence> {
-    if let Some(named) = elsewhere(github, &payload) {
+    if let Some(named) = payload
+        .get("repository")
+        .and_then(|repository| repository.get("full_name"))
+        .and_then(serde_json::Value::as_str)
+        && !named.eq_ignore_ascii_case(&github.repository)
+    {
         bail!(
             "the delivery is about {named}, and this integration watches {}",
             github.repository
@@ -904,14 +942,6 @@ pub fn delivered(
         time,
         data: payload,
     })
-}
-
-fn elsewhere<'a>(github: &GithubConnection, payload: &'a serde_json::Value) -> Option<&'a str> {
-    payload
-        .get("repository")
-        .and_then(|repository| repository.get("full_name"))
-        .and_then(serde_json::Value::as_str)
-        .filter(|named| !named.eq_ignore_ascii_case(&github.repository))
 }
 
 /// The external resource the event is about (ADR-0011): the repository, never the
@@ -1070,6 +1100,7 @@ mod tests {
             credential: App::held(1, 2, "not a pem, but nothing here signs with it"),
             bot_login: "kestrel[bot]".to_owned(),
             interval: jiff::SignedDuration::from_secs(60),
+            repository_id: 1,
         }
     }
 
@@ -1147,6 +1178,7 @@ mod tests {
             carries: vec![crate::domain::Direction::Inbound],
             poll_due_at: None,
             deliveries_read_from: None,
+            last_polled_at: None,
             last_event_refusal: None,
         };
         for shape in [

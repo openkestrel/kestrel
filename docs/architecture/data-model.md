@@ -58,7 +58,7 @@ erDiagram
 | `agent` | Harness and optional model | A null `model` means the harness default. |
 | `provider_credential` | Organization secrets by variable name | `sealed` is encrypted with `kestrel.key`. |
 | `subscription_profile`, `…_entry` | A person's harness login | Entries are `variable` or `file`, sealed. |
-| `integration` | GitHub or generic webhook | `CHECK`s tie columns to `kind`. GitHub's `signing_secret` and its App private key (`private_key_sealed`) are both sealed; a webhook keeps `shared_secret_digest`. The poll cursor (`deliveries_read_from`) and the last refusal live here; a refusal with no `last_event_refusal_id` is Deliveries lost to GitHub's retention. |
+| `integration` | GitHub or generic webhook | `CHECK`s tie columns to `kind`. GitHub's `signing_secret` and its App private key (`private_key_sealed`) are both sealed; a webhook keeps `shared_secret_digest`. The poll cursor (`deliveries_read_from`, GitHub's clock), `last_polled_at` (kestrel's), `repository_id` and the last refusal live here; a refusal with no `last_event_refusal_id` is Deliveries lost to GitHub's retention. |
 | `event` | Every recorded CloudEvent | `integration_id` null for minted Events. |
 | `trigger`, `trigger_agent` | The rule and its allowed Agents | Exactly one of `filter`, `every_ms`, `cron`. `due_at` is set only for schedules. |
 | `firing` | One Trigger × one Event | `outcome` ∈ opened, fed, ignored, held, canceled, failed; `CHECK`s tie `workspace_id`, `failure` and `considered_at` to it. |

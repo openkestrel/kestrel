@@ -126,8 +126,7 @@ pub async fn page(store: &Store, state: &str) -> Result<String> {
     let flow: Flow =
         serde_json::from_str(&store.read().await?.app_flows().read(state, "ready").await?)?;
     let base = &flow.registration.callback_base;
-    // GitHub refuses a loopback hook URL but never resolves a public one, so a control plane
-    // GitHub cannot reach still gets an active hook, and its poll reads what the hook logged.
+    // GitHub refuses a loopback hook URL, but never resolves a public one.
     let webhook_base = flow
         .registration
         .webhook_base
@@ -217,6 +216,9 @@ pub async fn installed(store: &Store, github: &Github, state: &str) -> Result<In
     credential.installation = github
         .repository_installation(api, &credential, &flow.registration.repository)
         .await?;
+    let repository_id = github
+        .repository_id(api, &credential, &flow.registration.repository)
+        .await?;
     let mut tx = store.begin().await?;
     tx.app_flows().read(state, "converted").await?;
     let organization = tx.organizations().named(&flow.organization).await?;
@@ -232,6 +234,7 @@ pub async fn installed(store: &Store, github: &Github, state: &str) -> Result<In
                 credential,
                 bot_login: format!("{}[bot]", app.slug),
                 interval: SignedDuration::from_mins(1),
+                repository_id,
             }),
             &[Direction::Inbound, Direction::Outbound],
             Some(app.webhook_secret.as_str()),

@@ -22,13 +22,15 @@ nothing twice. A GitHub Event's `id` is its Delivery's GUID for every type, howe
 - Ingest only records and wakes the firing sweep. Nothing is matched on the request path.
 - An unauthenticated request never becomes an Event, and says nothing about whether the
   Integration exists. The last refusal is kept on the Integration row for `integration list`.
-- A poll reads the Delivery log back to `deliveries_read_from`, keeps its installation's, and
-  fetches only the payloads of Deliveries not yet recorded. It records them and moves
-  `deliveries_read_from` to a minute before it started, in one transaction; a payload it cannot
-  fetch records nothing and moves nothing (ADR-0011). The first poll starts at registration.
-- GitHub keeps Deliveries three days. A poll that last read further back than that, and whose
-  walk ran out before reaching where it started, records the loss as the Integration's refusal;
-  nothing is rebuilt from a resource read.
+- A poll reads the Delivery log back to `deliveries_read_from`, keeps its installation's and
+  repository's (`repository_id`, learned at registration), and fetches only the payloads of
+  Deliveries not yet recorded. It records them, moves `deliveries_read_from` to a minute before
+  the newest `delivered_at` it listed (GitHub's clock, not kestrel's), and stamps
+  `last_polled_at`, in one transaction; a payload it cannot fetch records nothing and moves
+  nothing (ADR-0011). The first poll starts at registration.
+- GitHub keeps Deliveries three days. When `last_polled_at` is older than that and the walk ran
+  out before reaching where it started, the poll records on the Integration that some may have
+  been lost; nothing is rebuilt from a resource read. A later refusal replaces that notice.
 
 ## Firing
 

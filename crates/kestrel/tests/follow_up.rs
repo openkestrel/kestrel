@@ -561,10 +561,12 @@ async fn a_delivery_backlog_longer_than_a_page_loses_nothing() {
             credential: App::held(APP_ID, INSTALLATION_ID, PRIVATE_KEY),
             bot_login: "kestrel[bot]".to_owned(),
             interval: SignedDuration::from_secs(1),
+            repository_id: github_stub::REPOSITORY_ID,
         }),
         carries: vec![Direction::Inbound],
         poll_due_at: None,
         deliveries_read_from: Some(from),
+        last_polled_at: Some(from),
         last_event_refusal: None,
     };
 

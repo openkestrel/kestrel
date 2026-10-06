@@ -281,7 +281,11 @@ async fn a_first_poll_reads_only_what_was_delivered_since_registration() {
 #[tokio::test]
 async fn another_installations_deliveries_are_not_this_integrations() {
     let stub = GithubStub::start();
-    stub.deliver_elsewhere(labelled_ready(41), INSTALLATION_ID + 1);
+    stub.deliver_to(
+        labelled_ready(41),
+        INSTALLATION_ID + 1,
+        github_stub::REPOSITORY_ID,
+    );
     stub.deliver(labelled_ready(43));
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
@@ -295,8 +299,7 @@ async fn another_installations_deliveries_are_not_this_integrations() {
     kestrel.teardown().await;
 }
 
-/// GitHub keeps a Delivery three days; a poll that last read further back than that cannot know
-/// what it missed, and says so rather than rebuilding it.
+/// A poll away longer than GitHub keeps Deliveries cannot know what it missed.
 #[tokio::test]
 async fn deliveries_older_than_githubs_retention_are_reported_lost() {
     let stub = GithubStub::start();
@@ -314,12 +317,16 @@ async fn deliveries_older_than_githubs_retention_are_reported_lost() {
         .await;
     polled(&stub, 1).await;
     let pool = support::database(kestrel.data_dir()).await;
-    sqlx::query("UPDATE integration SET deliveries_read_from = ?, poll_due_at = ?")
-        .bind((Timestamp::now() - SignedDuration::from_hours(80)).to_string())
-        .bind(Timestamp::now().to_string())
-        .execute(&pool)
-        .await
-        .expect("the integration should be set back");
+    let away = (Timestamp::now() - SignedDuration::from_hours(80)).to_string();
+    sqlx::query(
+        "UPDATE integration SET deliveries_read_from = ?, last_polled_at = ?, poll_due_at = ?",
+    )
+    .bind(&away)
+    .bind(&away)
+    .bind(Timestamp::now().to_string())
+    .execute(&pool)
+    .await
+    .expect("the integration should be set back");
 
     let deadline = tokio::time::Instant::now() + PATIENCE;
     let refusal = loop {
@@ -337,7 +344,11 @@ async fn deliveries_older_than_githubs_retention_are_reported_lost() {
     };
 
     assert_eq!(refusal.id, None);
-    assert!(refusal.reason.contains("three days"), "{}", refusal.reason);
+    assert!(
+        refusal.reason.contains("may have been lost"),
+        "{}",
+        refusal.reason
+    );
     assert!(kestrel.events("acme").await.is_empty());
 
     kestrel.teardown().await;
@@ -346,9 +357,11 @@ async fn deliveries_older_than_githubs_retention_are_reported_lost() {
 #[tokio::test]
 async fn a_delivery_about_another_repository_the_app_is_installed_on_is_skipped() {
     let stub = GithubStub::start();
-    let mut elsewhere = labelled_ready(41);
-    elsewhere.payload["repository"] = serde_json::json!({ "full_name": "jtmthf/elsewhere" });
-    stub.deliver(elsewhere);
+    stub.deliver_to(
+        labelled_ready(41),
+        INSTALLATION_ID,
+        github_stub::REPOSITORY_ID + 1,
+    );
     stub.deliver(labelled_ready(43));
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
@@ -359,6 +372,26 @@ async fn a_delivery_about_another_repository_the_app_is_installed_on_is_skipped(
     let events = kestrel.events("acme").await;
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].occurrence.subject.as_deref(), Some("#43"));
+
+    kestrel.teardown().await;
+}
+
+/// GitHub lists a Delivery a few seconds after it is made, so one made before the newest the
+/// last poll read can still be listed after it.
+#[tokio::test]
+async fn a_delivery_listed_after_a_newer_one_is_still_read() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    watching(&kestrel, &stub, BOTH).await;
+    let ahead = Timestamp::now() + SignedDuration::from_secs(20);
+    stub.deliver_at(labelled_ready(43), ahead);
+    recorded(&kestrel, 1).await;
+    polled(&stub, polls(&stub) + 2).await;
+
+    stub.deliver_at(labelled_ready(44), ahead - SignedDuration::from_secs(10));
+
+    let events = recorded(&kestrel, 2).await;
+    assert_eq!(events.len(), 2);
 
     kestrel.teardown().await;
 }
@@ -494,8 +527,7 @@ async fn a_transient_failure_loses_no_event_and_records_none_twice() {
     kestrel.teardown().await;
 }
 
-/// The poll reads the App's own Delivery log, so it presents the App's JWT rather than an
-/// installation token; the credential is spoken only to the GitHub it was registered for.
+/// The Delivery log is the App's own, so the poll presents the App's JWT, not an installation token.
 #[tokio::test]
 async fn the_poll_presents_the_apps_own_credential() {
     let stub = GithubStub::start();
@@ -552,10 +584,12 @@ async fn an_installation_token_nearing_expiry_is_replaced_before_it_is_used_agai
             credential: App::held(APP_ID, INSTALLATION_ID, PRIVATE_KEY),
             bot_login: "kestrel[bot]".to_owned(),
             interval: eagerly(),
+            repository_id: github_stub::REPOSITORY_ID,
         }),
         carries: BOTH.to_vec(),
         poll_due_at: None,
         deliveries_read_from: None,
+        last_polled_at: None,
         last_event_refusal: None,
     };
     let github = Github::dialling_out().expect("the GitHub client");
