@@ -1,16 +1,93 @@
 //! The `kestrel-env` image as a test drives it: the one CI built for this change, or one built
 //! here when nothing named it, and run the way an operator running one by hand would run it.
 
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
+use std::sync::mpsc;
 use std::time::Duration;
+
+use serde_json::{Value, json};
 
 use super::diagnostics::Diagnostics;
 use super::docker::{self, Ran, removed};
 use super::{OnTheLink, images};
 
 const PATIENCE: Duration = Duration::from_secs(30);
+const HANDSHAKE_PATIENCE: Duration = Duration::from_secs(60);
+
+/// The harnesses the product images carry, and declare in `dev.kestrel.harnesses` (ADR-0048).
+pub const HARNESSES: &[&str] = &["opencode", "claude", "codex"];
+
+/// What the image declares in `dev.kestrel.harnesses`.
+pub fn declared_harnesses(image: &str) -> Vec<String> {
+    let labels = docker::configured(image, "{{json .Config.Labels}}");
+    let labels: HashMap<String, String> =
+        serde_json::from_str(&labels).expect("the image's labels should read");
+    let declared = labels
+        .get("dev.kestrel.harnesses")
+        .unwrap_or_else(|| panic!("the image declares no dev.kestrel.harnesses label: {labels:?}"));
+
+    declared.split(',').map(str::to_owned).collect()
+}
+
+/// What an ACP harness in the image answers the first message a client sends, with no
+/// credential anywhere it could look.
+pub fn handshake(image: &str, harness: &[&str]) -> Value {
+    let (program, arguments) = harness.split_first().expect("a harness to spawn");
+    let name = format!("kestrel-handshake-{program}-{}", std::process::id());
+    removed(&name);
+
+    let mut spawned = Command::new("docker")
+        .args(["run", "--rm", "--interactive", "--name", &name])
+        .args(["--entrypoint", program, image])
+        .args(arguments)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("docker should run the image");
+
+    let initialize = json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": 1,
+            "clientCapabilities": {
+                "fs": { "readTextFile": false, "writeTextFile": false },
+                "terminal": false,
+            },
+        },
+    });
+    let mut stdin = spawned.stdin.take().expect("the harness's stdin is piped");
+    writeln!(stdin, "{initialize}").expect("the harness should read its stdin");
+
+    let stdout = spawned
+        .stdout
+        .take()
+        .expect("the harness's stdout is piped");
+    let (answered, answer) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Ok(message) = serde_json::from_str::<Value>(&line)
+                && message["id"] == 0
+            {
+                let _ = answered.send(message);
+                return;
+            }
+        }
+    });
+
+    let answer = answer.recv_timeout(HANDSHAKE_PATIENCE);
+    drop(stdin);
+    removed(&name);
+    let _ = spawned.wait();
+
+    answer.unwrap_or_else(|_| panic!("{harness:?} in {image} never answered initialize"))
+}
 
 /// Two processes in one checkout build the same source to the same tags and never remove them,
 /// so unlike the compose suite they need no lock.

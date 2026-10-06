@@ -27,6 +27,23 @@ RUN set -eu; \
     tar --extract --gzip --file /tmp/opencode.tar.gz --directory /usr/local/bin opencode; \
     rm /tmp/opencode.tar.gz
 
+# node:24-trixie-slim
+FROM node@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0 AS adapters
+
+WORKDIR /opt/acp
+COPY images/kestrel-env/package.json images/kestrel-env/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
+# `claude` is a native binary its wrapper's postinstall copies over a stub, and --ignore-scripts
+# leaves the stub; running that one install step explicitly keeps every other script off while
+# the build still fails here rather than shipping a `claude` that prints install help.
+RUN node ./node_modules/@anthropic-ai/claude-code/install.cjs
+# What the runtime user runs: each catalogue command and both vendor sign-in executables,
+# without credentials and without signing in.
+RUN ./node_modules/.bin/claude-agent-acp --version \
+    && ./node_modules/.bin/codex-acp --version \
+    && ./node_modules/.bin/codex --version \
+    && ./node_modules/.bin/claude --version
+
 # rust:1.96.0-slim-trixie
 FROM rust@sha256:c37af730be4fd8104cbf9aedbd6ab259e51ca2d5437817a0f8680edf66ac6c28 AS supervisor
 
@@ -46,6 +63,16 @@ RUN apt-get update \
 
 COPY --from=opencode /usr/local/bin/opencode /usr/local/bin/opencode
 COPY --from=supervisor /src/target/release/kestrel-supervisor /usr/local/bin/kestrel-supervisor
+COPY --from=adapters /usr/local/bin/node /usr/local/bin/node
+COPY --from=adapters /opt/acp /opt/acp
+RUN ln --symbolic /opt/acp/node_modules/.bin/claude-agent-acp /usr/local/bin/claude-agent-acp \
+    && ln --symbolic /opt/acp/node_modules/.bin/codex-acp /usr/local/bin/codex-acp \
+    && ln --symbolic /opt/acp/node_modules/.bin/claude /usr/local/bin/claude \
+    && ln --symbolic /opt/acp/node_modules/.bin/codex /usr/local/bin/codex
+
+# The catalogue names these harnesses; a derived image inherits the label and overrides it when
+# it carries a different set (ADR-0048).
+LABEL dev.kestrel.harnesses="opencode,claude,codex"
 
 # Docker leaves HOME unset for anyone but root, and a harness with nowhere to keep its
 # state writes to `/`.

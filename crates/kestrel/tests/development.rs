@@ -7,16 +7,18 @@
 
 mod support;
 
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::time::Duration;
-
-use serde_json::{Value, json};
-use support::docker::{self, removed};
+use serde_json::Value;
+use support::docker;
 use support::image;
 
-const PATIENCE: Duration = Duration::from_secs(60);
+#[test]
+#[ignore = "builds and runs the kestrel-dev image"]
+fn the_harness_label_is_the_product_image_it_derives_from() {
+    assert_eq!(
+        image::declared_harnesses(image::development()),
+        image::HARNESSES
+    );
+}
 
 #[test]
 #[ignore = "builds and runs the kestrel-dev image"]
@@ -47,7 +49,7 @@ fn each_harness_answers_an_acp_handshake_in_the_image() {
         &["codex-acp"],
         &["opencode", "acp"],
     ] {
-        let answer = initialized(harness);
+        let answer = image::handshake(image::development(), harness);
         assert_eq!(
             answer["result"]["protocolVersion"], 1,
             "{harness:?} answered initialize with {answer}"
@@ -126,60 +128,4 @@ fn kestrel_passes_its_own_checks_in_the_image() {
 
 fn running(command: &[&str]) -> docker::Ran {
     docker::running(image::development(), command)
-}
-
-/// What an ACP harness in the image answers the first message a client sends, with no
-/// credential anywhere it could look.
-fn initialized(harness: &[&str]) -> Value {
-    let (program, arguments) = harness.split_first().expect("a harness to spawn");
-    let name = format!("kestrel-dev-handshake-{}-{}", program, std::process::id());
-    removed(&name);
-
-    let mut spawned = Command::new("docker")
-        .args(["run", "--rm", "--interactive", "--name", &name])
-        .args(["--entrypoint", program, image::development()])
-        .args(arguments)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("docker should run the image");
-
-    let initialize = json!({
-        "jsonrpc": "2.0",
-        "id": 0,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": 1,
-            "clientCapabilities": {
-                "fs": { "readTextFile": false, "writeTextFile": false },
-                "terminal": false,
-            },
-        },
-    });
-    let mut stdin = spawned.stdin.take().expect("the harness's stdin is piped");
-    writeln!(stdin, "{initialize}").expect("the harness should read its stdin");
-
-    let stdout = spawned
-        .stdout
-        .take()
-        .expect("the harness's stdout is piped");
-    let (answered, answer) = mpsc::channel();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if let Ok(message) = serde_json::from_str::<Value>(&line)
-                && message["id"] == 0
-            {
-                let _ = answered.send(message);
-                return;
-            }
-        }
-    });
-
-    let answer = answer.recv_timeout(PATIENCE);
-    drop(stdin);
-    removed(&name);
-    let _ = spawned.wait();
-
-    answer.unwrap_or_else(|_| panic!("{harness:?} never answered initialize"))
 }
