@@ -82,8 +82,11 @@ for (const width of [1280, 375]) {
 			if (await toggle.first().isVisible()) {
 				await tap(toggle.first(), `${workspace} ${mode} @ ${width}`);
 				const activity = page.locator("[data-activity] button").first();
-				if (await activity.isVisible().catch(() => false))
-					await tap(activity, `${workspace} expand Activity @ ${width}`);
+				if (await activity.isVisible().catch(() => false)) {
+					// The Transcript keeps scrolling under a pointer while it sticks to the bottom.
+					await activity.focus();
+					await page.keyboard.press("Enter");
+				}
 				await audit(page, `${workspace} transcript ${mode}`);
 			}
 		}

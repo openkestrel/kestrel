@@ -2,7 +2,7 @@
 
 import { ArrowDownIcon } from "lucide-react";
 import type { ComponentProps } from "react";
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import { Button } from "#/components/ui/button";
 import { cn } from "#/lib/utils";
@@ -21,9 +21,15 @@ export const Conversation = ({ className, ...props }: ConversationProps) => (
 
 export type ConversationContentProps = ComponentProps<typeof StickToBottom.Content>;
 
-export const ConversationContent = ({ className, ...props }: ConversationContentProps) => (
-	<StickToBottom.Content className={cn("flex flex-col gap-8 p-4", className)} {...props} />
-);
+export const ConversationContent = ({ className, ...props }: ConversationContentProps) => {
+	const { scrollRef } = useStickToBottomContext();
+	// StickToBottom.Content passes no props to the element that scrolls, and a log of plain
+	// messages holds nothing else a keyboard can reach.
+	useEffect(() => {
+		scrollRef.current?.setAttribute("tabindex", "0");
+	}, [scrollRef]);
+	return <StickToBottom.Content className={cn("flex flex-col gap-8 p-4", className)} {...props} />;
+};
 
 export type ConversationEmptyStateProps = ComponentProps<"div"> & {
 	title?: string;

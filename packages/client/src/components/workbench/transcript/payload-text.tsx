@@ -2,11 +2,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "#/components/ui/button";
 import { Skeleton } from "#/components/ui/skeleton";
+import { ScrollablePre } from "#/components/workbench/scrollable-pre";
 import { size } from "#/operator/format";
 import type { PayloadReference } from "#/operator/generated";
 import { transcriptPayloadQuery } from "#/operator/queries";
 import { Refused } from "#/operator/transport";
-import { ScrollablePre } from "./scrollable-pre";
 
 export function PayloadText({
 	organization,

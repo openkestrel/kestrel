@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useState } from "react";
 import { Button } from "#/components/ui/button";
+import { ScrollablePre } from "#/components/workbench/scrollable-pre";
 import type { Delivered } from "#/operator/transcript";
 import {
 	at,
@@ -12,7 +13,6 @@ import {
 	toolState,
 } from "#/operator/transcript-view";
 import { PayloadText } from "./payload-text";
-import { ScrollablePre } from "./scrollable-pre";
 
 export type Disclosure = "line" | "steps" | "full";
 
