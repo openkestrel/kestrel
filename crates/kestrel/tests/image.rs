@@ -97,13 +97,7 @@ fn the_label_names_the_harnesses_the_image_carries() {
 #[test]
 #[ignore = "builds and runs the kestrel-env image"]
 fn each_catalogued_harness_answers_an_acp_handshake_in_the_image() {
-    for harness in image::HARNESS_COMMANDS {
-        let answer = image::handshake(image::built(), harness);
-        assert_eq!(
-            answer["result"]["protocolVersion"], 1,
-            "{harness:?} answered initialize with {answer}"
-        );
-    }
+    image::each_harness_answers(image::built());
 }
 
 #[test]
@@ -120,7 +114,7 @@ fn the_vendor_sign_in_executables_answer_without_credentials_or_sign_in() {
 
     for (command, usage) in [
         (&["claude", "setup-token", "--help"][..], "setup-token"),
-        (&["codex", "login", "--help"][..], "codex login"),
+        (&["codex", "login", "--help"][..], "device-auth"),
     ] {
         let ran = image::running(command);
         let said = format!("{}\n{}", ran.out, ran.err);

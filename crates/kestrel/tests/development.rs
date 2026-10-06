@@ -48,13 +48,7 @@ fn the_toolchain_git_and_gh_are_each_invocable_in_the_image() {
 #[test]
 #[ignore = "builds and runs the kestrel-dev image"]
 fn each_harness_answers_an_acp_handshake_in_the_image() {
-    for harness in image::HARNESS_COMMANDS {
-        let answer = image::handshake(image::development(), harness);
-        assert_eq!(
-            answer["result"]["protocolVersion"], 1,
-            "{harness:?} answered initialize with {answer}"
-        );
-    }
+    image::each_harness_answers(image::development());
 }
 
 #[test]

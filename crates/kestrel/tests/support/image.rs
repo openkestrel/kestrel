@@ -95,6 +95,18 @@ pub fn handshake(image: &str, harness: &[&str]) -> Value {
     answer.unwrap_or_else(|_| panic!("{harness:?} in {image} never answered initialize"))
 }
 
+/// Every catalogued harness answers the first message a client sends, with no
+/// credential anywhere it could look.
+pub fn each_harness_answers(image: &str) {
+    for harness in HARNESS_COMMANDS {
+        let answer = handshake(image, harness);
+        assert_eq!(
+            answer["result"]["protocolVersion"], 1,
+            "{harness:?} answered initialize with {answer}"
+        );
+    }
+}
+
 /// Two processes in one checkout build the same source to the same tags and never remove them,
 /// so unlike the compose suite they need no lock.
 pub struct Tags {
