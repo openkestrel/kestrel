@@ -3892,7 +3892,7 @@
           "availability": {
             "type": "string",
             "enum": ["available", "unavailable"],
-            "description": "Unavailable when no inbound, signed GitHub Integration in the Organization watches the repository and none has delivered a pull request from it: kestrel cannot learn its pull requests, which says nothing about whether any exist."
+            "description": "Unavailable when no inbound GitHub Integration in the Organization watches the repository and none has delivered a pull request from it: kestrel cannot learn its pull requests, which says nothing about whether any exist."
           },
           "known": {
             "type": ["array", "null"],
@@ -4283,7 +4283,7 @@
               "null"
             ],
             "default": "1m",
-            "description": "How often the poll asks GitHub what has happened, as a duration such as `1m` or `PT30S`."
+            "description": "How often the poll reads the App's Delivery log, as a duration such as `1m` or `PT30S`."
           },
           "webhook_secret": {
             "type": [
@@ -4291,7 +4291,7 @@
               "null"
             ],
             "writeOnly": true,
-            "description": "The secret GitHub signs webhook deliveries with. Given one, the repository's events arrive by webhook and it is not polled."
+            "description": "The App's webhook secret. Given one, a Delivery that reaches kestrel's webhook is recorded on arrival; the repository is polled either way."
           },
           "api": {
             "type": [
@@ -4392,7 +4392,7 @@
               "string",
               "null"
             ],
-            "description": "Where on the link its events are delivered, when they are delivered rather than polled."
+            "description": "Where on the link GitHub, or a generic producer, can deliver to it. An inbound GitHub Integration is also polled."
           },
           "last_event_refusal": {
             "oneOf": [
@@ -4418,17 +4418,24 @@
         ]
       },
       "EventRefusal": {
-        "description": "The latest Event an Integration refused rather than stored, visible until acknowledged.",
+        "description": "The latest Event an Integration refused rather than stored, or the Deliveries it lost to GitHub's retention, visible until acknowledged.",
         "type": "object",
         "properties": {
           "source": {
             "type": "string"
           },
           "id": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The refused Event's id; null when Deliveries were lost rather than one refused."
           },
           "bytes": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "minimum": 0
           },
           "reason": {

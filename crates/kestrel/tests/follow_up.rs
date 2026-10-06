@@ -22,8 +22,7 @@ use support::{A_PROVIDER_KEY, APP_ID, INSTALLATION_ID, PRIVATE_KEY, PROVIDER_KEY
 const REPOSITORY: &str = "jtmthf/kestrel";
 const MAINTAINER: &str = "jack";
 const ISSUE: i64 = 43;
-const EVENTS: &str = "/issues/events?";
-const COMMENTS: &str = "/issues/comments?";
+const LISTED: &str = "/app/hook/deliveries?";
 const PATIENCE: Duration = Duration::from_secs(30);
 
 async fn a_workspace(kestrel: &Kestrel) -> kestrel::domain::Workspace {
@@ -381,11 +380,7 @@ async fn the_second_session_runs_through_the_supervisor_the_first_left_on_the_in
 #[tokio::test]
 async fn a_github_comment_enqueues_a_second_session_in_the_originating_workspace() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(
-        7,
-        ISSUE,
-        "ready-for-agent",
-    )]));
+    stub.deliver(github_stub::labelled(ISSUE, "ready-for-agent"));
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub).await;
     let workspace = workspaces(&kestrel, 1).await.remove(0);
@@ -397,19 +392,15 @@ async fn a_github_comment_enqueues_a_second_session_in_the_originating_workspace
     let comments_before = stub
         .requests()
         .iter()
-        .filter(|request| request.url.contains(COMMENTS))
+        .filter(|request| request.url.starts_with(LISTED))
         .count();
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(
-            11,
-            ISSUE,
-            "jack",
-            "please add the missing test",
-        )]),
-    );
-    requested(&stub, COMMENTS, comments_before).await;
+    stub.deliver(github_stub::issue_comment(
+        11,
+        ISSUE,
+        "jack",
+        "please add the missing test",
+    ));
+    requested(&stub, LISTED, comments_before).await;
     pending_arrived(&kestrel, workspace.id).await;
     assert_eq!(
         kestrel.sessions(workspace.id).await.len(),
@@ -447,11 +438,7 @@ async fn a_github_comment_enqueues_a_second_session_in_the_originating_workspace
 #[tokio::test]
 async fn comments_arriving_during_a_turn_wait_in_order_with_their_authors() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(
-        7,
-        ISSUE,
-        "ready-for-agent",
-    )]));
+    stub.deliver(github_stub::labelled(ISSUE, "ready-for-agent"));
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub).await;
     let workspace = workspaces(&kestrel, 1).await.remove(0);
@@ -463,17 +450,21 @@ async fn comments_arriving_during_a_turn_wait_in_order_with_their_authors() {
     let comments_before = stub
         .requests()
         .iter()
-        .filter(|request| request.url.contains(COMMENTS))
+        .filter(|request| request.url.starts_with(LISTED))
         .count();
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[
-            github_stub::issue_comment(12, ISSUE, "jill", "and update the docs"),
-            github_stub::issue_comment(11, ISSUE, "jack", "one more change"),
-        ]),
-    );
-    requested(&stub, COMMENTS, comments_before).await;
+    stub.deliver(github_stub::issue_comment(
+        11,
+        ISSUE,
+        "jack",
+        "one more change",
+    ));
+    stub.deliver(github_stub::issue_comment(
+        12,
+        ISSUE,
+        "jill",
+        "and update the docs",
+    ));
+    requested(&stub, LISTED, comments_before).await;
     pending_arrived(&kestrel, workspace.id).await;
     // Both comments are one poll's, and each is received in its own transaction; let the sweep
     // finish holding the second before the session ends.
@@ -529,13 +520,13 @@ async fn comments_arriving_during_a_turn_wait_in_order_with_their_authors() {
 #[tokio::test]
 async fn a_comment_polled_with_its_origin_waits_for_the_workspace_to_open() {
     let stub = GithubStub::start();
-    let occurred_at = serde_json::json!("2026-09-01T12:00:07Z");
-    let mut label = github_stub::labelled(7, ISSUE, "ready-for-agent");
-    label["created_at"] = occurred_at.clone();
-    let mut comment = github_stub::issue_comment(17, ISSUE, "jack", "picked up together");
-    comment["created_at"] = occurred_at;
-    stub.script_answer("GET", EVENTS, github_stub::page(&[label]));
-    stub.script_answer("GET", COMMENTS, github_stub::page(&[comment]));
+    stub.deliver(github_stub::labelled(ISSUE, "ready-for-agent"));
+    stub.deliver(github_stub::issue_comment(
+        17,
+        ISSUE,
+        "jack",
+        "picked up together",
+    ));
 
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub).await;
@@ -547,25 +538,19 @@ async fn a_comment_polled_with_its_origin_waits_for_the_workspace_to_open() {
 }
 
 #[tokio::test]
-async fn a_comment_backlog_larger_than_ten_pages_loses_nothing() {
+async fn a_delivery_backlog_longer_than_a_page_loses_nothing() {
     let stub = GithubStub::start();
-    let comments = (100..1200)
-        .rev()
-        .map(|id| github_stub::issue_comment(id, ISSUE, "jack", &format!("comment {id}")))
-        .collect::<Vec<_>>();
-    for page in comments.chunks(100) {
-        stub.script_answer("GET", COMMENTS, github_stub::page(page));
-    }
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(
-            99,
-            ISSUE,
-            "jack",
-            "the previous watermark",
-        )]),
+    let from = jiff::Timestamp::now();
+    stub.deliver_at(
+        github_stub::issue_comment(99, ISSUE, "jack", "read by the last poll"),
+        from - SignedDuration::from_secs(1),
     );
+    for id in 100..350 {
+        stub.deliver_at(
+            github_stub::issue_comment(id, ISSUE, "jack", &format!("comment {id}")),
+            from + SignedDuration::from_millis(id),
+        );
+    }
     let integration = Integration {
         id: IntegrationId::generate(),
         organization: OrganizationId::generate(),
@@ -576,29 +561,34 @@ async fn a_comment_backlog_larger_than_ten_pages_loses_nothing() {
             credential: App::held(APP_ID, INSTALLATION_ID, PRIVATE_KEY),
             bot_login: "kestrel[bot]".to_owned(),
             interval: SignedDuration::from_secs(1),
-            signed: false,
         }),
         carries: vec![Direction::Inbound],
         poll_due_at: None,
-        polled_through: None,
-        comments_polled_through: Some(99),
+        deliveries_read_from: Some(from),
         last_event_refusal: None,
     };
 
-    let seen = Github::dialling_out()
+    let listing = Github::dialling_out()
         .expect("the GitHub client")
-        .issue_comments(&integration)
+        .deliveries(&integration, from)
         .await
-        .expect("the comment backlog should be read");
+        .expect("the delivery backlog should be read");
 
-    assert_eq!(seen.occurrences.len(), 1100);
-    assert_eq!(seen.through, Some(1199));
+    assert_eq!(listing.listed.len(), 250);
+    assert!(!listing.ran_out);
+    assert!(
+        listing
+            .listed
+            .windows(2)
+            .all(|pair| pair[0].delivered_at < pair[1].delivered_at),
+        "oldest first"
+    );
     assert_eq!(
         stub.requests()
             .iter()
-            .filter(|request| request.url.contains(COMMENTS))
+            .filter(|request| request.url.starts_with("/app/hook/deliveries?"))
             .count(),
-        12
+        3
     );
 }
 
@@ -635,11 +625,7 @@ async fn watching_correlated(kestrel: &Kestrel, stub: &GithubStub, correlation: 
 #[tokio::test]
 async fn a_comment_on_a_sealed_workspace_feeds_the_open_one_holding_its_correlation() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(
-        7,
-        ISSUE,
-        "ready-for-agent",
-    )]));
+    stub.deliver(github_stub::labelled(ISSUE, "ready-for-agent"));
     let kestrel = Kestrel::boot().await;
     watching_correlated(&kestrel, &stub, "the release").await;
     let sealed = workspaces(&kestrel, 1).await.remove(0);
@@ -650,26 +636,18 @@ async fn a_comment_on_a_sealed_workspace_feeds_the_open_one_holding_its_correlat
     kestrel.complete_session(&first).await;
     kestrel.seal_workspace(sealed.id).await;
 
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled(8, ISSUE + 1, "ready-for-agent")]),
-    );
+    stub.deliver(github_stub::labelled(ISSUE + 1, "ready-for-agent"));
     let holding = workspaces(&kestrel, 2)
         .await
         .into_iter()
         .find(|workspace| workspace.id != sealed.id)
         .expect("the second label should continue the sealed workspace");
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(
-            12,
-            ISSUE,
-            "jack",
-            "about the release",
-        )]),
-    );
+    stub.deliver(github_stub::issue_comment(
+        12,
+        ISSUE,
+        "jack",
+        "about the release",
+    ));
 
     message_arrived(&kestrel, holding.id, "about the release").await;
     assert_eq!(kestrel.workspaces("acme").await.len(), 2);
@@ -694,8 +672,8 @@ async fn watching_a_named_actor(kestrel: &Kestrel, stub: &GithubStub) {
             &serde_json::json!({"all": [
                 {"exact": {"source": format!("https://github.com/{REPOSITORY}")}},
                 {"exact": {"type": "com.github.issue_comment.created"}},
-                {"exact": {"data.user.login": MAINTAINER}},
-                {"prefix": {"data.body": "@kestrel"}},
+                {"exact": {"data.comment.user.login": MAINTAINER}},
+                {"prefix": {"data.comment.body": "@kestrel"}},
             ]})
             .to_string(),
             "kestrel",
@@ -732,7 +710,7 @@ async fn watching_any_author(kestrel: &Kestrel, stub: &GithubStub) {
             &serde_json::json!({"all": [
                 {"exact": {"source": format!("https://github.com/{REPOSITORY}")}},
                 {"exact": {"type": "com.github.issue_comment.created"}},
-                {"prefix": {"data.body": "@kestrel"}},
+                {"prefix": {"data.comment.body": "@kestrel"}},
             ]})
             .to_string(),
             "kestrel",
@@ -754,23 +732,15 @@ async fn watching_any_author(kestrel: &Kestrel, stub: &GithubStub) {
 
 /// The maintainer's command, which is the comment that opens the workspace.
 fn the_command(stub: &GithubStub) {
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(
-            10, ISSUE, MAINTAINER, "@kestrel",
-        )]),
-    );
+    stub.deliver(github_stub::issue_comment(
+        10, ISSUE, MAINTAINER, "@kestrel",
+    ));
 }
 
 /// Scripted only once the session is already active, so a remark is judged against an open session
 /// rather than taken as its first prompt.
 fn a_remark_from(stub: &GithubStub, author: &str, remark: &str) {
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(11, ISSUE, author, remark)]),
-    );
+    stub.deliver(github_stub::issue_comment(11, ISSUE, author, remark));
 }
 
 /// The sweep records the remark as an Event before it decides whether to feed it, so an Event
@@ -782,7 +752,7 @@ async fn the_remark_was_recorded(kestrel: &Kestrel, remark: &str) {
             event
                 .occurrence
                 .data
-                .get("body")
+                .pointer("/comment/body")
                 .and_then(serde_json::Value::as_str)
                 == Some(remark)
         });
@@ -867,13 +837,9 @@ async fn a_remark_from_the_trigger_actor_feeds_an_open_workspace() {
 #[tokio::test]
 async fn a_comment_from_the_integration_s_own_identity_is_never_heard_as_input() {
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(
-            10, ISSUE, MAINTAINER, "@kestrel",
-        )]),
-    );
+    stub.deliver(github_stub::issue_comment(
+        10, ISSUE, MAINTAINER, "@kestrel",
+    ));
     let kestrel = Kestrel::boot().await;
     watching_any_author(&kestrel, &stub).await;
     let workspace = workspaces(&kestrel, 1).await.remove(0);
@@ -882,16 +848,12 @@ async fn a_comment_from_the_integration_s_own_identity_is_never_heard_as_input()
         .await
         .expect("the command should have opened a session");
 
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(
-            11,
-            ISSUE,
-            "kestrel[bot]",
-            "what kestrel said\n\n<!-- kestrel session 01a0 turn 1 -->",
-        )]),
-    );
+    stub.deliver(github_stub::issue_comment(
+        11,
+        ISSUE,
+        "kestrel[bot]",
+        "what kestrel said\n\n<!-- kestrel session 01a0 turn 1 -->",
+    ));
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     assert!(
@@ -906,13 +868,9 @@ async fn a_comment_from_the_integration_s_own_identity_is_never_heard_as_input()
 #[tokio::test]
 async fn a_marker_does_not_silence_a_comment_from_an_operator() {
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(
-            10, ISSUE, MAINTAINER, "@kestrel",
-        )]),
-    );
+    stub.deliver(github_stub::issue_comment(
+        10, ISSUE, MAINTAINER, "@kestrel",
+    ));
     let kestrel = Kestrel::boot().await;
     watching_a_named_actor(&kestrel, &stub).await;
     let workspace = workspaces(&kestrel, 1).await.remove(0);
@@ -920,16 +878,12 @@ async fn a_marker_does_not_silence_a_comment_from_an_operator() {
         .claim_session()
         .await
         .expect("the command should have opened a session");
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(
-            11,
-            ISSUE,
-            MAINTAINER,
-            "what kestrel said\n\n<!-- kestrel session 01a0 turn 1 -->",
-        )]),
-    );
+    stub.deliver(github_stub::issue_comment(
+        11,
+        ISSUE,
+        MAINTAINER,
+        "what kestrel said\n\n<!-- kestrel session 01a0 turn 1 -->",
+    ));
 
     pending_arrived(&kestrel, workspace.id).await;
 

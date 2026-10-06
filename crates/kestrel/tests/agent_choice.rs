@@ -72,9 +72,7 @@ async fn watching(kestrel: &Kestrel, stub: &GithubStub) {
 /// `codex`.
 async fn labelled(kestrel: &Kestrel, labels: &[&str]) -> GithubStub {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled_carrying(
-        7, 43, READY, labels,
-    )]));
+    stub.deliver(github_stub::labelled_carrying(43, READY, labels));
     kestrel
         .declare_trigger_allowing("acme", REPOSITORY, "builder", &["codex"], None)
         .await;
@@ -201,10 +199,12 @@ async fn a_label_on_work_that_feeds_an_open_workspace_changes_nothing_about_its_
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel).await;
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[
-        github_stub::labelled_carrying(7, 43, READY, &["agent:codex"]),
-        github_stub::labelled_carrying(8, 43, READY, &["agent:codex", "agent:builder"]),
-    ]));
+    stub.deliver(github_stub::labelled_carrying(43, READY, &["agent:codex"]));
+    stub.deliver(github_stub::labelled_carrying(
+        43,
+        READY,
+        &["agent:codex", "agent:builder"],
+    ));
     kestrel
         .declare_trigger_allowing(
             "acme",

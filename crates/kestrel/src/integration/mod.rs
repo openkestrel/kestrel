@@ -1,7 +1,7 @@
 pub mod credential;
-pub mod delivery;
 pub mod github;
 pub mod manifest;
+pub mod post;
 pub mod webhook;
 
 use anyhow::{Context as _, Result, bail};
@@ -9,7 +9,9 @@ use jiff::{SignedDuration, Timestamp};
 use tracing::warn;
 
 use crate::declined::Declined;
-use crate::domain::{Connection, Direction, Event, EventRecordId, GithubConnection, Integration};
+use crate::domain::{
+    Connection, Direction, Event, EventRecordId, GithubConnection, Integration, Occurrence,
+};
 use crate::integration::credential::App;
 use crate::integration::github::{Github, Refused};
 use crate::store::Store;
@@ -23,7 +25,8 @@ pub struct Registration<'a> {
 }
 
 pub enum Connecting<'a> {
-    /// A `signing_secret` means GitHub delivers by webhook, and the repository is not polled.
+    /// Polled whether or not it has a `signing_secret`; with one, a Delivery GitHub can
+    /// reach kestrel with is also recorded on arrival.
     Github {
         repository: &'a str,
         api: &'a str,
@@ -84,7 +87,6 @@ pub async fn register(
                     credential,
                     bot_login,
                     interval,
-                    signed: signing_secret.is_some(),
                 }),
                 signing_secret,
             )
@@ -153,90 +155,117 @@ pub async fn event(store: &Store, id: EventRecordId) -> Result<Event> {
     store.begin().await?.integrations().event(id).await
 }
 
-/// One poll of one Integration. Every Event the poll saw and what it was polled through are
-/// written in one transaction, so a poll that is interrupted before it commits leaves the
-/// Integration where it was and the next one covers the same window again — which costs
-/// nothing, because an Event already recorded is recognised rather than recorded twice.
+/// GitHub keeps a Delivery for three days: one older than that which no poll read is gone.
+const RETENTION: SignedDuration = SignedDuration::from_hours(72);
+/// A Delivery is listed a few seconds after it is made, so each poll reads back over the end
+/// of the last one; what it reads again it recognises rather than records twice.
+const LISTING_LAG: SignedDuration = SignedDuration::from_mins(1);
+
+/// One poll of one Integration: its App's Deliveries since it last read them. Every Event the poll
+/// read and where the next one starts are written in one transaction, and a poll that cannot read
+/// every new Delivery records none of them and starts from the same place next time (ADR-0011).
 pub async fn poll(store: &Store, github: &Github, integration: &Integration) -> Result<Polled> {
     let interval = integration.github()?.interval;
-    let seen = github.issue_events(integration).await;
-    let comments = github.issue_comments(integration).await;
+    let from = integration
+        .deliveries_read_from
+        .context("a polled integration knows where its reading starts")?;
+    let started = Timestamp::now();
+    let read = read(store, github, integration, from).await;
     let mut tx = store.begin().await?;
-    let mut recorded = 0;
 
-    if let Ok(seen) = &seen {
-        for occurrence in &seen.occurrences {
-            match tx
-                .integrations()
-                .record_event(integration, occurrence)
-                .await?
-            {
-                Recorded::Recorded => recorded += 1,
-                Recorded::Already => {}
-                Recorded::Refused { because } => {
-                    warn!(
-                        integration = integration.name,
-                        %because,
-                        "an event was refused at ingest rather than stored"
-                    );
-                }
+    let (occurrences, ran_out) = match read {
+        Ok(read) => read,
+        Err(refused) => {
+            warn!(
+                integration = integration.name,
+                because = %refused,
+                "a poll came back with nothing"
+            );
+            tx.integrations()
+                .poll_refused(integration, back_off(interval, &refused))
+                .await?;
+            tx.commit().await?;
+            return Ok(Polled::default());
+        }
+    };
+    let mut recorded = 0;
+    for occurrence in &occurrences {
+        match tx
+            .integrations()
+            .record_event(integration, occurrence)
+            .await?
+        {
+            Recorded::Recorded => recorded += 1,
+            Recorded::Already => {}
+            Recorded::Refused { because } => {
+                warn!(
+                    integration = integration.name,
+                    %because,
+                    "an event was refused at ingest rather than stored"
+                );
             }
         }
-    } else if let Err(refused) = &seen {
-        warn!(
-            integration = integration.name,
-            because = %refused,
-            "an event poll came back with nothing"
-        );
     }
-    if let Ok(comments) = &comments {
-        for occurrence in &comments.occurrences {
-            match tx
-                .integrations()
-                .record_event(integration, occurrence)
-                .await?
-            {
-                Recorded::Recorded => recorded += 1,
-                Recorded::Already => {}
-                Recorded::Refused { because } => {
-                    warn!(
-                        integration = integration.name,
-                        %because,
-                        "an event was refused at ingest rather than stored"
-                    );
-                }
-            }
-        }
+    if ran_out && from < started - RETENTION {
+        let github = integration.github()?;
         tx.integrations()
-            .comments_polled(integration, comments.through)
+            .deliveries_lost(
+                integration,
+                &github::source(github),
+                &format!(
+                    "GitHub keeps deliveries for three days, and those made after {from} that no \
+                     poll read are gone"
+                ),
+            )
             .await?;
-    } else if let Err(refused) = &comments {
-        warn!(
-            integration = integration.name,
-            because = %refused,
-            "a comment poll came back with nothing"
-        );
     }
     tx.integrations()
         .polled(
             integration,
-            seen.as_ref()
-                .map_or(integration.polled_through, |seen| seen.through),
-            seen.as_ref().map_or_else(
-                |refused| back_off(interval, refused),
-                |_| Timestamp::now() + interval,
-            ),
+            from.max(started - LISTING_LAG),
+            started + interval,
         )
         .await?;
     tx.commit().await?;
 
     Ok(Polled {
-        seen: seen.as_ref().map_or(0, |seen| seen.occurrences.len())
-            + comments
-                .as_ref()
-                .map_or(0, |comments| comments.occurrences.len()),
+        seen: occurrences.len(),
         recorded,
     })
+}
+
+/// Only a Delivery not yet recorded has its payload fetched: one that reached the webhook, or an
+/// earlier poll, already has its Event.
+async fn read(
+    store: &Store,
+    github: &Github,
+    integration: &Integration,
+    from: Timestamp,
+) -> Result<(Vec<Occurrence>, bool), Refused> {
+    let listing = github.deliveries(integration, from).await?;
+    let source = github::source(integration.github().map_err(Refused::Failed)?);
+    let mut occurrences = Vec::new();
+
+    for listed in &listing.listed {
+        let known = async {
+            store
+                .read()
+                .await?
+                .integrations()
+                .knows(integration, &source, &listed.guid)
+                .await
+        }
+        .await
+        .map_err(Refused::Failed)?;
+        if known {
+            continue;
+        }
+        if let Some(occurrence) = github.delivery(integration, listed).await? {
+            occurrences.push(occurrence);
+        }
+    }
+
+    Ok((occurrences, listing.ran_out))
 }
 
 /// A rate limit names the moment it lifts, and asking again before then spends a request on

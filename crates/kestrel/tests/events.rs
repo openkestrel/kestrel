@@ -1,15 +1,19 @@
-//! Discovering Events on a repository kestrel does not own, by polling rather than by webhook
-//! (ADR-0005). An Event is identified and deduplicated, so an overlapping poll window records
+//! Discovering Events on a repository kestrel does not own by polling its GitHub App's Delivery
+//! log (ADR-0055). An Event is identified by its Delivery, so an overlapping poll window records
 //! each one exactly once, and a control plane that restarts carries on from where it stopped.
 
 mod support;
 
 use std::time::Duration;
 
-use jiff::SignedDuration;
-use kestrel::domain::{Direction, Event};
-use support::Kestrel;
+use jiff::{SignedDuration, Timestamp};
+use kestrel::domain::{
+    Connection, Direction, Event, GithubConnection, Integration, IntegrationId, OrganizationId,
+};
+use kestrel::integration::credential::App;
+use kestrel::integration::github::Github;
 use support::github_stub::{self, GithubStub, INSTALLATION_TOKEN, ScriptedResponse};
+use support::{APP_ID, INSTALLATION_ID, Kestrel, PRIVATE_KEY};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 const REPOSITORY: &str = "jtmthf/kestrel";
@@ -52,12 +56,19 @@ async fn recorded(kestrel: &Kestrel, count: usize) -> Vec<Event> {
     }
 }
 
-/// How many of a stub's requests were a poll, rather than the one-off `GET /app` a
+const LISTED: &str = "/app/hook/deliveries?";
+const FETCHED: &str = "/app/hook/deliveries/";
+
+/// How many of a stub's requests listed the Delivery log, rather than the one-off `GET /app` a
 /// registration makes to learn the Integration's bot login.
 fn polls(stub: &GithubStub) -> usize {
+    requested(stub, LISTED)
+}
+
+fn requested(stub: &GithubStub, path: &str) -> usize {
     stub.requests()
         .iter()
-        .filter(|request| request.url.contains("/issues"))
+        .filter(|request| request.url.starts_with(path))
         .count()
 }
 
@@ -77,14 +88,14 @@ async fn polled(stub: &GithubStub, times: usize) {
     }
 }
 
-fn labelled_ready(id: i64, issue: i64) -> serde_json::Value {
-    github_stub::labelled(id, issue, "ready-for-agent")
+fn labelled_ready(issue: i64) -> github_stub::Delivery {
+    github_stub::labelled(issue, "ready-for-agent")
 }
 
 #[tokio::test]
 async fn events_on_a_watched_repository_are_recorded_and_listed() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[labelled_ready(7, 43)]));
+    stub.deliver(labelled_ready(43));
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
 
@@ -164,14 +175,13 @@ async fn an_integration_that_carries_only_outbound_is_never_polled() {
 #[tokio::test]
 async fn two_polls_with_an_overlapping_window_record_each_event_once() {
     let stub = GithubStub::start();
-    let overlapping = github_stub::page(&[labelled_ready(8, 44), labelled_ready(7, 43)]);
-    stub.script(overlapping.clone());
-    stub.script(overlapping);
+    stub.deliver(labelled_ready(43));
+    stub.deliver(labelled_ready(44));
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
 
     recorded(&kestrel, 2).await;
-    polled(&stub, 2).await;
+    polled(&stub, 3).await;
 
     let events = kestrel.events("acme").await;
     assert_eq!(
@@ -180,6 +190,11 @@ async fn two_polls_with_an_overlapping_window_record_each_event_once() {
         "the same two events were recorded {} times over",
         events.len()
     );
+    assert_eq!(
+        requested(&stub, FETCHED),
+        2,
+        "a delivery already recorded had its payload fetched again"
+    );
     kestrel.teardown().await;
 }
 
@@ -187,8 +202,8 @@ async fn two_polls_with_an_overlapping_window_record_each_event_once() {
 async fn two_integrations_in_one_organization_record_one_producer_event() {
     let first = GithubStub::start();
     let second = GithubStub::start();
-    first.script(github_stub::page(&[labelled_ready(7, 43)]));
-    second.script(github_stub::page(&[labelled_ready(7, 43)]));
+    first.deliver(labelled_ready(43));
+    second.deliver(labelled_ready(43));
     let kestrel = Kestrel::boot().await;
     kestrel.declare_organization("acme").await;
     kestrel
@@ -223,15 +238,13 @@ async fn two_integrations_in_one_organization_record_one_producer_event() {
 #[tokio::test]
 async fn polling_resumes_after_a_restart_without_re_recording_what_it_already_saw() {
     let stub = GithubStub::start();
-    let page = github_stub::page(&[labelled_ready(7, 43)]);
-    stub.script(page.clone());
+    stub.deliver(labelled_ready(43));
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
     recorded(&kestrel, 1).await;
 
     let kestrel = kestrel.kill_and_restart().await;
     let asked = polls(&stub);
-    stub.script(page);
     polled(&stub, asked + 1).await;
 
     let events = kestrel.events("acme").await;
@@ -240,6 +253,143 @@ async fn polling_resumes_after_a_restart_without_re_recording_what_it_already_sa
         1,
         "a restarted control plane recorded what it had already seen"
     );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_first_poll_reads_only_what_was_delivered_since_registration() {
+    let stub = GithubStub::start();
+    stub.deliver_at(
+        labelled_ready(41),
+        Timestamp::now() - SignedDuration::from_hours(1),
+    );
+    stub.deliver(labelled_ready(43));
+    let kestrel = Kestrel::boot().await;
+    watching(&kestrel, &stub, BOTH).await;
+
+    recorded(&kestrel, 1).await;
+    polled(&stub, 3).await;
+
+    let events = kestrel.events("acme").await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].occurrence.subject.as_deref(), Some("#43"));
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn another_installations_deliveries_are_not_this_integrations() {
+    let stub = GithubStub::start();
+    stub.deliver_elsewhere(labelled_ready(41), INSTALLATION_ID + 1);
+    stub.deliver(labelled_ready(43));
+    let kestrel = Kestrel::boot().await;
+    watching(&kestrel, &stub, BOTH).await;
+
+    recorded(&kestrel, 1).await;
+    polled(&stub, 3).await;
+
+    assert_eq!(kestrel.events("acme").await.len(), 1);
+    assert_eq!(requested(&stub, FETCHED), 1);
+
+    kestrel.teardown().await;
+}
+
+/// GitHub keeps a Delivery three days; a poll that last read further back than that cannot know
+/// what it missed, and says so rather than rebuilding it.
+#[tokio::test]
+async fn deliveries_older_than_githubs_retention_are_reported_lost() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+    kestrel
+        .register_integration(
+            "acme",
+            "github",
+            REPOSITORY,
+            &stub.base_url(),
+            BOTH,
+            SignedDuration::from_hours(1),
+        )
+        .await;
+    polled(&stub, 1).await;
+    let pool = support::database(kestrel.data_dir()).await;
+    sqlx::query("UPDATE integration SET deliveries_read_from = ?, poll_due_at = ?")
+        .bind((Timestamp::now() - SignedDuration::from_hours(80)).to_string())
+        .bind(Timestamp::now().to_string())
+        .execute(&pool)
+        .await
+        .expect("the integration should be set back");
+
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    let refusal = loop {
+        if let Some(refusal) = kestrel.integrations("acme").await[0]
+            .last_event_refusal
+            .clone()
+        {
+            break refusal;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "nothing said deliveries were lost"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+
+    assert_eq!(refusal.id, None);
+    assert!(refusal.reason.contains("three days"), "{}", refusal.reason);
+    assert!(kestrel.events("acme").await.is_empty());
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_delivery_about_another_repository_the_app_is_installed_on_is_skipped() {
+    let stub = GithubStub::start();
+    let mut elsewhere = labelled_ready(41);
+    elsewhere.payload["repository"] = serde_json::json!({ "full_name": "jtmthf/elsewhere" });
+    stub.deliver(elsewhere);
+    stub.deliver(labelled_ready(43));
+    let kestrel = Kestrel::boot().await;
+    watching(&kestrel, &stub, BOTH).await;
+
+    recorded(&kestrel, 1).await;
+    polled(&stub, 3).await;
+
+    let events = kestrel.events("acme").await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].occurrence.subject.as_deref(), Some("#43"));
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_delivery_whose_payload_cannot_be_fetched_leaves_the_poll_where_it_was() {
+    let stub = GithubStub::start();
+    for _ in 0..3 {
+        stub.script_answer("GET", FETCHED, ScriptedResponse::answering(502));
+    }
+    stub.deliver(labelled_ready(43));
+    stub.deliver(labelled_ready(44));
+    let kestrel = Kestrel::boot().await;
+    watching(&kestrel, &stub, BOTH).await;
+    let registered = kestrel.integrations("acme").await[0].deliveries_read_from;
+
+    while requested(&stub, FETCHED) < 3 {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        kestrel.integrations("acme").await[0].deliveries_read_from,
+        registered,
+        "a poll that could not fetch a payload moved on past it"
+    );
+    assert!(
+        kestrel.events("acme").await.is_empty(),
+        "a poll that could not read every new delivery recorded some of them"
+    );
+
+    let events = recorded(&kestrel, 2).await;
+    assert_eq!(events.len(), 2);
 
     kestrel.teardown().await;
 }
@@ -276,8 +426,8 @@ async fn the_poll_interval_survives_a_restart() {
 #[tokio::test]
 async fn a_rate_limited_poll_loses_no_event_and_records_none_twice() {
     let stub = GithubStub::start();
-    stub.script(github_stub::rate_limited());
-    stub.script(github_stub::page(&[labelled_ready(7, 43)]));
+    stub.script_answer("GET", LISTED, github_stub::rate_limited());
+    stub.deliver(labelled_ready(43));
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
 
@@ -296,16 +446,8 @@ async fn a_rate_limited_poll_loses_no_event_and_records_none_twice() {
 async fn a_payload_over_one_mebibyte_is_refused_rather_than_stored() {
     let stub = GithubStub::start();
     let oversized = "x".repeat(1024 * 1024 + 1);
-    stub.script_answer(
-        "GET",
-        "/issues/events?",
-        github_stub::page(&[labelled_ready(7, 43)]),
-    );
-    stub.script_answer(
-        "GET",
-        "/issues/comments?",
-        github_stub::page(&[github_stub::issue_comment(11, 43, "jack", &oversized)]),
-    );
+    stub.deliver(labelled_ready(43));
+    let comment = stub.deliver(github_stub::issue_comment(11, 43, "jack", &oversized));
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
 
@@ -323,9 +465,8 @@ async fn a_payload_over_one_mebibyte_is_refused_rather_than_stored() {
         .last_event_refusal
         .as_ref()
         .expect("the oversized event refusal should remain visible");
-    assert_eq!(refusal.id, "comment:11");
-    assert!(refusal.bytes > 1024 * 1024);
-    assert_eq!(integration.comments_polled_through, Some(11));
+    assert_eq!(refusal.id.as_deref(), Some(comment.as_str()));
+    assert!(refusal.bytes.is_some_and(|bytes| bytes > 1024 * 1024));
 
     kestrel.acknowledge_event_refusal("acme", "github").await;
     assert!(
@@ -340,9 +481,8 @@ async fn a_payload_over_one_mebibyte_is_refused_rather_than_stored() {
 #[tokio::test]
 async fn a_transient_failure_loses_no_event_and_records_none_twice() {
     let stub = GithubStub::start();
-    stub.script(ScriptedResponse::answering(502));
-    stub.script(github_stub::page(&[labelled_ready(7, 43)]));
-    stub.script(github_stub::page(&[labelled_ready(7, 43)]));
+    stub.script_answer("GET", LISTED, ScriptedResponse::answering(502));
+    stub.deliver(labelled_ready(43));
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
 
@@ -354,38 +494,39 @@ async fn a_transient_failure_loses_no_event_and_records_none_twice() {
     kestrel.teardown().await;
 }
 
-/// The credential is the Organization's, and the only place it is ever spoken is the request
-/// to the external system it was registered for.
+/// The poll reads the App's own Delivery log, so it presents the App's JWT rather than an
+/// installation token; the credential is spoken only to the GitHub it was registered for.
 #[tokio::test]
-async fn the_organizations_credential_is_what_the_poll_presents() {
+async fn the_poll_presents_the_apps_own_credential() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[labelled_ready(7, 43)]));
+    stub.deliver(labelled_ready(43));
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
 
     recorded(&kestrel, 1).await;
 
-    let asked = stub.requests();
-    let poll = asked
+    for request in stub
+        .requests()
         .iter()
-        .find(|request| {
-            request
-                .url
-                .starts_with("/repos/jtmthf/kestrel/issues/events")
-        })
-        .expect("the poll should have asked for issue events");
-    let authorization = poll
-        .headers
-        .iter()
-        .find(|(name, _)| name == "authorization")
-        .map(|(_, value)| value.as_str())
-        .expect("the poll should authenticate");
-    assert_eq!(authorization, format!("Bearer {INSTALLATION_TOKEN}"));
+        .filter(|request| request.url.starts_with("/app/hook/deliveries"))
+    {
+        let authorization = request
+            .headers
+            .iter()
+            .find(|(name, _)| name == "authorization")
+            .map(|(_, value)| value.as_str())
+            .expect("the poll should authenticate");
+        let jwt = authorization
+            .strip_prefix("Bearer ")
+            .expect("a bearer credential");
+        assert_eq!(jwt.split('.').count(), 3, "{jwt} is not a JWT");
+        assert!(!authorization.contains(INSTALLATION_TOKEN));
+    }
 
     kestrel.teardown().await;
 }
 
-/// An installation token lasts an hour; kestrel never keeps polling on one minted that long
+/// An installation token lasts an hour; kestrel never keeps reading on one minted that long
 /// ago. Rather than waiting out a real hour, the stub mints one good for less than
 /// `EXPIRY_MARGIN`, so it already reads as stale by the time anything asks for it again.
 #[tokio::test]
@@ -401,19 +542,35 @@ async fn an_installation_token_nearing_expiry_is_replaced_before_it_is_used_agai
         "/access_tokens",
         github_stub::minted_token("second-installation-token", SignedDuration::from_hours(1)),
     );
-    let kestrel = Kestrel::boot().await;
-    watching(&kestrel, &stub, BOTH).await;
+    let integration = Integration {
+        id: IntegrationId::generate(),
+        organization: OrganizationId::generate(),
+        name: "github".to_owned(),
+        connection: Connection::Github(GithubConnection {
+            repository: REPOSITORY.to_owned(),
+            api: stub.base_url(),
+            credential: App::held(APP_ID, INSTALLATION_ID, PRIVATE_KEY),
+            bot_login: "kestrel[bot]".to_owned(),
+            interval: eagerly(),
+        }),
+        carries: BOTH.to_vec(),
+        poll_due_at: None,
+        deliveries_read_from: None,
+        last_event_refusal: None,
+    };
+    let github = Github::dialling_out().expect("the GitHub client");
 
-    polled(&stub, 4).await;
+    for _ in 0..2 {
+        github
+            .issue(&integration, 43)
+            .await
+            .expect("the issue should read");
+    }
 
     let authorizations: Vec<String> = stub
         .requests()
         .iter()
-        .filter(|request| {
-            request
-                .url
-                .starts_with("/repos/jtmthf/kestrel/issues/events")
-        })
+        .filter(|request| request.url.ends_with("/issues/43"))
         .filter_map(|request| {
             request
                 .headers
@@ -431,8 +588,6 @@ async fn an_installation_token_nearing_expiry_is_replaced_before_it_is_used_agai
         ],
         "a token nearing expiry was not replaced before its next use"
     );
-
-    kestrel.teardown().await;
 }
 
 #[tokio::test]
@@ -464,7 +619,7 @@ async fn an_integration_names_a_repository_as_owner_and_name() {
 #[tokio::test]
 async fn an_integration_and_what_it_discovers_belong_to_one_organization() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[labelled_ready(7, 43)]));
+    stub.deliver(labelled_ready(43));
     let kestrel = Kestrel::boot().await;
     watching(&kestrel, &stub, BOTH).await;
     kestrel.declare_organization("globex").await;
@@ -487,8 +642,8 @@ async fn an_integration_and_what_it_discovers_belong_to_one_organization() {
 async fn two_organizations_keep_separate_copies_of_the_same_producer_event() {
     let acme = GithubStub::start();
     let globex = GithubStub::start();
-    acme.script(github_stub::page(&[labelled_ready(7, 43)]));
-    globex.script(github_stub::page(&[labelled_ready(7, 43)]));
+    acme.deliver(labelled_ready(43));
+    globex.deliver(labelled_ready(43));
     let kestrel = Kestrel::boot().await;
     kestrel.declare_organization("acme").await;
     kestrel.declare_organization("globex").await;

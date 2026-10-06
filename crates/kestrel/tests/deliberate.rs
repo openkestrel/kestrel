@@ -15,8 +15,6 @@ const DOGFOOD: &str = include_str!("../../../.kestrel/triggers.yaml");
 const REPOSITORY: &str = "openkestrel/kestrel";
 const MAINTAINER: &str = "jtmthf";
 const KESTREL: &str = "kestrel";
-const EVENTS: &str = "/issues/events?";
-const COMMENTS: &str = "/issues/comments?";
 const PATIENCE: Duration = Duration::from_secs(30);
 
 async fn dogfooding(kestrel: &Kestrel, stub: &GithubStub) {
@@ -117,20 +115,14 @@ fn issue_link(issue: i64) -> String {
 #[tokio::test]
 async fn neither_labels_nor_assignment_start_work() {
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[
-            github_stub::assigned(14, 45, KESTREL, MAINTAINER),
-            github_stub::labelled_carrying(12, 42, "agent:codex", &["ready-for-agent"]),
-            github_stub::labelled(11, 41, "ready-for-agent"),
-        ]),
-    );
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(20, 43, MAINTAINER, "@kestrel")]),
-    );
+    stub.deliver(github_stub::labelled(41, "ready-for-agent"));
+    stub.deliver(github_stub::labelled_carrying(
+        42,
+        "agent:codex",
+        &["ready-for-agent"],
+    ));
+    stub.deliver(github_stub::assigned(45, KESTREL, MAINTAINER));
+    stub.deliver(github_stub::issue_comment(20, 43, MAINTAINER, "@kestrel"));
     let kestrel = Kestrel::boot().await;
     dogfooding(&kestrel, &stub).await;
 
@@ -166,16 +158,12 @@ async fn neither_labels_nor_assignment_start_work() {
 #[tokio::test]
 async fn the_maintainers_mention_starts_work_with_the_instruction_and_agent_it_names() {
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(
-            20,
-            50,
-            MAINTAINER,
-            "@kestrel agent=codex $tdd the parser",
-        )]),
-    );
+    stub.deliver(github_stub::issue_comment(
+        20,
+        50,
+        MAINTAINER,
+        "@kestrel agent=codex $tdd the parser",
+    ));
     let kestrel = Kestrel::boot().await;
     dogfooding(&kestrel, &stub).await;
 
@@ -194,23 +182,37 @@ async fn the_maintainers_mention_starts_work_with_the_instruction_and_agent_it_n
 #[tokio::test]
 async fn ordinary_comments_strangers_and_kestrel_itself_command_nothing() {
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[
-            github_stub::issue_comment(26, 55, MAINTAINER, "@kestrel"),
-            github_stub::issue_comment(25, 56, MAINTAINER, "@kestrel-bot can you look?"),
-            github_stub::issue_comment(24, 54, MAINTAINER, "thanks @kestrel"),
-            github_stub::issue_comment(
-                23,
-                53,
-                "kestrel[bot]",
-                "@kestrel done\n<!-- kestrel session 01a0 -->",
-            ),
-            github_stub::issue_comment(22, 52, "a-stranger", "@kestrel /implement"),
-            github_stub::issue_comment(21, 51, MAINTAINER, "this one is ready"),
-        ]),
-    );
+    stub.deliver(github_stub::issue_comment(
+        21,
+        51,
+        MAINTAINER,
+        "this one is ready",
+    ));
+    stub.deliver(github_stub::issue_comment(
+        22,
+        52,
+        "a-stranger",
+        "@kestrel /implement",
+    ));
+    stub.deliver(github_stub::issue_comment(
+        23,
+        53,
+        "kestrel[bot]",
+        "@kestrel done\n<!-- kestrel session 01a0 -->",
+    ));
+    stub.deliver(github_stub::issue_comment(
+        24,
+        54,
+        MAINTAINER,
+        "thanks @kestrel",
+    ));
+    stub.deliver(github_stub::issue_comment(
+        25,
+        56,
+        MAINTAINER,
+        "@kestrel-bot can you look?",
+    ));
+    stub.deliver(github_stub::issue_comment(26, 55, MAINTAINER, "@kestrel"));
     let kestrel = Kestrel::boot().await;
     dogfooding(&kestrel, &stub).await;
 
@@ -244,15 +246,14 @@ async fn ordinary_comments_strangers_and_kestrel_itself_command_nothing() {
 #[tokio::test]
 async fn repeated_signals_for_one_issue_open_one_workspace() {
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[
-            github_stub::issue_comment(22, 43, MAINTAINER, "@kestrel /implement"),
-            github_stub::issue_comment(21, 43, MAINTAINER, "@kestrel"),
-            github_stub::issue_comment(20, 43, MAINTAINER, "@kestrel"),
-        ]),
-    );
+    stub.deliver(github_stub::issue_comment(20, 43, MAINTAINER, "@kestrel"));
+    stub.deliver(github_stub::issue_comment(21, 43, MAINTAINER, "@kestrel"));
+    stub.deliver(github_stub::issue_comment(
+        22,
+        43,
+        MAINTAINER,
+        "@kestrel /implement",
+    ));
     let kestrel = Kestrel::boot().await;
     dogfooding(&kestrel, &stub).await;
 
@@ -295,25 +296,25 @@ async fn repeated_signals_for_one_issue_open_one_workspace() {
 #[tokio::test]
 async fn a_command_on_an_open_workspaces_issue_is_not_also_heard_as_a_remark() {
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(10, 43, MAINTAINER, "@kestrel")]),
-    );
+    stub.deliver(github_stub::issue_comment(10, 43, MAINTAINER, "@kestrel"));
     let kestrel = Kestrel::boot().await;
     dogfooding(&kestrel, &stub).await;
     let workspace = workspaces(&kestrel, 1).await.remove(0);
     let first = kestrel.claim_session().await.expect("the first session");
     kestrel.complete_session(&first).await;
 
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[
-            github_stub::issue_comment(21, 43, MAINTAINER, "and a test, please"),
-            github_stub::issue_comment(20, 43, MAINTAINER, "@kestrel /again"),
-        ]),
-    );
+    stub.deliver(github_stub::issue_comment(
+        20,
+        43,
+        MAINTAINER,
+        "@kestrel /again",
+    ));
+    stub.deliver(github_stub::issue_comment(
+        21,
+        43,
+        MAINTAINER,
+        "and a test, please",
+    ));
 
     let deadline = tokio::time::Instant::now() + PATIENCE;
     let heard = loop {
@@ -351,17 +352,13 @@ async fn a_command_on_an_open_workspaces_issue_is_not_also_heard_as_a_remark() {
 #[tokio::test]
 async fn a_comment_on_a_sealed_workspaces_issue_starts_nothing_and_a_command_continues_it() {
     let stub = GithubStub::start();
-    let mut before_first_command =
-        github_stub::issue_comment(9, 43, MAINTAINER, "before the first command");
-    before_first_command["created_at"] = serde_json::json!("2026-09-02T12:00:10Z");
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[
-            github_stub::issue_comment(10, 43, MAINTAINER, "@kestrel"),
-            before_first_command,
-        ]),
-    );
+    stub.deliver(github_stub::issue_comment(
+        9,
+        43,
+        MAINTAINER,
+        "before the first command",
+    ));
+    stub.deliver(github_stub::issue_comment(10, 43, MAINTAINER, "@kestrel"));
     let kestrel = Kestrel::boot().await;
     dogfooding(&kestrel, &stub).await;
     let sealed = workspaces(&kestrel, 1).await.remove(0);
@@ -369,16 +366,18 @@ async fn a_comment_on_a_sealed_workspaces_issue_starts_nothing_and_a_command_con
     kestrel.complete_session(&first).await;
     kestrel.seal_workspace(sealed.id).await;
 
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(
-            21,
-            43,
-            MAINTAINER,
-            "@kestrel /again",
-        )]),
-    );
+    stub.deliver(github_stub::issue_comment(
+        22,
+        43,
+        MAINTAINER,
+        "still broken",
+    ));
+    stub.deliver(github_stub::issue_comment(
+        21,
+        43,
+        MAINTAINER,
+        "@kestrel /again",
+    ));
     let opened = workspaces(&kestrel, 2).await;
 
     assert_eq!(opened.len(), 2);
@@ -393,11 +392,12 @@ async fn a_comment_on_a_sealed_workspaces_issue_starts_nothing_and_a_command_con
             .await
             .starts_with("/again ")
     );
-    let mut older = github_stub::issue_comment(22, 43, MAINTAINER, "still broken");
-    older["created_at"] = serde_json::json!("2026-09-02T12:00:20Z");
-    let mut newer = github_stub::issue_comment(23, 43, MAINTAINER, "now please add a test");
-    newer["created_at"] = serde_json::json!("2026-09-02T12:00:21Z");
-    stub.script_answer("GET", COMMENTS, github_stub::page(&[newer, older]));
+    stub.deliver(github_stub::issue_comment(
+        23,
+        43,
+        MAINTAINER,
+        "now please add a test",
+    ));
 
     let deadline = tokio::time::Instant::now() + PATIENCE;
     let heard = loop {
@@ -482,11 +482,7 @@ async fn a_dispatch_fires_only_the_trigger_it_names() {
         .dispatch("acme", "delegated", 60, Asked::default())
         .await
         .expect("the dispatch should fire");
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled(7, 61, "bug")]),
-    );
+    stub.deliver(github_stub::labelled(61, "bug"));
 
     let opened = workspaces(&kestrel, 2).await;
     assert_eq!(opened.len(), 2);
@@ -665,22 +661,18 @@ async fn a_dispatch_test_refuses_what_the_dispatch_refuses() {
 #[tokio::test]
 async fn a_command_works_ahead_of_a_blocker_on_an_unassigned_issue_and_says_so() {
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(
-            20,
-            43,
-            MAINTAINER,
-            "@kestrel /implement",
-        )]),
-    );
+    stub.deliver(github_stub::issue_comment(
+        20,
+        43,
+        MAINTAINER,
+        "@kestrel /implement",
+    ));
     unassigned(&stub, 43);
     stub.script_answer(
         "GET",
         "/issues/comments/20",
         github_stub::ScriptedResponse::ok(
-            github_stub::issue_comment(20, 43, MAINTAINER, "@kestrel /implement").to_string(),
+            github_stub::issue_comment(20, 43, MAINTAINER, "@kestrel /implement").payload["comment"].to_string(),
         ),
     );
     blocked_by(&stub, 43, 42);
@@ -740,11 +732,7 @@ async fn command_firing(kestrel: &Kestrel) -> kestrel::domain::Firing {
 }
 
 fn script_command(stub: &GithubStub) {
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(20, 43, MAINTAINER, "@kestrel")]),
-    );
+    stub.deliver(github_stub::issue_comment(20, 43, MAINTAINER, "@kestrel"));
 }
 
 #[tokio::test]
@@ -809,7 +797,8 @@ async fn an_edited_command_without_a_current_assignment_cancels_the_start() {
         "GET",
         "/issues/comments/20",
         github_stub::ScriptedResponse::ok(
-            github_stub::issue_comment(20, 43, MAINTAINER, "never mind").to_string(),
+            github_stub::issue_comment(20, 43, MAINTAINER, "never mind").payload["comment"]
+                .to_string(),
         ),
     );
     let kestrel = Kestrel::boot().await;
@@ -951,11 +940,7 @@ const ASSIGNED: &str = "com.github.issues.assigned";
 #[tokio::test]
 async fn a_held_delegation_starts_once_its_blocker_closes() {
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::assigned(14, 43, KESTREL, MAINTAINER)]),
-    );
+    stub.deliver(github_stub::assigned(43, KESTREL, MAINTAINER));
     blocked_by(&stub, 43, 42);
     let kestrel = Kestrel::boot().await;
     delegating(&kestrel, &stub).await;
@@ -965,11 +950,7 @@ async fn a_held_delegation_starts_once_its_blocker_closes() {
     assert!(kestrel.workspaces("acme").await.is_empty());
 
     unblocked(&stub, 43);
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::issue_event(15, 42, "closed", "")]),
-    );
+    stub.deliver(github_stub::issue_event(42, "closed", ""));
 
     let opened = workspaces(&kestrel, 1).await;
     assert_eq!(opened.len(), 1);
@@ -986,11 +967,7 @@ async fn a_held_delegation_starts_once_its_blocker_closes() {
 #[tokio::test]
 async fn a_held_delegation_whose_unblocking_event_was_missed_starts_on_the_sweep() {
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::assigned(14, 43, KESTREL, MAINTAINER)]),
-    );
+    stub.deliver(github_stub::assigned(43, KESTREL, MAINTAINER));
     blocked_by(&stub, 43, 42);
     let kestrel = Kestrel::boot().await;
     delegating(&kestrel, &stub).await;
@@ -1024,22 +1001,14 @@ async fn a_held_delegation_whose_unblocking_event_was_missed_starts_on_the_sweep
 #[tokio::test]
 async fn unassigning_a_held_delegation_cancels_it() {
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::assigned(14, 43, KESTREL, MAINTAINER)]),
-    );
+    stub.deliver(github_stub::assigned(43, KESTREL, MAINTAINER));
     blocked_by(&stub, 43, 42);
     let kestrel = Kestrel::boot().await;
     delegating(&kestrel, &stub).await;
     firing_of(&kestrel, ASSIGNED, "held").await;
 
     unassigned(&stub, 43);
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::issue_event(15, 43, "unassigned", "")]),
-    );
+    stub.deliver(github_stub::issue_event(43, "unassigned", ""));
 
     let canceled = firing_of(&kestrel, ASSIGNED, "canceled").await;
     assert!(
@@ -1057,25 +1026,15 @@ async fn unassigning_a_held_delegation_cancels_it() {
 #[tokio::test]
 async fn two_held_delegations_of_one_issue_start_it_once() {
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[
-            github_stub::assigned(15, 43, KESTREL, MAINTAINER),
-            github_stub::assigned(14, 43, KESTREL, MAINTAINER),
-        ]),
-    );
+    stub.deliver(github_stub::assigned(43, KESTREL, MAINTAINER));
+    stub.deliver(github_stub::assigned(43, KESTREL, MAINTAINER));
     blocked_by(&stub, 43, 42);
     blocked_by(&stub, 43, 42);
     let kestrel = Kestrel::boot().await;
     delegating(&kestrel, &stub).await;
     firing_of(&kestrel, ASSIGNED, "canceled").await;
 
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::issue_event(16, 42, "closed", "")]),
-    );
+    stub.deliver(github_stub::issue_event(42, "closed", ""));
 
     let opened = workspaces(&kestrel, 1).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -1149,16 +1108,12 @@ async fn a_blocker_added_after_a_workspace_opens_does_not_freeze_it() {
     for _ in 0..4 {
         blocked_by(&stub, 43, 42);
     }
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(
-            21,
-            43,
-            MAINTAINER,
-            "@kestrel /again",
-        )]),
-    );
+    stub.deliver(github_stub::issue_comment(
+        21,
+        43,
+        MAINTAINER,
+        "@kestrel /again",
+    ));
 
     let deadline = tokio::time::Instant::now() + PATIENCE;
     let next = loop {

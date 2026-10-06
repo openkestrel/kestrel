@@ -1523,8 +1523,8 @@ struct IntegrationRecord {
 #[derive(Serialize)]
 struct EventRefusalRecord {
     source: String,
-    id: String,
-    bytes: usize,
+    id: Option<String>,
+    bytes: Option<usize>,
     reason: String,
     observed_at: Timestamp,
 }
@@ -1534,12 +1534,6 @@ impl From<Integration> for IntegrationRecord {
         let webhook_path = integration.webhook_path();
         let kind = integration.kind().as_str();
         let (repository, bot_login, polled_every, webhook_path) = match integration.connection {
-            Connection::Github(github) if github.signed => (
-                Some(github.repository),
-                Some(github.bot_login),
-                None,
-                Some(webhook_path),
-            ),
             Connection::Github(github) if !integration.carries.contains(&Direction::Inbound) => {
                 (Some(github.repository), Some(github.bot_login), None, None)
             }
@@ -1547,7 +1541,7 @@ impl From<Integration> for IntegrationRecord {
                 Some(github.repository),
                 Some(github.bot_login),
                 Some(format!("{:#}", github.interval)),
-                None,
+                Some(webhook_path),
             ),
             Connection::Webhook => (None, None, None, Some(webhook_path)),
         };

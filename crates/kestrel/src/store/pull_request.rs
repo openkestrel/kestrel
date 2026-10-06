@@ -42,7 +42,7 @@ impl<'a> PullRequests<'a> {
         }
     }
 
-    /// Only a signed GitHub Integration's: a generic webhook may name any type it likes.
+    /// Only a GitHub Integration's: a generic webhook may name any type it likes.
     pub async fn unconsidered(&mut self, types: &[&str], limit: usize) -> Result<Vec<Event>> {
         sqlx::query(
             "SELECT event.record_id, event.organization_id, event.integration_id, event.id,
@@ -53,7 +53,6 @@ impl<'a> PullRequests<'a> {
              LEFT JOIN pull_request_attachment AS considered
                  ON considered.event_record_id = event.record_id
              WHERE integration.kind = 'github' AND integration.inbound = TRUE
-               AND integration.signing_secret IS NOT NULL
                AND event.type IN (SELECT value FROM json_each(?))
                AND considered.event_record_id IS NULL
              ORDER BY event.recorded_at, event.record_id
@@ -268,13 +267,10 @@ impl<'a> PullRequests<'a> {
         .transpose()
     }
 
-    /// Only a signed Integration is delivered pull request Events; one that is polled reads the
-    /// issue timeline, which never says a pull request opened.
     pub async fn watched(&mut self, organization: &Organization) -> Result<Vec<String>> {
         sqlx::query(
             "SELECT repository FROM integration
-             WHERE organization_id = ? AND kind = 'github' AND inbound = TRUE
-               AND signing_secret IS NOT NULL",
+             WHERE organization_id = ? AND kind = 'github' AND inbound = TRUE",
         )
         .bind(organization.id.to_string())
         .fetch_all(&mut *self.connection)

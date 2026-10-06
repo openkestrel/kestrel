@@ -105,11 +105,7 @@ async fn a_workspace_from_the_issue(kestrel: &Kestrel, stub: &GithubStub) -> Wor
             SignedDuration::from_millis(1),
         )
         .await;
-    stub.script(github_stub::page(&[github_stub::labelled(
-        7,
-        ISSUE,
-        "ready-for-agent",
-    )]));
+    stub.deliver(github_stub::labelled(ISSUE, "ready-for-agent"));
 
     workspaces(kestrel, 1).await.remove(0)
 }

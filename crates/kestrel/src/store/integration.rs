@@ -5,12 +5,11 @@ use sqlx::{Row, SqliteConnection};
 
 use crate::declined::Declined;
 use crate::domain::{
-    Connection, Delivery, Direction, Event, EventRecordId, EventRefusal, GithubConnection,
-    Integration, IntegrationId, IntegrationKind, Occurrence, Organization, OrganizationId, Session,
+    Connection, Direction, Event, EventRecordId, EventRefusal, GithubConnection, Integration,
+    IntegrationId, IntegrationKind, Occurrence, Organization, OrganizationId, Post, Session,
     SessionId, Workspace,
 };
 use crate::integration::credential::App;
-use crate::integration::github;
 use crate::integration::webhook::Verifier;
 use crate::keyring::Keyring;
 use crate::link::credential::Secret;
@@ -31,8 +30,7 @@ macro_rules! integrations_where {
         concat!(
             "SELECT id, organization_id, name, kind, repository, api, app_id, installation_id,
                     private_key_sealed, bot_login, inbound, outbound, interval_ms,
-                    signed, poll_due_at,
-                    polled_through, comments_polled_through,
+                    poll_due_at, deliveries_read_from,
                     last_event_refusal_source, last_event_refusal_id, last_event_refusal_bytes,
                     last_event_refusal_reason, last_event_refusal_at
              FROM integration
@@ -87,8 +85,9 @@ impl<'a> Integrations<'a> {
         carries: &[Direction],
         webhook_secret: Option<&str>,
     ) -> Result<Integration> {
-        let polled = matches!(&connection, Connection::Github(github) if !github.signed)
-            && carries.contains(&Direction::Inbound);
+        let polled =
+            matches!(&connection, Connection::Github(_)) && carries.contains(&Direction::Inbound);
+        let registered_at = Timestamp::now();
         let integration = Integration {
             id,
             organization: organization.id,
@@ -97,9 +96,8 @@ impl<'a> Integrations<'a> {
             carries: carries.to_vec(),
             // Due the moment it is registered, so an operator who registers one sees what is
             // on the repository rather than waiting an interval to find out.
-            poll_due_at: polled.then(Timestamp::now),
-            polled_through: None,
-            comments_polled_through: None,
+            poll_due_at: polled.then_some(registered_at),
+            deliveries_read_from: polled.then_some(registered_at),
             last_event_refusal: None,
         };
         let github = integration.github().ok();
@@ -123,7 +121,7 @@ impl<'a> Integrations<'a> {
             "INSERT INTO integration
                  (id, organization_id, name, kind, repository, api, app_id, installation_id,
                   private_key_sealed, bot_login, inbound, outbound, interval_ms, signing_secret,
-                  shared_secret_digest, poll_due_at, registered_at, signed)
+                  shared_secret_digest, poll_due_at, deliveries_read_from, registered_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(integration.id.to_string())
@@ -146,8 +144,12 @@ impl<'a> Integrations<'a> {
         .bind(signing_secret)
         .bind(shared_secret_digest)
         .bind(integration.poll_due_at.map(due))
-        .bind(Timestamp::now().to_string())
-        .bind(github.is_some_and(|github| github.signed))
+        .bind(
+            integration
+                .deliveries_read_from
+                .map(|from| from.to_string()),
+        )
+        .bind(registered_at.to_string())
         .execute(&mut *self.connection)
         .await
         .map_err(|error| match error.as_database_error() {
@@ -335,11 +337,28 @@ impl<'a> Integrations<'a> {
     pub async fn polled(
         &mut self,
         integration: &Integration,
-        through: Option<i64>,
+        read_from: Timestamp,
         due_again_at: Timestamp,
     ) -> Result<()> {
-        sqlx::query("UPDATE integration SET polled_through = ?, poll_due_at = ? WHERE id = ?")
-            .bind(through)
+        sqlx::query(
+            "UPDATE integration SET deliveries_read_from = ?, poll_due_at = ? WHERE id = ?",
+        )
+        .bind(read_from.to_string())
+        .bind(due(due_again_at))
+        .bind(integration.id.to_string())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("recording the poll of integration {}", integration.name))?;
+
+        Ok(())
+    }
+
+    pub async fn poll_refused(
+        &mut self,
+        integration: &Integration,
+        due_again_at: Timestamp,
+    ) -> Result<()> {
+        sqlx::query("UPDATE integration SET poll_due_at = ? WHERE id = ?")
             .bind(due(due_again_at))
             .bind(integration.id.to_string())
             .execute(&mut *self.connection)
@@ -349,24 +368,47 @@ impl<'a> Integrations<'a> {
         Ok(())
     }
 
-    pub async fn comments_polled(
+    /// Deliveries GitHub no longer keeps were never read, so their Events are lost rather than
+    /// refused one by one.
+    pub async fn deliveries_lost(
         &mut self,
         integration: &Integration,
-        through: Option<i64>,
+        source: &str,
+        reason: &str,
     ) -> Result<()> {
-        sqlx::query("UPDATE integration SET comments_polled_through = ? WHERE id = ?")
-            .bind(through)
-            .bind(integration.id.to_string())
-            .execute(&mut *self.connection)
-            .await
-            .with_context(|| {
-                format!(
-                    "recording which comments integration {} has seen",
-                    integration.name
-                )
-            })?;
+        sqlx::query(
+            "UPDATE integration
+             SET last_event_refusal_source = ?, last_event_refusal_id = NULL,
+                 last_event_refusal_bytes = NULL, last_event_refusal_reason = ?,
+                 last_event_refusal_at = ?
+             WHERE id = ?",
+        )
+        .bind(source)
+        .bind(reason)
+        .bind(Timestamp::now().to_string())
+        .bind(integration.id.to_string())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("recording what integration {} lost", integration.name))?;
 
         Ok(())
+    }
+
+    pub async fn knows(
+        &mut self,
+        integration: &Integration,
+        source: &str,
+        id: &str,
+    ) -> Result<bool> {
+        Ok(
+            sqlx::query("SELECT 1 FROM event WHERE organization_id = ? AND source = ? AND id = ?")
+                .bind(integration.organization.to_string())
+                .bind(source)
+                .bind(id)
+                .fetch_optional(&mut *self.connection)
+                .await?
+                .is_some(),
+        )
     }
 
     pub async fn events(
@@ -432,19 +474,11 @@ impl<'a> Integrations<'a> {
                      AND origin.integration_id = event.integration_id
                      AND origin.source = event.source
                      AND origin.subject = event.subject
-                     AND (
-                         origin.time < event.time
-                         OR (origin.time = event.time AND (
-                             origin.type != ?
-                             OR CAST(substr(origin.id, 9) AS INTEGER)
-                                <= CAST(substr(event.id, 9) AS INTEGER)
-                         ))
-                     )
+                     AND origin.time <= event.time
                )
              ORDER BY event.time, event.id
              LIMIT ?",
         )
-        .bind(r#type)
         .bind(r#type)
         .bind(i64::try_from(limit)?)
         .fetch_all(&mut *self.connection)
@@ -455,8 +489,8 @@ impl<'a> Integrations<'a> {
     }
 
     pub async fn workspace_for_follow_up(&mut self, event: &Event) -> Result<Option<Workspace>> {
-        let candidates = sqlx::query(
-            "SELECT workspace.id AS workspace_id, origin.*
+        let candidate = sqlx::query(
+            "SELECT workspace.id AS workspace_id
              FROM workspace
              JOIN event AS origin ON origin.record_id = workspace.event_record_id
              WHERE workspace.organization_id = ?
@@ -464,28 +498,27 @@ impl<'a> Integrations<'a> {
                AND origin.source = ?
                AND origin.subject = ?
                AND origin.time <= ?
-             ORDER BY workspace.opened_at DESC, workspace.id DESC",
+             ORDER BY workspace.opened_at DESC, workspace.id DESC
+             LIMIT 1",
         )
         .bind(event.organization.to_string())
         .bind(event.integration.map(|integration| integration.to_string()))
         .bind(&event.occurrence.source)
         .bind(event.occurrence.subject.as_deref())
         .bind(event.occurrence.time.to_string())
-        .fetch_all(&mut *self.connection)
+        .fetch_optional(&mut *self.connection)
         .await?;
 
-        for row in candidates {
-            if github::at_or_after(&event.occurrence, &self::event(&row)?.occurrence) {
-                return Ok(Some(
-                    workspace::read(
-                        self.connection,
-                        row.get::<String, _>("workspace_id").parse()?,
-                    )
-                    .await?,
-                ));
-            }
+        match candidate {
+            Some(row) => Ok(Some(
+                workspace::read(
+                    self.connection,
+                    row.get::<String, _>("workspace_id").parse()?,
+                )
+                .await?,
+            )),
+            None => Ok(None),
         }
-        Ok(None)
     }
 
     pub async fn record_follow_up(&mut self, event: &Event, workspace: &Workspace) -> Result<()> {
@@ -505,9 +538,9 @@ impl<'a> Integrations<'a> {
     }
 
     /// Due the moment it is recorded, and recorded in the transaction that answered the Turn or
-    /// ended the Session, so what kestrel said has a delivery waiting and what it did not say has
+    /// ended the Session, so what kestrel said has a post waiting and what it did not say has
     /// nothing to withdraw.
-    pub async fn record_delivery(
+    pub async fn record_post(
         &mut self,
         session: &Session,
         integration: &Integration,
@@ -520,13 +553,13 @@ impl<'a> Integrations<'a> {
             .subject_issue()
             .with_context(|| {
                 format!(
-                    "the event {} names no issue a delivery could reach",
+                    "the event {} names no issue a post could reach",
                     event.record_id
                 )
             })?;
 
         sqlx::query(
-            "INSERT INTO delivery
+            "INSERT INTO post
                  (session_id, turn, organization_id, integration_id, event_record_id, subject, body, turn_messages,
                   due_at, recorded_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -550,87 +583,74 @@ impl<'a> Integrations<'a> {
     }
 
     pub async fn turn_responses(&mut self, session: SessionId) -> Result<Vec<Vec<String>>> {
-        let rows =
-            sqlx::query("SELECT turn_messages FROM delivery WHERE session_id = ? AND turn > 0")
-                .bind(session.to_string())
-                .fetch_all(&mut *self.connection)
-                .await
-                .with_context(|| format!("reading what session {session} has said back"))?;
+        let rows = sqlx::query("SELECT turn_messages FROM post WHERE session_id = ? AND turn > 0")
+            .bind(session.to_string())
+            .fetch_all(&mut *self.connection)
+            .await
+            .with_context(|| format!("reading what session {session} has said back"))?;
 
         rows.iter()
             .map(|row| Ok(serde_json::from_str(row.get("turn_messages"))?))
             .collect()
     }
 
-    pub async fn deliveries_due(&mut self, at: Timestamp) -> Result<Vec<Delivery>> {
+    pub async fn posts_due(&mut self, at: Timestamp) -> Result<Vec<Post>> {
         sqlx::query(
             "SELECT session_id, turn, organization_id, integration_id, event_record_id, subject, body,
                     attempted_at
-             FROM delivery
+             FROM post
              WHERE due_at <= ?
              ORDER BY due_at",
         )
         .bind(due(at))
         .fetch_all(&mut *self.connection)
         .await
-        .context("reading which deliveries are due")?
+        .context("reading which posts are due")?
         .iter()
-        .map(delivery)
+        .map(post)
         .collect()
     }
 
     /// Committed before the request goes out rather than after it comes back: what this
     /// records is that a comment may now exist, which is true from the moment kestrel asks.
-    pub async fn attempting_delivery(&mut self, delivery: &Delivery, at: Timestamp) -> Result<()> {
-        sqlx::query("UPDATE delivery SET attempted_at = ? WHERE session_id = ? AND turn = ?")
+    pub async fn attempting_post(&mut self, post: &Post, at: Timestamp) -> Result<()> {
+        sqlx::query("UPDATE post SET attempted_at = ? WHERE session_id = ? AND turn = ?")
             .bind(at.to_string())
-            .bind(delivery.session.to_string())
-            .bind(delivery.turn.unwrap_or(0))
+            .bind(post.session.to_string())
+            .bind(post.turn.unwrap_or(0))
             .execute(&mut *self.connection)
             .await
             .with_context(|| {
-                format!(
-                    "recording an attempt at what session {} said",
-                    delivery.session
-                )
+                format!("recording an attempt at what session {} said", post.session)
             })?;
 
         Ok(())
     }
 
-    pub async fn delivery_delivered(&mut self, delivery: &Delivery, to: &str) -> Result<()> {
+    pub async fn posted(&mut self, post: &Post, to: &str) -> Result<()> {
         sqlx::query(
-            "UPDATE delivery SET delivered_at = ?, delivered_to = ?, due_at = NULL
+            "UPDATE post SET posted_at = ?, posted_to = ?, due_at = NULL
              WHERE session_id = ? AND turn = ?",
         )
         .bind(Timestamp::now().to_string())
         .bind(to)
-        .bind(delivery.session.to_string())
-        .bind(delivery.turn.unwrap_or(0))
+        .bind(post.session.to_string())
+        .bind(post.turn.unwrap_or(0))
         .execute(&mut *self.connection)
         .await
-        .with_context(|| {
-            format!(
-                "recording what session {} said as delivered",
-                delivery.session
-            )
-        })?;
+        .with_context(|| format!("recording what session {} said as posted", post.session))?;
 
         Ok(())
     }
 
-    pub async fn delivery_deferred(
-        &mut self,
-        delivery: &Delivery,
-        due_again_at: Timestamp,
-    ) -> Result<()> {
-        sqlx::query("UPDATE delivery SET due_at = ? WHERE session_id = ? AND turn = ?")
+    pub async fn post_deferred(&mut self, post: &Post, due_again_at: Timestamp) -> Result<()> {
+        sqlx::query("UPDATE post SET due_at = ? WHERE session_id = ? AND turn = ?")
             .bind(due(due_again_at))
-            .bind(delivery.session.to_string())
-            .bind(delivery.turn.unwrap_or(0))
+            .bind(post.session.to_string())
+            .bind(post.turn.unwrap_or(0))
             .execute(&mut *self.connection)
             .await
-            .with_context(|| format!("deferring what session {} said", delivery.session))?;
+            .with_context(|| format!("deferring what session {} said", post.session))?;
 
         Ok(())
     }
@@ -727,7 +747,6 @@ fn integration(row: &SqliteRow, keyring: &Keyring) -> Result<Integration> {
                 credential: App::held(row.get("app_id"), row.get("installation_id"), &private_key),
                 bot_login: row.get("bot_login"),
                 interval: SignedDuration::from_millis(row.get("interval_ms")),
-                signed: row.get("signed"),
             })
         }
         IntegrationKind::Webhook => Connection::Webhook,
@@ -740,8 +759,7 @@ fn integration(row: &SqliteRow, keyring: &Keyring) -> Result<Integration> {
         connection,
         carries,
         poll_due_at: timestamp(row, "poll_due_at")?,
-        polled_through: row.get("polled_through"),
-        comments_polled_through: row.get("comments_polled_through"),
+        deliveries_read_from: timestamp(row, "deliveries_read_from")?,
         last_event_refusal: event_refusal(row)?,
     })
 }
@@ -753,13 +771,11 @@ fn event_refusal(row: &SqliteRow) -> Result<Option<EventRefusal>> {
 
     Ok(Some(EventRefusal {
         source,
-        id: row
-            .get::<Option<String>, _>("last_event_refusal_id")
-            .context("an event refusal has no producer id")?,
-        bytes: usize::try_from(
-            row.get::<Option<i64>, _>("last_event_refusal_bytes")
-                .context("an event refusal has no byte size")?,
-        )?,
+        id: row.get("last_event_refusal_id"),
+        bytes: row
+            .get::<Option<i64>, _>("last_event_refusal_bytes")
+            .map(usize::try_from)
+            .transpose()?,
         reason: row
             .get::<Option<String>, _>("last_event_refusal_reason")
             .context("an event refusal has no reason")?,
@@ -789,8 +805,8 @@ pub(crate) fn event(row: &SqliteRow) -> Result<Event> {
     })
 }
 
-fn delivery(row: &SqliteRow) -> Result<Delivery> {
-    Ok(Delivery {
+fn post(row: &SqliteRow) -> Result<Post> {
+    Ok(Post {
         session: row.get::<String, _>("session_id").parse()?,
         turn: match row.get::<i64, _>("turn") {
             0 => None,

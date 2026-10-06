@@ -45,7 +45,7 @@ erDiagram
     session }o--|| agent : runs
     session ||--o{ turn : has
     session ||--o{ link_instruction : "is sent"
-    session ||--o{ delivery : "says back"
+    session ||--o{ post : "says back"
     session ||--o{ session_dependency : "waits on"
 ```
 
@@ -58,7 +58,7 @@ erDiagram
 | `agent` | Harness and optional model | A null `model` means the harness default. |
 | `provider_credential` | Organization secrets by variable name | `sealed` is encrypted with `kestrel.key`. |
 | `subscription_profile`, `…_entry` | A person's harness login | Entries are `variable` or `file`, sealed. |
-| `integration` | GitHub or generic webhook | `CHECK`s tie columns to `kind`. GitHub's `signing_secret` and its App private key (`private_key_sealed`) are both sealed; a webhook keeps `shared_secret_digest`. Poll cursors and the last refusal live here. |
+| `integration` | GitHub or generic webhook | `CHECK`s tie columns to `kind`. GitHub's `signing_secret` and its App private key (`private_key_sealed`) are both sealed; a webhook keeps `shared_secret_digest`. The poll cursor (`deliveries_read_from`) and the last refusal live here; a refusal with no `last_event_refusal_id` is Deliveries lost to GitHub's retention. |
 | `event` | Every recorded CloudEvent | `integration_id` null for minted Events. |
 | `trigger`, `trigger_agent` | The rule and its allowed Agents | Exactly one of `filter`, `every_ms`, `cron`. `due_at` is set only for schedules. |
 | `firing` | One Trigger × one Event | `outcome` ∈ opened, fed, ignored, held, canceled, failed; `CHECK`s tie `workspace_id`, `failure` and `considered_at` to it. |
@@ -75,7 +75,7 @@ erDiagram
 | `pull_request_attachment` | Which pull request Events were considered | One per Event: `attached` with its Workspace, `unmatched`, `ambiguous` or `sealed`. |
 | `pull_request_candidate` | Which Workspaces a pull request Event matched | One row per match with the state it was in (`open` or `sealed`), kept for the `0.5` Audit Record. |
 | `pull_request_observation` | Each distinct observation appended for a pull request | A repeat of one already held appends nothing, so a retried delivery manufactures no history. |
-| `delivery` | Comments to post back | `(session_id, turn)`; `turn = 0` is the Outcome. |
+| `post` | Comments to post back | `(session_id, turn)`; `turn = 0` is the Outcome. |
 | `session_dependency` | Session waits on blocker | Drives Unreachable. |
 | `instance_archive` | Instances waiting to be destroyed | Written when a Workspace seals or releases. |
 | `instance_idle_hint` | Advisory hints waiting for the work role. | Queued with an eligible Session ending; superseded or no longer idle Instances are skipped at delivery. |

@@ -8,22 +8,27 @@ How Events get in, how a Trigger turns one into work, and how answers get back o
 
 Every Event is a CloudEvent ([ADR-0011](../adr/0011-cloudevents-is-the-events-shape.md)), stored in
 `event` and unique per `(organization, source, id)`, so a redelivery or overlapping poll records
-nothing twice.
+nothing twice. A GitHub Event's `id` is its Delivery's GUID for every type, however it arrived
+([ADR-0055](../adr/0055-a-github-integration-polls-its-apps-deliveries.md)).
 
 | Source | Path | Authenticated by |
 | --- | --- | --- |
-| GitHub webhook | `POST /webhooks/{integration}` → `github::delivered` | HMAC `X-Hub-Signature-256` with the Integration's signing secret |
+| GitHub webhook | `POST /webhooks/{integration}` → `github::delivered` | HMAC `X-Hub-Signature-256` with the App's webhook secret |
 | Generic webhook | `POST /webhooks/{integration}` → `webhook::received` | A shared secret whose digest is stored; binary or structured CloudEvents, or any other POST wrapped as `dev.kestrel.webhook.received` |
-| GitHub poll | `timer::polling` → `integration::poll` | The Integration's installation token, outbound, minted from its App credential. Used when the Integration has no signing secret. |
+| GitHub poll | `timer::polling` → `integration::poll` → `github::delivered` | The App's own JWT, outbound: it lists `GET /app/hook/deliveries` and fetches each new Delivery's payload. Every inbound GitHub Integration polls, webhook or not. |
 | Schedule | `trigger::elapse` | Minted by kestrel, with no Integration |
 | Operator dispatch | `trigger::dispatch` → `dev.kestrel.dispatched` | The operator request ([ADR-0021](../adr/0021-a-push-is-an-event-kestrel-mints.md)) |
 
 - Ingest only records and wakes the firing sweep. Nothing is matched on the request path.
 - An unauthenticated request never becomes an Event, and says nothing about whether the
   Integration exists. The last refusal is kept on the Integration row for `integration list`.
-- A poll records every Event it saw and advances `polled_through` in one transaction, so an
-  interrupted poll repeats its window harmlessly. A poll that hits its page cap says so, because
-  that is the one way an Event goes unread.
+- A poll reads the Delivery log back to `deliveries_read_from`, keeps its installation's, and
+  fetches only the payloads of Deliveries not yet recorded. It records them and moves
+  `deliveries_read_from` to a minute before it started, in one transaction; a payload it cannot
+  fetch records nothing and moves nothing (ADR-0011). The first poll starts at registration.
+- GitHub keeps Deliveries three days. A poll that last read further back than that, and whose
+  walk ran out before reaching where it started, records the loss as the Integration's refusal;
+  nothing is rebuilt from a resource read.
 
 ## Firing
 
@@ -139,7 +144,7 @@ Triggers:
 - A plain remark feeds an open Workspace only if the Trigger that opened it would admit the author.
   It is posted as a message ([Sessions](sessions.md#the-unfinished-session)).
 - A comment whose author is the Integration's own recorded bot login feeds nothing, by author
-  rather than by kestrel's delivery marker ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)).
+  rather than by kestrel's post marker ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)).
   Trigger matching excludes its Events in the same way.
 
 ## Pull requests
@@ -147,8 +152,8 @@ Triggers:
 `pull_request.rs` learns pull requests as Workspace state, independent of Triggers
 ([ADR-0032](../adr/0032-a-pull-request-event-updates-workspace-state-without-a-firing.md)):
 
-- It reads only a signed GitHub Integration's `opened`, `reopened`, `closed` and `synchronize`
-  Events; other actions stay Organization Events and a generic webhook may name any type, so it
+- It reads only a GitHub Integration's `opened`, `reopened`, `closed` and `synchronize` Events,
+  polled or delivered; other actions stay Organization Events and a generic webhook may name any type, so it
   proves nothing about GitHub.
 - The payload's head repository and head branch must name exactly one open Workspace in the
   Event's Organization: one whose declared branch is the head branch and which fixes the head
@@ -165,13 +170,14 @@ Triggers:
   `pull_request_candidate` every Workspace it matched with the state that Workspace was in, so each
   is considered once and the `0.5` Audit Record can explain the verdict.
 
-## Delivery
+## Posts
 
-The outbound half (`integration/delivery.rs`, [ADR-0024](../adr/0024-a-run-spans-prompt-turns.md)):
+The outbound half (`integration/post.rs`, [ADR-0024](../adr/0024-a-run-spans-prompt-turns.md)); a
+Delivery is always inbound:
 
-- An `answered` report records a `delivery` row for that Turn's messages; ending a Session records
+- An `answered` report records a `post` row for that Turn's messages; ending a Session records
   one for its Outcome when it adds something the Turns did not.
-- `timer::delivering` posts each as a GitHub comment on the originating issue. `attempted_at` is set
+- `timer::posting` posts each as a GitHub comment on the originating issue. `attempted_at` is set
   before the request, so a control plane that died mid-post finds the comment by its hidden marker
   instead of posting twice.
-- A refusal defers the delivery; it never changes the Session.
+- A refusal defers the post; it never changes the Session.

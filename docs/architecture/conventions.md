@@ -16,7 +16,7 @@ Patterns the code relies on that no single file states. Comment style is in `AGE
   `rows_affected`, so a replay or a race does nothing instead of doing it twice (`prompt_turn`,
   `answer_turn`, `end_session`).
 - **Commit before the side effect that depends on it.** The `start` instruction is committed before
-  the supervisor is spawned; a delivery's `attempted_at` before the comment is posted.
+  the supervisor is spawned; a post's `attempted_at` before the comment is posted.
 
 ## Sweeps and roles
 
@@ -27,7 +27,7 @@ Patterns the code relies on that no single file states. Comment style is in `AGE
   every 100 ms and `timer` sweeps every 500 ms. `Wake` shortens the wait after ingest within one
   process only.
 - **Due times live in `Store`**, never only in memory: lease expiry, schedule `due_at`, poll due,
-  held-firing reconsideration, delivery `due_at`. A restarted control plane finds all of them.
+  held-firing reconsideration, post `due_at`. A restarted control plane finds all of them.
 - **A failed pass warns and waits for the next.** Nothing in a sweep or the dispatch loop stops a
   role, because stopping the work role cuts every live supervisor off its link.
 - **Work in bounded bites.** Sweeps take a fixed number of rows (32 firings, 10 poll pages) so one

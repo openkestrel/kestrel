@@ -56,7 +56,7 @@ async fn receiving(store: &Store, event: &Event) -> Result<Received> {
         let after_opening_event = match open.started_by {
             Some(StartedBy::Event(origin)) => {
                 let origin = tx.integrations().event(origin).await?;
-                github::at_or_after(&event.occurrence, &origin.occurrence)
+                event.occurrence.time >= origin.occurrence.time
             }
             _ => true,
         };

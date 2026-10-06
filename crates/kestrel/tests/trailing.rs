@@ -770,7 +770,6 @@ async fn a_message_to_a_trailing_session_starts_its_turn_at_once_with_every_slot
 #[tokio::test]
 async fn a_firing_that_continues_a_trailing_session_starts_its_turn_at_once() {
     const REPOSITORY: &str = "jtmthf/kestrel";
-    const EVENTS: &str = "/issues/events?";
     let correlated = |name: &str, label: &str| {
         (
             name.to_owned(),
@@ -783,11 +782,7 @@ async fn a_firing_that_continues_a_trailing_session_starts_its_turn_at_once() {
         )
     };
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled(7, 43, "ready-for-agent")]),
-    );
+    stub.deliver(github_stub::labelled(43, "ready-for-agent"));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, None).await;
     for (name, filter, templates) in [
@@ -828,11 +823,7 @@ async fn a_firing_that_continues_a_trailing_session_starts_its_turn_at_once() {
     };
     let session = answered_on(&kestrel, &queued, "trailing").await;
 
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled(8, 43, "ci-failed")]),
-    );
+    stub.deliver(github_stub::labelled(43, "ci-failed"));
 
     while kestrel.session(session.id).await.state != SessionState::Working {
         assert!(
