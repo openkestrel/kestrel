@@ -203,6 +203,8 @@ A configured, credentialed connection to an external system. Carries events inbo
 requests outbound; an integration may do either direction or both, and declares which. Slack,
 Linear, GitHub and a plain webhook are all integrations. It is also the identity kestrel, and the
 agents it runs, act under in that system.
+Disabling pauses its use reversibly; retiring permanently ends its use while preserving its identity
+in history.
 _Avoid_: connector, provider, app, plugin
 
 **Delegation**:

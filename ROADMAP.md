@@ -272,8 +272,13 @@ is the fallback for the manifest flow, never a personal access token.
 **Polish covers routine use, not only setup.** Failed declaration and queue reads say they failed
 and offer recovery; an unavailable Transcript never looks like empty history. Recovery actions,
 help, branch and People wording, keyboard navigation and moderate accessibility findings are part
-of `0.4`. Integration updates, credential rotation and switching from polling to webhooks also
-belong here, with their lifecycle rules decided against the GitHub App contract. Existing `0.3`
+of `0.4`. Integration maintenance keeps its repository, App and installation identity fixed;
+name, directions, polling interval and credentials can change. Disable pauses use; retirement erases
+credentials while retaining history. Projects explicitly select the Integration and Workspaces fix
+that selection when they open, so replacement never silently changes existing work's authority.
+App key rotation is validated and atomic locally; webhook-secret rotation is resumable across
+Kestrel and GitHub. Polling continues alongside a reachable webhook, preserving its cursor
+([ADR-0056](docs/adr/0056-an-integration-keeps-its-identity-through-maintenance.md)). Existing `0.3`
 acceptance blockers keep their owners and must pass that gate; unverified cancellation and repository
 validation observations require evidence before they become feature commitments
 ([papercut scope decision](https://github.com/openkestrel/kestrel/issues/494)).
@@ -403,6 +408,11 @@ and reported there. Jira work items and Teams conversations can start work and r
 their own context. Each Integration declares its inbound and outbound capabilities; they share the
 Event, Trigger, Workspace and Outcome model without pretending to have identical native operations.
 Inbound CloudEvents have worked since `0.1`; this rung adds the named adapters and outbound paths.
+
+Multi-repository GitHub installations are explicit work at this rung: settle shared credential
+ownership, repository bindings and authority routing through
+[Define the Integration domain and architecture](https://github.com/openkestrel/kestrel/issues/140).
+`0.4` retains one repository per Integration while making its maintenance and replacement deliberate.
 
 Scheduled Triggers join the same Event and Firing path, with intervals and time-zone-aware calendar
 recurrence, including the [cron acceptance slice](https://github.com/jtmthf/kestrel/issues/198).
