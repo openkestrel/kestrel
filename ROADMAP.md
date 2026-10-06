@@ -279,9 +279,16 @@ that selection when they open, so replacement never silently changes existing wo
 App key rotation is validated and atomic locally; webhook-secret rotation is resumable across
 Kestrel and GitHub. Polling continues alongside a reachable webhook, preserving its cursor
 ([ADR-0056](docs/adr/0056-an-integration-keeps-its-identity-through-maintenance.md)). Existing `0.3`
-acceptance blockers keep their owners and must pass that gate; unverified cancellation and repository
-validation observations require evidence before they become feature commitments
+acceptance blockers keep their owners and must pass that gate; unverified cancellation observations
+require evidence before they become feature commitments
 ([papercut scope decision](https://github.com/openkestrel/kestrel/issues/494)).
+
+Repository declarations share syntax validation and GitHub shorthand expansion. Unbound declarations
+do not require a network probe; a selected GitHub Integration must establish repository access and
+the checkout base branch before saving a new or changed binding. Failure preserves the prior
+declaration. GitHub-backed checkout uses HTTPS with the App's authority, while actual checkout
+success remains the supervisor's to establish
+([ADR-0057](docs/adr/0057-a-repository-declaration-is-not-a-successful-checkout.md)).
 
 **The CLI emits complete JSON.** `--json` returns an object for one resource and an array for a
 collection, including `[]` when empty; following emits one JSON object per line. `--jq EXPR` uses
