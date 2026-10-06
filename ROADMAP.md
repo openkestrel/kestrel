@@ -269,6 +269,15 @@ that partial result. GitHub uses `kestrel integration github connect` and always
 ([ADR-0028](docs/adr/0028-an-integration-lends-a-run-its-identity.md)); registering an existing App
 is the fallback for the manifest flow, never a personal access token.
 
+GitHub setup creates and installs the App before asking which repository to use. Its temporary
+flow lists accessible repositories with their default branches; confirming one creates a
+single-repository Integration. Pending selection resumes across a control-plane restart within
+the flow's one-hour lifetime. Completion, cancellation and expiry erase temporary local secrets;
+they never delete or uninstall the external App. Safe completion state lets either Client observe
+the result without creating another Integration. Browser setup/settings and the CLI use the same
+flow, repository validation and lifecycle contracts
+([GitHub and repository build split](https://github.com/openkestrel/kestrel/issues/534)).
+
 **Polish covers routine use, not only setup.** Failed declaration and queue reads say they failed
 and offer recovery; an unavailable Transcript never looks like empty history. Recovery actions,
 help, branch and People wording, keyboard navigation and moderate accessibility findings are part
