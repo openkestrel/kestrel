@@ -239,7 +239,9 @@ stderr, and redirected output uses no colour or terminal animations
 ([ADR-0046](docs/adr/0046-kestrel-ships-a-catalogue-of-how-each-harness-signs-in.md)), relays a
 person's own subscription sign-in to whichever Client they are using, including a terminal on a
 remote machine ([ADR-0047](docs/adr/0047-kestrel-relays-a-persons-own-sign-in.md)), and checks each
-sign-in with a real call when it is saved. The default image carries every catalogued harness and
+sign-in without automatically spending model usage: supported provider checks establish credential
+acceptance, while an optional model test or actual Session establishes harness/model evidence. The
+default image carries every catalogued harness and
 says so in a label, so kestrel never offers one it cannot run
 ([ADR-0048](docs/adr/0048-the-environment-image-carries-every-catalogued-harness.md)).
 
@@ -256,8 +258,13 @@ reviewed patch release. Main uses `main` and commit-SHA image tags
 ([ADR-0053](docs/adr/0053-a-tag-prepares-a-release-acceptance-publishes-it.md)).
 
 `kestrel login --token` imports an existing token or key through hidden input or stdin;
-`kestrel login --file PATH` imports a login file. Both name their harness and check the sign-in.
-If the model service is unavailable, the saved sign-in remains unchecked and the Client reports
+`kestrel login --file PATH` imports a login file. Both name their harness and validate the input;
+interactive login prompts for a missing method, and non-interactive login requires one when
+ambiguous. `kestrel sign-in test` tests saved material only when explicitly requested.
+The test uses only the selected sign-in, never silently falls back to an Organization key, and
+reports the model used. OpenCode requires an explicit provider/model; Codex tests share its Profile's
+serialized credential use and report busy instead of racing a Session's login refresh.
+If a provider validation service is unavailable, the saved sign-in remains unchecked and the Client reports
 that partial result. GitHub uses `kestrel integration github connect` and always acts as an App
 ([ADR-0028](docs/adr/0028-an-integration-lends-a-run-its-identity.md)); registering an existing App
 is the fallback for the manifest flow, never a personal access token.

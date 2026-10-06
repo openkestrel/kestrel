@@ -34,5 +34,9 @@ and the terminal they are already in.
   pseudo-terminal. This is the riskiest part of the work and is proven before anything depends on it.
 - Codex device authorization is in beta. Pasting `auth.json` stays available for when it fails.
 - Pasting a token or key by hand stays available everywhere, for any sign-in method.
+- One active relay belongs to one destination credential slot, so different people's Profiles and
+  Organizations proceed independently. Either Client can continue it; an accepted import wins
+  over its late result. Closing a Client leaves it running until its ten-minute deadline, while
+  a control-plane restart interrupts it, cleans up its container and offers retry.
 - Anthropic's guidance is vendor policy that changes without notice; ADR-0029's instruction to check
   it again before a release now covers the relay too.

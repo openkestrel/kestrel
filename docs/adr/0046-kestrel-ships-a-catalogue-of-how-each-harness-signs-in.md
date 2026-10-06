@@ -37,5 +37,11 @@ runs from the control plane's harness-command setting. kestrel simply cannot gui
 - OpenCode's own OAuth providers (`opencode auth login`) stay out: OpenCode 2 keeps credentials only
   in its own database and a fresh home never imports a seeded `auth.json` (ADR-0026, #369), so kestrel
   has no surface to supply or keep such a login alive.
-- Each sign-in is checked with one real model call when it is saved, and carries a state a reader can
-  act on: signed in, expired, or not covered by the plan.
+- Saving validates the input and uses supported provider checks without inference; it never spends
+  model usage automatically. Credential acceptance and completed vendor login are evidence of
+  authentication, not proof that a harness can use a model. Unsupported checks leave material
+  unchecked, and an outage retains the saved material without diagnosing authentication failure.
+- An optional model-call test or an actual Session establishes that the material revision worked
+  with that harness and model. Expiry and lack of coverage still require evidence. This replaces
+  the original call-on-every-save requirement after [reviewing provider validation mechanisms](../research/sign-in-validation-without-inference.md)
+  in [the sign-in specification decision](https://github.com/openkestrel/kestrel/issues/533).
