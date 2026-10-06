@@ -48,6 +48,12 @@ lost, resume by setting the same persisted replacement again before finalizing l
 claim completion from the masked value
 ([GitHub's hook interface](https://docs.github.com/en/rest/apps/webhooks)).
 
+The hook URL and secret belong to the App, not the repository. Refuse a webhook-secret or URL
+change when another non-retired Integration uses the same App, including a disabled connection
+and connections in other Organizations. Return a typed explanation without exposing another
+Organization's records. Coordinated shared-App maintenance belongs to the deferred sharing design;
+local disable, retirement and private-key replacement remain available.
+
 An Integration revision guards maintenance, polling, webhook ingest, outbound posts and token
 handoff. Recheck the current state and revision before committing fetched Events, advancing a cursor
 or handing out a credential; stale work must not restore credentials, resume use or overwrite newer
