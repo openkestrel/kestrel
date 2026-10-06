@@ -1903,43 +1903,27 @@ impl<'a> Workspaces<'a> {
         Ok(())
     }
 
-    /// A lease that has already passed is not revived: the sweep is about to end its Session, and
-    /// a control plane coming back takes no supervisor's word for one it has let go.
-    pub async fn hold_leases_on(&mut self, instance: &str, until: Timestamp) -> Result<()> {
-        let now = Timestamp::now();
-        let sessions = self.live_sessions_on(instance).await?;
-
-        sqlx::query(
-            "UPDATE session SET lease_expires_at = ?
-             WHERE instance = ? AND state IN (SELECT value FROM json_each(?))
-               AND lease_expires_at > ?",
-        )
-        .bind(due(until))
-        .bind(instance)
-        .bind(live()?)
-        .bind(due(now))
-        .execute(&mut *self.connection)
-        .await
-        .with_context(|| format!("holding the leases of the sessions on {instance}"))?;
-
-        for session in sessions {
-            if session.lease_expires_at.is_some_and(|at| at > now) {
-                self.touched.session(&session);
-            }
+    pub async fn hold_lease_on(
+        &mut self,
+        instance: &str,
+        session: Option<SessionId>,
+        until: Timestamp,
+    ) -> Result<()> {
+        if let Some(id) = session
+            && let Some(session) = self.carried(instance, id).await?
+        {
+            self.hold_lease(&session, until).await?;
         }
-
         Ok(())
     }
 
     pub async fn carried(&mut self, instance: &str, id: SessionId) -> Result<Option<Session>> {
         sqlx::query(sessions_where!(
-            "id = ? AND instance = ? AND state IN (SELECT value FROM json_each(?))
-               AND lease_expires_at > ?"
+            "id = ? AND instance = ? AND state IN (SELECT value FROM json_each(?))"
         ))
         .bind(id.to_string())
         .bind(instance)
         .bind(live()?)
-        .bind(due(Timestamp::now()))
         .fetch_optional(&mut *self.connection)
         .await
         .with_context(|| format!("reading whether {instance} carries the session {id}"))?
@@ -1975,6 +1959,14 @@ impl<'a> Workspaces<'a> {
 
         self.touched.session(session);
 
+        Ok(())
+    }
+
+    pub async fn grace_leases(&mut self, until: Timestamp) -> Result<()> {
+        let sessions = self.expired_leases(until).await?;
+        for session in sessions {
+            self.hold_lease(&session, until).await?;
+        }
         Ok(())
     }
 

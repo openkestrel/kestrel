@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod app_flow;
 pub mod integration;
+pub mod lease_sweep;
 pub mod organization;
 pub mod profile;
 pub mod project;
@@ -161,6 +162,10 @@ impl Tx<'_> {
 
     pub fn workspaces(&mut self) -> Workspaces<'_> {
         Workspaces::over(&mut self.transaction, &mut self.touched)
+    }
+
+    pub fn lease_sweep(&mut self) -> lease_sweep::LeaseSweep<'_> {
+        lease_sweep::LeaseSweep::over(&mut self.transaction)
     }
 
     pub fn queue(&mut self) -> Queue<'_> {

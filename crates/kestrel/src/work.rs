@@ -24,6 +24,8 @@ use crate::workspace;
 /// outlasts a restart under a live one by enough that an upgrade does not reap the Sessions it
 /// was carrying; a dead supervisor holds a Workspace's active-Session slot until it is up.
 pub(crate) const LEASE: SignedDuration = SignedDuration::from_mins(2);
+pub(crate) const GAP: SignedDuration = SignedDuration::from_secs(10);
+pub(crate) const GRACE: SignedDuration = SignedDuration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -181,8 +183,7 @@ impl fmt::Display for ReportRefused {
             }
             Self::Gone(session) => write!(
                 f,
-                "the session {session} is not one this instance carries: it has ended, or its \
-                 lease has passed and its control plane has let it go"
+                "the session {session} is not one this instance carries: it has ended or belongs to another instance"
             ),
             Self::MissingSequence => {
                 write!(
@@ -569,7 +570,7 @@ pub async fn report(
             let mut tx = store.begin().await?;
             tx.workspaces().record_reached(instance).await?;
             tx.workspaces()
-                .hold_leases_on(instance, Timestamp::now() + LEASE)
+                .hold_lease_on(instance, session, Timestamp::now() + LEASE)
                 .await?;
             tx.commit().await?;
             debug!(instance, "a supervisor reported itself alive");
@@ -957,11 +958,6 @@ pub(crate) fn expired_lease() -> Exit {
     }
 }
 
-/// Forgotten with the Sessions it was carrying, so the next Session on the Instance starts
-/// another.
-///
-/// A lease that lapsed first decides the reason, so one lapse reads the same whether the sweep or
-/// the supervisor's exit gets to the Session first.
 pub async fn supervisor_exited(
     store: &Store,
     instance: &str,
@@ -971,15 +967,10 @@ pub async fn supervisor_exited(
     let mut tx = store.begin().await?;
     tx.workspaces().forget_supervisor(instance).await?;
     let sessions = tx.workspaces().live_sessions_on(instance).await?;
-    let now = Timestamp::now();
     for session in &sessions {
         close_lost_units(&mut tx, session, summaries).await?;
-        let exit = if session.lease_expires_at.is_some_and(|at| at <= now) {
-            expired_lease()
-        } else {
-            Exit::Failed {
-                because: because.to_owned(),
-            }
+        let exit = Exit::Failed {
+            because: because.to_owned(),
         };
         ending(&mut tx, session, exit).await?;
     }

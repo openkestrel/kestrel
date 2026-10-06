@@ -16,7 +16,7 @@ use support::scripted_agent::Script;
 use support::supervisor::Supervisor;
 use support::{Kestrel, OnTheLink};
 
-const PATIENCE: Duration = Duration::from_secs(30);
+const PATIENCE: Duration = Duration::from_secs(45);
 const LONG_ENOUGH_TO_BE_SURE: Duration = Duration::from_secs(1);
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
@@ -196,10 +196,17 @@ async fn a_lease_is_not_swept_while_the_environment_that_holds_it_out_is_reconne
         .await;
     let kestrel = stopped.restart().await;
 
-    until(&kestrel, abandoned.id, "was swept", |session| {
+    let expired = until(&kestrel, abandoned.id, "was swept", |session| {
         session.state == SessionState::Ended
     })
     .await;
+    assert_eq!(
+        expired.exit,
+        Some(Exit::Failed {
+            because: "the supervisor stopped holding the session's lease out, and it expired"
+                .to_owned()
+        })
+    );
     assert_eq!(
         kestrel.session(session.id).await.state,
         SessionState::Working,
@@ -322,5 +329,94 @@ async fn a_report_that_changes_the_sessions_record_and_is_not_numbered_is_refuse
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
     assert_eq!(kestrel.transcript(session.workspace).await.len(), 2);
 
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_gap_gives_a_healthy_waiting_session_grace_and_attributes_a_lost_supervisor() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace(&kestrel).await;
+    let (healthy, supervisor) = working(&kestrel, &workspace, Script::Speaks).await;
+    until(&kestrel, healthy.id, "answered and settled", |session| {
+        session.state == SessionState::Waiting
+    })
+    .await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let (lost, lost_supervisor) = working(&kestrel, &workspace, Script::Speaks).await;
+    until(&kestrel, lost.id, "answered and settled", |session| {
+        session.state == SessionState::Waiting
+    })
+    .await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let (forgotten, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let command = support::scripted_agent::playing(Script::Speaks);
+    let mut forgetful = Supervisor::provision_running(
+        &kestrel.link(),
+        &on,
+        &command,
+        "",
+        Some(Duration::from_secs(1)),
+    );
+    forgetful.wait_until_it_says("reported connected").await;
+    kestrel.start(&forgotten, forgetful.harness()).await;
+    until(&kestrel, forgotten.id, "answered and settled", |session| {
+        session.state == SessionState::Waiting
+    })
+    .await;
+    let stopped = kestrel.kill().await;
+    lost_supervisor.destroy();
+    forgetful.wait_until_it_says("let the session").await;
+    let start = Timestamp::now() - SignedDuration::from_mins(9);
+    stopped.last_lease_sweep(start).await;
+    let lapsed = Timestamp::now() - SignedDuration::from_secs(1);
+    stopped.lease_until(&healthy, lapsed).await;
+    stopped.lease_until(&lost, lapsed).await;
+    stopped.lease_until(&forgotten, lapsed).await;
+    let kestrel = stopped.restart().await;
+    let held = until(&kestrel, healthy.id, "renewed its lease", |session| {
+        session.lease_expires_at > Some(Timestamp::now() + SignedDuration::from_secs(60))
+    })
+    .await;
+    assert_eq!(held.state, SessionState::Waiting);
+    let graced = kestrel.session(lost.id).await;
+    assert_eq!(graced.state, SessionState::Waiting);
+    let deadline = graced.lease_expires_at.unwrap();
+    assert!(deadline > Timestamp::now());
+    let ended = until(&kestrel, lost.id, "failed after grace", |session| {
+        session.state == SessionState::Ended
+    })
+    .await;
+    assert!(Timestamp::now() >= deadline);
+    let end = deadline - SignedDuration::from_secs(30);
+    assert_eq!(
+        ended.exit,
+        Some(Exit::Failed {
+            because: format!(
+                "the control plane was not running from {start} to {end}, and the supervisor did not reach it within 30 s after"
+            )
+        })
+    );
+    let forgotten = until(
+        &kestrel,
+        forgotten.id,
+        "failed without renewing the session it let go",
+        |session| session.state == SessionState::Ended,
+    )
+    .await;
+    assert_eq!(
+        forgotten.exit,
+        Some(Exit::Failed {
+            because: format!(
+                "the supervisor came back after the control plane was not running from {start} to {end}, no longer carrying the session"
+            )
+        })
+    );
+    assert_eq!(
+        kestrel.session(healthy.id).await.state,
+        SessionState::Waiting
+    );
+    assert_eq!(kestrel.sessions(lost.workspace).await.len(), 1);
+    supervisor.destroy();
+    forgetful.destroy();
     kestrel.teardown().await;
 }
