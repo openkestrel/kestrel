@@ -518,7 +518,7 @@ fn the_published_operator_document_describes_the_change_stream_and_its_events() 
         );
     }
 
-    let schemas = events["oneOf"].as_array().expect("the documented events");
+    let schemas = events["anyOf"].as_array().expect("the documented events");
     let change = schemas
         .iter()
         .map(|schema| resolve(&document, schema["$ref"].as_str().expect("a reference")))

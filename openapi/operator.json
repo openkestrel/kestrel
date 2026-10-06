@@ -5451,7 +5451,7 @@
       },
       "ChangesEvent": {
         "description": "SSE names: open (ChangesOpen) on connect and on reconnect, change (Change) for one resource that changed, and resync (ChangesResync) for a subscriber that fell behind the bounded buffer. No event carries an id.",
-        "oneOf": [
+        "anyOf": [
           {
             "$ref": "#/components/schemas/Change",
             "x-sse-event": "change"
