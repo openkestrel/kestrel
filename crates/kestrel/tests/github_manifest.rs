@@ -67,7 +67,7 @@ async fn manifest_setup_registers_a_usable_app_without_returning_secrets() {
             manifest["default_events"],
             json!(["issues", "issue_comment", "pull_request"])
         );
-        assert_eq!(manifest["hook_attributes"]["active"], webhook);
+        assert_eq!(manifest["hook_attributes"]["active"], true);
         assert!(
             manifest["redirect_url"]
                 .as_str()
@@ -113,15 +113,14 @@ async fn manifest_setup_registers_a_usable_app_without_returning_secrets() {
             client.get(&finish).send().await.unwrap().status(),
             StatusCode::UNPROCESSABLE_ENTITY
         );
-        let integration = sqlx::query("SELECT id, app_id, installation_id, private_key_sealed, signing_secret, signed, poll_due_at FROM integration").fetch_one(&pool).await.unwrap();
+        let integration = sqlx::query("SELECT id, app_id, installation_id, private_key_sealed, signing_secret, poll_due_at FROM integration").fetch_one(&pool).await.unwrap();
         assert_eq!(integration.get::<i64, _>("app_id"), 17);
         assert_eq!(integration.get::<i64, _>("installation_id"), 23);
-        assert_eq!(integration.get::<bool, _>("signed"), webhook);
-        assert_eq!(
+        assert!(
             integration
                 .get::<Option<String>, _>("poll_due_at")
                 .is_some(),
-            !webhook
+            "every inbound GitHub Integration is polled"
         );
         assert!(
             !integration
@@ -132,15 +131,18 @@ async fn manifest_setup_registers_a_usable_app_without_returning_secrets() {
             integration.get::<String, _>("signing_secret"),
             "manifest-webhook-secret"
         );
-        if webhook {
-            assert_eq!(
-                manifest["hook_attributes"]["url"],
-                format!(
-                    "https://hooks.example.com/webhooks/{}",
-                    integration.get::<String, _>("id")
-                )
-            );
-        }
+        assert_eq!(
+            manifest["hook_attributes"]["url"],
+            format!(
+                "{}/webhooks/{}",
+                if webhook {
+                    "https://hooks.example.com"
+                } else {
+                    "https://unreachable.invalid"
+                },
+                integration.get::<String, _>("id")
+            )
+        );
         let records: Value = client
             .get(format!(
                 "{}/operator/organizations/acme/integrations",
@@ -156,14 +158,9 @@ async fn manifest_setup_registers_a_usable_app_without_returning_secrets() {
         assert!(!records.to_string().contains("manifest-webhook-secret"));
         assert!(!records.to_string().contains("PRIVATE KEY"));
         let integrations = kestrel.integrations("acme").await;
-        stub.script_answer(
-            "GET",
-            "/repos/acme/repo/issues/events",
-            ScriptedResponse::ok("[]"),
-        );
         kestrel::integration::github::Github::dialling_out()
             .unwrap()
-            .issue_events(&integrations[0])
+            .issue(&integrations[0], 1)
             .await
             .unwrap();
         let requests = stub.requests();
@@ -173,7 +170,7 @@ async fn manifest_setup_registers_a_usable_app_without_returning_secrets() {
                 .any(|r| r.url == "/app/installations/23/access_tokens")
         );
         assert!(requests.iter().any(|r| {
-            r.url.contains("/issues/events")
+            r.url == "/repos/acme/repo/issues/1"
                 && r.headers.iter().any(|(name, value)| {
                     name.eq_ignore_ascii_case("authorization")
                         && value == &format!("Bearer {}", support::github_stub::INSTALLATION_TOKEN)

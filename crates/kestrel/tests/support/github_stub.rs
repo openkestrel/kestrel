@@ -45,36 +45,53 @@ impl ScriptedResponse {
     }
 }
 
-pub fn labelled(id: i64, issue: i64, label: &str) -> serde_json::Value {
-    issue_event(id, issue, "labeled", label)
+#[derive(Debug, Clone)]
+pub struct Delivery {
+    pub event: String,
+    pub payload: serde_json::Value,
 }
 
-pub fn unlabelled(id: i64, issue: i64, label: &str) -> serde_json::Value {
-    issue_event(id, issue, "unlabeled", label)
+pub const REPOSITORY: &str = "jtmthf/kestrel";
+
+pub fn labelled(issue: i64, label: &str) -> Delivery {
+    issue_event(issue, "labeled", label)
 }
 
-/// One entry as GitHub's issue-events endpoint reports it.
-pub fn issue_event(id: i64, issue: i64, kind: &str, label: &str) -> serde_json::Value {
+pub fn unlabelled(issue: i64, label: &str) -> Delivery {
+    issue_event(issue, "unlabeled", label)
+}
+
+pub fn issue_event(issue: i64, action: &str, label: &str) -> Delivery {
+    Delivery {
+        event: "issues".to_owned(),
+        payload: serde_json::json!({
+            "action": action,
+            "label": { "name": label },
+            "issue": an_issue(issue),
+            "sender": { "login": "jtmthf" },
+        }),
+    }
+}
+
+fn an_issue(number: i64) -> serde_json::Value {
     serde_json::json!({
-        "id": id,
-        "event": kind,
-        "created_at": format!("2026-09-01T12:00:{:02}Z", id % 60),
-        "actor": { "login": "jtmthf" },
-        "label": { "name": label },
-        "issue": {
-            "number": issue,
-            "title": format!("an issue numbered {issue}"),
-            "html_url": format!("https://github.com/jtmthf/kestrel/issues/{issue}"),
-        },
+        "number": number,
+        "title": format!("an issue numbered {number}"),
+        "html_url": format!("https://github.com/{REPOSITORY}/issues/{number}"),
+        "labels": [],
     })
 }
 
-pub fn assigned(id: i64, issue: i64, assignee: &str, actor: &str) -> serde_json::Value {
-    let mut event = issue_event(id, issue, "assigned", "");
-    event["actor"]["login"] = actor.into();
-    event["assignee"] = serde_json::json!({ "login": assignee });
-    event.as_object_mut().expect("an event").remove("label");
-    event
+pub fn assigned(issue: i64, assignee: &str, actor: &str) -> Delivery {
+    let mut delivery = issue_event(issue, "assigned", "");
+    delivery.payload["sender"]["login"] = actor.into();
+    delivery.payload["assignee"] = serde_json::json!({ "login": assignee });
+    delivery
+        .payload
+        .as_object_mut()
+        .expect("a payload")
+        .remove("label");
+    delivery
 }
 
 pub fn issue(number: i64, labels: &[&str]) -> ScriptedResponse {
@@ -83,7 +100,7 @@ pub fn issue(number: i64, labels: &[&str]) -> ScriptedResponse {
             "number": number,
             "state": "open",
             "title": format!("an issue numbered {number}"),
-            "html_url": format!("https://github.com/jtmthf/kestrel/issues/{number}"),
+            "html_url": format!("https://github.com/{REPOSITORY}/issues/{number}"),
             "assignees": [{ "login": "kestrel" }],
             "labels": labels
                 .iter()
@@ -95,33 +112,40 @@ pub fn issue(number: i64, labels: &[&str]) -> ScriptedResponse {
 }
 
 /// Labelled with `label` on an issue that already carries `carries` besides it.
-pub fn labelled_carrying(id: i64, issue: i64, label: &str, carries: &[&str]) -> serde_json::Value {
-    let mut event = labelled(id, issue, label);
-    event["issue"]["labels"] = std::iter::once(label)
+pub fn labelled_carrying(issue: i64, label: &str, carries: &[&str]) -> Delivery {
+    let mut delivery = labelled(issue, label);
+    delivery.payload["issue"]["labels"] = std::iter::once(label)
         .chain(carries.iter().copied())
         .map(|name| serde_json::json!({ "name": name }))
         .collect();
-    event
+    delivery
 }
 
-/// One comment as GitHub reports it, and as it answers a newly posted one.
+/// One comment as GitHub answers a newly posted one, or a read of one.
 pub fn comment(id: i64, body: &str) -> serde_json::Value {
     serde_json::json!({
         "id": id,
-        "html_url": format!("https://github.com/jtmthf/kestrel/issues/43#issuecomment-{id}"),
+        "html_url": format!("https://github.com/{REPOSITORY}/issues/43#issuecomment-{id}"),
         "body": body,
     })
 }
 
-pub fn issue_comment(id: i64, issue: i64, actor: &str, body: &str) -> serde_json::Value {
-    serde_json::json!({
-        "id": id,
-        "html_url": format!("https://github.com/jtmthf/kestrel/issues/{issue}#issuecomment-{id}"),
-        "issue_url": format!("https://api.github.com/repos/jtmthf/kestrel/issues/{issue}"),
-        "body": body,
-        "created_at": format!("2026-09-02T12:00:{:02}Z", id % 60),
-        "user": { "login": actor },
-    })
+pub fn issue_comment(id: i64, issue: i64, actor: &str, body: &str) -> Delivery {
+    Delivery {
+        event: "issue_comment".to_owned(),
+        payload: serde_json::json!({
+            "action": "created",
+            "issue": an_issue(issue),
+            "comment": {
+                "id": id,
+                "html_url": format!("https://github.com/{REPOSITORY}/issues/{issue}#issuecomment-{id}"),
+                "issue_url": format!("https://api.github.com/repos/{REPOSITORY}/issues/{issue}"),
+                "body": body,
+                "user": { "login": actor },
+            },
+            "sender": { "login": actor },
+        }),
+    }
 }
 
 pub fn created(id: i64, body: &str) -> ScriptedResponse {
@@ -132,7 +156,6 @@ pub fn created(id: i64, body: &str) -> ScriptedResponse {
     }
 }
 
-/// GitHub answers newest first, so a page reads the other way round from how it happened.
 pub fn page(events: &[serde_json::Value]) -> ScriptedResponse {
     ScriptedResponse::ok(serde_json::Value::Array(events.to_vec()).to_string())
 }
@@ -176,6 +199,16 @@ pub fn rate_limited() -> ScriptedResponse {
         )
 }
 
+/// Made when the stub is next asked for the log, so a test may deliver before kestrel registers.
+struct Logged {
+    id: i64,
+    guid: String,
+    delivered_at: Option<jiff::Timestamp>,
+    installation_id: Option<i64>,
+    repository_id: i64,
+    delivery: Delivery,
+}
+
 /// A queue of responses for one endpoint, so a sweep polling for events cannot take a
 /// response scripted for an outbound comment.
 struct Endpoint {
@@ -189,6 +222,7 @@ pub struct GithubStub {
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
     responses: Arc<Mutex<VecDeque<ScriptedResponse>>>,
     endpoints: Arc<Mutex<Vec<Endpoint>>>,
+    log: Arc<Mutex<Vec<Logged>>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -205,12 +239,14 @@ impl GithubStub {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let responses = Arc::new(Mutex::new(VecDeque::new()));
         let endpoints = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
 
         let thread = {
             let requests = Arc::clone(&requests);
             let responses = Arc::clone(&responses);
             let endpoints = Arc::clone(&endpoints);
+            let log = Arc::clone(&log);
             let stop = Arc::clone(&stop);
 
             std::thread::spawn(move || {
@@ -221,7 +257,7 @@ impl GithubStub {
                         Err(_) => break,
                     };
 
-                    respond(request, &requests, &responses, &endpoints);
+                    respond(request, &requests, &responses, &endpoints, &log);
                 }
             })
         };
@@ -231,6 +267,7 @@ impl GithubStub {
             requests,
             responses,
             endpoints,
+            log,
             stop,
             thread: Some(thread),
         }
@@ -267,6 +304,54 @@ impl GithubStub {
         }
     }
 
+    /// Answers the GUID, which a webhook carrying it would name in `X-GitHub-Delivery`.
+    pub fn deliver(&self, delivery: Delivery) -> String {
+        self.log_delivery(delivery, None, Some(INSTALLATION), REPOSITORY_ID)
+    }
+
+    /// As GitHub logs a Delivery made at `at`, rather than when it is next asked.
+    pub fn deliver_at(&self, delivery: Delivery, at: jiff::Timestamp) -> String {
+        self.log_delivery(delivery, Some(at), Some(INSTALLATION), REPOSITORY_ID)
+    }
+
+    /// As GitHub logs a Delivery whose webhook already carried `guid`.
+    pub fn deliver_as(&self, delivery: Delivery, guid: &str) {
+        self.log_delivery(delivery, None, Some(INSTALLATION), REPOSITORY_ID);
+        let mut log = self
+            .log
+            .lock()
+            .expect("the delivery log should not be poisoned");
+        log.last_mut().expect("just logged").guid = guid.to_owned();
+    }
+
+    pub fn deliver_to(&self, delivery: Delivery, installation: i64, repository_id: i64) -> String {
+        self.log_delivery(delivery, None, Some(installation), repository_id)
+    }
+
+    fn log_delivery(
+        &self,
+        delivery: Delivery,
+        at: Option<jiff::Timestamp>,
+        installation_id: Option<i64>,
+        repository_id: i64,
+    ) -> String {
+        let mut log = self
+            .log
+            .lock()
+            .expect("the delivery log should not be poisoned");
+        let id = i64::try_from(log.len()).expect("a small log") + 1;
+        let guid = format!("00000000-0000-4000-8000-{id:012}");
+        log.push(Logged {
+            id,
+            guid: guid.clone(),
+            delivered_at: at,
+            installation_id,
+            repository_id,
+            delivery,
+        });
+        guid
+    }
+
     pub fn requests(&self) -> Vec<RecordedRequest> {
         self.requests
             .lock()
@@ -280,6 +365,7 @@ fn respond(
     requests: &Mutex<Vec<RecordedRequest>>,
     responses: &Mutex<VecDeque<ScriptedResponse>>,
     endpoints: &Mutex<Vec<Endpoint>>,
+    log: &Mutex<Vec<Logged>>,
 ) {
     let headers = request
         .headers()
@@ -306,6 +392,12 @@ fn respond(
 
     let method = request.method().to_string();
     let url = request.url().to_owned();
+    let host = request
+        .headers()
+        .iter()
+        .find(|header| header.field.equiv("host"))
+        .map(|header| header.value.as_str().to_owned())
+        .unwrap_or_default();
     let scripted = endpoints
         .lock()
         .expect("the endpoint queues should not be poisoned")
@@ -322,6 +414,14 @@ fn respond(
             Some(minted_installation_token())
         } else if method == "GET" && url.ends_with("/app") {
             Some(default_app_record())
+        } else if method == "GET"
+            && url
+                .strip_prefix("/repos/")
+                .is_some_and(|named| named.split('/').count() == 2)
+        {
+            Some(ScriptedResponse::ok(
+                serde_json::json!({ "id": REPOSITORY_ID }).to_string(),
+            ))
         } else {
             None
         }
@@ -340,14 +440,24 @@ fn respond(
         }
     });
     let scripted = scripted.or_else(|| {
-        if method == "GET" && url.contains("/issues/comments?") {
-            Some(ScriptedResponse::ok("[]"))
-        } else {
-            responses
-                .lock()
-                .expect("the response queue should not be poisoned")
-                .pop_front()
+        if method != "GET" {
+            return None;
         }
+        let mut log = log.lock().expect("the delivery log should not be poisoned");
+        if url.starts_with("/app/hook/deliveries?") {
+            Some(listed(&mut log, &url, &host))
+        } else {
+            let id: i64 = url.strip_prefix("/app/hook/deliveries/")?.parse().ok()?;
+            log.iter()
+                .find(|logged| logged.id == id)
+                .map(|logged| ScriptedResponse::ok(delivered(logged).to_string()))
+        }
+    });
+    let scripted = scripted.or_else(|| {
+        responses
+            .lock()
+            .expect("the response queue should not be poisoned")
+            .pop_front()
     });
 
     let scripted = scripted.unwrap_or_else(|| ScriptedResponse::answering(404));
@@ -360,6 +470,82 @@ fn respond(
         response.add_header(header);
     }
     let _ = request.respond(response);
+}
+
+const INSTALLATION: i64 = 2;
+/// What `GET /repos/{owner}/{name}` answers for any repository.
+pub const REPOSITORY_ID: i64 = 1;
+
+/// What has not been listed before is made now, in the order it was delivered.
+fn listed(log: &mut [Logged], url: &str, host: &str) -> ScriptedResponse {
+    let parameter = |name: &str| {
+        url.split(['?', '&'])
+            .find_map(|pair| pair.strip_prefix(&format!("{name}=")))
+            .and_then(|value| value.parse::<usize>().ok())
+    };
+    let per_page = parameter("per_page").unwrap_or(30);
+    let cursor = parameter("cursor").unwrap_or(0);
+    let mut at = jiff::Timestamp::now();
+    for logged in log
+        .iter_mut()
+        .filter(|logged| logged.delivered_at.is_none())
+    {
+        at += jiff::SignedDuration::from_millis(1);
+        logged.delivered_at = Some(at);
+    }
+    let mut newest_first: Vec<&Logged> = log.iter().collect();
+    newest_first.sort_by_key(|logged| std::cmp::Reverse((logged.delivered_at, logged.id)));
+    let more = newest_first.len() > cursor + per_page;
+    let entries: Vec<_> = newest_first
+        .into_iter()
+        .skip(cursor)
+        .take(per_page)
+        .map(|logged| {
+            serde_json::json!({
+                "id": logged.id,
+                "guid": logged.guid,
+                "delivered_at": logged.delivered_at.expect("made above").to_string(),
+                "redelivery": false,
+                "status": "failed to connect to host",
+                "status_code": 502,
+                "event": logged.delivery.event,
+                "action": logged.delivery.payload.get("action"),
+                "installation_id": logged.installation_id,
+                "repository_id": logged.repository_id,
+            })
+        })
+        .collect();
+    let page = ScriptedResponse::ok(serde_json::Value::Array(entries).to_string());
+    if more {
+        page.with_header(
+            "link",
+            &format!(
+                "<http://{host}/app/hook/deliveries?per_page={per_page}&cursor={}>; rel=\"next\"",
+                cursor + per_page
+            ),
+        )
+    } else {
+        page
+    }
+}
+
+fn delivered(logged: &Logged) -> serde_json::Value {
+    serde_json::json!({
+        "id": logged.id,
+        "guid": logged.guid,
+        "delivered_at": logged.delivered_at.map(|at| at.to_string()),
+        "event": logged.delivery.event,
+        "action": logged.delivery.payload.get("action"),
+        "installation_id": logged.installation_id,
+        "request": {
+            "headers": {
+                "X-GitHub-Delivery": logged.guid,
+                "X-GitHub-Event": logged.delivery.event,
+            },
+            "payload": logged.delivery.payload,
+        },
+        "response": { "headers": null, "payload": "" },
+    })
 }
 
 impl Drop for GithubStub {

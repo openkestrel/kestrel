@@ -253,8 +253,8 @@ async fn a_github_delivery_is_verified_by_its_signature() {
     kestrel.teardown().await;
 }
 
-/// A shared secret is not how GitHub proves a delivery, and a polled integration has no key to
-/// check a signature with.
+/// A shared secret is not how GitHub proves a delivery, and an integration registered without
+/// its App's webhook secret has no key to check a signature with.
 #[tokio::test]
 async fn a_github_integration_without_a_signing_secret_accepts_no_delivery() {
     let kestrel = Kestrel::boot().await;
@@ -479,7 +479,7 @@ async fn a_command_from_the_integration_itself_fires_no_trigger() {
 }
 
 #[tokio::test]
-async fn a_delivered_label_opens_a_workspace_and_the_repository_is_not_polled() {
+async fn a_delivered_label_opens_a_workspace_after_checking_the_issue() {
     let kestrel = Kestrel::boot().await;
     let stub = GithubStub::start();
     let organization = kestrel.declare_organization("acme").await;
@@ -522,12 +522,6 @@ async fn a_delivered_label_opens_a_workspace_and_the_repository_is_not_polled() 
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let requests = stub.requests();
-    assert!(
-        requests.iter().all(|request| {
-            !request.url.contains("/issues/events?") && !request.url.contains("/issues/comments?")
-        }),
-        "a webhook-delivered repository was polled: {requests:?}"
-    );
     assert!(
         requests
             .iter()

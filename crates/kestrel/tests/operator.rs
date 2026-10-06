@@ -686,11 +686,7 @@ async fn a_declaration_preview_changes_nothing() {
 #[tokio::test]
 async fn a_trigger_applied_after_an_event_never_fires_for_that_event() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(
-        7,
-        43,
-        "ready-for-agent",
-    )]));
+    stub.deliver(github_stub::labelled(43, "ready-for-agent"));
     let kestrel = Kestrel::boot().await;
     succeeded(&client(&kestrel, &["organization", "declare", "acme"]).await);
     succeeded(
@@ -3629,7 +3625,10 @@ async fn a_client_registers_and_lists_integrations_without_saying_their_secrets(
     assert_eq!(github[0]["repository"], "jtmthf/kestrel");
     assert_eq!(github[0]["carries"], json!(["inbound", "outbound"]));
     assert_eq!(github[0]["polled_every"], "5m");
-    assert_eq!(github[0]["webhook_path"], Value::Null);
+    assert_eq!(
+        github[0]["webhook_path"],
+        format!("/webhooks/{}", github[0]["id"].as_str().expect("an id"))
+    );
     assert_eq!(webhook[0]["kind"], "webhook");
     assert_eq!(webhook[0]["carries"], json!(["inbound"]));
     assert_eq!(
@@ -3680,7 +3679,7 @@ async fn an_integration_is_registered_with_what_it_is_declared_to_carry() {
     assert_eq!(status, StatusCode::CREATED, "{signed}");
     assert_eq!(signed["carries"], json!(["outbound"]));
     assert_eq!(signed["polled_every"], Value::Null);
-    assert!(signed["webhook_path"].is_string(), "{signed}");
+    assert_eq!(signed["webhook_path"], Value::Null, "{signed}");
     assert!(!signed.to_string().contains("a-signing-secret"));
     assert!(!signed.to_string().contains(PRIVATE_KEY));
 

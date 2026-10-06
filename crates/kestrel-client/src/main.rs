@@ -322,11 +322,11 @@ enum RegisterCommand {
             default_values = ["inbound", "outbound"]
         )]
         carries: Vec<String>,
-        /// How often the poll asks GitHub what has happened
+        /// How often the poll reads the App's Delivery log
         #[arg(long, value_name = "DURATION", default_value = "1m")]
         interval: String,
-        /// The secret GitHub signs webhook deliveries with; given one, kestrel receives the
-        /// repository's events by webhook and stops polling for them
+        /// The App's webhook secret; given one, a Delivery that reaches kestrel's webhook is
+        /// recorded on arrival, ahead of the poll that would otherwise read it
         #[arg(
             long,
             env = "KESTREL_GITHUB_WEBHOOK_SECRET",

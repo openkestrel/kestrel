@@ -12,8 +12,8 @@ use tracing::{info, warn};
 
 use crate::domain::{Exit, SessionId};
 use crate::follow_up;
-use crate::integration::delivery;
 use crate::integration::github::Github;
+use crate::integration::post;
 use crate::integration::{self, Polled};
 use crate::pull_request;
 use crate::store::Store;
@@ -60,7 +60,7 @@ pub async fn sweeping(
         following_up(store, wake.0.subscribe(), shutdown),
         learning_pull_requests(store, &github, wake.0.subscribe(), shutdown),
         sealing_idle_workspaces(store, shutdown),
-        delivering(store, &github, shutdown)
+        posting(store, &github, shutdown)
     )?;
 
     Ok(())
@@ -195,11 +195,11 @@ async fn polling(store: &Store, github: &Github, shutdown: &CancellationToken) -
 /// ended as is durable the moment it ends, and saying so out loud is a request to somebody
 /// else's system that may be refused, deferred and asked again without any of that reaching
 /// the Session.
-async fn delivering(store: &Store, github: &Github, shutdown: &CancellationToken) -> Result<()> {
+async fn posting(store: &Store, github: &Github, shutdown: &CancellationToken) -> Result<()> {
     while !shutdown.is_cancelled() {
-        match deliver(store, github).await {
+        match post_due(store, github).await {
             Ok(()) => {}
-            Err(error) => warn!(%error, "a delivery found nothing it could do"),
+            Err(error) => warn!(%error, "a post found nothing it could do"),
         }
 
         tick(shutdown).await;
@@ -343,17 +343,17 @@ async fn sweep(
     Ok(expired)
 }
 
-async fn deliver(store: &Store, github: &Github) -> Result<()> {
+async fn post_due(store: &Store, github: &Github) -> Result<()> {
     let due = {
         let mut tx = store.begin().await?;
-        tx.integrations().deliveries_due(Timestamp::now()).await?
+        tx.integrations().posts_due(Timestamp::now()).await?
     };
 
-    for delivery in due {
-        if let Some(comment) = delivery::deliver(store, github, &delivery).await? {
+    for due in due {
+        if let Some(comment) = post::post(store, github, &due).await? {
             info!(
-                session = %delivery.session,
-                turn = delivery.turn,
+                session = %due.session,
+                turn = due.turn,
                 comment,
                 "what a session said reached the issue it came from"
             );

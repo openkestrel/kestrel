@@ -1,5 +1,3 @@
-ALTER TABLE integration ADD COLUMN comments_polled_through INTEGER;
-
 ALTER TABLE event ADD COLUMN message TEXT;
 
 ALTER TABLE session ADD COLUMN supervisor TEXT;

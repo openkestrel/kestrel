@@ -1,21 +1,15 @@
 # kestrel trigger apply --organization acme -f .kestrel/triggers.yaml
 #
 # Work starts only when jtmthf opens a comment with `@kestrel`, or an operator dispatches an issue.
-# Labels, including ready-for-agent, start nothing. Both shapes of a comment are matched: a poll
-# reports its author as `user`, and a webhook nests the comment.
+# Labels, including ready-for-agent, start nothing.
 triggers:
   delegated:
     filter:
       all:
         - exact: {source: "https://github.com/openkestrel/kestrel"}
         - exact: {type: com.github.issue_comment.created}
-        - any:
-            - all:
-                - exact: {data.user.login: jtmthf}
-                - prefix: {data.body: "@kestrel"}
-            - all:
-                - exact: {data.comment.user.login: jtmthf}
-                - prefix: {data.comment.body: "@kestrel"}
+        - exact: {data.comment.user.login: jtmthf}
+        - prefix: {data.comment.body: "@kestrel"}
     brief: |
       {% if instruction %}{{ instruction }}{% else %}/implement{% endif %} {{ event.source }}/issues/{{ event.subject | replace("#", "") }}
 

@@ -10,7 +10,7 @@ Create the App through Kestrel:
 kestrel integration create-github-app origin --repository openkestrel/kestrel --app-organization openkestrel
 ```
 
-Follow the printed URL to create and install the App. See [Create the GitHub App](../../USAGE.md#create-the-github-app) for localhost callbacks and optional public webhooks. Kestrel polls every minute when no webhook base is supplied; the first poll establishes a starting point instead of replaying repository history. Existing Apps can still be registered with `kestrel integration register github` and their App ID, installation ID, and private key.
+Follow the printed URL to create and install the App. See [Create the GitHub App](../../USAGE.md#create-the-github-app) for localhost callbacks and optional public webhooks. Kestrel polls the App's log of webhook deliveries every minute, so it learns everything a webhook would — issue events, comments and pull requests — about one interval later, and back as far as GitHub keeps deliveries (three days). A webhook base that GitHub can reach only makes it faster. The first poll starts from when the Integration was registered instead of replaying earlier deliveries. Existing Apps can still be registered with `kestrel integration register github` and their App ID, installation ID, and private key.
 
 Kestrel learns the App's own login (`<slug>[bot]`) when the Integration is registered and never takes what that identity said — kestrel's comments and its agents' alike — as input or as a command, whatever a trigger's filter admits.
 
@@ -27,13 +27,8 @@ triggers:
       all:
         - exact: {source: "https://github.com/openkestrel/kestrel"}
         - exact: {type: com.github.issue_comment.created}
-        - any:
-            - all:
-                - exact: {data.user.login: jtmthf}
-                - prefix: {data.body: "@kestrel"}
-            - all:
-                - exact: {data.comment.user.login: jtmthf}
-                - prefix: {data.comment.body: "@kestrel"}
+        - exact: {data.comment.user.login: jtmthf}
+        - prefix: {data.comment.body: "@kestrel"}
     brief: |
       {% if instruction %}{{ instruction }}{% else %}Implement{% endif %} {{ event.source }}/issues/{{ event.subject | replace("#", "") }}
 
@@ -46,7 +41,7 @@ triggers:
     allows: [codex, claude]
 ```
 
-The two author paths account for the shapes of polled and webhook comment events. The filter chooses *who* can delegate; a `ready-for-agent` label or an ordinary comment does not start this rule. Replace the repository, login, project, agents, and brief with your own reviewed values.
+Polled and webhook events share one shape: GitHub's webhook payload. The filter chooses *who* can delegate; a `ready-for-agent` label or an ordinary comment does not start this rule. Replace the repository, login, project, agents, and brief with your own reviewed values.
 
 Save the file as `.kestrel/triggers.yaml`, then inspect and apply it:
 
@@ -63,11 +58,11 @@ The trigger's declared project and agent determine its authority. Event data sup
 
 ## Try a trigger without a file
 
-For an experiment, declare a trigger directly. This example covers polled comments by one author; adapt the filter to your event shape before enabling it:
+For an experiment, declare a trigger directly. This example covers comments by one author; adapt the filter to your event shape before enabling it:
 
 ```sh
 kestrel trigger declare ready \
-  --filter '{"all":[{"exact":{"source":"https://github.com/openkestrel/kestrel"}},{"exact":{"type":"com.github.issue_comment.created"}},{"exact":{"data.user.login":"jtmthf"}}]}' \
+  --filter '{"all":[{"exact":{"source":"https://github.com/openkestrel/kestrel"}},{"exact":{"type":"com.github.issue_comment.created"}},{"exact":{"data.comment.user.login":"jtmthf"}}]}' \
   --brief @.kestrel/briefs/ready.md \
   --project kestrel \
   --agent builder

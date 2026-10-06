@@ -8,13 +8,13 @@ use jiff::Timestamp;
 use tracing::warn;
 
 use crate::domain::{
-    Delivery, Direction, Event, Exit, Integration, Session, SessionId, StartedBy, Workspace,
+    Direction, Event, Exit, Integration, Post, Session, SessionId, StartedBy, Workspace,
 };
 use crate::integration::back_off;
 use crate::integration::github::{Github, MARKER, Refused};
 use crate::store::{Store, Tx};
 
-/// Invisible where GitHub renders it, and the whole of how a delivery that never learned whether
+/// Invisible where GitHub renders it, and the whole of how a post that never learned whether
 /// its comment landed recognises its own. The Turn names which of a Session's messages it is.
 fn marker(session: SessionId, turn: Option<i64>) -> String {
     match turn {
@@ -65,7 +65,7 @@ pub(crate) async fn record_turn(
         marker(session.id, Some(turn))
     );
     tx.integrations()
-        .record_delivery(session, &integration, &event, Some(turn), &body, Some(said))
+        .record_post(session, &integration, &event, Some(turn), &body, Some(said))
         .await
 }
 
@@ -95,54 +95,47 @@ pub(crate) async fn record_outcome(
     let body = body(workspace, session, exit, said);
 
     tx.integrations()
-        .record_delivery(session, &integration, &event, None, &body, None)
+        .record_post(session, &integration, &event, None, &body, None)
         .await
 }
 
-/// One delivery attempt. What comes back is where the comment landed, or nothing — a refusal
+/// One attempt at a post. What comes back is where the comment landed, or nothing — a refusal
 /// defers it rather than failing anything, because the Turn is already over and nothing said
 /// afterwards changes it.
-pub async fn deliver(
-    store: &Store,
-    github: &Github,
-    delivery: &Delivery,
-) -> Result<Option<String>> {
+pub async fn post(store: &Store, github: &Github, post: &Post) -> Result<Option<String>> {
     let integration = {
         let mut tx = store.begin().await?;
-        tx.integrations().with_id(delivery.integration).await?
+        tx.integrations().with_id(post.integration).await?
     };
-    let marker = marker(delivery.session, delivery.turn);
+    let marker = marker(post.session, post.turn);
 
     // An earlier attempt went out and never came back, so a comment may already be there.
-    if let Some(attempted_at) = delivery.attempted_at {
+    if let Some(attempted_at) = post.attempted_at {
         match github
-            .comment_carrying(&integration, delivery.subject, &marker, attempted_at)
+            .comment_carrying(&integration, post.subject, &marker, attempted_at)
             .await
         {
-            Ok(Some(already)) => return delivered(store, delivery, &already.html_url).await,
+            Ok(Some(already)) => return posted(store, post, &already.html_url).await,
             Ok(None) => {}
-            Err(refused) => return deferred(store, delivery, &integration, &refused).await,
+            Err(refused) => return deferred(store, post, &integration, &refused).await,
         }
     }
 
     let mut tx = store.begin().await?;
     tx.integrations()
-        .attempting_delivery(delivery, Timestamp::now())
+        .attempting_post(post, Timestamp::now())
         .await?;
     tx.commit().await?;
 
-    match github
-        .comment(&integration, delivery.subject, &delivery.body)
-        .await
-    {
-        Ok(comment) => delivered(store, delivery, &comment.html_url).await,
-        Err(refused) => deferred(store, delivery, &integration, &refused).await,
+    match github.comment(&integration, post.subject, &post.body).await {
+        Ok(comment) => posted(store, post, &comment.html_url).await,
+        Err(refused) => deferred(store, post, &integration, &refused).await,
     }
 }
 
-async fn delivered(store: &Store, delivery: &Delivery, to: &str) -> Result<Option<String>> {
+async fn posted(store: &Store, post: &Post, to: &str) -> Result<Option<String>> {
     let mut tx = store.begin().await?;
-    tx.integrations().delivery_delivered(delivery, to).await?;
+    tx.integrations().posted(post, to).await?;
     tx.commit().await?;
 
     Ok(Some(to.to_owned()))
@@ -150,13 +143,13 @@ async fn delivered(store: &Store, delivery: &Delivery, to: &str) -> Result<Optio
 
 async fn deferred(
     store: &Store,
-    delivery: &Delivery,
+    post: &Post,
     integration: &Integration,
     refused: &Refused,
 ) -> Result<Option<String>> {
     warn!(
-        session = %delivery.session,
-        turn = delivery.turn,
+        session = %post.session,
+        turn = post.turn,
         integration = integration.name,
         because = %refused,
         "what a session said could not be said back on the issue it came from"
@@ -164,7 +157,7 @@ async fn deferred(
 
     let mut tx = store.begin().await?;
     tx.integrations()
-        .delivery_deferred(delivery, back_off(integration.github()?.interval, refused))
+        .post_deferred(post, back_off(integration.github()?.interval, refused))
         .await?;
     tx.commit().await?;
 

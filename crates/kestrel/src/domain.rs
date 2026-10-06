@@ -195,8 +195,10 @@ pub struct Integration {
     pub connection: Connection,
     pub carries: Vec<Direction>,
     pub poll_due_at: Option<Timestamp>,
-    pub polled_through: Option<i64>,
-    pub comments_polled_through: Option<i64>,
+    /// By GitHub's clock: every Delivery made earlier has been read.
+    pub deliveries_read_from: Option<Timestamp>,
+    /// By kestrel's clock, when a poll last read every new Delivery.
+    pub last_polled_at: Option<Timestamp>,
     pub last_event_refusal: Option<EventRefusal>,
 }
 
@@ -238,8 +240,7 @@ pub struct GithubConnection {
     /// The App's own bot account, `<slug>[bot]`, learned from GitHub when it was registered.
     pub bot_login: String,
     pub interval: SignedDuration,
-    /// Delivered by a signed webhook rather than polled.
-    pub signed: bool,
+    pub repository_id: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,8 +268,9 @@ pub struct Event {
 #[derive(Debug, Clone)]
 pub struct EventRefusal {
     pub source: String,
-    pub id: String,
-    pub bytes: usize,
+    /// Absent when GitHub's retention lost Deliveries a poll never read.
+    pub id: Option<String>,
+    pub bytes: Option<usize>,
     pub reason: String,
     pub observed_at: Timestamp,
 }
@@ -277,7 +279,7 @@ pub struct EventRefusal {
 /// response, or the Session's own final Outcome. Posted once however many attempts that takes.
 /// `turn` is the Turn's seq, or `None` for the Session's own outcome.
 #[derive(Debug, Clone)]
-pub struct Delivery {
+pub struct Post {
     pub session: SessionId,
     pub turn: Option<i64>,
     pub organization: OrganizationId,
@@ -285,7 +287,7 @@ pub struct Delivery {
     pub event: EventRecordId,
     pub subject: i64,
     pub body: String,
-    /// Set before a request goes out and left set: a Delivery that has been attempted may
+    /// Set before a request goes out and left set: a Post that has been attempted may
     /// already have a comment on the issue, and is read back rather than posted twice.
     pub attempted_at: Option<Timestamp>,
 }

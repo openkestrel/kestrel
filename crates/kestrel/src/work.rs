@@ -11,7 +11,7 @@ use crate::domain::{
     SessionOption, SessionState, Turn, Usage, Workspace, WorkspaceId,
 };
 use crate::instance::Observed;
-use crate::integration::delivery;
+use crate::integration::post;
 use crate::link;
 use crate::live_work::{RunningTool, RunningUnit};
 use crate::log::{ClosingReason, Completion, Entry, Message, PlanEntry, ToolStatus};
@@ -826,7 +826,7 @@ async fn reported(
                     .said_since(&workspace, from_seq, &session.agent.name)
                     .await?;
                 if !said.is_empty() {
-                    delivery::record_turn(tx, session, &workspace, turn, &said).await?;
+                    post::record_turn(tx, session, &workspace, turn, &said).await?;
                 }
                 tx.workspaces()
                     .record_active(session.organization, session.workspace, Timestamp::now())
@@ -1160,7 +1160,7 @@ pub(crate) async fn ending(tx: &mut Tx<'_>, session: &Session, exit: Exit) -> Re
         tx.workspaces()
             .send_instruction(session, link::Instruction::Stop)
             .await?;
-        delivery::record_outcome(tx, session, &workspace, &exit, said.as_deref()).await?;
+        post::record_outcome(tx, session, &workspace, &exit, said.as_deref()).await?;
         if let Exit::Failed { .. } = exit {
             cascade_unreachable(tx, session.id).await?;
         }

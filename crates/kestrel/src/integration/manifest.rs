@@ -15,6 +15,7 @@ use crate::store::Store;
 pub const PAGE: &str = "/operator/github-app/setup";
 pub const CALLBACK: &str = "/operator/github-app/callback";
 pub const INSTALLED: &str = "/operator/github-app/installed";
+const UNREACHABLE: &str = "https://unreachable.invalid";
 
 #[derive(Deserialize, Serialize)]
 pub struct Start {
@@ -125,10 +126,14 @@ pub async fn page(store: &Store, state: &str) -> Result<String> {
     let flow: Flow =
         serde_json::from_str(&store.read().await?.app_flows().read(state, "ready").await?)?;
     let base = &flow.registration.callback_base;
-    let hook = flow.registration.webhook_base.as_ref().map_or(
-        json!({"active": false}),
-        |base| json!({"url": format!("{base}/webhooks/{}", flow.integration), "active": true}),
-    );
+    // GitHub refuses a loopback hook URL, but never resolves a public one.
+    let webhook_base = flow
+        .registration
+        .webhook_base
+        .as_deref()
+        .unwrap_or(UNREACHABLE);
+    let hook =
+        json!({"url": format!("{webhook_base}/webhooks/{}", flow.integration), "active": true});
     let action = flow.registration.app_organization.as_ref().map_or_else(
         || "https://github.com/settings/apps/new".to_owned(),
         |owner| format!("https://github.com/organizations/{owner}/settings/apps/new"),
@@ -211,6 +216,9 @@ pub async fn installed(store: &Store, github: &Github, state: &str) -> Result<In
     credential.installation = github
         .repository_installation(api, &credential, &flow.registration.repository)
         .await?;
+    let repository_id = github
+        .repository_id(api, &credential, &flow.registration.repository)
+        .await?;
     let mut tx = store.begin().await?;
     tx.app_flows().read(state, "converted").await?;
     let organization = tx.organizations().named(&flow.organization).await?;
@@ -226,7 +234,7 @@ pub async fn installed(store: &Store, github: &Github, state: &str) -> Result<In
                 credential,
                 bot_login: format!("{}[bot]", app.slug),
                 interval: SignedDuration::from_mins(1),
-                signed: flow.registration.webhook_base.is_some(),
+                repository_id,
             }),
             &[Direction::Inbound, Direction::Outbound],
             Some(app.webhook_secret.as_str()),

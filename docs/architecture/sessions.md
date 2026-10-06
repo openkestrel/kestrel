@@ -46,7 +46,7 @@ stateDiagram-v2
 - **A Session ends once.** `work::ending` is the single path; whoever reaches it first (the
   supervisor's `finished`, a stop, the lease sweep, the claimant failing) sets the exit, and later
   callers get the exit that stands. Ending appends `SessionEnded`, invalidates the link
-  credential, records the Outcome delivery, and cascades Unreachable to dependents of a failure.
+  credential, records the Outcome post, and cascades Unreachable to dependents of a failure.
 - **A working Turn can be interrupted without ending the Session.** `work::interrupt` records
   `interrupting {participant, requested_at}` on the Session and sends the link an `interrupt`
   instruction; only a working Turn is interruptible, so every other phase is refused naming itself.

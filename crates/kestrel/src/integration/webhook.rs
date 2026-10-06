@@ -87,8 +87,10 @@ async fn deliver(
                 Refused::BadRequest(format!("the payload is not JSON: {error}"))
             })?;
 
-            github::delivered(connection, event, delivery, payload)
-                .map_err(|error| Refused::BadRequest(error.to_string()))?
+            Some(
+                github::delivered(connection, event, delivery, payload, Timestamp::now())
+                    .map_err(|error| Refused::BadRequest(error.to_string()))?,
+            )
         }
         (Connection::Webhook, Verifier::Shared { digest }) => {
             if !presented(&headers, &digest) {
@@ -360,8 +362,8 @@ mod tests {
             connection: Connection::Webhook,
             carries: vec![Direction::Inbound],
             poll_due_at: None,
-            polled_through: None,
-            comments_polled_through: None,
+            deliveries_read_from: None,
+            last_polled_at: None,
             last_event_refusal: None,
         }
     }

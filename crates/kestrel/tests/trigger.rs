@@ -20,7 +20,6 @@ use support::{A_PROVIDER_KEY, HARNESS, Kestrel, PROVIDER_KEY, labelled_on, repos
 const PATIENCE: Duration = Duration::from_secs(30);
 const REPOSITORY: &str = "jtmthf/kestrel";
 const READY: &str = "ready-for-agent";
-const EVENTS: &str = "/issues/events?";
 const BOTH: &[Direction] = &[Direction::Inbound, Direction::Outbound];
 
 /// Sooner than the wheel's own sweep, so what paces these tests is the sweep rather than a
@@ -122,7 +121,7 @@ async fn nothing_opens(kestrel: &Kestrel) {
 #[tokio::test]
 async fn labelling_an_issue_opens_a_workspace_and_enqueues_a_session() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     ready_for_agent(&kestrel).await;
@@ -175,7 +174,7 @@ async fn first_entry(kestrel: &Kestrel, workspace: &Workspace) -> Entry {
 #[tokio::test]
 async fn the_rendered_brief_is_the_workspaces_first_transcript_entry() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     ready_rendering(
@@ -275,7 +274,7 @@ async fn prompted(kestrel: &Kestrel, workspace: &Workspace) -> String {
 #[tokio::test]
 async fn the_agent_is_first_prompted_with_exactly_the_brief_its_workspace_preserved() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     let workspace = briefed(&kestrel, &stub).await;
 
@@ -296,7 +295,7 @@ async fn the_agent_is_first_prompted_with_exactly_the_brief_its_workspace_preser
 #[tokio::test]
 async fn a_brief_something_was_said_after_reaches_the_agent_as_earlier_context() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     let workspace = briefed(&kestrel, &stub).await;
     kestrel
@@ -318,7 +317,7 @@ async fn a_brief_something_was_said_after_reaches_the_agent_as_earlier_context()
 #[tokio::test]
 async fn a_workspace_opens_on_the_branch_and_correlation_its_trigger_renders() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     ready_rendering(
@@ -346,7 +345,7 @@ async fn a_workspace_opens_on_the_branch_and_correlation_its_trigger_renders() {
 #[tokio::test]
 async fn a_workspace_whose_trigger_renders_no_branch_opens_on_its_own_cut_from_the_projects() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     ready_for_agent(&kestrel).await;
@@ -367,7 +366,7 @@ async fn a_workspace_whose_trigger_renders_no_branch_opens_on_its_own_cut_from_t
 #[tokio::test]
 async fn a_brief_that_cannot_render_fails_the_firing_and_starts_nothing() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     ready_rendering(
@@ -406,7 +405,7 @@ async fn a_brief_that_cannot_render_fails_the_firing_and_starts_nothing() {
 #[tokio::test]
 async fn a_correlation_hit_feeds_the_open_workspace_without_changing_its_agent() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     let organization = an_organization(&kestrel, "acme").await;
     let correlation = Some("{{ event.source }}{{ event.subject }}");
@@ -460,7 +459,7 @@ async fn a_correlation_hit_feeds_the_open_workspace_without_changing_its_agent()
 #[tokio::test]
 async fn a_correlation_miss_can_be_ignored() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     kestrel
@@ -515,7 +514,7 @@ async fn a_correlated_trigger_must_declare_what_it_does_on_a_miss() {
 #[tokio::test]
 async fn a_correlation_miss_opens_a_continuation_of_the_sealed_workspace() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     ready_rendering(
@@ -538,11 +537,7 @@ async fn a_correlation_miss_opens_a_continuation_of_the_sealed_workspace() {
 
     // Scripted for the events endpoint alone: the comment the completed session posts would
     // otherwise take this response off the shared queue.
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled(8, 43, READY)]),
-    );
+    stub.deliver(github_stub::labelled(43, READY));
     let workspaces = opened(&kestrel, 2).await;
     let continuation = workspaces
         .into_iter()
@@ -559,7 +554,7 @@ async fn a_correlation_miss_opens_a_continuation_of_the_sealed_workspace() {
 #[tokio::test]
 async fn an_ignoring_trigger_still_continues_a_sealed_workspace_it_correlates_to() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     let correlation = templates(
@@ -599,11 +594,7 @@ async fn an_ignoring_trigger_still_continues_a_sealed_workspace_it_correlates_to
     kestrel.complete_session(&active).await;
     kestrel.seal_workspace(sealed.id).await;
 
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled(8, 43, "ci-failed")]),
-    );
+    stub.deliver(github_stub::labelled(43, "ci-failed"));
     let continuation = opened(&kestrel, 2)
         .await
         .into_iter()
@@ -619,7 +610,7 @@ async fn an_ignoring_trigger_still_continues_a_sealed_workspace_it_correlates_to
 #[tokio::test]
 async fn correlated_events_arriving_during_a_session_drain_into_one_entry_and_one_session() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     ready_rendering(
@@ -637,10 +628,8 @@ async fn correlated_events_arriving_during_a_session_drain_into_one_entry_and_on
         .claim_session()
         .await
         .expect("the firing enqueued a session");
-    stub.script(github_stub::page(&[
-        github_stub::labelled(9, 43, READY),
-        github_stub::labelled(8, 43, READY),
-    ]));
+    stub.deliver(github_stub::labelled(43, READY));
+    stub.deliver(github_stub::labelled(43, READY));
     let deadline = tokio::time::Instant::now() + PATIENCE;
     while {
         let mut fed = 0;
@@ -696,7 +685,7 @@ async fn correlated_events_arriving_during_a_session_drain_into_one_entry_and_on
 #[tokio::test]
 async fn the_workspace_records_the_event_that_started_it() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     ready_for_agent(&kestrel).await;
@@ -713,14 +702,12 @@ async fn the_workspace_records_the_event_that_started_it() {
     kestrel.teardown().await;
 }
 
-/// The same label going on the same issue twice is one Event however many polls see it, and
-/// one firing however many sweeps pass over it.
+/// One Delivery is one Event however many polls list it, and one firing however many sweeps
+/// pass over it.
 #[tokio::test]
-async fn relabelling_the_same_issue_twice_opens_exactly_one_workspace() {
+async fn a_delivery_every_poll_lists_opens_exactly_one_workspace() {
     let stub = GithubStub::start();
-    let relabelled = github_stub::page(&[github_stub::labelled(7, 43, READY)]);
-    stub.script(relabelled.clone());
-    stub.script(relabelled);
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     ready_for_agent(&kestrel).await;
@@ -743,7 +730,7 @@ async fn relabelling_the_same_issue_twice_opens_exactly_one_workspace() {
 #[tokio::test]
 async fn an_event_matching_several_triggers_fires_every_one_of_them() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     ready_for_agent(&kestrel).await;
@@ -781,11 +768,7 @@ async fn an_event_matching_several_triggers_fires_every_one_of_them() {
 #[tokio::test]
 async fn an_event_matching_no_trigger_opens_nothing() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(
-        7,
-        43,
-        "needs-triage",
-    )]));
+    stub.deliver(github_stub::labelled(43, "needs-triage"));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     ready_for_agent(&kestrel).await;
@@ -801,7 +784,7 @@ async fn an_event_matching_no_trigger_opens_nothing() {
 #[tokio::test]
 async fn taking_the_label_back_off_fires_nothing() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::unlabelled(7, 43, READY)]));
+    stub.deliver(github_stub::unlabelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     ready_for_agent(&kestrel).await;
@@ -815,7 +798,7 @@ async fn taking_the_label_back_off_fires_nothing() {
 #[tokio::test]
 async fn a_disabled_trigger_fires_for_nothing() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     ready_for_agent(&kestrel).await;
@@ -830,10 +813,9 @@ async fn a_disabled_trigger_fires_for_nothing() {
 #[tokio::test]
 async fn a_trigger_that_exceeds_its_firing_budget_disables_without_stopping_another() {
     let stub = GithubStub::start();
-    let events = (7..18)
-        .map(|id| github_stub::labelled(id, id + 36, READY))
-        .collect::<Vec<_>>();
-    stub.script(github_stub::page(&events));
+    for issue in 43..54 {
+        stub.deliver(github_stub::labelled(issue, READY));
+    }
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     ready_for_agent(&kestrel).await;
@@ -878,10 +860,9 @@ async fn a_trigger_that_exceeds_its_firing_budget_disables_without_stopping_anot
 #[tokio::test]
 async fn a_trigger_enabled_after_exhausting_its_budget_fires_again_within_the_window() {
     let stub = GithubStub::start();
-    let events = (7..18)
-        .map(|id| github_stub::labelled(id, id + 36, READY))
-        .collect::<Vec<_>>();
-    stub.script(github_stub::page(&events));
+    for issue in 43..54 {
+        stub.deliver(github_stub::labelled(issue, READY));
+    }
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     ready_for_agent(&kestrel).await;
@@ -898,7 +879,7 @@ async fn a_trigger_enabled_after_exhausting_its_budget_fires_again_within_the_wi
     }
 
     kestrel.enable_trigger("acme", "ready").await;
-    stub.script(github_stub::page(&[github_stub::labelled(30, 66, READY)]));
+    stub.deliver(github_stub::labelled(66, READY));
 
     opened(&kestrel, 11).await;
     assert_eq!(
@@ -952,11 +933,9 @@ async fn a_trigger_is_named_listed_and_disabled() {
 #[tokio::test]
 async fn a_trigger_never_fires_for_events_recorded_before_it_was_declared() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[
-        github_stub::labelled(9, 45, READY),
-        github_stub::labelled(8, 44, READY),
-        github_stub::labelled(7, 43, READY),
-    ]));
+    stub.deliver(github_stub::labelled(43, READY));
+    stub.deliver(github_stub::labelled(44, READY));
+    stub.deliver(github_stub::labelled(45, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     watching(&kestrel, &stub).await;
@@ -991,10 +970,8 @@ triggers:
 #[tokio::test]
 async fn applying_a_declaration_file_never_fires_for_events_already_recorded() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[
-        github_stub::labelled(9, 45, READY),
-        github_stub::labelled(8, 44, READY),
-    ]));
+    stub.deliver(github_stub::labelled(44, READY));
+    stub.deliver(github_stub::labelled(45, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     watching(&kestrel, &stub).await;
@@ -1014,11 +991,7 @@ async fn applying_a_declaration_file_never_fires_for_events_already_recorded() {
 #[tokio::test]
 async fn reapplying_a_changed_filter_never_fires_for_events_already_recorded() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(
-        7,
-        43,
-        "needs-triage",
-    )]));
+    stub.deliver(github_stub::labelled(43, "needs-triage"));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     kestrel
@@ -1041,7 +1014,7 @@ async fn reapplying_a_changed_filter_never_fires_for_events_already_recorded() {
 #[tokio::test]
 async fn an_applied_trigger_fires_for_events_recorded_after_it() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     kestrel
@@ -1065,7 +1038,7 @@ async fn an_applied_trigger_fires_for_events_recorded_after_it() {
 #[tokio::test]
 async fn a_trigger_fires_only_for_the_source_it_names() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     kestrel
@@ -1089,7 +1062,7 @@ async fn a_trigger_fires_only_for_the_source_it_names() {
 #[tokio::test]
 async fn trigger_test_says_whether_a_recorded_event_matches() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     watching(&kestrel, &stub).await;
@@ -1167,7 +1140,7 @@ async fn trigger_test_says_whether_a_recorded_event_matches() {
 #[tokio::test]
 async fn a_trigger_is_tested_only_against_its_own_organizations_events() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     an_organization(&kestrel, "globex").await;
@@ -1200,7 +1173,7 @@ async fn a_trigger_is_tested_only_against_its_own_organizations_events() {
 #[tokio::test]
 async fn trigger_test_renders_the_brief_and_resolves_the_branch() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     watching(&kestrel, &stub).await;
@@ -1241,7 +1214,7 @@ async fn trigger_test_renders_the_brief_and_resolves_the_branch() {
 #[tokio::test]
 async fn trigger_test_answers_for_a_declaration_not_yet_applied() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     watching(&kestrel, &stub).await;
@@ -1268,7 +1241,7 @@ async fn trigger_test_answers_for_a_declaration_not_yet_applied() {
 #[tokio::test]
 async fn a_trigger_that_renders_no_branch_leaves_the_workspace_its_own() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     watching(&kestrel, &stub).await;
@@ -1292,7 +1265,7 @@ async fn a_trigger_that_renders_no_branch_leaves_the_workspace_its_own() {
 #[tokio::test]
 async fn a_brief_that_cannot_render_fails_naming_the_trigger_and_the_event() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     watching(&kestrel, &stub).await;
@@ -1482,7 +1455,7 @@ async fn a_scheduled_trigger_is_tested_against_its_next_elapsing() {
 #[tokio::test]
 async fn a_scheduled_trigger_matches_what_its_own_schedule_minted_and_nothing_else() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::boot().await;
     an_organization(&kestrel, "acme").await;
     let trigger = hourly(&kestrel, "Sweep the backlog").await;
@@ -1715,7 +1688,7 @@ async fn a_trigger_that_fires_on_events_is_tested_against_a_named_one() {
 #[tokio::test]
 async fn a_triggers_declared_mode_overrides_its_agents_for_the_session_it_starts() {
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(7, 43, READY)]));
+    stub.deliver(github_stub::labelled(43, READY));
     let kestrel = Kestrel::dispatching_to(
         supervisor::binary(),
         &scripted_agent::playing(Script::Speaks),

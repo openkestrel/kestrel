@@ -9,7 +9,7 @@ use reqwest::StatusCode;
 use serde_json::{Value, json};
 use sha2::Sha256;
 use support::Consideration;
-use support::github_stub::{GithubStub, ScriptedResponse};
+use support::github_stub::{self, GithubStub, ScriptedResponse};
 use support::{Kestrel, client, templates};
 
 const PATIENCE: Duration = Duration::from_secs(30);
@@ -74,6 +74,13 @@ impl<'a> Delivery<'a> {
             number,
             revision,
             updated_at,
+        }
+    }
+
+    fn logged(&self) -> github_stub::Delivery {
+        github_stub::Delivery {
+            event: "pull_request".to_owned(),
+            payload: self.payload(),
         }
     }
 
@@ -1114,4 +1121,160 @@ async fn a_trigger_declared_for_the_event_fires_as_it_would_without_the_workspac
     assert!(kestrel.sessions(workspace.id).await.is_empty());
 
     kestrel.teardown().await;
+}
+
+/// Polled only: no signing secret, and nothing ever reaches its webhook.
+async fn polling(kestrel: &Kestrel, organization: &str, repository: &str) -> GithubStub {
+    let stub = GithubStub::start();
+    kestrel
+        .register_integration(
+            organization,
+            &repository.replace('/', "-"),
+            repository,
+            &stub.base_url(),
+            &[kestrel::domain::Direction::Inbound],
+            jiff::SignedDuration::from_millis(1),
+        )
+        .await;
+
+    stub
+}
+
+#[tokio::test]
+async fn a_polled_integration_learns_a_pull_request_opened_pushed_to_and_merged() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, "acme", &[BASE]).await;
+    let stub = polling(&kestrel, "acme", BASE).await;
+    let workspace = kestrel
+        .open_workspace_on("acme", "kestrel", "builder", "feature")
+        .await;
+    assert_eq!(
+        shown(&kestrel, "acme", &workspace).await["pull_requests"][0]["availability"],
+        "available",
+        "a polled integration can learn this repository's pull requests"
+    );
+
+    stub.deliver(opened(7, REVISION, OPENED_AT).logged());
+    stub.deliver(synchronize(7, MOVED, MOVED_AT).logged());
+    stub.deliver(merged(7, MOVED, CLOSED_AT).logged());
+    let entries = attached(&kestrel, workspace.id, 3).await;
+
+    assert_eq!(
+        observations(&entries),
+        [
+            ("opened", "open"),
+            ("synchronize", "open"),
+            ("closed", "merged")
+        ]
+    );
+    let record = shown(&kestrel, "acme", &workspace).await;
+    assert_eq!(record["pull_requests"][0]["availability"], "available");
+    assert_eq!(known(&record)[0]["state"], "merged");
+    assert_eq!(known(&record)[0]["head_revision"], MOVED);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_trigger_on_a_closed_pull_request_fires_for_a_polled_integration() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, "acme", &[BASE]).await;
+    kestrel
+        .declare_trigger_rendering(
+            "acme",
+            "landed",
+            &json!({"exact": {"type": "com.github.pull_request.closed"}}).to_string(),
+            "kestrel",
+            "builder",
+            &templates("Follow up {{ event.data.pull_request.title }}", None, None),
+        )
+        .await;
+    let stub = polling(&kestrel, "acme", BASE).await;
+
+    stub.deliver(merged(7, MOVED, CLOSED_AT).logged());
+
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    loop {
+        if let Some(event) = kestrel.events("acme").await.first()
+            && !kestrel.firings(event.record_id).await.is_empty()
+        {
+            assert_eq!(event.occurrence.r#type, "com.github.pull_request.closed");
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the trigger never fired"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    kestrel.teardown().await;
+}
+
+/// A Delivery GitHub could reach kestrel with is recorded on arrival and recognised when the poll
+/// lists it, or the other way round: either way it is one Event, and one firing.
+#[tokio::test]
+async fn a_delivery_by_webhook_and_by_poll_is_one_event_in_either_order() {
+    for webhook_first in [true, false] {
+        let kestrel = Kestrel::boot().await;
+        declared(&kestrel, "acme", &[BASE]).await;
+        kestrel
+            .declare_trigger_rendering(
+                "acme",
+                "review",
+                &json!({"exact": {"type": "com.github.pull_request.opened"}}).to_string(),
+                "kestrel",
+                "builder",
+                &templates("Review {{ event.data.pull_request.title }}", None, None),
+            )
+            .await;
+        let (github, stub) = watching(&kestrel, "acme", BASE).await;
+        let sent = opened(7, REVISION, OPENED_AT);
+        let guid = "6f9b2a40-c131-11f1-9cac-dea11dd30571";
+
+        if webhook_first {
+            deliver(&kestrel, &github, guid, &sent).await;
+            stub.deliver_as(sent.logged(), guid);
+        } else {
+            stub.deliver_as(sent.logged(), guid);
+            while kestrel.events("acme").await.is_empty() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            deliver(&kestrel, &github, guid, &sent).await;
+        }
+        let polls = |stub: &GithubStub| {
+            stub.requests()
+                .iter()
+                .filter(|request| request.url.starts_with("/app/hook/deliveries?"))
+                .count()
+        };
+        let listed = polls(&stub);
+        while polls(&stub) < listed + 3 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let events = kestrel.events("acme").await;
+        assert_eq!(events.len(), 1, "webhook first: {webhook_first}");
+        assert_eq!(events[0].occurrence.id, guid);
+        let deadline = tokio::time::Instant::now() + PATIENCE;
+        while kestrel.firings(events[0].record_id).await.is_empty() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the trigger never fired"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        assert_eq!(kestrel.firings(events[0].record_id).await.len(), 1);
+        assert_eq!(
+            stub.requests()
+                .iter()
+                .filter(|request| request.url.starts_with("/app/hook/deliveries/"))
+                .count(),
+            usize::from(!webhook_first),
+            "a payload already recorded was fetched again"
+        );
+
+        kestrel.teardown().await;
+    }
 }

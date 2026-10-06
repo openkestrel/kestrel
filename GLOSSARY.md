@@ -159,6 +159,12 @@ other. An Event does not own or select an Integration; reviewed configuration ch
 connection whose authority kestrel uses.
 _Avoid_: signal, notification, hook, payload
 
+**Delivery**:
+One transmission of an event to kestrel by its producer, identified by the producer so that a
+redelivery is recognisably the same one. Always inbound; kestrel sending something to an external
+system is a post.
+_Avoid_: webhook, push, callback
+
 **Work Item**:
 A unit of work tracked in an external system — an issue, a pull request, a thread — that events
 are about and a delegation hands to kestrel. kestrel holds no copy of it; whether it is open,
@@ -353,6 +359,9 @@ words from drifting.
 - Authority comes from the **authenticated request** that minted an event, never from the event.
   An event kestrel minted for itself is no more trusted than one an integration delivered.
 - An integration never takes what its **own identity** said as input or as a command.
+- An inbound integration always **polls**, and also **listens** where its producer can reach
+  kestrel; listening only adds speed. An event is the **same** event whichever way it arrived.
+  kestrel learns what its producer still holds, and reconstructs nothing older.
 - A request that does not **authenticate** never becomes an event. One that authenticated and
   matched no trigger is still recorded.
 - **Events expire; a transcript's shared-state entries never do.** An event stream is unbounded

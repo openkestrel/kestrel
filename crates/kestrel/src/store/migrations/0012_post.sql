@@ -4,7 +4,7 @@
 -- `attempted_at` is set before the request goes out and left set, so a control plane that died
 -- mid-post finds a row that says a comment may already be there and reads it back rather than
 -- posting a second one.
-CREATE TABLE delivery (
+CREATE TABLE post (
     session_id TEXT NOT NULL REFERENCES session (id),
     turn INTEGER NOT NULL,
     organization_id TEXT NOT NULL REFERENCES organization (id),
@@ -15,10 +15,10 @@ CREATE TABLE delivery (
     turn_messages TEXT,
     attempted_at TEXT,
     due_at TEXT,
-    delivered_at TEXT,
-    delivered_to TEXT,
+    posted_at TEXT,
+    posted_to TEXT,
     recorded_at TEXT NOT NULL,
     PRIMARY KEY (session_id, turn)
 ) STRICT;
 
-CREATE INDEX delivery_due ON delivery (due_at) WHERE due_at IS NOT NULL;
+CREATE INDEX post_due ON post (due_at) WHERE due_at IS NOT NULL;

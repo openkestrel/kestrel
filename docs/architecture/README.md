@@ -8,7 +8,7 @@ each area has its own page.
 | --- | --- |
 | [Sessions](sessions.md) | how work is queued, claimed, executed, waits, ends or seals |
 | [Link](link.md) | anything the supervisor and control plane say to each other |
-| [Triggers](triggers.md) | Event ingest, matching, correlation, readiness, follow-ups, delivery |
+| [Triggers](triggers.md) | Event ingest, matching, correlation, readiness, follow-ups, posts |
 | [Data model](data-model.md) | the schema, or a query against it |
 | [Operator boundary and Client](operator-and-client.md) | an operator endpoint or a `kestrel` command |
 | [Conventions](conventions.md) | anything: transactions, errors, sweeps, tests |

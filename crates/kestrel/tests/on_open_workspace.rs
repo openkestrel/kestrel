@@ -22,8 +22,6 @@ const REPOSITORY: &str = "jtmthf/kestrel";
 const ISSUE: i64 = 43;
 const READY: &str = "ready-for-agent";
 const CI_FAILED: &str = "ci-failed";
-const EVENTS: &str = "/issues/events?";
-const COMMENTS: &str = "/issues/comments?";
 const CORRELATION: &str = "{{ event.source }}{{ event.subject }}";
 const CI_BRIEF: &str = "Fix the build of {{ event.data.issue.title }}";
 const BOTH: &[Direction] = &[Direction::Inbound, Direction::Outbound];
@@ -163,11 +161,7 @@ async fn briefs(kestrel: &Kestrel, workspace: WorkspaceId) -> Vec<(BriefSource, 
 
 /// The CI failure on the issue the Workspace was opened for, carrying `labels` besides.
 fn ci_failed(stub: &GithubStub, labels: &[&str]) {
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled_carrying(8, ISSUE, CI_FAILED, labels)]),
-    );
+    stub.deliver(github_stub::labelled_carrying(ISSUE, CI_FAILED, labels));
 }
 
 fn ci_brief() -> (BriefSource, String) {
@@ -206,7 +200,7 @@ async fn a_command_on_a_continuing_trigger_is_the_waiting_sessions_next_turn() {
             "asked",
             &serde_json::json!({"all": [
                 {"exact": {"type": "com.github.issue_comment.created"}},
-                {"prefix": {"data.body": "@kestrel"}},
+                {"prefix": {"data.comment.body": "@kestrel"}},
             ]})
             .to_string(),
             "fixer",
@@ -216,27 +210,19 @@ async fn a_command_on_a_continuing_trigger_is_the_waiting_sessions_next_turn() {
         )
         .await;
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled(7, ISSUE, READY)]),
-    );
+    stub.deliver(github_stub::labelled(ISSUE, READY));
     watching(&kestrel, &stub).await;
     let workspace = opened(&kestrel).await;
     let session = sessions(&kestrel, workspace.id, 1).await.remove(0);
     let waiting = kestrel.answered(session.id, 1).await;
     assert_eq!(waiting.state, SessionState::Waiting);
 
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(
-            11,
-            ISSUE,
-            "jack",
-            "@kestrel also update the docs",
-        )]),
-    );
+    stub.deliver(github_stub::issue_comment(
+        11,
+        ISSUE,
+        "jack",
+        "@kestrel also update the docs",
+    ));
     let answered = kestrel.answered(session.id, 2).await;
 
     assert_eq!(answered.state, SessionState::Waiting);
@@ -274,11 +260,7 @@ async fn a_new_session_trigger_starts_a_session_with_its_agent_and_brief() {
     an_organization(&kestrel).await;
     correlated(&kestrel, OnOpenWorkspace::NewSession).await;
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled(7, ISSUE, READY)]),
-    );
+    stub.deliver(github_stub::labelled(ISSUE, READY));
     watching(&kestrel, &stub).await;
     let workspace = opened(&kestrel).await;
     let first = kestrel
@@ -317,11 +299,7 @@ async fn a_new_session_firing_waits_for_the_unfinished_session_to_let_go() {
     an_organization(&kestrel).await;
     correlated(&kestrel, OnOpenWorkspace::NewSession).await;
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled(7, ISSUE, READY)]),
-    );
+    stub.deliver(github_stub::labelled(ISSUE, READY));
     watching(&kestrel, &stub).await;
     let workspace = opened(&kestrel).await;
     let first = kestrel
@@ -362,11 +340,7 @@ async fn a_new_session_firing_ends_the_session_waiting_between_its_turns() {
     an_organization(&kestrel).await;
     correlated(&kestrel, OnOpenWorkspace::NewSession).await;
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled(7, ISSUE, READY)]),
-    );
+    stub.deliver(github_stub::labelled(ISSUE, READY));
     watching(&kestrel, &stub).await;
     let workspace = opened(&kestrel).await;
     let first = sessions(&kestrel, workspace.id, 1).await.remove(0);
@@ -398,11 +372,7 @@ async fn a_workspace_drains_messages_and_new_sessions_in_the_order_they_arrived(
     an_organization(&kestrel).await;
     correlated(&kestrel, OnOpenWorkspace::NewSession).await;
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled(7, ISSUE, READY)]),
-    );
+    stub.deliver(github_stub::labelled(ISSUE, READY));
     watching(&kestrel, &stub).await;
     let workspace = opened(&kestrel).await;
     let first = kestrel
@@ -457,11 +427,7 @@ async fn a_label_chooses_the_agent_of_a_new_session_among_those_its_trigger_allo
     an_organization(&kestrel).await;
     correlated(&kestrel, OnOpenWorkspace::NewSession).await;
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled(7, ISSUE, READY)]),
-    );
+    stub.deliver(github_stub::labelled(ISSUE, READY));
     watching(&kestrel, &stub).await;
     let workspace = opened(&kestrel).await;
     let first = kestrel
@@ -500,7 +466,7 @@ async fn a_command_chooses_the_agent_of_a_new_session_among_those_its_trigger_al
             "asked",
             &serde_json::json!({"all": [
                 {"exact": {"type": "com.github.issue_comment.created"}},
-                {"prefix": {"data.body": "@kestrel"}},
+                {"prefix": {"data.comment.body": "@kestrel"}},
             ]})
             .to_string(),
             "fixer",
@@ -510,11 +476,7 @@ async fn a_command_chooses_the_agent_of_a_new_session_among_those_its_trigger_al
         )
         .await;
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled(7, ISSUE, READY)]),
-    );
+    stub.deliver(github_stub::labelled(ISSUE, READY));
     watching(&kestrel, &stub).await;
     let workspace = opened(&kestrel).await;
     let first = kestrel
@@ -523,16 +485,12 @@ async fn a_command_chooses_the_agent_of_a_new_session_among_those_its_trigger_al
         .expect("the opening firing enqueued a session");
     kestrel.complete_session(&first).await;
 
-    stub.script_answer(
-        "GET",
-        COMMENTS,
-        github_stub::page(&[github_stub::issue_comment(
-            11,
-            ISSUE,
-            "jack",
-            "@kestrel agent=codex fix the build",
-        )]),
-    );
+    stub.deliver(github_stub::issue_comment(
+        11,
+        ISSUE,
+        "jack",
+        "@kestrel agent=codex fix the build",
+    ));
     let started = sessions(&kestrel, workspace.id, 2).await;
 
     assert_eq!(started[1].agent.name, "codex");
@@ -587,11 +545,7 @@ triggers:
         OnOpenWorkspace::Continue
     );
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled(7, ISSUE, READY)]),
-    );
+    stub.deliver(github_stub::labelled(ISSUE, READY));
     watching(&kestrel, &stub).await;
     let workspace = opened(&kestrel).await;
     let first = kestrel
@@ -660,11 +614,7 @@ async fn trigger_test_says_whether_a_firing_opens_continues_or_starts_a_new_sess
         )
         .await;
     let stub = GithubStub::start();
-    stub.script_answer(
-        "GET",
-        EVENTS,
-        github_stub::page(&[github_stub::labelled(7, ISSUE, READY)]),
-    );
+    stub.deliver(github_stub::labelled(ISSUE, READY));
     watching(&kestrel, &stub).await;
     opened(&kestrel).await;
     let label = kestrel.events("acme").await.remove(0);

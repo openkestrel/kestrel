@@ -125,7 +125,7 @@ fn said(comment: &RecordedRequest) -> String {
 }
 
 fn labelled(stub: &GithubStub) {
-    stub.script(github_stub::page(&[github_stub::labelled(7, ISSUE, READY)]));
+    stub.deliver(github_stub::labelled(ISSUE, READY));
 }
 
 #[tokio::test]

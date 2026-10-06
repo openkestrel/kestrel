@@ -1204,13 +1204,7 @@ fn watching(kestrel: &Booted, stub: &GithubStub, interval: &str) {
 fn the_client_lists_what_a_poll_recorded_and_the_credential_appears_in_neither_it_nor_a_log() {
     let kestrel = Kestrel::new();
     let stub = GithubStub::start();
-    for _ in 0..8 {
-        stub.script(github_stub::page(&[github_stub::labelled(
-            7,
-            43,
-            "ready-for-agent",
-        )]));
-    }
+    let delivery = stub.deliver(github_stub::labelled(43, "ready-for-agent"));
     let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "trace");
     watching(&booted, &stub, "1ms");
 
@@ -1225,7 +1219,7 @@ fn the_client_lists_what_a_poll_recorded_and_the_credential_appears_in_neither_i
     booted.killed();
 
     assert_eq!(shown["record"], record);
-    assert_eq!(shown["event"]["id"], "7");
+    assert_eq!(shown["event"]["id"], delivery);
     assert_eq!(shown["event"]["specversion"], "1.0");
     assert_eq!(shown["event"]["subject"], "#43");
     let listed = serde_json::to_string(&listed).expect("the listing serializes");
@@ -1583,11 +1577,7 @@ fn apply_reads_a_declaration_file_from_standard_input() {
 fn a_trigger_is_tested_as_a_file_declares_it_rather_than_as_it_was_applied() {
     let kestrel = Kestrel::new();
     let stub = GithubStub::start();
-    stub.script(github_stub::page(&[github_stub::labelled(
-        7,
-        43,
-        "ready-for-agent",
-    )]));
+    stub.deliver(github_stub::labelled(43, "ready-for-agent"));
     let booted = kestrel.boot();
     declared(&booted);
     watching(&booted, &stub, "1ms");
