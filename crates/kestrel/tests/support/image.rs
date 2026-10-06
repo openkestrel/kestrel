@@ -21,7 +21,13 @@ const HANDSHAKE_PATIENCE: Duration = Duration::from_secs(60);
 /// The harnesses the product images carry, and declare in `dev.kestrel.harnesses` (ADR-0048).
 pub const HARNESSES: &[&str] = &["opencode", "claude", "codex"];
 
-/// What the image declares in `dev.kestrel.harnesses`.
+/// Each catalogued harness's command, as the image's runtime user runs it.
+pub const HARNESS_COMMANDS: &[&[&str]] = &[
+    &["claude-agent-acp"],
+    &["codex-acp"],
+    &["opencode", "acp", "--print-logs"],
+];
+
 pub fn declared_harnesses(image: &str) -> Vec<String> {
     let labels = docker::configured(image, "{{json .Config.Labels}}");
     let labels: HashMap<String, String> =

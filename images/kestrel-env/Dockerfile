@@ -33,16 +33,16 @@ FROM node@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae
 WORKDIR /opt/acp
 COPY images/kestrel-env/package.json images/kestrel-env/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
-# `claude` is a native binary its wrapper's postinstall copies over a stub, and --ignore-scripts
-# leaves the stub; running that one install step explicitly keeps every other script off while
-# the build still fails here rather than shipping a `claude` that prints install help.
+# The wrapper's postinstall copies the native `claude` binary over a stub that --ignore-scripts
+# would otherwise leave behind, so that one install step runs explicitly and nothing else does.
 RUN node ./node_modules/@anthropic-ai/claude-code/install.cjs
-# What the runtime user runs: each catalogue command and both vendor sign-in executables,
-# without credentials and without signing in.
+# Every catalogue command and both sign-in subcommands run with no credentials and no sign-in.
 RUN ./node_modules/.bin/claude-agent-acp --version \
     && ./node_modules/.bin/codex-acp --version \
     && ./node_modules/.bin/codex --version \
-    && ./node_modules/.bin/claude --version
+    && ./node_modules/.bin/claude --version \
+    && ./node_modules/.bin/codex login --help \
+    && ./node_modules/.bin/claude setup-token --help
 
 # rust:1.96.0-slim-trixie
 FROM rust@sha256:c37af730be4fd8104cbf9aedbd6ab259e51ca2d5437817a0f8680edf66ac6c28 AS supervisor

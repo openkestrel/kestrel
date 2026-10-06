@@ -97,11 +97,7 @@ fn the_label_names_the_harnesses_the_image_carries() {
 #[test]
 #[ignore = "builds and runs the kestrel-env image"]
 fn each_catalogued_harness_answers_an_acp_handshake_in_the_image() {
-    for harness in [
-        &["claude-agent-acp"][..],
-        &["codex-acp"],
-        &["opencode", "acp"],
-    ] {
+    for harness in image::HARNESS_COMMANDS {
         let answer = image::handshake(image::built(), harness);
         assert_eq!(
             answer["result"]["protocolVersion"], 1,
@@ -119,6 +115,19 @@ fn the_vendor_sign_in_executables_answer_without_credentials_or_sign_in() {
         assert!(
             !ran.out.is_empty(),
             "{command:?} in the image answered nothing: {ran:?}"
+        );
+    }
+
+    for (command, usage) in [
+        (&["claude", "setup-token", "--help"][..], "setup-token"),
+        (&["codex", "login", "--help"][..], "codex login"),
+    ] {
+        let ran = image::running(command);
+        let said = format!("{}\n{}", ran.out, ran.err);
+        assert_eq!(ran.code, 0, "{command:?} in the image said {ran:?}");
+        assert!(
+            said.contains(usage),
+            "{command:?} in the image never named its sign-in command: {ran:?}"
         );
     }
 

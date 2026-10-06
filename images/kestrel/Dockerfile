@@ -12,9 +12,8 @@ RUN cargo build --locked --release --package kestrel --package kestrel-client
 FROM debian@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 
 # The Docker driver provisions an Environment by executing `docker`, so this image carries a
-# client whatever kestrel is linked against (ADR-0008). `curl` is how a healthcheck asks the
-# operator boundary, and `kestrel` is how an operator beside the database does.
-# `tzdata` is where a cron Trigger's time zone is read from.
+# client whatever kestrel is linked against (ADR-0008); `curl` serves the healthcheck, `kestrel`
+# an operator beside the database, and `tzdata` a cron Trigger's time zone.
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl docker-cli tzdata \
     && rm --recursive --force /var/lib/apt/lists/* \

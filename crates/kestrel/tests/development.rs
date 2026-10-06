@@ -16,6 +16,10 @@ use support::image;
 fn the_harness_label_is_the_product_image_it_derives_from() {
     assert_eq!(
         image::declared_harnesses(image::development()),
+        image::declared_harnesses(image::built()),
+    );
+    assert_eq!(
+        image::declared_harnesses(image::development()),
         image::HARNESSES
     );
 }
@@ -44,11 +48,7 @@ fn the_toolchain_git_and_gh_are_each_invocable_in_the_image() {
 #[test]
 #[ignore = "builds and runs the kestrel-dev image"]
 fn each_harness_answers_an_acp_handshake_in_the_image() {
-    for harness in [
-        &["claude-agent-acp"][..],
-        &["codex-acp"],
-        &["opencode", "acp"],
-    ] {
+    for harness in image::HARNESS_COMMANDS {
         let answer = image::handshake(image::development(), harness);
         assert_eq!(
             answer["result"]["protocolVersion"], 1,
