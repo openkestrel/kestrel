@@ -11,14 +11,20 @@ import { order } from "#/operator/workspace-list";
 import { PaneHeading } from "./workbench";
 import { WorkspaceRowView } from "./workspace-row";
 
-export function WorkspacesPane({ organization }: { organization: string }) {
+export function WorkspacesPane({
+	organization,
+	headingLevel = 2,
+}: {
+	organization: string;
+	headingLevel?: 1 | 2;
+}) {
 	const workspaces = useQuery(workspacesQuery(organization));
 	const queue = useQuery(queueQuery(organization));
 	const rows = order(workspaces.data ?? []);
 
 	return (
 		<>
-			<PaneHeading>Workspaces</PaneHeading>
+			<PaneHeading level={headingLevel}>Workspaces</PaneHeading>
 			<QueueHeader queue={queue.data} />
 			<div className="p-2">
 				<Link
