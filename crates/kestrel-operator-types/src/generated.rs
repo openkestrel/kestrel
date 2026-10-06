@@ -7196,12 +7196,174 @@ pub struct TurnOutcomeAnswered {
     pub stop_reason: String,
 }
 ///SSE names: open (ChangesOpen) on connect and on reconnect, change (Change) for one resource that changed, and resync (ChangesResync) for a subscriber that fell behind the bounded buffer. No event carries an id.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub enum ChangesEvent {
     Change(Change),
     ChangesOpen(ChangesOpen),
     ChangesResync(ChangesResync),
+}
+impl Serialize for ChangesEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Change(value) => serde::Serialize::serialize(value, serializer),
+            Self::ChangesOpen(value) => serde::Serialize::serialize(value, serializer),
+            Self::ChangesResync(value) => serde::Serialize::serialize(value, serializer),
+        }
+    }
+}
+impl<'de> Deserialize<'de> for ChangesEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        fn exact_json_integer(number: &serde_json::Number) -> Option<i128> {
+            number
+                .as_i64()
+                .map(i128::from)
+                .or_else(|| number.as_u64().map(i128::from))
+        }
+        fn json_numbers_have_same_value(
+            encoded: &serde_json::Number,
+            input: &serde_json::Number,
+        ) -> bool {
+            match (exact_json_integer(encoded), exact_json_integer(input)) {
+                (Some(encoded), Some(input)) => encoded == input,
+                (Some(encoded), None) => input.as_f64().is_some_and(|input| {
+                    input.is_finite() && input.fract() == 0.0 && input as i128 == encoded
+                }),
+                (None, Some(input)) => encoded.as_f64().is_some_and(|encoded| {
+                    encoded.is_finite() && encoded.fract() == 0.0 && encoded as i128 == input
+                }),
+                (None, None) => encoded.as_f64() == input.as_f64(),
+            }
+        }
+        /// `nulls_may_be_absent` also accepts an input `null` that the
+        /// branch omits, as a skipped `None` does. Extra encoded
+        /// keys are allowed only by the pre-existing anyOf match.
+        fn preserves_complete_json_input(
+            encoded: &serde_json::Value,
+            input: &serde_json::Value,
+            nulls_may_be_absent: bool,
+            encoded_keys_may_be_extra: bool,
+        ) -> bool {
+            match (encoded, input) {
+                (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
+                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                        && input.iter().all(|(key, value)| match encoded.get(key) {
+                            Some(encoded_value) => preserves_complete_json_input(
+                                encoded_value,
+                                value,
+                                nulls_may_be_absent,
+                                encoded_keys_may_be_extra,
+                            ),
+                            None => nulls_may_be_absent && value.is_null(),
+                        })
+                }
+                (serde_json::Value::Array(encoded), serde_json::Value::Array(input)) => {
+                    encoded.len() == input.len()
+                        && encoded.iter().zip(input).all(|(encoded, input)| {
+                            preserves_complete_json_input(
+                                encoded,
+                                input,
+                                nulls_may_be_absent,
+                                encoded_keys_may_be_extra,
+                            )
+                        })
+                }
+                (serde_json::Value::Number(encoded), serde_json::Value::Number(input)) => {
+                    json_numbers_have_same_value(encoded, input)
+                }
+                _ => encoded == input,
+            }
+        }
+        let input = <serde_json::Value as Deserialize>::deserialize(deserializer)?;
+        let mut matched = None;
+        let mut equivalent = None;
+        let mut equivalent_matches = 0usize;
+        if true {
+            if let Ok(candidate) = serde_json::from_value::<Change>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(ChangesEvent),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::Change(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::Change(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if true {
+            if let Ok(candidate) = serde_json::from_value::<ChangesOpen>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(ChangesEvent),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::ChangesOpen(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::ChangesOpen(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if true {
+            if let Ok(candidate) = serde_json::from_value::<ChangesResync>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(ChangesEvent),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::ChangesResync(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::ChangesResync(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(matched) = matched {
+            return Ok(matched);
+        }
+        if equivalent_matches > 1 {
+            return Err(serde::de::Error::custom(concat!(
+                "ambiguous oneOf value for ",
+                stringify!(ChangesEvent),
+                ": more than one branch preserved an equivalent input",
+            )));
+        }
+        equivalent.ok_or_else(|| {
+            serde::de::Error::custom(concat!(
+                "no oneOf branch for ",
+                stringify!(ChangesEvent),
+                " preserved the complete input",
+            ))
+        })
+    }
 }
 pub type ChangesResync = Refetch;
 pub type ChangesOpen = Refetch;

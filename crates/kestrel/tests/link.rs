@@ -1338,7 +1338,8 @@ fn published_transcript_reads_describe_activities_ranges_and_snapshots() {
                 document["components"]["schemas"]["Event"]["oneOf"]
                     .as_array()
                     .unwrap()
-                    .contains(&json!({"$ref":"#/components/schemas/Activity"}))
+                    .iter()
+                    .any(|variant| variant["$ref"] == "#/components/schemas/Activity")
             );
         } else {
             assert_eq!(
