@@ -3128,9 +3128,9 @@
         },
         "required": ["name", "brief", "project", "agent"],
         "oneOf": [
-          { "required": ["filter"], "not": { "anyOf": [{ "required": ["every"] }, { "required": ["cron"] }, { "required": ["zone"] }] } },
-          { "required": ["every"], "not": { "anyOf": [{ "required": ["filter"] }, { "required": ["cron"] }, { "required": ["zone"] }] } },
-          { "required": ["cron", "zone"], "not": { "anyOf": [{ "required": ["filter"] }, { "required": ["every"] }] } }
+          { "$ref": "#/components/schemas/EventTriggerCondition" },
+          { "$ref": "#/components/schemas/IntervalTriggerCondition" },
+          { "$ref": "#/components/schemas/CronTriggerCondition" }
         ]
       },
       "Trigger": {
@@ -3277,9 +3277,15 @@
       },
       "Fired": {
         "oneOf": [
-          { "type": "object", "properties": { "outcome": { "const": "opened" }, "event": { "type": "string", "format": "uuid" }, "workspace": { "type": "string", "format": "uuid" }, "session": { "type": "string", "format": "uuid" } }, "required": ["outcome", "event", "workspace", "session"] },
-          { "type": "object", "properties": { "outcome": { "const": "fed" }, "event": { "type": "string", "format": "uuid" }, "workspace": { "type": "string", "format": "uuid" }, "session": { "type": ["string", "null"], "format": "uuid" } }, "required": ["outcome", "event", "workspace", "session"] },
-          { "type": "object", "properties": { "outcome": { "const": "ignored" }, "event": { "type": "string", "format": "uuid" }, "correlation": { "type": "string" } }, "required": ["outcome", "event", "correlation"] }
+          {
+            "$ref": "#/components/schemas/FiredOpened"
+          },
+          {
+            "$ref": "#/components/schemas/FiredFed"
+          },
+          {
+            "$ref": "#/components/schemas/FiredIgnored"
+          }
         ]
       },
       "HeldInstance": {
@@ -3601,114 +3607,22 @@
         "description": "One reason a Session has not started, for a Client to phrase.",
         "oneOf": [
           {
-            "properties": {
-              "kind": {
-                "const": "dependencies"
-              },
-              "sessions": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "The blocking Sessions that have not ended successfully."
-              }
-            },
-            "required": [
-              "kind",
-              "sessions"
-            ]
+            "$ref": "#/components/schemas/QueueReasonDependencies"
           },
           {
-            "properties": {
-              "kind": {
-                "const": "subscription_profile"
-              },
-              "profile": {
-                "type": "string"
-              },
-              "session": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "The Working or Trailing Session holding the Profile when it belongs to this Organization; otherwise null."
-              }
-            },
-            "required": [
-              "kind",
-              "profile",
-              "session"
-            ]
+            "$ref": "#/components/schemas/QueueReasonSubscriptionProfile"
           },
           {
-            "properties": {
-              "kind": {
-                "const": "instance_archiving"
-              },
-              "instance": {
-                "type": "string",
-                "description": "The idle Instance being archived, or that dispatch will archive, to make room."
-              }
-            },
-            "required": [
-              "kind",
-              "instance"
-            ]
+            "$ref": "#/components/schemas/QueueReasonInstanceArchiving"
           },
           {
-            "properties": {
-              "kind": {
-                "const": "live_instance_limit"
-              },
-              "limit": {
-                "type": "integer",
-                "minimum": 1,
-                "description": "The Organization's live Instance limit, reached with no idle Instance known recoverable."
-              }
-            },
-            "required": [
-              "kind",
-              "limit"
-            ]
+            "$ref": "#/components/schemas/QueueReasonLiveInstanceLimit"
           },
           {
-            "properties": {
-              "kind": {
-                "const": "active_work_slots"
-              },
-              "limit": {
-                "type": "integer",
-                "minimum": 1,
-                "description": "The Active-Work Slot limit, every slot occupied."
-              }
-            },
-            "required": [
-              "kind",
-              "limit"
-            ]
+            "$ref": "#/components/schemas/QueueReasonActiveWorkSlots"
           },
           {
-            "properties": {
-              "kind": {
-                "const": "ahead"
-              },
-              "sessions": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "Earlier eligible slot requests in this Organization, in global dispatch order."
-              },
-              "elsewhere": {
-                "type": "integer",
-                "minimum": 1,
-                "description": "Earlier eligible slot requests in other Organizations, omitted when zero."
-              }
-            },
-            "required": [
-              "kind",
-              "sessions"
-            ]
+            "$ref": "#/components/schemas/QueueReasonAhead"
           }
         ]
       },
@@ -4019,17 +3933,76 @@
         "type": "object",
         "description": "A harness config option, whole: what it is, what it may be and what it is now.",
         "properties": {
-          "id": { "type": "string" },
-          "name": { "type": "string" },
-          "description": { "type": ["string", "null"] },
-          "category": { "type": ["string", "null"], "description": "`mode`, `model`, `model_config`, `thought_level`, or the harness's own string, which may begin with `_`." },
-          "kind": { "type": "string", "enum": ["select", "boolean"] },
-          "current": { "anyOf": [{ "type": "string" }, { "type": "boolean" }], "description": "The current value: a value id for a select, a boolean for a toggle." },
-          "values": { "type": "array", "description": "The offered values of an ungrouped select; empty for a grouped one and for a boolean.", "items": { "$ref": "#/components/schemas/SessionOptionValue" } },
-          "groups": { "type": "array", "description": "The offered values of a grouped select; empty for an ungrouped one.", "items": { "$ref": "#/components/schemas/SessionOptionGroup" } },
-          "warns_cache": { "type": "boolean", "description": "Whether changing this option makes the next Turn re-read the context without the prompt cache. True for a Model, ThoughtLevel or ModelConfig option, except a category kestrel's per-harness table keeps the cache for; at 0.3 that is Claude's ThoughtLevel (ADR-0041)." }
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`mode`, `model`, `model_config`, `thought_level`, or the harness's own string, which may begin with `_`."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "select",
+              "boolean"
+            ]
+          },
+          "current": {
+            "$ref": "#/components/schemas/SessionOptionCurrent"
+          },
+          "values": {
+            "type": "array",
+            "description": "The offered values of an ungrouped select; empty for a grouped one and for a boolean.",
+            "items": {
+              "$ref": "#/components/schemas/SessionOptionValue"
+            }
+          },
+          "groups": {
+            "type": "array",
+            "description": "The offered values of a grouped select; empty for an ungrouped one.",
+            "items": {
+              "$ref": "#/components/schemas/SessionOptionGroup"
+            }
+          },
+          "warns_cache": {
+            "type": "boolean",
+            "description": "Whether changing this option makes the next Turn re-read the context without the prompt cache. True for a Model, ThoughtLevel or ModelConfig option, except a category kestrel's per-harness table keeps the cache for; at 0.3 that is Claude's ThoughtLevel (ADR-0041)."
+          }
         },
-        "required": ["id", "name", "description", "category", "kind", "current", "values", "groups", "warns_cache"]
+        "required": [
+          "id",
+          "name",
+          "description",
+          "category",
+          "kind",
+          "current",
+          "values",
+          "groups",
+          "warns_cache"
+        ]
+      },
+      "SessionOptionCurrent": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SelectedOptionValue"
+          },
+          {
+            "$ref": "#/components/schemas/ToggleOptionValue"
+          }
+        ],
+        "description": "The current value: a value id for a select, a boolean for a toggle."
       },
       "SessionOptionValue": {
         "type": "object",
@@ -4828,14 +4801,7 @@
             "$ref": "#/components/schemas/BriefSource"
           },
           "brief": {
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/PayloadReference"
-              }
-            ]
+            "$ref": "#/components/schemas/BriefContent"
           },
           "type": {
             "const": "brief"
@@ -4858,38 +4824,10 @@
         "description": "Who supplied a Brief: the Trigger whose firing rendered it, or an operator, under the participant name they declared if they declared one.",
         "oneOf": [
           {
-            "type": "object",
-            "properties": {
-              "kind": {
-                "const": "trigger"
-              },
-              "trigger": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind",
-              "trigger"
-            ]
+            "$ref": "#/components/schemas/BriefSourceTrigger"
           },
           {
-            "type": "object",
-            "properties": {
-              "kind": {
-                "const": "operator"
-              },
-              "participant": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "The participant who joined directly before the Brief, or null when the operator declared no name and no one joined."
-              }
-            },
-            "required": [
-              "kind",
-              "participant"
-            ]
+            "$ref": "#/components/schemas/BriefSourceOperator"
           }
         ]
       },
@@ -4947,18 +4885,7 @@
         "type": "object",
         "properties": {
           "messages": {
-            "oneOf": [
-              {
-                "type": "array",
-                "minItems": 1,
-                "items": {
-                  "$ref": "#/components/schemas/SpokenMessage"
-                }
-              },
-              {
-                "$ref": "#/components/schemas/PayloadReference"
-              }
-            ]
+            "$ref": "#/components/schemas/MessageCollection"
           },
           "type": {
             "const": "messages"
@@ -4984,14 +4911,7 @@
             "type": "string"
           },
           "message": {
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/PayloadReference"
-              }
-            ]
+            "$ref": "#/components/schemas/MessageContent"
           },
           "payload_fields": {
             "type": "array",
@@ -5156,22 +5076,33 @@
       "Event": {
         "description": "SSE names: entry (Recorded), activity (Activity), session_state (TranscriptSessionState), cursor (CursorEvent), end (End), follower (FollowerEvent), or presence (Presence). Entry, Activity and cursor IDs advance the global Transcript cursor; session_state, follower and presence carry no id. Activity replacements retain first_seq, and their final closed replacement precedes the closing shared-state entry.",
         "oneOf": [
-          { "$ref": "#/components/schemas/Activity" },
-          { "$ref": "#/components/schemas/TranscriptSessionState" },
           {
-            "$ref": "#/components/schemas/Recorded"
+            "$ref": "#/components/schemas/Activity",
+            "x-sse-event": "activity"
           },
           {
-            "$ref": "#/components/schemas/End"
+            "$ref": "#/components/schemas/TranscriptSessionState",
+            "x-sse-event": "session_state"
           },
           {
-            "$ref": "#/components/schemas/CursorEvent"
+            "$ref": "#/components/schemas/Recorded",
+            "x-sse-event": "entry"
           },
           {
-            "$ref": "#/components/schemas/FollowerEvent"
+            "$ref": "#/components/schemas/End",
+            "x-sse-event": "end"
           },
           {
-            "$ref": "#/components/schemas/Presence"
+            "$ref": "#/components/schemas/CursorEvent",
+            "x-sse-event": "cursor"
+          },
+          {
+            "$ref": "#/components/schemas/FollowerEvent",
+            "x-sse-event": "follower"
+          },
+          {
+            "$ref": "#/components/schemas/Presence",
+            "x-sse-event": "presence"
           }
         ]
       },
@@ -5282,45 +5213,13 @@
       "TurnOutcome": {
         "oneOf": [
           {
-            "type": "object",
-            "properties": {
-              "status": {
-                "const": "answered"
-              },
-              "stop_reason": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "status",
-              "stop_reason"
-            ]
+            "$ref": "#/components/schemas/TurnOutcomeAnswered"
           },
           {
-            "type": "object",
-            "properties": {
-              "status": {
-                "const": "cancelled"
-              }
-            },
-            "required": [
-              "status"
-            ]
+            "$ref": "#/components/schemas/TurnOutcomeCancelled"
           },
           {
-            "type": "object",
-            "properties": {
-              "status": {
-                "const": "failed"
-              },
-              "because": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "status",
-              "because"
-            ]
+            "$ref": "#/components/schemas/TurnOutcomeFailed"
           }
         ],
         "discriminator": {
@@ -5369,17 +5268,7 @@
             "$ref": "#/components/schemas/Completion"
           },
           "entries": {
-            "oneOf": [
-              {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/PlanEntry"
-                }
-              },
-              {
-                "$ref": "#/components/schemas/PayloadReference"
-              }
-            ]
+            "$ref": "#/components/schemas/PlanEntries"
           },
           "payload_fields": {
             "type": "array",
@@ -5410,14 +5299,7 @@
             "$ref": "#/components/schemas/Completion"
           },
           "text": {
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "$ref": "#/components/schemas/PayloadReference"
-              }
-            ]
+            "$ref": "#/components/schemas/ThoughtContent"
           },
           "payload_fields": {
             "type": "array",
@@ -5568,13 +5450,19 @@
         ]
       },
       "ChangesEvent": {
-        "description": "SSE names: open (Refetch) on connect and on reconnect, change (Change) for one resource that changed, and resync (Refetch) for a subscriber that fell behind the bounded buffer. No event carries an id.",
-        "oneOf": [
+        "description": "SSE names: open (ChangesOpen) on connect and on reconnect, change (Change) for one resource that changed, and resync (ChangesResync) for a subscriber that fell behind the bounded buffer. No event carries an id.",
+        "anyOf": [
           {
-            "$ref": "#/components/schemas/Change"
+            "$ref": "#/components/schemas/Change",
+            "x-sse-event": "change"
           },
           {
-            "$ref": "#/components/schemas/Refetch"
+            "$ref": "#/components/schemas/ChangesOpen",
+            "x-sse-event": "open"
+          },
+          {
+            "$ref": "#/components/schemas/ChangesResync",
+            "x-sse-event": "resync"
           }
         ]
       },
@@ -5582,63 +5470,492 @@
         "description": "One resource that changed: a Workspace or Session by id, with the name of the Workspace it belongs to, or the Organization's queue, which carries neither. Never a copy of its state.",
         "oneOf": [
           {
-            "type": "object",
-            "properties": {
-              "resource": {
-                "const": "workspace"
-              },
-              "id": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "workspace": {
-                "type": "string",
-                "description": "The name of the Workspace."
-              }
-            },
-            "required": [
-              "resource",
-              "id",
-              "workspace"
-            ]
+            "$ref": "#/components/schemas/ChangeWorkspace"
           },
           {
-            "type": "object",
-            "properties": {
-              "resource": {
-                "const": "session"
-              },
-              "id": {
-                "type": "string",
-                "format": "uuid"
-              },
-              "workspace": {
-                "type": "string",
-                "description": "The name of the Workspace that holds the Session."
-              }
-            },
-            "required": [
-              "resource",
-              "id",
-              "workspace"
-            ]
+            "$ref": "#/components/schemas/ChangeSession"
           },
           {
-            "type": "object",
-            "properties": {
-              "resource": {
-                "const": "queue"
-              }
-            },
-            "required": [
-              "resource"
-            ]
+            "$ref": "#/components/schemas/ChangeQueue"
           }
         ]
       },
       "Refetch": {
         "description": "The event that means refetch every view the Client subscribes to. It carries no fields.",
         "type": "object"
+      },
+      "FiredOpened": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "const": "opened"
+          },
+          "event": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspace": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "outcome",
+          "event",
+          "workspace",
+          "session"
+        ]
+      },
+      "FiredFed": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "const": "fed"
+          },
+          "event": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspace": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "outcome",
+          "event",
+          "workspace",
+          "session"
+        ]
+      },
+      "FiredIgnored": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "const": "ignored"
+          },
+          "event": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "correlation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "event",
+          "correlation"
+        ]
+      },
+      "QueueReasonDependencies": {
+        "properties": {
+          "kind": {
+            "const": "dependencies"
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The blocking Sessions that have not ended successfully."
+          }
+        },
+        "required": [
+          "kind",
+          "sessions"
+        ]
+      },
+      "QueueReasonSubscriptionProfile": {
+        "properties": {
+          "kind": {
+            "const": "subscription_profile"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Working or Trailing Session holding the Profile when it belongs to this Organization; otherwise null."
+          }
+        },
+        "required": [
+          "kind",
+          "profile",
+          "session"
+        ]
+      },
+      "QueueReasonInstanceArchiving": {
+        "properties": {
+          "kind": {
+            "const": "instance_archiving"
+          },
+          "instance": {
+            "type": "string",
+            "description": "The idle Instance being archived, or that dispatch will archive, to make room."
+          }
+        },
+        "required": [
+          "kind",
+          "instance"
+        ]
+      },
+      "QueueReasonLiveInstanceLimit": {
+        "properties": {
+          "kind": {
+            "const": "live_instance_limit"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The Organization's live Instance limit, reached with no idle Instance known recoverable."
+          }
+        },
+        "required": [
+          "kind",
+          "limit"
+        ]
+      },
+      "QueueReasonActiveWorkSlots": {
+        "properties": {
+          "kind": {
+            "const": "active_work_slots"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The Active-Work Slot limit, every slot occupied."
+          }
+        },
+        "required": [
+          "kind",
+          "limit"
+        ]
+      },
+      "QueueReasonAhead": {
+        "properties": {
+          "kind": {
+            "const": "ahead"
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Earlier eligible slot requests in this Organization, in global dispatch order."
+          },
+          "elsewhere": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Earlier eligible slot requests in other Organizations, omitted when zero."
+          }
+        },
+        "required": [
+          "kind",
+          "sessions"
+        ]
+      },
+      "BriefSourceTrigger": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "trigger"
+          },
+          "trigger": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "trigger"
+        ]
+      },
+      "BriefSourceOperator": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "operator"
+          },
+          "participant": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The participant who joined directly before the Brief, or null when the operator declared no name and no one joined."
+          }
+        },
+        "required": [
+          "kind",
+          "participant"
+        ]
+      },
+      "TurnOutcomeAnswered": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "const": "answered"
+          },
+          "stop_reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "stop_reason"
+        ]
+      },
+      "TurnOutcomeCancelled": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "const": "cancelled"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "TurnOutcomeFailed": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "const": "failed"
+          },
+          "because": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "because"
+        ]
+      },
+      "ChangeWorkspace": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "const": "workspace"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspace": {
+            "type": "string",
+            "description": "The name of the Workspace."
+          }
+        },
+        "required": [
+          "resource",
+          "id",
+          "workspace"
+        ]
+      },
+      "ChangeSession": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "const": "session"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspace": {
+            "type": "string",
+            "description": "The name of the Workspace that holds the Session."
+          }
+        },
+        "required": [
+          "resource",
+          "id",
+          "workspace"
+        ]
+      },
+      "ChangeQueue": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "const": "queue"
+          }
+        },
+        "required": [
+          "resource"
+        ]
+      },
+      "SelectedOptionValue": {
+        "type": "string"
+      },
+      "ToggleOptionValue": {
+        "type": "boolean"
+      },
+      "InlineBrief": {
+        "type": "string"
+      },
+      "BriefContent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/InlineBrief"
+          },
+          {
+            "$ref": "#/components/schemas/PayloadReference"
+          }
+        ]
+      },
+      "InlineMessages": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "$ref": "#/components/schemas/SpokenMessage"
+        }
+      },
+      "MessageCollection": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/InlineMessages"
+          },
+          {
+            "$ref": "#/components/schemas/PayloadReference"
+          }
+        ]
+      },
+      "InlineMessage": {
+        "type": "string"
+      },
+      "MessageContent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/InlineMessage"
+          },
+          {
+            "$ref": "#/components/schemas/PayloadReference"
+          }
+        ]
+      },
+      "InlinePlanEntries": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/PlanEntry"
+        }
+      },
+      "PlanEntries": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/InlinePlanEntries"
+          },
+          {
+            "$ref": "#/components/schemas/PayloadReference"
+          }
+        ]
+      },
+      "InlineThought": {
+        "type": "string"
+      },
+      "ThoughtContent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/InlineThought"
+          },
+          {
+            "$ref": "#/components/schemas/PayloadReference"
+          }
+        ]
+      },
+      "ChangesOpen": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Refetch"
+          }
+        ]
+      },
+      "ChangesResync": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Refetch"
+          }
+        ]
+      },
+      "EventTriggerCondition": {
+        "required": [
+          "filter"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "every"
+              ]
+            },
+            {
+              "required": [
+                "cron"
+              ]
+            },
+            {
+              "required": [
+                "zone"
+              ]
+            }
+          ]
+        }
+      },
+      "IntervalTriggerCondition": {
+        "required": [
+          "every"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "filter"
+              ]
+            },
+            {
+              "required": [
+                "cron"
+              ]
+            },
+            {
+              "required": [
+                "zone"
+              ]
+            }
+          ]
+        }
+      },
+      "CronTriggerCondition": {
+        "required": [
+          "cron",
+          "zone"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "filter"
+              ]
+            },
+            {
+              "required": [
+                "every"
+              ]
+            }
+          ]
+        }
       }
     }
   }
