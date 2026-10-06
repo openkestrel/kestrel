@@ -159,6 +159,11 @@ supervisor ([ADR-0026](../adr/0026-kestrel-carries-named-credentials-never-a-run
 
 An accepted ADR is a decision, not a description. These are decided and not yet built:
 
+- **Integration maintenance** ([ADR-0056](../adr/0056-an-integration-keeps-its-identity-through-maintenance.md)):
+  registration still fixes the entire connection, with no disable, retirement or rotation interface.
+  Projects do not select an Integration explicitly and Workspaces do not fix that authority at open;
+  token caches and in-flight operations do not yet observe lifecycle revisions.
+
 - **Release preparation and acceptance** ([ADR-0053](../adr/0053-a-tag-prepares-a-release-acceptance-publishes-it.md)):
   tag publishing still races Conformance, covers only two images on amd64, and has no draft-release
   acceptance gate, CLI distribution or generated digest-pinned release Compose. Main still moves
