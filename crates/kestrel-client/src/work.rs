@@ -1,10 +1,11 @@
-use std::io::Write;
+use std::io::{IsTerminal as _, Write};
 
 use anyhow::Result;
 use kestrel_operator_types::{WorkLastReport, WorkRepository, WorkspaceWork};
 use serde_json::Value;
 
 pub fn show(answer: Value, json: bool) -> Result<()> {
+    let terminal = std::io::stdout().is_terminal();
     let mut out = std::io::stdout().lock();
     if json {
         writeln!(out, "{answer}")?;
@@ -15,20 +16,22 @@ pub fn show(answer: Value, json: bool) -> Result<()> {
                 if let Some(pull_request) = work.pull_request {
                     writeln!(out, "{pull_request}")?;
                 }
-                last_report(&mut out, work.last_report)?;
+                last_report(&mut out, work.last_report, terminal)?;
             }
             WorkspaceWork::WorkNotAnswering(work) => {
                 writeln!(out, "{}", work.message)?;
-                last_report(&mut out, work.last_report)?;
+                last_report(&mut out, work.last_report, terminal)?;
             }
             WorkspaceWork::WorkReported(work) => {
-                writeln!(
-                    out,
-                    "Reported by the supervisor {}s ago ({})",
-                    age(&work.reported_at)?,
-                    work.reported_at
-                )?;
-                repositories(&mut out, work.repositories)?;
+                if terminal {
+                    writeln!(
+                        out,
+                        "Reported by the supervisor {}s ago ({})",
+                        age(&work.reported_at)?,
+                        work.reported_at
+                    )?;
+                }
+                repositories(&mut out, work.repositories, terminal)?;
             }
         }
     }
@@ -36,7 +39,7 @@ pub fn show(answer: Value, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn last_report(out: &mut impl Write, report: WorkLastReport) -> Result<()> {
+fn last_report(out: &mut impl Write, report: WorkLastReport, terminal: bool) -> Result<()> {
     match report {
         WorkLastReport::WorkNoReport(_) => writeln!(out, "No work report received.")?,
         WorkLastReport::WorkInstanceReport(report) => {
@@ -52,7 +55,7 @@ fn last_report(out: &mut impl Write, report: WorkLastReport) -> Result<()> {
                 age(&report.reported_at)?,
                 report.reported_at
             )?;
-            repositories(out, report.repositories)?;
+            repositories(out, report.repositories, terminal)?;
         }
     }
     Ok(())
@@ -65,15 +68,23 @@ fn age(reported_at: &str) -> Result<i64> {
         .max(0))
 }
 
-fn repositories(out: &mut impl Write, repositories: Vec<WorkRepository>) -> Result<()> {
+fn repositories(
+    out: &mut impl Write,
+    repositories: Vec<WorkRepository>,
+    terminal: bool,
+) -> Result<()> {
     for repository in repositories {
         match repository {
             WorkRepository::WorkRepositoryUnreadable(repository) => {
-                writeln!(out, "\n{}", repository.repository)?;
+                if terminal {
+                    writeln!(out, "\n{}", repository.repository)?;
+                }
                 writeln!(out, "  {}", repository.because)?;
             }
             WorkRepository::WorkRepositoryRead(repository) => {
-                writeln!(out, "\n{}", repository.repository)?;
+                if terminal {
+                    writeln!(out, "\n{}", repository.repository)?;
+                }
                 writeln!(
                     out,
                     "On branch {}",

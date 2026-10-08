@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 
 use crate::api::ControlPlane;
 use crate::exit::{Exit, Failed};
-use crate::output::{Presentation, show};
+use crate::output::{Presentation, collection, show};
 use crate::scope::{Derived, Scope, Scoping, Source};
 
 const BINARY: &str = "kestrel";
@@ -202,6 +202,9 @@ enum CredentialCommand {
         variable: String,
     },
     /// List what the Organization holds, by the variable each is read from and never by value
+    #[command(
+        after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
+    )]
     List,
     /// Forget a Provider Credential the Organization holds
     Forget {
@@ -228,6 +231,9 @@ enum ProfileCommand {
         entry: ProfileEntry,
     },
     /// List every profile in the Organization with what each holds, one JSON record a line
+    #[command(
+        after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
+    )]
     List,
     /// Forget a login a profile holds
     Forget {
@@ -286,6 +292,9 @@ enum IntegrationCommand {
     #[command(subcommand)]
     Register(RegisterCommand),
     /// List every Integration in the Organization, one JSON record a line
+    #[command(
+        after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
+    )]
     List,
     /// Acknowledge the latest oversized Event refused by an Integration
     AcknowledgeRefusal { name: String },
@@ -355,6 +364,9 @@ enum RegisterCommand {
 #[derive(Debug, Subcommand)]
 enum EventCommand {
     /// List the Events recorded for the Organization, most recent first, one JSON record a line
+    #[command(
+        after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
+    )]
     List {
         /// How many to list at most
         #[arg(long, default_value_t = 50)]
@@ -431,6 +443,9 @@ enum TriggerCommand {
         profile: Option<String>,
     },
     /// List every Trigger in the Organization, one JSON record a line
+    #[command(
+        after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
+    )]
     List,
     /// Show a Trigger
     Show { name: String },
@@ -498,6 +513,9 @@ enum OrganizationCommand {
         max_live_instances: Option<std::num::NonZeroUsize>,
     },
     /// List every Organization, one JSON record a line
+    #[command(
+        after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
+    )]
     List,
 }
 
@@ -515,6 +533,9 @@ enum ProjectCommand {
         branch: String,
     },
     /// List every Project in the Organization, one JSON record a line
+    #[command(
+        after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
+    )]
     List,
 }
 
@@ -542,12 +563,18 @@ enum AgentCommand {
         model: Option<String>,
     },
     /// List every Agent in the Organization, one JSON record a line
+    #[command(
+        after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
+    )]
     List,
 }
 
 #[derive(Debug, Subcommand)]
 enum InstanceCommand {
     /// List every Instance kept because it may hold the only copy of its Workspace's work, and why
+    #[command(
+        after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
+    )]
     List,
     /// Destroy a Workspace's Instance, discarding whatever it holds that was never pushed
     Release {
@@ -601,28 +628,87 @@ enum WorkspaceCommand {
         #[arg(long, value_name = "SESSION")]
         depends_on: Vec<String>,
     },
-    /// List every Workspace in the Organization
+    /// List Workspaces; an empty terminal lists the scoped next step, while a pipe emits nothing
+    #[command(
+        after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
+    )]
     List,
-    #[command(alias = "diff")]
+    #[command(
+        alias = "diff",
+        after_help = "Terminal output includes repository headings and empty-list guidance. Redirected output omits headings and guidance; --json returns the complete operator response.",
+        about = "Inspect a Workspace's Unpublished Work",
+        long_about = "Inspect a Workspace's Unpublished Work across its repositories.
+
+By default, compare the working tree (including untracked files) with origin/<work-branch>. Before the first push, compare with the merge base of HEAD and origin/<checkout-base>. The Project's checkout base is the starting branch; the Workspace's declared work branch holds its work.
+
+Scopes: default Unpublished Work; --changed for unstaged tracked changes; --staged for staged changes; COMMIT (a hexadecimal commit id) for one commit. Scopes are mutually exclusive. Paths after -- are literal <repo>/<path> filters, using checkout directory names from workspace files.
+
+Examples:
+  kestrel workspace changes latest
+  kestrel workspace changes latest --changed -- repo/src/main.rs
+  kestrel workspace changes latest --staged
+  kestrel workspace changes latest abcd1234 -- repo/README.md"
+    )]
     Changes {
         workspace: String,
+        /// Compare staged changes with HEAD
         #[arg(long, conflicts_with_all = ["changed", "commit"])]
         staged: bool,
+        /// Compare unstaged tracked changes with the index
         #[arg(long, conflicts_with = "commit")]
         changed: bool,
+        /// Show one commit against its parent
         commit: Option<String>,
+        /// Literal repository-qualified paths: <repo>/<path>
         #[arg(last = true)]
         paths: Vec<String>,
     },
-    #[command(alias = "log")]
+    #[command(
+        alias = "log",
+        after_help = "Terminal output includes repository headings and empty-list guidance. Redirected output omits headings and guidance; --json returns the complete operator response.",
+        about = "Inspect commits that have not reached a remote",
+        long_about = "List commits reachable from any local branch or detached HEAD that no remote-tracking branch reaches, grouped by repository. This covers the Workspace's live checkouts, not just its declared work branch or checkout base. No comparison scope or path filter is supported.
+
+Examples:
+  kestrel workspace commits latest
+  kestrel workspace changes latest abcd1234 -- repo/README.md
+
+Inspect one commit's patch with changes COMMIT (a hexadecimal commit id); paths there are literal <repo>/<path> filters. The Project's checkout base starts the checkout; the Workspace's work branch holds its work."
+    )]
     Commits { workspace: String },
-    #[command(alias = "stash")]
+    #[command(
+        alias = "stash",
+        after_help = "Terminal output includes repository headings and empty-list guidance. Redirected output omits headings and guidance; --json returns the complete operator response.",
+        about = "Inspect stashes in a Workspace's live checkouts",
+        long_about = "List stashes grouped by repository without diffing them. All repositories in the Workspace's live Instance are included; no comparison scope or path filter is supported. Stashes are separate from the default Unpublished Work comparison in changes. The checkout base starts the checkout; the Workspace's declared work branch holds its work.
+
+Examples:
+  kestrel workspace stashes latest
+  kestrel workspace changes latest -- repo/README.md
+
+The changes path filter uses literal <repo>/<path>, with checkout directory names from workspace files."
+    )]
     Stashes { workspace: String },
-    #[command(alias = "status")]
+    #[command(
+        alias = "status",
+        after_help = "Terminal output includes repository headings and empty-list guidance. Redirected output omits headings and guidance; --json returns the complete operator response.",
+        about = "Inspect the supervisor's latest report of a Workspace's work",
+        long_about = "Show the supervisor's latest per-repository work summary and its report time. This is a reported snapshot, not a fresh diff. Changed and staged counts describe the working tree; committed counts cover commits on local branches or detached HEAD that no remote-tracking branch reaches. The default changes comparison is against origin/<work-branch>, or the merge base of HEAD and origin/<checkout-base> before the first push. The checkout base starts the checkout; the Workspace's declared work branch holds its work.
+
+No comparison scope or path filter is supported here. Use changes for default Unpublished Work, --changed, --staged or one COMMIT, and literal <repo>/<path> filters.
+
+Examples:
+  kestrel workspace work latest
+  kestrel workspace changes latest --staged -- repo/src/main.rs
+  kestrel workspace files latest"
+    )]
     Work { workspace: String },
     /// List one directory of a Workspace's live Instance, each entry marked tracked, untracked
     /// or ignored; with no path, its repositories
-    #[command(alias = "ls")]
+    #[command(
+        alias = "ls",
+        after_help = "An empty directory shows scoped inspection guidance at a terminal; non-JSON pipes emit nothing. Redirected listings omit directory headings; --json returns the complete operator response."
+    )]
     Files {
         workspace: String,
         /// `<repo>/<path>`
@@ -737,6 +823,9 @@ enum SessionCommand {
         depends_on: Vec<String>,
     },
     /// List every Session in a Workspace
+    #[command(
+        after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
+    )]
     List {
         /// The Workspace the Sessions execute on behalf of, by generated name, identifier, any
         /// unambiguous prefix of its identifier, or `latest`
@@ -899,10 +988,16 @@ async fn run() -> Result<()> {
             )?;
         }
         Command::Organization(OrganizationCommand::List) => {
-            show(
+            collection(
                 &presentation,
                 &view::ORGANIZATIONS,
                 &api.get(&["organizations"]).await?,
+                &empty_list(
+                    &client.control_plane,
+                    "Organizations",
+                    None,
+                    "organization declare --help",
+                ),
             )?;
         }
         Command::Project(ProjectCommand::Declare {
@@ -925,11 +1020,17 @@ async fn run() -> Result<()> {
         }
         Command::Project(ProjectCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            collection(
                 &presentation,
                 &view::PROJECTS,
                 &api.get(&["organizations", &organization, "projects"])
                     .await?,
+                &empty_list(
+                    &client.control_plane,
+                    "Projects",
+                    Some(&organization),
+                    "project declare --help",
+                ),
             )?;
         }
         Command::Agent(AgentCommand::Declare {
@@ -964,10 +1065,16 @@ async fn run() -> Result<()> {
         }
         Command::Agent(AgentCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            collection(
                 &presentation,
                 &view::AGENTS,
                 &api.get(&["organizations", &organization, "agents"]).await?,
+                &empty_list(
+                    &client.control_plane,
+                    "Agents",
+                    Some(&organization),
+                    "agent declare --help",
+                ),
             )?;
         }
         Command::Credential(CredentialCommand::Set { variable }) => {
@@ -985,11 +1092,17 @@ async fn run() -> Result<()> {
         }
         Command::Credential(CredentialCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            collection(
                 &presentation,
                 &view::CREDENTIALS,
                 &api.get(&["organizations", &organization, "credentials"])
                     .await?,
+                &empty_list(
+                    &client.control_plane,
+                    "Provider Credentials",
+                    Some(&organization),
+                    "credential set --help",
+                ),
             )?;
         }
         Command::Credential(CredentialCommand::Forget { variable }) => {
@@ -1023,11 +1136,17 @@ async fn run() -> Result<()> {
         }
         Command::Profile(ProfileCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            collection(
                 &presentation,
                 &view::PROFILES,
                 &api.get(&["organizations", &organization, "profiles"])
                     .await?,
+                &empty_list(
+                    &client.control_plane,
+                    "Subscription Profiles",
+                    Some(&organization),
+                    "profile declare --help",
+                ),
             )?;
         }
         Command::Profile(ProfileCommand::Forget { name, entry }) => {
@@ -1097,11 +1216,17 @@ async fn run() -> Result<()> {
         }
         Command::Integration(IntegrationCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            collection(
                 &presentation,
                 &view::INTEGRATIONS,
                 &api.get(&["organizations", &organization, "integrations"])
                     .await?,
+                &empty_list(
+                    &client.control_plane,
+                    "Integrations",
+                    Some(&organization),
+                    "integration register github --help",
+                ),
             )?;
         }
         Command::Integration(IntegrationCommand::AcknowledgeRefusal { name }) => {
@@ -1120,7 +1245,7 @@ async fn run() -> Result<()> {
         }
         Command::Event(EventCommand::List { limit }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            collection(
                 &presentation,
                 &view::EVENTS,
                 &api.get_where(
@@ -1128,6 +1253,12 @@ async fn run() -> Result<()> {
                     &[("limit", &limit.to_string())],
                 )
                 .await?,
+                &empty_list(
+                    &client.control_plane,
+                    "Events",
+                    Some(&organization),
+                    "integration list",
+                ),
             )?;
         }
         Command::Event(EventCommand::Show { record }) => {
@@ -1243,11 +1374,17 @@ async fn run() -> Result<()> {
         }
         Command::Trigger(TriggerCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            collection(
                 &presentation,
                 &view::TRIGGERS,
                 &api.get(&["organizations", &organization, "triggers"])
                     .await?,
+                &empty_list(
+                    &client.control_plane,
+                    "Triggers",
+                    Some(&organization),
+                    "trigger declare --help",
+                ),
             )?;
         }
         Command::Trigger(TriggerCommand::Show { name }) => {
@@ -1364,11 +1501,17 @@ async fn run() -> Result<()> {
         }
         Command::Workspace(WorkspaceCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            collection(
                 &presentation,
                 &view::WORKSPACES,
                 &api.get(&["organizations", &organization, "workspaces"])
                     .await?,
+                &empty_list(
+                    &client.control_plane,
+                    "Workspaces",
+                    Some(&organization),
+                    "workspace open --help",
+                ),
             )?;
         }
         Command::Workspace(WorkspaceCommand::Work { workspace }) => {
@@ -1415,7 +1558,16 @@ async fn run() -> Result<()> {
                     &query,
                 )
                 .await?;
-            changes::show(answer, client.json.is_some())?;
+            changes::show(
+                answer,
+                client.json.is_some(),
+                &empty_list(
+                    &client.control_plane,
+                    "changes in this comparison",
+                    Some(&organization),
+                    &format!("workspace work {}", corrective::quoted(&workspace)),
+                ),
+            )?;
         }
         Command::Workspace(
             command @ (WorkspaceCommand::Commits { .. } | WorkspaceCommand::Stashes { .. }),
@@ -1435,7 +1587,16 @@ async fn run() -> Result<()> {
                     read,
                 ])
                 .await?;
-            changes::show(answer, client.json.is_some())?;
+            changes::show(
+                answer,
+                client.json.is_some(),
+                &empty_list(
+                    &client.control_plane,
+                    read,
+                    Some(&organization),
+                    &format!("workspace work {}", corrective::quoted(&workspace)),
+                ),
+            )?;
         }
         Command::Workspace(WorkspaceCommand::Files { workspace, path }) => {
             let organization = scoping.resolve().await?.organization;
@@ -1452,7 +1613,16 @@ async fn run() -> Result<()> {
                     &[("path", &path)],
                 )
                 .await?;
-            files::list(answer, client.json.is_some())?;
+            files::list(
+                answer,
+                client.json.is_some(),
+                &empty_list(
+                    &client.control_plane,
+                    "directory entries",
+                    Some(&organization),
+                    &format!("workspace files {}", corrective::quoted(&workspace)),
+                ),
+            )?;
         }
         Command::Workspace(WorkspaceCommand::Read { workspace, path }) => {
             let organization = scoping.resolve().await?.organization;
@@ -1629,7 +1799,7 @@ async fn run() -> Result<()> {
         }
         Command::Session(SessionCommand::List { workspace }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            collection(
                 &presentation,
                 &view::SESSIONS,
                 &api.get(&[
@@ -1640,6 +1810,12 @@ async fn run() -> Result<()> {
                     "sessions",
                 ])
                 .await?,
+                &empty_list(
+                    &client.control_plane,
+                    "Sessions",
+                    Some(&organization),
+                    &format!("workspace show {}", corrective::quoted(&workspace)),
+                ),
             )?;
         }
         Command::Session(SessionCommand::Show { session }) => {
@@ -1713,11 +1889,17 @@ async fn run() -> Result<()> {
         }
         Command::Instance(InstanceCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            collection(
                 &presentation,
                 &view::INSTANCES,
                 &api.get(&["organizations", &organization, "instances"])
                     .await?,
+                &empty_list(
+                    &client.control_plane,
+                    "Instances",
+                    Some(&organization),
+                    "workspace list",
+                ),
             )?;
         }
         Command::Instance(InstanceCommand::Release {
@@ -1866,10 +2048,24 @@ async fn started(
     )
 }
 
-/// The limits and their occupancy said first, so every row below is read against what it
-/// counts against. A script asks `--json` for the fields and gets the rows alone, each one
-/// carrying the limits it arrived with.
-/// A `--json` read asks for the fields themselves and gets them exactly as served.
+fn empty_list(
+    control_plane: &str,
+    absent: &str,
+    organization: Option<&str>,
+    action: &str,
+) -> String {
+    let scope = organization.map_or_else(String::new, |name| {
+        format!(" in Organization {}", corrective::quoted(name))
+    });
+    let flag = organization.map_or_else(String::new, |name| {
+        format!(" --organization {}", corrective::quoted(name))
+    });
+    format!(
+        "No {absent}{scope}.\nInspect the next step with:\n  kestrel{flag} {action} --control-plane {}",
+        corrective::quoted(control_plane)
+    )
+}
+
 fn shown_session(presentation: &Presentation, session: &Value) -> Result<()> {
     let mut record = session.clone();
     if !matches!(presentation, Presentation::Json(_)) {

@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{IsTerminal as _, Write};
 
 use anyhow::{Context as _, Result};
 use reqwest::Response;
@@ -28,14 +28,18 @@ struct Text {
 }
 
 /// One line an entry, marked the way `ls -F` marks directories and symlinks.
-pub fn list(answer: Value, json: bool) -> Result<()> {
+pub fn list(answer: Value, json: bool, empty: &str) -> Result<()> {
     let mut out = std::io::stdout().lock();
     if json {
         writeln!(out, "{answer}")?;
         return Ok(out.flush()?);
     }
     let listing: Listing = serde_json::from_value(answer)?;
-    if !listing.path.is_empty() {
+    let terminal = std::io::stdout().is_terminal();
+    if terminal && listing.entries.is_empty() {
+        writeln!(out, "{empty}")?;
+    }
+    if terminal && !listing.entries.is_empty() && !listing.path.is_empty() {
         writeln!(out, "{}", listing.path)?;
     }
     for entry in &listing.entries {
@@ -49,7 +53,7 @@ pub fn list(answer: Value, json: bool) -> Result<()> {
             None => writeln!(out, "{}{marked}", entry.name)?,
         }
     }
-    if listing.truncated {
+    if terminal && listing.truncated {
         writeln!(
             out,
             "{} of {} entries shown",

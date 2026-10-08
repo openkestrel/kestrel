@@ -42,6 +42,21 @@ impl Presentation {
     }
 }
 
+pub fn collection(
+    presentation: &Presentation,
+    view: &View,
+    answer: &Value,
+    empty: &str,
+) -> Result<()> {
+    if answer.as_array().is_some_and(Vec::is_empty)
+        && matches!(presentation, Presentation::Human(_))
+    {
+        writeln!(std::io::stdout().lock(), "{empty}")?;
+        return Ok(());
+    }
+    show(presentation, view, answer)
+}
+
 pub fn show(presentation: &Presentation, view: &View, answer: &Value) -> Result<()> {
     let records: Vec<&Value> = match answer {
         Value::Null => Vec::new(),
@@ -82,6 +97,9 @@ fn delimited(record: &Value, view: &View) -> String {
 }
 
 fn human(out: &mut impl Write, view: &View, records: &[&Value], width: usize) -> Result<()> {
+    if records.is_empty() {
+        return Ok(());
+    }
     match view {
         View::Value(field) => {
             for record in records {
