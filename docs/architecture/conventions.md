@@ -35,8 +35,9 @@ Patterns the code relies on that no single file states. Comment style is in `AGE
 
 ## Errors
 
-- `anyhow` throughout. Refuse with `declined::Declined` when a boundary should answer something
-  other than 503 ([Operator boundary](operator-and-client.md#errors)).
+- `anyhow` throughout. Refuse with `declined::Reason` when the refusal has a Diagnostic, and with
+  `declined::Declined` when a boundary should answer something other than 503 but nothing types
+  it yet ([Operator boundary](operator-and-client.md#errors)). Never match a refusal's message.
 - Messages are sentences a person reads: say what happened and to what, in `GLOSSARY.md`'s terms.
 
 ## Abstraction

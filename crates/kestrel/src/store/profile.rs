@@ -33,6 +33,8 @@ impl<'a> Profiles<'a> {
         if let Some(found) = self.find(organization, name).await? {
             if found.owner != owner {
                 bail!(Reason::Taken {
+                    operation: "declare_subscription_profile",
+                    state: "owned_by_another",
                     resource: Resource::SubscriptionProfile,
                     reference: name.to_owned(),
                     organization: Some(organization.name.clone()),

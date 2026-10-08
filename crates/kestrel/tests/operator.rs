@@ -3308,10 +3308,12 @@ async fn an_invalid_declaration_field_is_typed_and_offers_a_correction() {
     assert_eq!(refusal["kind"], "invalid_field");
     assert_eq!(refusal["field"], "repositories");
     assert_eq!(refusal["context"]["field"], "repositories");
+    assert_eq!(refusal["context"]["constraint"], "non_empty");
     let next = &refusal["next_steps"][0];
     assert_eq!(next["action"], "correct_field");
     assert_eq!(next["operation"], "declare_project");
     assert_eq!(next["field"], "repositories");
+    assert_eq!(next["constraint"], "non_empty");
 
     let (status, refusal) = declared(
         &kestrel,
@@ -3356,7 +3358,60 @@ async fn a_subscription_profile_that_belongs_to_someone_else_is_a_typed_state_co
     assert_eq!(refusal["kind"], "state_conflict");
     assert_eq!(refusal["context"]["resource"], "subscription_profile");
     assert_eq!(refusal["context"]["reference"], "jack");
+    assert_eq!(
+        refusal["context"]["operation"],
+        "declare_subscription_profile"
+    );
+    assert_eq!(refusal["context"]["state"], "owned_by_another");
     assert_eq!(refusal["next_steps"][0]["action"], "inspect_resource");
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_invalid_declaration_document_names_its_field_and_an_untyped_one_falls_back() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+    let document = |repositories: Value, brief: &str| {
+        json!({
+            "project": { "name": "kestrel", "repositories": repositories, "branch": "main" },
+            "agent": { "name": "builder", "harness": "opencode" },
+            "trigger": {
+                "name": "ready",
+                "filter": { "exact": { "type": "com.github.issues.labeled" } },
+                "brief": brief,
+                "project": "kestrel",
+                "agent": "builder",
+            },
+        })
+    };
+
+    let (status, refusal) = declared(
+        &kestrel,
+        &declaration_preview_of("acme"),
+        &document(json!([]), "Work on {{ event.data.issue.title }}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(refusal["kind"], "invalid_field");
+    assert_eq!(refusal["field"], "project.repositories");
+    assert_eq!(refusal["context"]["constraint"], "non_empty");
+    let next = &refusal["next_steps"][0];
+    assert_eq!(next["action"], "correct_field");
+    assert_eq!(next["operation"], "preview_declaration");
+
+    let (status, refusal) = declared(
+        &kestrel,
+        &declaration_of("acme"),
+        &document(
+            json!(["https://github.com/jtmthf/kestrel"]),
+            "{{ event.data",
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert!(refusal.get("kind").is_none(), "{refusal}");
+    assert!(refusal["message"].is_string(), "{refusal}");
 
     kestrel.teardown().await;
 }

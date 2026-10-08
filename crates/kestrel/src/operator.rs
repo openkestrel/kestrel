@@ -25,7 +25,7 @@ use tracing::warn;
 use crate::agent;
 use crate::cron::Cron;
 use crate::declaration;
-use crate::declined::{Declined, FieldRefusal, Kind, Reason, Resource};
+use crate::declined::{Constraint, Declined, FieldRefusal, Kind, Reason, Resource};
 use crate::domain::{
     self, Agent, Connection, Correlation, Declared, Direction, EventRecordId, EventRefusal, Fires,
     Firing, HeldMessage, Integration, Occurrence, Organization, Project, Schedule, Session,
@@ -1116,6 +1116,7 @@ async fn declare_project(
         return Err(invalid_field(
             "declare_project",
             "repositories",
+            Constraint::NonEmpty,
             "a project names at least one repository",
         ));
     }
@@ -1123,11 +1124,17 @@ async fn declare_project(
         return Err(invalid_field(
             "declare_project",
             "branch",
+            Constraint::NonEmpty,
             "a project names the branch its work happens on",
         ));
     }
     if let Some(clash) = sharing_a_directory(&declaration.repositories) {
-        return Err(invalid_field("declare_project", "repositories", clash));
+        return Err(invalid_field(
+            "declare_project",
+            "repositories",
+            Constraint::DistinctCheckoutDirectories,
+            clash,
+        ));
     }
 
     let mut tx = control_plane.store.begin().await?;
@@ -1184,6 +1191,7 @@ async fn declare_agent(
         return Err(invalid_field(
             "declare_agent",
             "harness",
+            Constraint::NonEmpty,
             "an agent names the harness that drives it",
         ));
     }
@@ -2063,12 +2071,7 @@ fn named_refusal(error: anyhow::Error) -> Refused {
         Err(error) => error,
     };
     let message = error.to_string();
-    if message.starts_with("no organization ")
-        || message.starts_with("no project named ")
-        || message.starts_with("no agent named ")
-        || message.starts_with("no trigger named ")
-        || message.starts_with("no event ")
-    {
+    if message.starts_with("no trigger named ") || message.starts_with("no event ") {
         return Refused::NotFound(message);
     }
 
@@ -2087,12 +2090,7 @@ fn declaration_refusal(error: anyhow::Error) -> Refused {
         Ok(reason) => return diagnosed(reason),
         Err(error) => error,
     };
-    let message = error.to_string();
-    if message.starts_with("no organization ") {
-        return Refused::NotFound(message);
-    }
-
-    Refused::Unprocessable(message)
+    Refused::Unprocessable(error.to_string())
 }
 
 #[derive(Serialize)]
@@ -2837,10 +2835,7 @@ fn workspace_refusal(error: anyhow::Error) -> Refused {
         return error.into();
     }
     let message = error.to_string();
-    if message.starts_with("no workspace ")
-        || message.starts_with("no project named ")
-        || message.starts_with("no agent named ")
-    {
+    if message.starts_with("no workspace ") {
         return Refused::NotFound(message);
     }
     if message.contains("already has the session")
@@ -2879,7 +2874,12 @@ fn cloned_into(repository: &str) -> &str {
 
 fn named(operation: &'static str, name: &str) -> Result<(), Refused> {
     if name.is_empty() {
-        return Err(invalid_field(operation, "name", "a name cannot be empty"));
+        return Err(invalid_field(
+            operation,
+            "name",
+            Constraint::NonEmpty,
+            "a name cannot be empty",
+        ));
     }
     Ok(())
 }
@@ -3160,8 +3160,6 @@ enum Refused {
         field: &'static str,
         why: String,
     },
-    /// A typed Diagnostic (ADR-0052): the wire value a Client reads `message`/`field` out of
-    /// today, and `kind`/`context`/`next_steps` out of once its migration ticket lands.
     Diagnosed {
         status: StatusCode,
         diagnostic: Box<wire::Diagnostic>,
@@ -3189,11 +3187,7 @@ impl Refused {
     }
 }
 
-/// Why the domain resource at `resource` could not be found, leaned on to offer the fixed
-/// declaration input vocabulary when one exists, and to inspect or list it otherwise rather
-/// than invent a repair (ADR-0052, #490/#521). Shared by `missing_reference` and
-/// `ambiguous_reference`: declaring a second record never resolves an ambiguity, so the caller
-/// decides whether this applies.
+/// Never offered for an ambiguous reference: declaring another record cannot resolve one.
 fn declare_or_inspect(
     resource: Resource,
     reference: &str,
@@ -3293,8 +3287,6 @@ fn diagnostic_message(diagnostic: &wire::Diagnostic) -> &str {
     }
 }
 
-/// Maps a domain `Reason` to the HTTP status and wire `Diagnostic` the operator boundary
-/// answers with, so no later code reads the reason's prose to decide either (ADR-0052).
 fn diagnosed(reason: Reason) -> Refused {
     match reason {
         Reason::MissingReference {
@@ -3350,9 +3342,12 @@ fn diagnosed(reason: Reason) -> Refused {
         Reason::InvalidField {
             field,
             operation,
+            constraint,
             message,
-        } => invalid_field(operation, field, message),
+        } => invalid_field(operation, field, constraint, message),
         Reason::Taken {
+            operation,
+            state,
             resource,
             reference,
             organization,
@@ -3362,14 +3357,14 @@ fn diagnosed(reason: Reason) -> Refused {
             diagnostic: Box::new(wire::Diagnostic::StateConflictDiagnostic(
                 wire::StateConflictDiagnostic {
                     kind: serde_json::json!("state_conflict"),
-                    message: message.clone(),
+                    message,
                     field: None,
                     context: wire::StateConflictContext {
-                        operation: "declare".to_owned(),
+                        operation: operation.to_owned(),
                         resource: wire_resource(resource),
                         reference: reference.clone(),
                         organization: organization.clone(),
-                        state: message,
+                        state: state.to_owned(),
                         holding_session: None,
                     },
                     next_steps: vec![wire::Action::InspectResourceAction(
@@ -3386,11 +3381,10 @@ fn diagnosed(reason: Reason) -> Refused {
     }
 }
 
-/// An invalid request field (ADR-0052): 422, naming the field and its constraint rather than
-/// a sentence a Client would have to parse back apart.
 fn invalid_field(
     operation: &'static str,
     field: &'static str,
+    constraint: Constraint,
     message: impl Into<String>,
 ) -> Refused {
     let message = message.into();
@@ -3399,11 +3393,11 @@ fn invalid_field(
         diagnostic: Box::new(wire::Diagnostic::InvalidFieldDiagnostic(
             wire::InvalidFieldDiagnostic {
                 kind: serde_json::json!("invalid_field"),
-                message: message.clone(),
+                message,
                 field: Some(field.to_owned()),
                 context: wire::InvalidFieldContext {
                     field: field.to_owned(),
-                    constraint: message.clone(),
+                    constraint: constraint.as_str().to_owned(),
                     allowed_values: None,
                 },
                 next_steps: vec![wire::Action::CorrectFieldAction(wire::CorrectFieldAction {
@@ -3411,7 +3405,7 @@ fn invalid_field(
                     operation: operation.to_owned(),
                     resource: None,
                     field: field.to_owned(),
-                    constraint: message,
+                    constraint: constraint.as_str().to_owned(),
                     allowed_values: None,
                 })],
             },

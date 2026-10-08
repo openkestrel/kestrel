@@ -6265,6 +6265,134 @@ impl AsRef<str> for EndBecause {
         self.as_str()
     }
 }
+///A typed Diagnostic, or the plain Refusal a refusal falls back to until its producer is typed. Only `kind` tells them apart.
+#[derive(Debug, Clone)]
+pub enum DiagnosedRefusal {
+    Diagnostic(Diagnostic),
+    Refusal(Refusal),
+}
+impl Serialize for DiagnosedRefusal {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Diagnostic(value) => serde::Serialize::serialize(value, serializer),
+            Self::Refusal(value) => serde::Serialize::serialize(value, serializer),
+        }
+    }
+}
+impl<'de> Deserialize<'de> for DiagnosedRefusal {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        fn exact_json_integer(number: &serde_json::Number) -> Option<i128> {
+            number
+                .as_i64()
+                .map(i128::from)
+                .or_else(|| number.as_u64().map(i128::from))
+        }
+        fn json_numbers_have_same_value(
+            encoded: &serde_json::Number,
+            input: &serde_json::Number,
+        ) -> bool {
+            match (exact_json_integer(encoded), exact_json_integer(input)) {
+                (Some(encoded), Some(input)) => encoded == input,
+                (Some(encoded), None) => input.as_f64().is_some_and(|input| {
+                    input.is_finite() && input.fract() == 0.0 && input as i128 == encoded
+                }),
+                (None, Some(input)) => encoded.as_f64().is_some_and(|encoded| {
+                    encoded.is_finite() && encoded.fract() == 0.0 && encoded as i128 == input
+                }),
+                (None, None) => encoded.as_f64() == input.as_f64(),
+            }
+        }
+        /// `nulls_may_be_absent` also accepts an input `null` that the
+        /// branch omits, as a skipped `None` does. Extra encoded
+        /// keys are allowed only by the pre-existing anyOf match.
+        fn preserves_complete_json_input(
+            encoded: &serde_json::Value,
+            input: &serde_json::Value,
+            nulls_may_be_absent: bool,
+            encoded_keys_may_be_extra: bool,
+        ) -> bool {
+            match (encoded, input) {
+                (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
+                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                        && input.iter().all(|(key, value)| match encoded.get(key) {
+                            Some(encoded_value) => preserves_complete_json_input(
+                                encoded_value,
+                                value,
+                                nulls_may_be_absent,
+                                encoded_keys_may_be_extra,
+                            ),
+                            None => nulls_may_be_absent && value.is_null(),
+                        })
+                }
+                (serde_json::Value::Array(encoded), serde_json::Value::Array(input)) => {
+                    encoded.len() == input.len()
+                        && encoded.iter().zip(input).all(|(encoded, input)| {
+                            preserves_complete_json_input(
+                                encoded,
+                                input,
+                                nulls_may_be_absent,
+                                encoded_keys_may_be_extra,
+                            )
+                        })
+                }
+                (serde_json::Value::Number(encoded), serde_json::Value::Number(input)) => {
+                    json_numbers_have_same_value(encoded, input)
+                }
+                _ => encoded == input,
+            }
+        }
+        let input = <serde_json::Value as Deserialize>::deserialize(deserializer)?;
+        let mut equivalent = None;
+        if let Ok(candidate) = serde_json::from_value::<Diagnostic>(input.clone()) {
+            match serde_json::to_value(&candidate) {
+                Ok(encoded) if preserves_complete_json_input(&encoded, &input, false, true) => {
+                    return Ok(Self::Diagnostic(candidate));
+                }
+                Ok(encoded)
+                    if equivalent.is_none()
+                        && preserves_complete_json_input(&encoded, &input, true, false) =>
+                {
+                    equivalent = Some(Self::Diagnostic(candidate));
+                }
+                _ => {}
+            }
+        }
+        if let Ok(candidate) = serde_json::from_value::<Refusal>(input.clone()) {
+            match serde_json::to_value(&candidate) {
+                Ok(encoded) if preserves_complete_json_input(&encoded, &input, false, true) => {
+                    return Ok(Self::Refusal(candidate));
+                }
+                Ok(encoded)
+                    if equivalent.is_none()
+                        && preserves_complete_json_input(&encoded, &input, true, false) =>
+                {
+                    equivalent = Some(Self::Refusal(candidate));
+                }
+                _ => {}
+            }
+        }
+        equivalent.ok_or_else(|| {
+            serde::de::Error::custom(concat!(
+                "no anyOf branch for ",
+                stringify!(DiagnosedRefusal),
+                " preserved the complete input",
+            ))
+        })
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Refusal {
+    ///The request field the message concerns, when the refusal is about one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    pub message: String,
+}
 ///Why kestrel would not do what it was asked, and the ordered, typed next steps that repair, inspect or retry it (ADR-0052). `message` is display only; a Client never classifies it.
 #[derive(Debug, Clone)]
 pub enum Diagnostic {
@@ -9656,13 +9784,6 @@ impl OrganizationDeclarationBuilder {
 pub struct ProviderCredentialSecret {
     ///Constraint: minLength=1
     pub secret: String,
-}
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Refusal {
-    ///The request field the message concerns, when the refusal is about one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub field: Option<String>,
-    pub message: String,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ReleasedInstance {
