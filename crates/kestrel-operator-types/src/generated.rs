@@ -290,17 +290,6 @@ impl<'de> serde::Deserialize<'de> for WorkspaceWork {
     }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct WorkNotAnswering {
-    pub message: String,
-    pub state: serde_json::Value,
-}
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct WorkNoInstance {
-    pub branch: String,
-    pub pull_request: Option<String>,
-    pub state: serde_json::Value,
-}
-#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WorkspaceStashes {
     pub repositories: Vec<RepositoryText>,
 }
@@ -319,9 +308,206 @@ pub struct WorkspaceChanges {
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WorkReported {
+    pub last_report: WorkLastReport,
     pub reported_at: String,
     pub repositories: Vec<WorkRepository>,
     pub state: serde_json::Value,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WorkNotAnswering {
+    pub last_report: WorkLastReport,
+    pub message: String,
+    pub state: serde_json::Value,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WorkNoInstance {
+    pub branch: String,
+    pub last_report: WorkLastReport,
+    pub pull_request: Option<String>,
+    pub state: serde_json::Value,
+}
+///The last complete work report any of the Workspace's Instances sent, kept across link loss, release and restart. It is history: it is no evidence of current Unpublished Work, authorizes no seal or release, and makes no Files or Changes read live.
+#[derive(Debug, Clone)]
+pub enum WorkLastReport {
+    WorkNoReport(WorkNoReport),
+    WorkInstanceReport(WorkInstanceReport),
+}
+impl serde::Serialize for WorkLastReport {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::WorkNoReport(payload) => {
+                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::ser::Error::custom(concat!(
+                        "discriminated union variant `",
+                        stringify!(WorkNoReport),
+                        "` did not serialize as an object",
+                    ))
+                })?;
+                match object.get("report") {
+                    Some(serde_json::Value::String(tag)) if matches!(tag.as_str(), "none") => {}
+                    Some(serde_json::Value::String(tag)) => {
+                        return Err(serde::ser::Error::custom(format!(
+                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
+                            "report",
+                            stringify!(WorkNoReport),
+                        )));
+                    }
+                    Some(_) => {
+                        return Err(serde::ser::Error::custom(concat!(
+                            "discriminator `",
+                            "report",
+                            "` did not serialize as a string",
+                        )));
+                    }
+                    None => {
+                        object.insert(
+                            "report".to_string(),
+                            serde_json::Value::String("none".to_string()),
+                        );
+                    }
+                }
+                value.serialize(serializer)
+            }
+            Self::WorkInstanceReport(payload) => {
+                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::ser::Error::custom(concat!(
+                        "discriminated union variant `",
+                        stringify!(WorkInstanceReport),
+                        "` did not serialize as an object",
+                    ))
+                })?;
+                match object.get("report") {
+                    Some(serde_json::Value::String(tag)) if matches!(tag.as_str(), "received") => {}
+                    Some(serde_json::Value::String(tag)) => {
+                        return Err(serde::ser::Error::custom(format!(
+                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
+                            "report",
+                            stringify!(WorkInstanceReport),
+                        )));
+                    }
+                    Some(_) => {
+                        return Err(serde::ser::Error::custom(concat!(
+                            "discriminator `",
+                            "report",
+                            "` did not serialize as a string",
+                        )));
+                    }
+                    None => {
+                        object.insert(
+                            "report".to_string(),
+                            serde_json::Value::String("received".to_string()),
+                        );
+                    }
+                }
+                value.serialize(serializer)
+            }
+        }
+    }
+}
+impl<'de> serde::Deserialize<'de> for WorkLastReport {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let discriminator = match value.get("report") {
+            Some(serde_json::Value::String(discriminator)) => Some(discriminator.as_str()),
+            Some(_) => {
+                return Err(serde::de::Error::custom(concat!(
+                    "non-string discriminator `",
+                    "report",
+                    "`",
+                )));
+            }
+            None => None,
+        };
+        match discriminator {
+            Some(discriminator) => match discriminator {
+                "none" => {
+                    let primary_error = match serde_json::from_value::<WorkNoReport>(value.clone())
+                    {
+                        Ok(payload) => return Ok(Self::WorkNoReport(payload)),
+                        Err(error) => error,
+                    };
+                    let mut structural_match: Option<(Self, &'static str)> = None;
+                    if let Ok(payload) = serde_json::from_value::<WorkInstanceReport>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "report",
+                                "none",
+                                first_name,
+                                stringify!(WorkInstanceReport),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::WorkInstanceReport(payload),
+                            stringify!(WorkInstanceReport),
+                        ));
+                    }
+                    match structural_match {
+                        Some((payload, _)) => Ok(payload),
+                        None => Err(serde::de::Error::custom(primary_error)),
+                    }
+                }
+                "received" => {
+                    let primary_error =
+                        match serde_json::from_value::<WorkInstanceReport>(value.clone()) {
+                            Ok(payload) => return Ok(Self::WorkInstanceReport(payload)),
+                            Err(error) => error,
+                        };
+                    let mut structural_match: Option<(Self, &'static str)> = None;
+                    if let Ok(payload) = serde_json::from_value::<WorkNoReport>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "report",
+                                "received",
+                                first_name,
+                                stringify!(WorkNoReport),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::WorkNoReport(payload), stringify!(WorkNoReport)));
+                    }
+                    match structural_match {
+                        Some((payload, _)) => Ok(payload),
+                        None => Err(serde::de::Error::custom(primary_error)),
+                    }
+                }
+                other => Err(serde::de::Error::custom(format!(
+                    "unknown discriminator value `{other}` for `{}`",
+                    "report",
+                ))),
+            },
+            None => Err(serde::de::Error::custom(concat!(
+                "missing string discriminator `",
+                "report",
+                "`",
+            ))),
+        }
+    }
+}
+///No Instance of the Workspace has sent a work report.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WorkNoReport {
+    pub report: serde_json::Value,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WorkInstanceReport {
+    ///Whether the Workspace still holds that Instance. When false the report belongs to an Instance it released or replaced, never to its current one.
+    pub current_instance: bool,
+    ///The Instance that sent the report.
+    pub instance: String,
+    pub report: serde_json::Value,
+    pub reported_at: String,
+    pub repositories: Vec<WorkRepository>,
 }
 #[derive(Debug, Clone)]
 pub enum WorkRepository {

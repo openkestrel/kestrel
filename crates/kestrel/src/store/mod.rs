@@ -611,6 +611,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_work_report_raises_a_notice_once_written_and_a_repeat_raises_none() {
+        let data_dir = TempDir::new().unwrap();
+        let store = Store::open(data_dir.path()).await.unwrap();
+        let (organization, workspace, mut changes) = opened_with_notices(&store).await;
+        let reporter = workspace::Linked {
+            instance: "local-exec/one".to_owned(),
+            workspace: workspace.id,
+            organization: organization.id,
+        };
+        let summary = || crate::live_work::Summary {
+            repositories: vec![crate::live_work::Repository {
+                repository: "kestrel".to_owned(),
+                git: crate::live_work::Git::Unreadable {
+                    because: "no such directory".to_owned(),
+                },
+            }],
+            reported_at: Timestamp::now(),
+        };
+
+        let mut tx = store.begin().await.unwrap();
+        tx.workspaces()
+            .record_work_report(&reporter, &summary())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let noticed = tokio::time::timeout(std::time::Duration::from_secs(1), changes.recv()).await;
+        assert!(matches!(noticed, Ok(Some(Watch::Change(_)))));
+
+        let repeated = summary();
+        let mut tx = store.begin().await.unwrap();
+        tx.workspaces()
+            .record_work_report(&reporter, &repeated)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let waited =
+            tokio::time::timeout(std::time::Duration::from_millis(400), changes.recv()).await;
+        assert!(waited.is_err(), "a repeated work report raised a notice");
+
+        let last = store
+            .read()
+            .await
+            .unwrap()
+            .workspaces()
+            .last_work_report(workspace.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(last.instance, reporter.instance);
+        assert_eq!(last.summary.repositories, repeated.repositories);
+        assert_eq!(last.summary.reported_at, repeated.reported_at);
+    }
+
+    #[tokio::test]
     async fn a_write_that_never_commits_raises_no_notice() {
         let data_dir = TempDir::new().unwrap();
         let store = Store::open(data_dir.path()).await.unwrap();

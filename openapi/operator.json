@@ -1476,8 +1476,8 @@
     "/operator/organizations/{organization}/workspaces/{workspace}/work": {
       "get": {
         "operationId": "workspaceWork",
-        "summary": "Read the live work summary of a Workspace.",
-        "description": "Returns the latest supervisor report and its arrival time, per repository. Held only in serve memory, lost on restart; never writes to the Store, Transcript or Event log. A supervisor off the link is not answering; durable checkout observations are never presented as live state.",
+        "summary": "Read the live and last reported work of a Workspace.",
+        "description": "Returns the latest supervisor report and its arrival time, per repository, while the supervisor is on the link; otherwise why it is unavailable. Alongside either, `last_report` is the last complete report kept durably with the Instance that sent it. The read writes nothing to the Store, Transcript or Event log, and neither the durable checkout observation nor `last_report` is presented as live state.",
         "parameters": [
           {
             "name": "organization",
@@ -2734,12 +2734,16 @@
           "reported_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "last_report": {
+            "$ref": "#/components/schemas/WorkLastReport"
           }
         },
         "required": [
           "state",
           "repositories",
-          "reported_at"
+          "reported_at",
+          "last_report"
         ]
       },
       "WorkNoInstance": {
@@ -2756,12 +2760,16 @@
               "string",
               "null"
             ]
+          },
+          "last_report": {
+            "$ref": "#/components/schemas/WorkLastReport"
           }
         },
         "required": [
           "state",
           "branch",
-          "pull_request"
+          "pull_request",
+          "last_report"
         ]
       },
       "WorkNotAnswering": {
@@ -2772,11 +2780,78 @@
           },
           "message": {
             "type": "string"
+          },
+          "last_report": {
+            "$ref": "#/components/schemas/WorkLastReport"
           }
         },
         "required": [
           "state",
-          "message"
+          "message",
+          "last_report"
+        ]
+      },
+      "WorkLastReport": {
+        "description": "The last complete work report any of the Workspace's Instances sent, kept across link loss, release and restart. It is history: it is no evidence of current Unpublished Work, authorizes no seal or release, and makes no Files or Changes read live.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/WorkNoReport"
+          },
+          {
+            "$ref": "#/components/schemas/WorkInstanceReport"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "report",
+          "mapping": {
+            "none": "#/components/schemas/WorkNoReport",
+            "received": "#/components/schemas/WorkInstanceReport"
+          }
+        }
+      },
+      "WorkNoReport": {
+        "description": "No Instance of the Workspace has sent a work report.",
+        "type": "object",
+        "properties": {
+          "report": {
+            "const": "none"
+          }
+        },
+        "required": [
+          "report"
+        ]
+      },
+      "WorkInstanceReport": {
+        "type": "object",
+        "properties": {
+          "report": {
+            "const": "received"
+          },
+          "instance": {
+            "type": "string",
+            "description": "The Instance that sent the report."
+          },
+          "current_instance": {
+            "type": "boolean",
+            "description": "Whether the Workspace still holds that Instance. When false the report belongs to an Instance it released or replaced, never to its current one."
+          },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkRepository"
+            }
+          },
+          "reported_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "report",
+          "instance",
+          "current_instance",
+          "repositories",
+          "reported_at"
         ]
       },
       "FileListing": {
