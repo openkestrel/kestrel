@@ -9,7 +9,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use support::client::{self, Finished, Invocation};
 use support::github_stub::{self, GithubStub};
 use support::scripted_agent::Script;
@@ -1780,4 +1780,190 @@ fn transcript_kinds_select_the_entries_the_client_streams() {
         all.windows(2)
             .all(|pair| pair[0]["seq"].as_i64() < pair[1]["seq"].as_i64())
     );
+}
+
+#[test]
+fn empty_cli_lists_guide_a_terminal_and_leave_pipes_empty() {
+    let kestrel = Kestrel::new();
+    let booted = kestrel.boot();
+    let args = ["organization", "list"];
+    let shown = client::ran_on_a_terminal(&booted.operator, &args, 120, "");
+    assert!(shown.status.success(), "{}", shown.said);
+    assert!(shown.said.contains("No Organizations."), "{}", shown.said);
+    assert!(
+        shown.said.contains("kestrel organization declare --help"),
+        "{}",
+        shown.said
+    );
+    assert!(booted.client(&args).out.is_empty());
+    let json = client::ran_on_a_terminal(
+        &booted.operator,
+        &["organization", "list", "--json", "name"],
+        120,
+        "",
+    );
+    assert!(json.status.success(), "{}", json.said);
+    assert!(!json.said.contains("No Organizations"), "{}", json.said);
+    booted.run(&["organization", "declare", "acme"]);
+    for (command, absent, action) in [
+        ("project", "Projects", "project declare --help"),
+        ("agent", "Agents", "agent declare --help"),
+        (
+            "credential",
+            "Provider Credentials",
+            "credential set --help",
+        ),
+        ("profile", "Subscription Profiles", "profile declare --help"),
+        (
+            "integration",
+            "Integrations",
+            "integration register github --help",
+        ),
+        ("event", "Events", "integration list"),
+        ("trigger", "Triggers", "trigger declare --help"),
+        ("workspace", "Workspaces", "workspace open --help"),
+        ("instance", "Instances", "workspace list"),
+    ] {
+        let args = ["--organization", "acme", command, "list"];
+        let shown = client::ran_on_a_terminal(&booted.operator, &args, 120, "");
+        assert!(shown.status.success(), "{}", shown.said);
+        assert!(
+            shown
+                .said
+                .contains(&format!("No {absent} in Organization acme.")),
+            "{}",
+            shown.said
+        );
+        assert!(
+            shown
+                .said
+                .contains(&format!("kestrel --organization acme {action}")),
+            "{}",
+            shown.said
+        );
+        let piped = booted.client(&args);
+        assert!(piped.status.success(), "{}", piped.err);
+        assert!(piped.out.is_empty(), "{:?}", piped.out);
+        assert!(piped.err.is_empty(), "{}", piped.err);
+        assert!(!shown.said.contains("Compose"));
+        assert!(!shown.said.contains("Participant"));
+    }
+}
+
+#[test]
+fn work_inspection_help_explains_comparisons_scopes_and_paths() {
+    for (command, description) in [
+        ("work", "reported snapshot"),
+        ("changes", "Before the first push"),
+        ("commits", "no remote-tracking branch reaches"),
+        ("stashes", "without diffing them"),
+    ] {
+        let finished = client::ran("http://127.0.0.1:1", &["workspace", command, "--help"]);
+        assert!(finished.status.success(), "{}", finished.err);
+        let shown = finished.out.join("\n");
+        for required in [
+            description,
+            "checkout base",
+            "work branch",
+            "<repo>/<path>",
+            "kestrel workspace",
+            "latest",
+        ] {
+            assert!(
+                shown.contains(required),
+                "{command} help lacks {required}: {shown}"
+            );
+        }
+        assert!(!shown.contains('\u{1b}'), "{shown}");
+    }
+}
+
+#[test]
+fn empty_cli_inspection_lists_leave_pipes_empty_and_json_unmodified() {
+    let server = tiny_http::Server::http("127.0.0.1:0").expect("a stub operator");
+    let operator = format!("http://{}", server.server_addr());
+    let serving = std::thread::spawn(move || {
+        for index in 0..19 {
+            let request = server.recv().expect("an inspection request");
+            let answer = if request.url().contains("/work") && index >= 17 {
+                json!({"state":"reported", "reported_at":"2026-10-07T12:00:00Z", "repositories":[{"repository":"repo", "git":"unreadable", "because":"checkout unavailable"}]})
+            } else if index >= 15 {
+                json!({"repositories":[{"repository":"repo", "text":"abcd1234 a local commit\n"}]})
+            } else if request.url().contains("/sessions") {
+                json!([])
+            } else if request.url().contains("/files") {
+                json!({"path":"repo/empty", "entries":[], "total":0, "truncated":false})
+            } else if request.url().contains("/changes") {
+                json!({"repositories":[{"repository":"repo", "diff":"", "stats":[], "truncated":false}]})
+            } else {
+                json!({"repositories":[{"repository":"repo", "text":""}]})
+            };
+            request
+                .respond(tiny_http::Response::from_string(answer.to_string()))
+                .expect("an operator answer");
+        }
+    });
+    for (args, absent) in [
+        (
+            vec!["workspace", "changes", "latest"],
+            "changes in this comparison",
+        ),
+        (vec!["workspace", "commits", "latest"], "commits"),
+        (vec!["workspace", "stashes", "latest"], "stashes"),
+        (
+            vec!["workspace", "files", "latest", "repo/empty"],
+            "directory entries",
+        ),
+        (vec!["session", "list", "--workspace", "latest"], "Sessions"),
+    ] {
+        let mut args = args;
+        args.extend(["--organization", "selected"]);
+        let shown = client::ran_on_a_terminal(&operator, &args, 160, "");
+        assert!(shown.status.success(), "{}", shown.said);
+        assert!(
+            shown
+                .said
+                .contains(&format!("No {absent} in Organization selected.")),
+            "{}",
+            shown.said
+        );
+        assert!(shown.said.contains("latest"), "{}", shown.said);
+        assert!(shown.said.contains(&operator), "{}", shown.said);
+        let piped = client::ran(&operator, &args);
+        assert!(piped.status.success(), "{}", piped.err);
+        assert!(piped.out.is_empty(), "{:?}", piped.out);
+        assert!(piped.err.is_empty(), "{}", piped.err);
+        args.extend(["--json", "name"]);
+        let json = client::ran(&operator, &args);
+        assert!(json.status.success(), "{}", json.err);
+        assert!(!json.out.join("\n").contains("No "));
+        if args[0] == "workspace" {
+            assert_eq!(json.records().len(), 1);
+        }
+    }
+    let args = [
+        "workspace",
+        "commits",
+        "latest",
+        "--organization",
+        "selected",
+    ];
+    let shown = client::ran_on_a_terminal(&operator, &args, 160, "");
+    assert!(shown.status.success(), "{}", shown.said);
+    assert!(shown.said.contains("repo:"), "{}", shown.said);
+    let piped = client::ran(&operator, &args);
+    assert!(piped.status.success(), "{}", piped.err);
+    assert_eq!(piped.out, ["abcd1234 a local commit"]);
+    let args = ["workspace", "work", "latest", "--organization", "selected"];
+    let shown = client::ran_on_a_terminal(&operator, &args, 160, "");
+    assert!(shown.status.success(), "{}", shown.said);
+    assert!(
+        shown.said.contains("Reported by the supervisor"),
+        "{}",
+        shown.said
+    );
+    let piped = client::ran(&operator, &args);
+    assert!(piped.status.success(), "{}", piped.err);
+    assert_eq!(piped.out, ["  checkout unavailable"]);
+    serving.join().expect("the stub served every read");
 }

@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{IsTerminal as _, Write};
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -20,17 +20,29 @@ struct Repository {
     truncated: bool,
 }
 
-pub fn show(answer: Value, json: bool) -> Result<()> {
+pub fn show(answer: Value, json: bool, empty: &str) -> Result<()> {
     let mut out = std::io::stdout().lock();
     if json {
         writeln!(out, "{answer}")?;
         return Ok(());
     }
     let answer: Repositories = serde_json::from_value(answer)?;
+    let terminal = std::io::stdout().is_terminal();
+    if terminal
+        && answer
+            .repositories
+            .iter()
+            .all(|repository| repository.diff.is_empty() && repository.text.is_empty())
+    {
+        writeln!(out, "{empty}")?;
+        return Ok(());
+    }
     for repository in answer.repositories {
-        writeln!(out, "{}:", repository.repository)?;
+        if terminal && (!repository.diff.is_empty() || !repository.text.is_empty()) {
+            writeln!(out, "{}:", repository.repository)?;
+        }
         write!(out, "{}{}", repository.diff, repository.text)?;
-        if repository.truncated {
+        if terminal && repository.truncated {
             writeln!(
                 out,
                 "\n[diff truncated at 2 MiB; per-file stats are complete]"
