@@ -9,7 +9,8 @@ routes.
 ## The boundary
 
 - Served on its own listener (`KESTREL_OPERATOR_LISTEN`, default loopback 7718) and authenticates
-  nobody. Operator identity is `0.5` work; until then, reaching the port is authority.
+  nobody. Reaching the port is authority; the install's Operator record is a name and stable ID,
+  not an authenticated identity.
 - Every route refuses a `Host` that is not loopback and, when the request carries one, an `Origin`
   that is not exactly `http://` and that `Host`; a cross-origin preflight is granted nothing. The
   guard is `operator::addressed_here`, pinned by `crates/kestrel/tests/suite/forgery.rs`. These
@@ -21,6 +22,18 @@ routes.
   `operator::router`.
 - Handlers are thin: parse, call the domain module (`workspace`, `work`, `trigger`, `integration`,
   `start`, `declaration`…), and map the result.
+
+### The Operator
+
+`GET /operator/operator` reads the install's Operator, or answers 404 with a `setup_gap` and
+`name_operator` action. `PUT /operator/operator {name}` creates or renames that record without
+changing its ID. First creation declares an Organization with that name only when none exists,
+in the same transaction; naming does not complete initial setup.
+
+Profile declaration defaults an omitted `owner` to the current Operator, or refuses 409 with the
+same setup gap. Reads expose `owner_operator` beside `owner`; Operator-owned Profiles show the
+current Operator label and keep their identity and material on rename. An explicit free-text
+owner stays generic even when its text matches the Operator's label.
 
 ### Harness catalogue
 

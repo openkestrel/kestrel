@@ -6,7 +6,7 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
 use crate::declined::{Next, Reason, Resource};
-use crate::domain::{Organization, SubscriptionProfile, SubscriptionProfileId};
+use crate::domain::{OperatorId, Organization, SubscriptionProfile, SubscriptionProfileId};
 use crate::keyring::Keyring;
 use crate::profile::{Contents, Entry, Held, Kind};
 use crate::store::Declared;
@@ -29,9 +29,12 @@ impl<'a> Profiles<'a> {
         organization: &Organization,
         name: &str,
         owner: &str,
+        owner_operator: Option<OperatorId>,
     ) -> Result<Declared<SubscriptionProfile>> {
         if let Some(found) = self.find(organization, name).await? {
-            if found.owner != owner {
+            if found.owner_operator != owner_operator
+                || (owner_operator.is_none() && found.owner != owner)
+            {
                 bail!(Reason::StateConflict {
                     operation: "declare_subscription_profile",
                     state: "owned_by_another",
@@ -58,15 +61,17 @@ impl<'a> Profiles<'a> {
             organization: organization.id,
             name: name.to_owned(),
             owner: owner.to_owned(),
+            owner_operator,
         };
         sqlx::query(
-            "INSERT INTO subscription_profile (id, organization_id, name, owner, declared_at)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO subscription_profile (id, organization_id, name, owner, owner_operator, declared_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(profile.id.to_string())
         .bind(profile.organization.to_string())
         .bind(&profile.name)
         .bind(&profile.owner)
+        .bind(profile.owner_operator.map(|id| id.to_string()))
         .bind(Timestamp::now().to_string())
         .execute(&mut *self.connection)
         .await
@@ -104,7 +109,9 @@ impl<'a> Profiles<'a> {
         name: &str,
     ) -> Result<Option<SubscriptionProfile>> {
         sqlx::query(
-            "SELECT id, organization_id, name, owner
+            "SELECT id, organization_id, name,
+                    COALESCE((SELECT name FROM operator WHERE id = owner_operator), owner) AS owner,
+                    owner_operator
              FROM subscription_profile
              WHERE organization_id = ? AND name = ?",
         )
@@ -119,7 +126,9 @@ impl<'a> Profiles<'a> {
 
     pub async fn all(&mut self, organization: &Organization) -> Result<Vec<SubscriptionProfile>> {
         sqlx::query(
-            "SELECT id, organization_id, name, owner
+            "SELECT id, organization_id, name,
+                    COALESCE((SELECT name FROM operator WHERE id = owner_operator), owner) AS owner,
+                    owner_operator
              FROM subscription_profile
              WHERE organization_id = ?
              ORDER BY name",
@@ -275,7 +284,9 @@ pub(crate) async fn with_id(
     id: SubscriptionProfileId,
 ) -> Result<SubscriptionProfile> {
     let row = sqlx::query(
-        "SELECT id, organization_id, name, owner
+        "SELECT id, organization_id, name,
+                    COALESCE((SELECT name FROM operator WHERE id = owner_operator), owner) AS owner,
+                    owner_operator
          FROM subscription_profile
          WHERE id = ?",
     )
@@ -303,5 +314,9 @@ fn profile(row: &SqliteRow) -> Result<SubscriptionProfile> {
         organization: row.get::<String, _>("organization_id").parse()?,
         name: row.get("name"),
         owner: row.get("owner"),
+        owner_operator: row
+            .get::<Option<String>, _>("owner_operator")
+            .map(|id| id.parse())
+            .transpose()?,
     })
 }

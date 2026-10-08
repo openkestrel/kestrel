@@ -164,6 +164,9 @@ impl Next {
 /// `message` is display only; the boundary maps the other fields without reading it (ADR-0052).
 #[derive(Debug)]
 pub enum Reason {
+    MissingOperator {
+        operation: &'static str,
+    },
     MissingReference {
         resource: Resource,
         reference: String,
@@ -233,6 +236,7 @@ impl Reason {
 impl fmt::Display for Reason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
+            Reason::MissingOperator { .. } => "name the Operator before using their Profile",
             Reason::MissingReference { message, .. }
             | Reason::AmbiguousReference { message, .. }
             | Reason::InvalidField { message, .. }

@@ -1226,7 +1226,7 @@ impl Kestrel {
         name: &str,
         owner: &str,
     ) -> anyhow::Result<SubscriptionProfile> {
-        profile::declare(&self.store, organization, name, owner)
+        profile::declare(&self.store, organization, name, Some(owner))
             .await
             .map(|declared| declared.record)
     }

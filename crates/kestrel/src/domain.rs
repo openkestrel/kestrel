@@ -40,6 +40,7 @@ macro_rules! identifiers {
 }
 
 identifiers!(
+    OperatorId,
     OrganizationId,
     ProjectId,
     AgentId,
@@ -50,6 +51,12 @@ identifiers!(
     TriggerId,
     SubscriptionProfileId,
 );
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Operator {
+    pub id: OperatorId,
+    pub name: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct Organization {
@@ -117,6 +124,7 @@ pub struct SubscriptionProfile {
     pub organization: OrganizationId,
     pub name: String,
     pub owner: String,
+    pub owner_operator: Option<OperatorId>,
 }
 
 /// Which way an Integration carries: events inbound, kestrel's requests outbound, or both.

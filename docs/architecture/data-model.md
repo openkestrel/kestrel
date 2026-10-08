@@ -6,7 +6,7 @@ tables gain columns in later files.
 
 ## Relationships
 
-`organization_id` is on every table and omitted from the diagram.
+`organization_id` scopes owned records and is omitted from the diagram. The Operator is install-wide.
 
 ```mermaid
 erDiagram
@@ -54,11 +54,12 @@ erDiagram
 
 | Table | Holds | Notes |
 | --- | --- | --- |
+| `operator` | The install's person | One stable ID and a renameable label; naming authenticates nobody. |
 | `organization` | The boundary | `max_live_instances` caps Instances across its Workspaces. |
 | `project`, `project_repository` | Repositories and default branch | Ordered by `position`; the first is where ACP sessions are rooted. |
 | `agent` | Harness and optional model | A null `model` means the harness default. |
 | `provider_credential` | Organization secrets by variable name | `sealed` is encrypted with `kestrel.key`. |
-| `subscription_profile`, `…_entry` | A person's harness login | Entries are `variable` or `file`, sealed. |
+| `subscription_profile`, `…_entry` | A person's harness login | `owner_operator` fixes Operator ownership separately from free-text ownership. Entries are `variable` or `file`, sealed to the Profile ID. |
 | `integration` | GitHub or generic webhook | `CHECK`s tie columns to `kind`. GitHub's `signing_secret` and its App private key (`private_key_sealed`) are both sealed; a webhook keeps `shared_secret_digest`. The poll cursor (`deliveries_read_from`, GitHub's clock), `last_polled_at` (kestrel's), `repository_id` and the last refusal live here; a refusal with no `last_event_refusal_id` is Deliveries lost to GitHub's retention. |
 | `event` | Every recorded CloudEvent | `integration_id` null for minted Events. |
 | `trigger`, `trigger_agent` | The rule and its allowed Agents | Exactly one of `filter`, `every_ms`, `cron`. `due_at` is set only for schedules. |

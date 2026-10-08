@@ -2,6 +2,7 @@ pub mod agent;
 pub mod app_flow;
 pub mod integration;
 pub mod lease_sweep;
+pub mod operator;
 pub mod organization;
 pub mod profile;
 pub mod project;
@@ -304,6 +305,10 @@ pub struct Tx<'a> {
 impl Tx<'_> {
     pub fn log(&mut self) -> Log<'_> {
         Log::over(&mut self.transaction)
+    }
+
+    pub fn operators(&mut self) -> operator::Operators<'_> {
+        operator::Operators::over(&mut self.transaction)
     }
 
     pub fn organizations(&mut self) -> Organizations<'_> {
