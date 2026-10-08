@@ -1606,10 +1606,8 @@ impl<'a> Workspaces<'a> {
         Ok(before.as_deref() != Some(repositories.as_str()))
     }
 
-    pub async fn last_work_report(
-        &mut self,
-        workspace: WorkspaceId,
-    ) -> Result<Option<InstanceReport>> {
+    /// Newest first.
+    pub async fn work_reports(&mut self, workspace: WorkspaceId) -> Result<Vec<InstanceReport>> {
         let rows = sqlx::query(
             "SELECT instance, repositories, reported_at FROM instance_work_report
              WHERE workspace_id = ?",
@@ -1619,25 +1617,22 @@ impl<'a> Workspaces<'a> {
         .await
         .with_context(|| format!("reading the workspace {workspace}'s work reports"))?;
 
+        let mut reports = rows
+            .iter()
+            .map(|row| {
+                Ok(InstanceReport {
+                    instance: row.get("instance"),
+                    summary: Summary {
+                        repositories: serde_json::from_str(row.get("repositories"))?,
+                        reported_at: row.get::<String, _>("reported_at").parse()?,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         // Stored timestamps vary in their fractional digits, so they order only once parsed.
-        let mut last: Option<InstanceReport> = None;
-        for row in rows {
-            let report = InstanceReport {
-                instance: row.get("instance"),
-                summary: Summary {
-                    repositories: serde_json::from_str(row.get("repositories"))?,
-                    reported_at: row.get::<String, _>("reported_at").parse()?,
-                },
-            };
-            if last
-                .as_ref()
-                .is_none_or(|last| last.summary.reported_at < report.summary.reported_at)
-            {
-                last = Some(report);
-            }
-        }
+        reports.sort_by_key(|report| std::cmp::Reverse(report.summary.reported_at));
 
-        Ok(last)
+        Ok(reports)
     }
 
     pub async fn kept_instance(&mut self, workspace: WorkspaceId) -> Result<Option<Kept>> {

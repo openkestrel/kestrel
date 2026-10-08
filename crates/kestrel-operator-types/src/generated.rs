@@ -308,6 +308,8 @@ pub struct WorkspaceChanges {
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WorkReported {
+    ///The last report of each other Instance the Workspace has had, newest first. Every one is history for its own Instance.
+    pub earlier_reports: Vec<WorkInstanceReport>,
     pub last_report: WorkLastReport,
     pub reported_at: String,
     pub repositories: Vec<WorkRepository>,
@@ -315,6 +317,8 @@ pub struct WorkReported {
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WorkNotAnswering {
+    ///The last report of each other Instance the Workspace has had, newest first. Every one is history for its own Instance.
+    pub earlier_reports: Vec<WorkInstanceReport>,
     pub last_report: WorkLastReport,
     pub message: String,
     pub state: serde_json::Value,
@@ -322,6 +326,8 @@ pub struct WorkNotAnswering {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WorkNoInstance {
     pub branch: String,
+    ///The last report of each other Instance the Workspace has had, newest first. Every one is history for its own Instance.
+    pub earlier_reports: Vec<WorkInstanceReport>,
     pub last_report: WorkLastReport,
     pub pull_request: Option<String>,
     pub state: serde_json::Value,

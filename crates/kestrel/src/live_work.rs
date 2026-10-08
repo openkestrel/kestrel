@@ -133,15 +133,11 @@ pub enum Work {
     },
 }
 
-/// The current work beside the last report, which is history whatever the current state says.
 pub struct Read {
     pub work: Work,
-    pub last_report: Option<LastReport>,
-}
-
-pub struct LastReport {
-    pub report: InstanceReport,
-    pub instance_current: bool,
+    pub instance: Option<String>,
+    /// History whatever `work` says, newest first.
+    pub reports: Vec<InstanceReport>,
 }
 
 pub async fn read(
@@ -154,21 +150,15 @@ pub async fn read(
     let organization = tx.organizations().named(organization).await?;
     let workspace = tx.workspaces().resolved(&organization, reference).await?;
     let current = tx.workspaces().instance(workspace.id).await?;
-    let last_report = tx
-        .workspaces()
-        .last_work_report(workspace.id)
-        .await?
-        .map(|report| LastReport {
-            instance_current: current.as_deref() == Some(report.instance.as_str()),
-            report,
-        });
+    let reports = tx.workspaces().work_reports(workspace.id).await?;
     let Some(instance) = current else {
         return Ok(Read {
             work: Work::NoInstance {
                 branch: workspace.checkout.branch,
                 pull_request: None,
             },
-            last_report,
+            instance: None,
+            reports,
         });
     };
     let on_the_link = tx
@@ -183,7 +173,11 @@ pub async fn read(
             message: "the Instance isn't answering",
         },
     };
-    Ok(Read { work, last_report })
+    Ok(Read {
+        work,
+        instance: Some(instance),
+        reports,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

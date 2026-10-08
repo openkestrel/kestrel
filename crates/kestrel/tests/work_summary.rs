@@ -57,7 +57,8 @@ async fn a_workspace_with_no_instance_names_its_declared_branch_without_recordin
             "state": "no_instance",
             "branch": workspace.checkout.branch,
             "pull_request": null,
-            "last_report": {"report": "none"}
+            "last_report": {"report": "none"},
+            "earlier_reports": []
         })
     );
     let shown = support::client::ran_by(
@@ -423,6 +424,7 @@ async fn the_last_report_outlives_its_instance_and_is_never_attributed_to_a_repl
     let released = summary(&kestrel, &workspace).await;
     assert_eq!(released["state"], "no_instance");
     assert_eq!(released["last_report"], historical);
+    assert_eq!(released["earlier_reports"], json!([]));
     let shown = support::client::ran_by(
         &kestrel,
         &["workspace", "work", &workspace.id.to_string()],
@@ -459,6 +461,7 @@ async fn the_last_report_outlives_its_instance_and_is_never_attributed_to_a_repl
                 Some(last["instance"].as_str().unwrap()),
                 kestrel.session(replacement.id).await.instance.as_deref()
             );
+            assert_eq!(answer["earlier_reports"], json!([historical]), "{answer}");
             break;
         }
         assert!(tokio::time::Instant::now() < deadline, "{answer}");

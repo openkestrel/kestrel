@@ -182,6 +182,7 @@ class Reads {
 							branch: "main",
 							pull_request: null,
 							last_report: { report: "none" },
+							earlier_reports: [],
 						},
 					),
 				});
@@ -418,6 +419,7 @@ test("changed work and a learned pull request update on a Workspace notice", asy
 			{
 				state: "reported",
 				last_report: { report: "none" },
+				earlier_reports: [],
 				reported_at: new Date().toISOString(),
 				repositories: [
 					{
@@ -461,6 +463,7 @@ test("changed work and a learned pull request update on a Workspace notice", asy
 			{
 				state: "reported",
 				last_report: { report: "none" },
+				earlier_reports: [],
 				reported_at: new Date().toISOString(),
 				repositories: [
 					{

@@ -2,7 +2,8 @@ use std::io::{IsTerminal as _, Write};
 
 use anyhow::Result;
 use kestrel_operator_types::{
-    WorkLastReport, WorkRepository, WorkRepositoryRead, WorkRepositoryUnreadable, WorkspaceWork,
+    WorkInstanceReport, WorkLastReport, WorkRepository, WorkRepositoryRead,
+    WorkRepositoryUnreadable, WorkspaceWork,
 };
 use serde_json::Value;
 
@@ -19,10 +20,12 @@ pub fn show(answer: Value, json: bool) -> Result<()> {
                     writeln!(out, "{pull_request}")?;
                 }
                 last_report(&mut out, work.last_report, terminal)?;
+                earlier(&mut out, work.earlier_reports, terminal)?;
             }
             WorkspaceWork::WorkNotAnswering(work) => {
                 writeln!(out, "{}", work.message)?;
                 last_report(&mut out, work.last_report, terminal)?;
+                earlier(&mut out, work.earlier_reports, terminal)?;
             }
             WorkspaceWork::WorkReported(work) => {
                 if terminal {
@@ -37,6 +40,7 @@ pub fn show(answer: Value, json: bool) -> Result<()> {
                     )?;
                 }
                 repositories(&mut out, work.repositories, terminal)?;
+                earlier(&mut out, work.earlier_reports, terminal)?;
             }
         }
     }
@@ -64,25 +68,39 @@ fn last_report(out: &mut impl Write, last: WorkLastReport, terminal: bool) -> Re
     Ok(())
 }
 
+fn earlier(out: &mut impl Write, reports: Vec<WorkInstanceReport>, terminal: bool) -> Result<()> {
+    for report in reports {
+        writeln!(
+            out,
+            "\nEarlier reported by the Instance {} at {}",
+            report.instance, report.reported_at
+        )?;
+        repositories(out, report.repositories, terminal)?;
+    }
+    Ok(())
+}
+
 fn repositories(
     out: &mut impl Write,
     repositories: Vec<WorkRepository>,
     terminal: bool,
 ) -> Result<()> {
     for repository in repositories {
+        if terminal {
+            let (WorkRepository::WorkRepositoryRead(WorkRepositoryRead { repository, .. })
+            | WorkRepository::WorkRepositoryUnreadable(WorkRepositoryUnreadable {
+                repository,
+                ..
+            })) = &repository;
+            writeln!(out, "\n{repository}")?;
+        }
         match repository {
             WorkRepository::WorkRepositoryUnreadable(WorkRepositoryUnreadable {
-                repository,
-                because,
-                ..
+                because, ..
             }) => {
-                if terminal {
-                    writeln!(out, "\n{repository}")?;
-                }
                 writeln!(out, "  {because}")?;
             }
             WorkRepository::WorkRepositoryRead(WorkRepositoryRead {
-                repository,
                 branch,
                 changed,
                 staged,
@@ -92,9 +110,6 @@ fn repositories(
                 stashed,
                 ..
             }) => {
-                if terminal {
-                    writeln!(out, "\n{repository}")?;
-                }
                 writeln!(
                     out,
                     "On branch {}",

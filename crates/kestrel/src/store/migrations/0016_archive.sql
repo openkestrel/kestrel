@@ -15,8 +15,7 @@ CREATE TABLE instance_idle_hint (
     archive_deadline TEXT NOT NULL
 ) STRICT;
 
--- One row per Instance, kept after the Workspace lets it go, so a replacement never inherits it.
--- Information only: the numbered checkout report in workspace.observed alone gates reaping.
+-- History only, kept per Instance after the Workspace lets it go: workspace.observed alone gates reaping.
 CREATE TABLE instance_work_report (
     instance TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL REFERENCES organization (id),

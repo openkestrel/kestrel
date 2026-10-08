@@ -172,12 +172,14 @@ returns `state: not_answering` rather than a durable checkout observation.
 
 Every state also carries `last_report`: `report: none`, or `report: received` with the latest
 summary any of the Workspace's Instances sent, its `reported_at`, the originating `instance` and
-`instance_current`, false once the Workspace has let that Instance go. It survives link loss,
-release and restarts, and is history only: it never establishes Unpublished Work, gates seal or
+`instance_current`, false once the Workspace has let that Instance go; `earlier_reports` holds each
+other Instance's last report, newest first. Both survive link loss,
+release and restarts, and are history only: they never establishes Unpublished Work, gates seal or
 release, or makes a Files or Changes read live.
 
 `kestrel workspace work <workspace>` (alias `status`) prints a heading per repository and how long
-ago its supervisor reported it, and otherwise the last report or "No work report received."
+ago its supervisor reported it, and otherwise the last report or "No work report received.", then
+any earlier Instances' reports.
 `--json` returns the whole operator response.
 
 `GET …/workspaces/{workspace}/files?path=` lists one directory of the live Instance and

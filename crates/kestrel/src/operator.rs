@@ -2435,18 +2435,24 @@ async fn work_summary(
         &reference,
     )
     .await?;
-    let last_report = match read.last_report {
+    let instance = read.instance;
+    let mut reports = read
+        .reports
+        .into_iter()
+        .map(|report| wire::WorkInstanceReport {
+            report: serde_json::json!("received"),
+            instance_current: instance.as_deref() == Some(report.instance.as_str()),
+            instance: report.instance,
+            reported_at: report.summary.reported_at.to_string(),
+            repositories: wire_repositories(report.summary.repositories),
+        });
+    let last_report = match reports.next() {
         None => wire::WorkLastReport::WorkNoReport(wire::WorkNoReport {
             report: serde_json::json!("none"),
         }),
-        Some(last) => wire::WorkLastReport::WorkInstanceReport(wire::WorkInstanceReport {
-            report: serde_json::json!("received"),
-            instance: last.report.instance,
-            instance_current: last.instance_current,
-            reported_at: last.report.summary.reported_at.to_string(),
-            repositories: wire_repositories(last.report.summary.repositories),
-        }),
+        Some(last) => wire::WorkLastReport::WorkInstanceReport(last),
     };
+    let earlier_reports: Vec<_> = reports.collect();
     Ok(Json(match read.work {
         crate::live_work::Work::Reported(summary) => {
             wire::WorkspaceWork::WorkReported(wire::WorkReported {
@@ -2454,6 +2460,7 @@ async fn work_summary(
                 reported_at: summary.reported_at.to_string(),
                 repositories: wire_repositories(summary.repositories),
                 last_report,
+                earlier_reports,
             })
         }
         crate::live_work::Work::NoInstance {
@@ -2464,12 +2471,14 @@ async fn work_summary(
             branch,
             pull_request,
             last_report,
+            earlier_reports,
         }),
         crate::live_work::Work::NotAnswering { message } => {
             wire::WorkspaceWork::WorkNotAnswering(wire::WorkNotAnswering {
                 state: serde_json::json!("not_answering"),
                 message: message.to_owned(),
                 last_report,
+                earlier_reports,
             })
         }
     }))
