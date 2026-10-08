@@ -8,41 +8,21 @@ use std::time::Duration;
 use kestrel::domain::{SessionId, SessionState, Workspace};
 use reqwest::StatusCode;
 use reqwest::header::RETRY_AFTER;
+use support::fixture::Fixture;
 use support::scripted_agent::Script;
-use support::{Kestrel, repository, scripted_agent, supervisor};
+use support::{Kestrel, scripted_agent, supervisor};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 /// SQLite's own, which sqlx sets on every connection it opens.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 async fn a_workspace(kestrel: &Kestrel, organization: &str) -> Workspace {
-    let organization = kestrel.declare_organization(organization).await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(
-            &organization,
-            "builder",
-            "opencode",
-            Some(kestrel_scripted_agent::OTHER_MODEL),
-        )
-        .await;
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
-        .await;
-
-    kestrel
-        .open_workspace(&organization.name, repository::NAME, "builder")
+    Fixture::acme()
+        .organization(organization)
+        .checked_out()
+        .model(kestrel_scripted_agent::OTHER_MODEL)
+        .holding_a_provider_key()
+        .open(kestrel)
         .await
 }
 
@@ -84,7 +64,8 @@ async fn a_database_locked_past_the_busy_timeout_stops_neither_the_control_plane
         .await;
 
     let answers = kestrel
-        .while_the_database_is_locked(async {
+        .database()
+        .while_locked(async {
             let started = tokio::time::Instant::now();
             let client = reqwest::Client::new();
             let (operator, link) = tokio::join!(

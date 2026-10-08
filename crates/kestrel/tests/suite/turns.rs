@@ -8,32 +8,19 @@ use std::time::Duration;
 use kestrel::domain::{Exit, SessionId, SessionState, Workspace, WorkspaceId};
 use kestrel::log::{Entry, Message};
 use kestrel_scripted_agent::conversed;
+use support::fixture::Fixture;
 use support::scripted_agent::{self, Script};
-use support::{HARNESS, Kestrel, repository, supervisor};
+use support::{HARNESS, Kestrel, supervisor};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 
 async fn conversing(script: Script) -> (Kestrel, Workspace) {
     let kestrel =
         Kestrel::dispatching_to(supervisor::binary(), &scripted_agent::playing(script)).await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", HARNESS, None)
-        .await;
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
+    Fixture::acme()
+        .checked_out()
+        .holding_a_provider_key()
+        .declare(&kestrel)
         .await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
 
@@ -348,27 +335,11 @@ async fn sharing_one_slot() -> Kestrel {
         1,
     )
     .await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", HARNESS, None)
-        .await;
-    kestrel
-        .declare_agent(&organization, "dawdler", "claude", None)
-        .await;
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
+    Fixture::acme()
+        .checked_out()
+        .agent("dawdler", "claude", None)
+        .holding_a_provider_key()
+        .declare(&kestrel)
         .await;
 
     kestrel
@@ -404,7 +375,7 @@ async fn a_waiting_session_leaves_its_active_work_slot_to_another_workspace() {
         .expect("a waiting session takes the message as its next prompt");
     assert_eq!(continued.id, first.id);
     not_prompted_again(&kestrel, first.id, 1).await;
-    assert!(kestrel.has_pending_messages(waiting.id).await);
+    assert!(kestrel.database().holds_messages(waiting.id).await);
 
     kestrel.stop_session(second.id).await;
     let answered = kestrel.answered(first.id, 2).await;

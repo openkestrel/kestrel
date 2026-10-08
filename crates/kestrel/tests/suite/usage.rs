@@ -6,6 +6,7 @@ use kestrel::domain::{Exit, SessionId, SessionState, Workspace, WorkspaceId};
 use kestrel_scripted_agent::BURSTED_USAGE;
 use serde_json::Value;
 use support::Kestrel;
+use support::fixture::Fixture;
 use support::link_client::{Events, Next};
 use support::scripted_agent::{self, Script};
 use support::supervisor;
@@ -17,27 +18,7 @@ async fn dispatching(script: Script) -> Kestrel {
 }
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", support::HARNESS, None)
-        .await;
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme().holding_a_provider_key().open(kestrel).await
 }
 
 async fn follow(kestrel: &Kestrel, workspace: WorkspaceId) -> Events {

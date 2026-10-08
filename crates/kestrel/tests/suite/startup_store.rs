@@ -1,9 +1,12 @@
 //! An incompatible store fails startup with a diagnostic and a reset command, without
 //! touching the data; anything else that fails to open keeps its own cause.
 
+use crate::support;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use support::Database;
 use tempfile::TempDir;
 
 const DATABASE: &str = "kestrel.db";
@@ -31,33 +34,6 @@ async fn seeded() -> TempDir {
     tx.commit().await.expect("the declaration commits");
 
     data_dir
-}
-
-async fn pool(data_dir: &Path) -> sqlx::SqlitePool {
-    sqlx::SqlitePool::connect(&format!(
-        "sqlite://{}?mode=rwc",
-        database(data_dir).display()
-    ))
-    .await
-    .expect("a direct connection to the database")
-}
-
-async fn organizations(data_dir: &Path) -> Vec<String> {
-    sqlx::query_scalar::<_, String>("SELECT name FROM organization ORDER BY name")
-        .fetch_all(&pool(data_dir).await)
-        .await
-        .expect("the organizations the store holds")
-}
-
-/// A checkpoint moves every frame the tampering left in the WAL into the database, so a
-/// byte comparison afterwards proves the refused open wrote nothing itself.
-async fn checkpoint(data_dir: &Path) {
-    let pool = pool(data_dir).await;
-    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-        .execute(&pool)
-        .await
-        .expect("a checkpoint");
-    pool.close().await;
 }
 
 fn refused(error: anyhow::Error) -> String {
@@ -133,11 +109,9 @@ async fn a_compatible_restart_keeps_its_organizations() {
 #[tokio::test]
 async fn a_store_from_an_edited_migration_is_refused_and_left_alone() {
     let data_dir = seeded().await;
-    sqlx::query("UPDATE _sqlx_migrations SET checksum = randomblob(48) WHERE version = 1")
-        .execute(&pool(data_dir.path()).await)
-        .await
-        .expect("the history is tampered with");
-    checkpoint(data_dir.path()).await;
+    let tampered = Database::at(data_dir.path());
+    tampered.edit_the_first_migration().await;
+    tampered.checkpoint().await;
     let kept_database = std::fs::read(database(data_dir.path())).expect("the database");
     let kept_key = std::fs::read(key(data_dir.path())).expect("the encryption key");
 
@@ -158,20 +132,18 @@ async fn a_store_from_an_edited_migration_is_refused_and_left_alone() {
         kept_key,
         "the refused open changed the encryption key"
     );
-    assert_eq!(organizations(data_dir.path()).await, ["acme"]);
+    assert_eq!(
+        Database::at(data_dir.path()).organizations().await,
+        ["acme"]
+    );
 }
 
 #[tokio::test]
 async fn a_store_from_a_newer_build_is_refused_and_left_alone() {
     let data_dir = seeded().await;
-    sqlx::query(
-        "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
-         VALUES (99999, 'from a newer build', TRUE, randomblob(48), 0)",
-    )
-    .execute(&pool(data_dir.path()).await)
-    .await
-    .expect("a newer build's history");
-    checkpoint(data_dir.path()).await;
+    let tampered = Database::at(data_dir.path());
+    tampered.record_a_migration_from_a_newer_build(99999).await;
+    tampered.checkpoint().await;
     let kept_database = std::fs::read(database(data_dir.path())).expect("the database");
     let kept_key = std::fs::read(key(data_dir.path())).expect("the encryption key");
 
@@ -192,20 +164,17 @@ async fn a_store_from_a_newer_build_is_refused_and_left_alone() {
         kept_key,
         "the refused open changed the encryption key"
     );
-    assert_eq!(organizations(data_dir.path()).await, ["acme"]);
+    assert_eq!(
+        Database::at(data_dir.path()).organizations().await,
+        ["acme"]
+    );
 }
 
 #[tokio::test]
 async fn tables_without_a_migration_history_are_refused_and_left_alone() {
     let data_dir = TempDir::new().expect("a temporary data directory");
-    sqlx::query("CREATE TABLE leftover (id INTEGER PRIMARY KEY)")
-        .execute(&pool(data_dir.path()).await)
-        .await
-        .expect("a table without history");
-    sqlx::query("INSERT INTO leftover (id) VALUES (1)")
-        .execute(&pool(data_dir.path()).await)
-        .await
-        .expect("a row worth keeping");
+    let leftover = Database::at(data_dir.path());
+    leftover.leave_a_table_without_history().await;
 
     let message = fails(data_dir.path(), "tables without history opened").await;
 
@@ -218,21 +187,11 @@ async fn tables_without_a_migration_history_are_refused_and_left_alone() {
         !key(data_dir.path()).exists(),
         "the refused open generated an encryption key"
     );
-    let tracking: Option<String> = sqlx::query_scalar(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
-    )
-    .fetch_optional(&pool(data_dir.path()).await)
-    .await
-    .expect("the migration history");
     assert!(
-        tracking.is_none(),
+        !leftover.has_a_migration_history().await,
         "the refused open started a migration history"
     );
-    let held: Vec<i64> = sqlx::query_scalar("SELECT id FROM leftover")
-        .fetch_all(&pool(data_dir.path()).await)
-        .await
-        .expect("the kept row");
-    assert_eq!(held, [1]);
+    assert_eq!(leftover.rows_left_over().await, [1]);
 }
 
 #[tokio::test]
@@ -272,11 +231,9 @@ fn an_incompatible_store_fails_the_binary_with_the_reset_command() {
         .expect("a runtime");
     let data_dir = runtime.block_on(seeded());
     runtime.block_on(async {
-        sqlx::query("UPDATE _sqlx_migrations SET checksum = randomblob(48) WHERE version = 1")
-            .execute(&pool(data_dir.path()).await)
-            .await
-            .expect("the history is tampered with");
-        checkpoint(data_dir.path()).await;
+        let tampered = Database::at(data_dir.path());
+        tampered.edit_the_first_migration().await;
+        tampered.checkpoint().await;
     });
     let kept_database = std::fs::read(database(data_dir.path())).expect("the database");
     let kept_key = std::fs::read(key(data_dir.path())).expect("the encryption key");

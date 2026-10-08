@@ -2,7 +2,6 @@ use crate::support;
 
 use reqwest::{Client, StatusCode, Url};
 use serde_json::{Value, json};
-use sqlx::Row;
 use support::{
     Kestrel, PRIVATE_KEY,
     github_stub::{GithubStub, ScriptedResponse},
@@ -89,11 +88,7 @@ async fn manifest_setup_registers_a_usable_app_without_returning_secrets() {
             client.get(&callback).send().await.unwrap().status(),
             StatusCode::UNPROCESSABLE_ENTITY
         );
-        let pool = support::database(kestrel.data_dir()).await;
-        let sealed: String = sqlx::query_scalar("SELECT configuration_sealed FROM github_app_flow")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let sealed = kestrel.database().sealed_github_app_configuration().await;
         assert!(!sealed.contains(PRIVATE_KEY));
         assert!(!sealed.contains("manifest-webhook-secret"));
         stub.script_answer(
@@ -113,24 +108,15 @@ async fn manifest_setup_registers_a_usable_app_without_returning_secrets() {
             client.get(&finish).send().await.unwrap().status(),
             StatusCode::UNPROCESSABLE_ENTITY
         );
-        let integration = sqlx::query("SELECT id, app_id, installation_id, private_key_sealed, signing_secret, poll_due_at FROM integration").fetch_one(&pool).await.unwrap();
-        assert_eq!(integration.get::<i64, _>("app_id"), 17);
-        assert_eq!(integration.get::<i64, _>("installation_id"), 23);
+        let integration = kestrel.database().github_integration_at_rest().await;
+        assert_eq!(integration.app_id, 17);
+        assert_eq!(integration.installation_id, 23);
         assert!(
-            integration
-                .get::<Option<String>, _>("poll_due_at")
-                .is_some(),
+            integration.polled,
             "every inbound GitHub Integration is polled"
         );
-        assert!(
-            !integration
-                .get::<String, _>("private_key_sealed")
-                .contains("BEGIN")
-        );
-        assert_ne!(
-            integration.get::<String, _>("signing_secret"),
-            "manifest-webhook-secret"
-        );
+        assert!(!integration.private_key_sealed.contains("BEGIN"));
+        assert_ne!(integration.signing_secret, "manifest-webhook-secret");
         assert_eq!(
             manifest["hook_attributes"]["url"],
             format!(
@@ -140,7 +126,7 @@ async fn manifest_setup_registers_a_usable_app_without_returning_secrets() {
                 } else {
                     "https://unreachable.invalid"
                 },
-                integration.get::<String, _>("id")
+                kestrel.integrations("acme").await[0].id
             )
         );
         let records: Value = client
@@ -226,11 +212,7 @@ async fn unknown_expired_and_concurrent_callbacks_cannot_exchange_twice() {
             .count(),
         1
     );
-    let pool = support::database(kestrel.data_dir()).await;
-    sqlx::query("UPDATE github_app_flow SET phase = 'ready', expires_at = '2000-01-01'")
-        .execute(&pool)
-        .await
-        .unwrap();
+    kestrel.database().expire_github_app_flows().await;
     assert_eq!(
         request().await.unwrap().status(),
         StatusCode::UNPROCESSABLE_ENTITY
@@ -267,14 +249,7 @@ async fn installation_must_belong_to_the_created_app_and_requested_repository() 
             StatusCode::UNPROCESSABLE_ENTITY
         );
     }
-    let pool = support::database(kestrel.data_dir()).await;
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM integration")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        0
-    );
+    assert!(kestrel.integrations("acme").await.is_empty());
     stub.script_answer(
         "GET",
         "/repos/acme/repo/installation",

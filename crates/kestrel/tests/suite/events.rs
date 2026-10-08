@@ -316,17 +316,10 @@ async fn deliveries_older_than_githubs_retention_are_reported_lost() {
         )
         .await;
     polled(&stub, 1).await;
-    let pool = support::database(kestrel.data_dir()).await;
-    let away = (Timestamp::now() - SignedDuration::from_hours(80)).to_string();
-    sqlx::query(
-        "UPDATE integration SET deliveries_read_from = ?, last_polled_at = ?, poll_due_at = ?",
-    )
-    .bind(&away)
-    .bind(&away)
-    .bind(Timestamp::now().to_string())
-    .execute(&pool)
-    .await
-    .expect("the integration should be set back");
+    kestrel
+        .database()
+        .unpolled_since(Timestamp::now() - SignedDuration::from_hours(80))
+        .await;
 
     let deadline = tokio::time::Instant::now() + PATIENCE;
     let refusal = loop {

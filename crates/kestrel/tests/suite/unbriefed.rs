@@ -9,10 +9,10 @@ use kestrel::domain::{
 use kestrel::log::{BriefSource, Entry};
 use kestrel::scheduling::Occupied;
 use kestrel::scheduling::Reason;
-use support::repository;
+use support::fixture::Fixture;
 use support::scripted_agent::{self, Script};
 use support::supervisor;
-use support::{A_PROVIDER_KEY, HARNESS, Kestrel, PROVIDER_KEY};
+use support::{HARNESS, Kestrel};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 
@@ -59,28 +59,12 @@ async fn sealed_by_the_sweep(kestrel: &Kestrel, workspace: Workspace) -> Workspa
 }
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(
-            &organization,
-            "builder",
-            HARNESS,
-            Some(kestrel_scripted_agent::OTHER_MODEL),
-        )
-        .await;
-    kestrel
-        .hold_provider_credential(&organization, PROVIDER_KEY, A_PROVIDER_KEY)
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme()
+        .checked_out()
+        .model(kestrel_scripted_agent::OTHER_MODEL)
+        .holding_a_provider_key()
+        .open(kestrel)
+        .await
 }
 
 async fn reasons(kestrel: &Kestrel, session: &Session) -> Vec<Reason> {
@@ -144,25 +128,12 @@ async fn with_every_slot_occupied_an_unbriefed_workspace_still_reaches_harness_r
 #[tokio::test]
 async fn an_unbriefed_workspace_is_refused_at_the_live_instance_limit() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_limited_organization("acme", 1).await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(
-            &organization,
-            "builder",
-            HARNESS,
-            Some(kestrel_scripted_agent::OTHER_MODEL),
-        )
-        .await;
-    kestrel
-        .hold_provider_credential(&organization, PROVIDER_KEY, A_PROVIDER_KEY)
+    Fixture::acme()
+        .limited_to(1)
+        .checked_out()
+        .model(kestrel_scripted_agent::OTHER_MODEL)
+        .holding_a_provider_key()
+        .declare(&kestrel)
         .await;
     let active = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let waiting = kestrel.open_workspace("acme", "kestrel", "builder").await;
@@ -195,17 +166,10 @@ async fn an_unbriefed_workspace_is_refused_at_the_live_instance_limit() {
 #[tokio::test]
 async fn an_unbriefed_workspace_dispatches_past_a_serialized_profile() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", support::SERIALIZED, None)
+    Fixture::acme()
+        .checked_out()
+        .harness(support::SERIALIZED)
+        .declare(&kestrel)
         .await;
     kestrel
         .declare_profile("acme", "jack", "Jack")
@@ -330,23 +294,11 @@ async fn a_post_to_a_ready_unbriefed_session_becomes_its_brief_and_the_agent_ech
         1,
     )
     .await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", HARNESS, None)
-        .await;
-    kestrel
-        .declare_agent(&organization, "holder", support::SERIALIZED, None)
-        .await;
-    kestrel
-        .hold_provider_credential(&organization, PROVIDER_KEY, A_PROVIDER_KEY)
+    Fixture::acme()
+        .checked_out()
+        .agent("holder", support::SERIALIZED, None)
+        .holding_a_provider_key()
+        .declare(&kestrel)
         .await;
 
     let holding = kestrel.open_workspace("acme", "kestrel", "holder").await;
@@ -429,7 +381,7 @@ async fn a_message_posted_before_the_harness_is_ready_becomes_the_brief_at_ready
 
     let posted = kestrel.post(workspace.id, "alice", "what I want").await;
     assert_eq!(posted.id, session.id);
-    assert!(kestrel.has_pending_messages(workspace.id).await);
+    assert!(kestrel.database().holds_messages(workspace.id).await);
     assert!(
         kestrel
             .transcript(workspace.id)
@@ -456,7 +408,7 @@ async fn a_message_posted_before_the_harness_is_ready_becomes_the_brief_at_ready
             participant: "alice".to_owned(),
         }
     );
-    assert!(!kestrel.has_pending_messages(workspace.id).await);
+    assert!(!kestrel.database().holds_messages(workspace.id).await);
 
     let prompted = match kestrel.occupy_up_to(2).await {
         Some(Occupied::Resumed(prompted)) => prompted,
@@ -524,17 +476,10 @@ async fn the_first_turn_waits_behind_older_held_input() {
 #[tokio::test]
 async fn a_serialized_profile_holds_the_first_turn_not_the_dispatch() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", support::SERIALIZED, None)
+    Fixture::acme()
+        .checked_out()
+        .harness(support::SERIALIZED)
+        .declare(&kestrel)
         .await;
     kestrel
         .declare_profile("acme", "jack", "Jack")
@@ -605,7 +550,7 @@ async fn posts_after_the_brief_are_held_and_drain_into_the_next_turn() {
         .post_while_busy(workspace.id, "operator", "and one more thing")
         .await;
     assert_eq!(held.map(|held| held.id), Some(session.id));
-    assert!(kestrel.has_pending_messages(workspace.id).await);
+    assert!(kestrel.database().holds_messages(workspace.id).await);
 
     let prompted = match kestrel.occupy_up_to(2).await {
         Some(Occupied::Resumed(prompted)) => prompted,
@@ -621,7 +566,7 @@ async fn posts_after_the_brief_are_held_and_drain_into_the_next_turn() {
         "the held message should follow at the answer, on the slot the Session holds"
     );
     assert_eq!(kestrel.turns(session.id).await.len(), 2);
-    assert!(!kestrel.has_pending_messages(workspace.id).await);
+    assert!(!kestrel.database().holds_messages(workspace.id).await);
 
     kestrel.teardown().await;
 }

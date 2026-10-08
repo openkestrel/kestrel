@@ -11,9 +11,10 @@ use kestrel::domain::{Direction, Exit, Session, SessionId, Workspace};
 use kestrel::log::Entry;
 use kestrel_scripted_agent::{DEFAULT_MODEL, OTHER_MODEL, conversed};
 use serde_json::Value;
+use support::fixture::Fixture;
 use support::github_stub::{self, GithubStub};
 use support::scripted_agent::{self, Script};
-use support::{Kestrel, client, repository, supervisor};
+use support::{Kestrel, client, supervisor};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 const REPOSITORY: &str = "jtmthf/kestrel";
@@ -23,35 +24,13 @@ const BOTH: &[Direction] = &[Direction::Inbound, Direction::Outbound];
 /// `builder` on the default harness, and `codex` and `claude` on harnesses of their own, each
 /// naming a model so a test can tell whose was recorded.
 async fn an_organization(kestrel: &Kestrel) {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(
-            &organization,
-            "builder",
-            support::HARNESS,
-            Some(DEFAULT_MODEL),
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "codex", "codex", Some(OTHER_MODEL))
-        .await;
-    kestrel
-        .declare_agent(&organization, "claude", "claude", None)
-        .await;
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
+    Fixture::acme()
+        .checked_out()
+        .model(DEFAULT_MODEL)
+        .agent("codex", "codex", Some(OTHER_MODEL))
+        .agent("claude", "claude", None)
+        .holding_a_provider_key()
+        .declare(kestrel)
         .await;
 }
 

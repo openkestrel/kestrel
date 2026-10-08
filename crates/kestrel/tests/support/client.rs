@@ -253,10 +253,6 @@ pub fn ran(control_plane: &str, args: &[&str]) -> Finished {
     Client::spawn(control_plane, args).finish()
 }
 
-pub fn ran_given(control_plane: &str, args: &[&str], input: &str) -> Finished {
-    ran_as(control_plane, args, Invocation::default().given(input))
-}
-
 pub fn ran_as(control_plane: &str, args: &[&str], invocation: Invocation) -> Finished {
     Client::spawn_as(control_plane, args, invocation).finish()
 }

@@ -11,6 +11,7 @@ use kestrel::domain::{Exit, Session, SessionId, SessionState, Workspace};
 use kestrel::work::{Report, Reported};
 use reqwest::StatusCode;
 use serde_json::json;
+use support::fixture::Fixture;
 use support::link_client::Link;
 use support::scripted_agent::Script;
 use support::supervisor::Supervisor;
@@ -20,15 +21,11 @@ const PATIENCE: Duration = Duration::from_secs(45);
 const LONG_ENOUGH_TO_BE_SURE: Duration = Duration::from_secs(1);
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(&organization, "kestrel", &[], "main")
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", Some("claude-opus-5"))
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme()
+        .without_repositories()
+        .model("claude-opus-5")
+        .open(kestrel)
+        .await
 }
 
 async fn until(
@@ -367,7 +364,7 @@ async fn a_gap_gives_a_healthy_waiting_session_grace_and_attributes_a_lost_super
     lost_supervisor.destroy();
     forgetful.wait_until_it_says("let the session").await;
     let start = Timestamp::now() - SignedDuration::from_mins(9);
-    stopped.last_lease_sweep(start).await;
+    stopped.database().last_lease_sweep(start).await;
     let lapsed = Timestamp::now() - SignedDuration::from_secs(1);
     stopped.lease_until(&healthy, lapsed).await;
     stopped.lease_until(&lost, lapsed).await;

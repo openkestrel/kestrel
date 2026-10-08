@@ -9,40 +9,19 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{Exit, Session, SessionId, SessionState, Workspace};
 use support::environment::Environment;
-use support::repository;
+use support::fixture::Fixture;
 use support::scripted_agent::Script;
 use support::{Kestrel, scripted_agent, supervisor};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(
-            &organization,
-            "builder",
-            "opencode",
-            Some(kestrel_scripted_agent::OTHER_MODEL),
-        )
-        .await;
-
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme()
+        .checked_out()
+        .model(kestrel_scripted_agent::OTHER_MODEL)
+        .holding_a_provider_key()
+        .open(kestrel)
+        .await
 }
 
 async fn until(

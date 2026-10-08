@@ -5,24 +5,14 @@ use reqwest::StatusCode;
 use reqwest::header::{HOST, ORIGIN};
 use support::Kestrel;
 use support::client;
+use support::fixture::Fixture;
 
 const ELSEWHERE: &str = "https://evil.example";
 
 async fn an_idle_workspace_a_working_session_and_triggers(
     kestrel: &Kestrel,
 ) -> (kestrel::domain::Workspace, kestrel::domain::Session) {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(kestrel).await;
     for name in ["enabled", "disabled"] {
         kestrel
             .declare_trigger(
@@ -254,18 +244,7 @@ async fn a_cross_origin_preflight_is_granted_nothing() {
 #[tokio::test]
 async fn a_page_served_from_the_boundary_itself_may_write() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     kestrel
         .declare_trigger(
             "acme",

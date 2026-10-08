@@ -5,10 +5,10 @@ use std::time::Duration;
 use kestrel::domain::{Session, SessionId, SessionState, Workspace, WorkspaceId};
 use kestrel::link::Instruction;
 use kestrel::log::{ClosingReason, Entry};
-use support::repository;
+use support::Kestrel;
+use support::fixture::Fixture;
 use support::scripted_agent::{self, Script};
 use support::supervisor;
-use support::{A_PROVIDER_KEY, HARNESS, Kestrel, PROVIDER_KEY};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 
@@ -62,28 +62,12 @@ async fn entries(kestrel: &Kestrel, workspace: WorkspaceId) -> Vec<Entry> {
 }
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(
-            &organization,
-            "builder",
-            HARNESS,
-            Some(kestrel_scripted_agent::OTHER_MODEL),
-        )
-        .await;
-    kestrel
-        .hold_provider_credential(&organization, PROVIDER_KEY, A_PROVIDER_KEY)
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme()
+        .checked_out()
+        .model(kestrel_scripted_agent::OTHER_MODEL)
+        .holding_a_provider_key()
+        .open(kestrel)
+        .await
 }
 
 /// A Session the control plane believes is mid-Turn, without a harness behind it.
@@ -129,7 +113,7 @@ async fn an_interrupt_records_who_asked_and_a_second_one_sends_nothing_more() {
         "the first request stands"
     );
 
-    let instructions = kestrel.instructions(&session).await;
+    let instructions = kestrel.database().instructions(&session).await;
     assert_eq!(
         instructions
             .iter()
@@ -178,7 +162,7 @@ async fn an_interrupt_is_refused_for_queued_waiting_and_ended_sessions() {
 
     for (session, phase) in [(queued, "queued"), (waiting, "waiting"), (ended, "ended")] {
         let before = kestrel.session(session.id).await;
-        let sent = kestrel.instructions(&session).await;
+        let sent = kestrel.database().instructions(&session).await;
         let refusal = kestrel
             .interrupt(session.id, "alice")
             .await
@@ -194,7 +178,7 @@ async fn an_interrupt_is_refused_for_queued_waiting_and_ended_sessions() {
         );
         assert!(after.interrupting.is_none());
         assert_eq!(
-            kestrel.instructions(&session).await,
+            kestrel.database().instructions(&session).await,
             sent,
             "a refused interrupt sends nothing"
         );
@@ -210,7 +194,7 @@ async fn an_interrupt_of_a_trailing_session_says_its_turn_answered_and_points_to
     kestrel.report_answered(&session, 1).await;
     let before = kestrel.session(session.id).await;
     assert_eq!(before.state, SessionState::Trailing);
-    let sent = kestrel.instructions(&session).await;
+    let sent = kestrel.database().instructions(&session).await;
 
     let refusal = kestrel
         .interrupt(session.id, "alice")
@@ -229,7 +213,7 @@ async fn an_interrupt_of_a_trailing_session_says_its_turn_answered_and_points_to
     );
     assert!(after.interrupting.is_none());
     assert_eq!(
-        kestrel.instructions(&session).await,
+        kestrel.database().instructions(&session).await,
         sent,
         "a refused interrupt sends nothing"
     );
@@ -428,6 +412,7 @@ async fn an_interrupted_report_takes_held_messages_at_once_on_the_slot_it_held()
     );
     assert!(
         kestrel
+            .database()
             .instructions(&session)
             .await
             .iter()
@@ -606,6 +591,7 @@ async fn a_held_message_becomes_the_next_turn_at_once() {
     assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
     assert!(
         kestrel
+            .database()
             .instructions(&session)
             .await
             .iter()

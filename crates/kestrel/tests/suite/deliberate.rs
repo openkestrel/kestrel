@@ -8,6 +8,7 @@ use jiff::SignedDuration;
 use kestrel::domain::{Direction, Schedule, TriggerState, Workspace, WorkspaceId};
 use kestrel::log::Entry;
 use kestrel::trigger::{Asked, Fired};
+use support::fixture::Fixture;
 use support::github_stub::{self, GithubStub};
 use support::{Kestrel, templates};
 
@@ -27,19 +28,12 @@ async fn dogfooding(kestrel: &Kestrel, stub: &GithubStub) {
 /// recorded before a Trigger's `declared_at` is never matched, and the poller answers from an
 /// exhausted script with a 404, never offering that Event again.
 async fn dogfood_declarations(kestrel: &Kestrel) {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(&organization, "kestrel", &[], "main")
+    Fixture::acme()
+        .without_repositories()
+        .agent("codex", "codex", None)
+        .agent("claude", "claude", None)
+        .declare(kestrel)
         .await;
-    for (agent, harness) in [
-        ("builder", "opencode"),
-        ("codex", "codex"),
-        ("claude", "claude"),
-    ] {
-        kestrel
-            .declare_agent(&organization, agent, harness, None)
-            .await;
-    }
     let applied = kestrel.apply_triggers("acme", DOGFOOD).await;
     assert!(
         applied.admitting_outsiders.is_empty(),
@@ -418,7 +412,7 @@ async fn a_comment_on_a_sealed_workspaces_issue_starts_nothing_and_a_command_con
         heard,
         vec![(MAINTAINER.to_owned(), "now please add a test".to_owned())]
     );
-    assert!(!kestrel.has_pending_messages(continuation.id).await);
+    assert!(!kestrel.database().holds_messages(continuation.id).await);
 
     kestrel.teardown().await;
 }

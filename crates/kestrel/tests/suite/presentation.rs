@@ -5,6 +5,7 @@ use crate::support;
 
 use serde_json::Value;
 use support::client::{self, Invocation, ran_on_a_terminal};
+use support::fixture::Fixture;
 use support::github_stub::GithubStub;
 use support::{Kestrel, PRIVATE_KEY};
 
@@ -12,15 +13,11 @@ const REPOSITORY: &str = "https://github.com/jtmthf/kestrel";
 
 async fn an_organization_holding_two_agents() -> Kestrel {
     let kestrel = Kestrel::boot().await;
-    let acme = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(&acme, "kestrel", &[REPOSITORY.to_owned()], "main")
-        .await;
-    kestrel
-        .declare_agent(&acme, "builder", "opencode", Some("claude-opus-5"))
-        .await;
-    kestrel
-        .declare_agent(&acme, "reviewer", "opencode", None)
+    Fixture::acme()
+        .repositories(&[REPOSITORY])
+        .model("claude-opus-5")
+        .agent("reviewer", "opencode", None)
+        .declare(&kestrel)
         .await;
 
     kestrel

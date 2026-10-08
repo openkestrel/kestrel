@@ -13,9 +13,10 @@ use kestrel::domain::{
 use kestrel::log::{BriefSource, Entry};
 use kestrel::trigger::Would;
 use kestrel_scripted_agent::conversed;
+use support::fixture::Fixture;
 use support::github_stub::{self, GithubStub};
 use support::scripted_agent::{self, Script};
-use support::{Kestrel, labelled_on, repository, supervisor, templates};
+use support::{Kestrel, labelled_on, supervisor, templates};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 const REPOSITORY: &str = "jtmthf/kestrel";
@@ -27,30 +28,12 @@ const CI_BRIEF: &str = "Fix the build of {{ event.data.issue.title }}";
 const BOTH: &[Direction] = &[Direction::Inbound, Direction::Outbound];
 
 async fn an_organization(kestrel: &Kestrel) {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    for (agent, harness) in [
-        ("builder", support::HARNESS),
-        ("fixer", support::HARNESS),
-        ("codex", "codex"),
-    ] {
-        kestrel
-            .declare_agent(&organization, agent, harness, None)
-            .await;
-    }
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
+    Fixture::acme()
+        .checked_out()
+        .agent("fixer", support::HARNESS, None)
+        .agent("codex", "codex", None)
+        .holding_a_provider_key()
+        .declare(kestrel)
         .await;
 }
 

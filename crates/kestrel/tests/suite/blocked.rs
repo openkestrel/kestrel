@@ -8,22 +8,10 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{Session, SessionId, SessionState, Workspace, WorkspaceState};
 use support::Kestrel;
+use support::fixture::Fixture;
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", Some("claude-opus-5"))
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme().model("claude-opus-5").open(kestrel).await
 }
 
 fn claimed(first: Option<Session>, second: Option<Session>) -> Vec<SessionId> {
@@ -258,7 +246,7 @@ async fn a_session_blocked_on_a_blocker_that_ended_without_an_exit_is_never_clai
         blocker, dependent, ..
     } = a_session_blocked_on_an_active_one(&kestrel).await;
 
-    kestrel.end_session_without_an_exit(&blocker).await;
+    kestrel.database().end_without_an_exit(&blocker).await;
 
     assert!(
         kestrel.claim_session().await.is_none(),

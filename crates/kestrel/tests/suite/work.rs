@@ -11,6 +11,7 @@ use kestrel::log::Entry;
 use kestrel::work::{Report, Reported};
 use support::Kestrel;
 use support::environment::Environment;
+use support::fixture::Fixture;
 use support::link_client::Link;
 use support::repository;
 use support::scripted_agent::{self, Script};
@@ -19,33 +20,12 @@ use support::supervisor;
 const PATIENCE: Duration = Duration::from_secs(30);
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(
-            &organization,
-            "builder",
-            "opencode",
-            Some(kestrel_scripted_agent::OTHER_MODEL),
-        )
-        .await;
-
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme()
+        .checked_out()
+        .model(kestrel_scripted_agent::OTHER_MODEL)
+        .holding_a_provider_key()
+        .open(kestrel)
+        .await
 }
 
 async fn until(
@@ -670,29 +650,12 @@ async fn a_session_whose_instance_is_gone_fails_saying_so_and_the_next_starts_fr
 #[tokio::test]
 async fn a_checkout_that_fails_names_the_repository_and_branch_and_the_session_never_starts() {
     let kestrel = Kestrel::dispatching(supervisor::binary()).await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            "a-branch-nobody-cut",
-        )
-        .await;
-    kestrel
-        .declare_agent(
-            &organization,
-            "builder",
-            "opencode",
-            Some(kestrel_scripted_agent::OTHER_MODEL),
-        )
-        .await;
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
+    Fixture::acme()
+        .branch("a-branch-nobody-cut")
+        .checked_out()
+        .model(kestrel_scripted_agent::OTHER_MODEL)
+        .holding_a_provider_key()
+        .declare(&kestrel)
         .await;
 
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;

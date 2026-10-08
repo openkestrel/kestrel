@@ -9,6 +9,7 @@ use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{Workspace, WorkspaceState};
 use kestrel::log::Window;
 use support::Kestrel;
+use support::fixture::Fixture;
 
 const PATIENCE: Duration = Duration::from_secs(30);
 
@@ -16,20 +17,7 @@ const PATIENCE: Duration = Duration::from_secs(30);
 const WELL_INSIDE_THE_WINDOW: SignedDuration = SignedDuration::from_hours(23);
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", Some("claude-opus-5"))
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme().model("claude-opus-5").open(kestrel).await
 }
 
 fn a_day_ago() -> Timestamp {

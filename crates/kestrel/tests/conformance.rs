@@ -24,6 +24,7 @@ use kestrel::domain::{Exit, Session, Usage, Workspace};
 use kestrel::link::Harness;
 use support::Kestrel;
 use support::diagnostics::Diagnostics;
+use support::fixture::Fixture;
 use support::lineage::{DONE, Lineage};
 
 /// A real agent starts slowly and a real model answers slowly, and a free one answers slowly
@@ -206,20 +207,18 @@ async fn provisioned(
 }
 
 async fn a_workspace(kestrel: &Kestrel, lineage: Lineage, model: &str) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(&organization, "kestrel", &[], "main")
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", lineage.command(), Some(model))
-        .await;
+    let acme = Fixture::acme()
+        .without_repositories()
+        .harness(lineage.command())
+        .model(model);
+    let organization = acme.declare(kestrel).await;
     for (variable, secret) in lineage.credentials(&Lineage::key()) {
         kestrel
             .hold_provider_credential(&organization, &variable, &secret)
             .await;
     }
 
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    acme.open_another(kestrel).await
 }
 
 /// Answering a turn never ends a Session, so one that answered is stopped, the way a person would.

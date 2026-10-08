@@ -18,11 +18,12 @@ use kestrel_scripted_agent::{
     CHILD_TITLE, OTHER_MODEL, SAID_BY_SUBAGENT, SAID_WHILE_TRAILING, SUBAGENT, SUBAGENT_CALL,
     TASK_RUNS, UNKNOWN_UPDATE,
 };
+use support::fixture::Fixture;
 use support::github_stub::{self, GithubStub};
 use support::scripted_agent::{self, Script};
 use support::supervisor::Supervisor;
 use support::{
-    HARNESS, Kestrel, QUIET_PERIOD, labelled_on, operator_log, repository, supervisor, templates,
+    Kestrel, QUIET_PERIOD, labelled_on, operator_log, repository, supervisor, templates,
 };
 
 const PATIENCE: Duration = Duration::from_secs(30);
@@ -38,28 +39,16 @@ async fn a_workspace_in(kestrel: &Kestrel, instance_limit: Option<usize>) -> Wor
 }
 
 async fn an_organization(kestrel: &Kestrel, instance_limit: Option<usize>) {
-    let organization = match instance_limit {
-        Some(limit) => kestrel.declare_limited_organization("acme", limit).await,
-        None => kestrel.declare_organization("acme").await,
-    };
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", HARNESS, Some(OTHER_MODEL))
-        .await;
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
-        .await;
+    let fixture = Fixture::acme()
+        .checked_out()
+        .model(OTHER_MODEL)
+        .holding_a_provider_key();
+    match instance_limit {
+        Some(limit) => fixture.limited_to(limit),
+        None => fixture,
+    }
+    .declare(kestrel)
+    .await;
 }
 
 async fn playing(script: Script) -> (Kestrel, Workspace, Session) {
@@ -758,7 +747,7 @@ async fn a_message_to_a_trailing_session_starts_its_turn_at_once_with_every_slot
     assert_eq!(kestrel.turns(session.id).await.len(), 2);
     assert!(
         matches!(
-            kestrel.instruction(&session).await,
+            kestrel.database().latest_instruction(&session).await,
             Instruction::Prompt { turn: 2, prompt } if prompt == "and the next thing"
         ),
         "the message is the next Turn's prompt"
@@ -834,7 +823,7 @@ async fn a_firing_that_continues_a_trailing_session_starts_its_turn_at_once() {
     }
     assert_eq!(kestrel.turns(session.id).await.len(), 2);
     assert!(matches!(
-        kestrel.instruction(&session).await,
+        kestrel.database().latest_instruction(&session).await,
         Instruction::Prompt { turn: 2, .. }
     ));
 
@@ -1269,7 +1258,8 @@ async fn live_units_wait_for_the_transaction_that_can_end_their_session() {
     let reporting = link.report(&on.instance, Some(&on.credential), &reported);
     tokio::pin!(reporting);
     kestrel
-        .while_the_database_is_locked(async {
+        .database()
+        .while_locked(async {
             assert!(
                 tokio::time::timeout(Duration::from_millis(200), &mut reporting)
                     .await

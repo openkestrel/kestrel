@@ -13,23 +13,13 @@ use kestrel::scheduling;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use support::client::{self, Client};
+use support::fixture::Fixture;
 use support::github_stub::{self, GithubStub};
 use support::supervisor;
 use support::{Kestrel, PRIVATE_KEY, SERIALIZED};
 
 async fn an_open_workspace(kestrel: &Kestrel, said: usize) -> (String, kestrel::domain::Session) {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let session = kestrel.dispatch_session(workspace.id).await;
     for message in 1..=said {
@@ -1086,20 +1076,9 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
 #[tokio::test]
 async fn a_client_enqueues_a_session_naming_its_agent_and_shows_what_it_runs_on() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
-    kestrel
-        .declare_agent(&organization, "reviewer", "claude", Some("claude-opus-5"))
+    Fixture::acme()
+        .agent("reviewer", "claude", Some("claude-opus-5"))
+        .declare(&kestrel)
         .await;
     let opened = recorded(
         &client(
@@ -1191,18 +1170,7 @@ async fn a_client_enqueues_a_session_naming_its_agent_and_shows_what_it_runs_on(
 #[tokio::test]
 async fn a_client_naming_an_agent_the_organization_never_declared_enqueues_nothing() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     let opened = recorded(
         &client(
             &kestrel,
@@ -1267,18 +1235,7 @@ async fn a_client_naming_an_agent_the_organization_never_declared_enqueues_nothi
 #[tokio::test]
 async fn a_client_names_a_workspace_by_name_identifier_prefix_and_latest() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
 
     let first = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let second = kestrel.open_workspace("acme", "kestrel", "builder").await;
@@ -1331,18 +1288,7 @@ async fn a_client_names_a_workspace_by_name_identifier_prefix_and_latest() {
 #[tokio::test]
 async fn a_workspace_reference_matching_several_is_refused_naming_them() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     for _ in 0..17 {
         kestrel.open_workspace("acme", "kestrel", "builder").await;
     }
@@ -1386,18 +1332,7 @@ async fn a_workspace_reference_matching_several_is_refused_naming_them() {
 async fn a_workspace_reference_never_reaches_across_the_organizations_in_scope() {
     let kestrel = Kestrel::boot().await;
     for name in ["acme", "globex"] {
-        let organization = kestrel.declare_organization(name).await;
-        kestrel
-            .declare_project(
-                &organization,
-                "kestrel",
-                &["https://github.com/jtmthf/kestrel".to_owned()],
-                "main",
-            )
-            .await;
-        kestrel
-            .declare_agent(&organization, "builder", "opencode", None)
-            .await;
+        Fixture::acme().organization(name).declare(&kestrel).await;
     }
     let acme = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let globex = kestrel.open_workspace("globex", "kestrel", "builder").await;
@@ -1459,18 +1394,7 @@ async fn a_workspace_reference_never_reaches_across_the_organizations_in_scope()
 #[tokio::test]
 async fn a_client_names_a_session_by_name_identifier_prefix_and_latest() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
 
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let first = kestrel.enqueue_session(workspace.id).await;
@@ -1506,18 +1430,7 @@ async fn a_client_names_a_session_by_name_identifier_prefix_and_latest() {
 #[tokio::test]
 async fn workspace_and_session_names_remain_unique_when_creation_retries_collisions() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
 
     let mut workspace_names = HashSet::new();
     let mut session_names = HashSet::new();
@@ -1724,18 +1637,7 @@ async fn a_client_manages_triggers_without_opening_a_database() {
 #[tokio::test]
 async fn the_operator_documents_trigger_answers_and_refusals() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     let triggers = triggers_of("acme");
     let declaration = json!({
         "name": "sweep",
@@ -1790,18 +1692,7 @@ async fn the_operator_documents_trigger_answers_and_refusals() {
 #[tokio::test]
 async fn a_trigger_declared_on_a_cron_prints_its_expression_and_zone() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     let fields = "name,every,cron,zone,filter";
     let declare = |extra: &'static [&'static str]| {
         let mut args = vec![
@@ -1920,18 +1811,7 @@ async fn a_trigger_declared_on_a_cron_prints_its_expression_and_zone() {
 #[tokio::test]
 async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
 
     let (status, _) = got(&kestrel, &workspaces).await;
@@ -2230,20 +2110,9 @@ async fn workspace_and_session_refusals_carry_their_state_and_inspect_first() {
 }
 
 async fn ready_to_open(kestrel: &Kestrel) -> kestrel::domain::Organization {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
-    kestrel
-        .declare_agent(&organization, "reviewer", "opencode", None)
+    let organization = Fixture::acme()
+        .agent("reviewer", "opencode", None)
+        .declare(kestrel)
         .await;
     kestrel
         .declare_profile("acme", "jack", "Jack")
@@ -2683,18 +2552,7 @@ async fn a_client_opens_a_workspace_with_a_brief_a_model_and_a_participant() {
 #[tokio::test]
 async fn a_later_session_enqueue_refuses_a_workspace_that_never_had_a_session() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
 
     let refused = client(
@@ -2853,20 +2711,9 @@ async fn an_unbriefed_session_shows_its_state_and_preparing_step_everywhere() {
 #[tokio::test]
 async fn a_post_names_its_participant_and_refuses_an_agents_name() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
-    kestrel
-        .declare_agent(&organization, "reviewer", "opencode", None)
+    Fixture::acme()
+        .agent("reviewer", "opencode", None)
+        .declare(&kestrel)
         .await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let messages = workspace_messages_at("acme", &workspace.id.to_string());
@@ -2899,18 +2746,7 @@ async fn a_post_names_its_participant_and_refuses_an_agents_name() {
 #[tokio::test]
 async fn held_messages_are_listed_edited_and_withdrawn_over_the_boundary() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let active = kestrel.dispatch_session(workspace.id).await;
     let messages = workspace_messages_at("acme", &workspace.id.to_string());
@@ -3090,18 +2926,7 @@ async fn held_messages_are_listed_edited_and_withdrawn_over_the_boundary() {
 #[tokio::test]
 async fn a_names_first_turn_joins_once_and_a_later_turn_does_not() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
 
     kestrel.post(workspace.id, "alice", "the first thing").await;
@@ -3158,18 +2983,7 @@ fn the_published_document_requires_a_participant_on_a_post() {
 #[tokio::test]
 async fn sealing_a_workspace_whose_instance_holds_unpublished_work_is_a_conflict_not_an_outage() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
 
     let queued = kestrel.enqueue_session(workspace.id).await;
@@ -4650,18 +4464,7 @@ fn numbered(said: &Value) -> Vec<Value> {
 async fn a_client_reads_the_queue_in_enqueue_order_with_positions_its_blockers_and_limits() {
     let kestrel = Kestrel::boot().await;
     kestrel.record_dispatch(8, "local-exec").await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
 
     let first = a_queued_workspace_in(&kestrel, "acme", "kestrel").await;
     let second = a_queued_workspace_in(&kestrel, "acme", "kestrel").await;
@@ -4843,17 +4646,9 @@ async fn a_dependency_no_session_could_meet_is_refused_and_leaves_nothing_behind
     kestrel
         .fail_session(&fails, "the agent could not open a pull request")
         .await;
-    let globex = kestrel.declare_organization("globex").await;
-    kestrel
-        .declare_project(
-            &globex,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&globex, "builder", "opencode", None)
+    Fixture::acme()
+        .organization("globex")
+        .declare(&kestrel)
         .await;
     let foreign = kestrel
         .enqueue_session(
@@ -5100,17 +4895,10 @@ async fn a_client_opens_and_enqueues_sessions_that_depend_on_others() {
 async fn a_session_of_another_organization_occupying_the_shared_slots_is_counted_and_never_named() {
     let kestrel = Kestrel::boot().await;
     for name in ["acme", "globex"] {
-        let organization = kestrel.declare_organization(name).await;
-        kestrel
-            .declare_project(
-                &organization,
-                name,
-                &["https://github.com/jtmthf/kestrel".to_owned()],
-                "main",
-            )
-            .await;
-        kestrel
-            .declare_agent(&organization, "builder", "opencode", None)
+        Fixture::acme()
+            .organization(name)
+            .project(name)
+            .declare(&kestrel)
             .await;
     }
 
@@ -5249,18 +5037,7 @@ async fn the_queue_reads_the_recorded_dispatch_which_a_restart_with_new_flags_re
 #[tokio::test]
 async fn a_queue_without_a_recorded_dispatch_leaves_positions_unknown() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     let first = a_queued_workspace_in(&kestrel, "acme", "kestrel").await;
     let second = a_queued_workspace_in(&kestrel, "acme", "kestrel").await;
     kestrel.enqueue_session(first).await;
@@ -5290,18 +5067,7 @@ const QUEUE_LIMITS: &str =
 async fn a_client_reads_the_queue_with_kestrel_queue_and_whatever_fields_it_names() {
     let kestrel = Kestrel::boot().await;
     kestrel.record_dispatch(8, "local-exec").await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
 
     let first = a_queued_workspace_in(&kestrel, "acme", "kestrel").await;
     let second = a_queued_workspace_in(&kestrel, "acme", "kestrel").await;
@@ -5352,18 +5118,7 @@ async fn a_client_reads_the_queue_with_kestrel_queue_and_whatever_fields_it_name
 #[tokio::test]
 async fn a_terminal_reads_the_kestrel_queue_with_the_limits_said_first() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     let first = a_queued_workspace_in(&kestrel, "acme", "kestrel").await;
     let second = a_queued_workspace_in(&kestrel, "acme", "kestrel").await;
     let blocker = kestrel.enqueue_session(first).await;
@@ -5423,18 +5178,7 @@ fn clean_checkout() -> Vec<Observed> {
 
 /// An Organization of `maximum` live Instances whose `idle` Workspaces each keep one, clean.
 async fn at_the_instance_limit(kestrel: &Kestrel, maximum: usize, idle: usize) -> Vec<WorkspaceId> {
-    let organization = kestrel.declare_limited_organization("acme", maximum).await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().limited_to(maximum).declare(kestrel).await;
 
     let mut kept = Vec::new();
     for place in 0..idle {
@@ -5495,21 +5239,13 @@ async fn reading_the_queue_at_the_instance_limit_archives_nothing_and_dispatch_s
 /// An Organization whose `builder` runs a serialized harness, with the Subscription Profile
 /// `jack` for its Workspaces to share, and a work role recorded dispatching `slots`.
 async fn sharing_a_serialized_profile(kestrel: &Kestrel, maximum: Option<usize>, slots: usize) {
-    let organization = match maximum {
-        Some(maximum) => kestrel.declare_limited_organization("acme", maximum).await,
-        None => kestrel.declare_organization("acme").await,
-    };
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", SERIALIZED, None)
-        .await;
+    let fixture = Fixture::acme().harness(SERIALIZED);
+    match maximum {
+        Some(maximum) => fixture.limited_to(maximum),
+        None => fixture,
+    }
+    .declare(kestrel)
+    .await;
     kestrel
         .declare_profile("acme", "jack", "Jack")
         .await
@@ -5891,23 +5627,14 @@ async fn queue_and_dispatch_preserve_input_priority_at_equal_timestamps() {
     let kestrel = Kestrel::boot().await;
     let requests = mixed_slot_requests(&kestrel).await;
     let at: jiff::Timestamp = "2026-10-01T12:00:00Z".parse().unwrap();
-    kestrel.backdate_transcript(requests[1].workspace, at).await;
-    let pool = support::database(kestrel.data_dir()).await;
-    sqlx::query(
-        "UPDATE pending_message SET received_at = ? WHERE workspace_id = ? AND state = 'held'",
-    )
-    .bind(at.to_string())
-    .bind(requests[0].workspace.to_string())
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query("UPDATE session SET enqueued_at = ? WHERE id = ?")
-        .bind(at.to_string())
-        .bind(requests[2].id.to_string())
-        .execute(&pool)
-        .await
-        .unwrap();
-    pool.close().await;
+    let database = kestrel.database();
+    database
+        .backdate_transcript(requests[1].workspace, at)
+        .await;
+    database
+        .receive_held_messages_at(requests[0].workspace, at)
+        .await;
+    database.enqueue_at(&requests[2], at).await;
     assert_queue_dispatch_order(&kestrel, &requests).await;
     kestrel.teardown().await;
 }
@@ -5916,17 +5643,9 @@ async fn queue_and_dispatch_preserve_input_priority_at_equal_timestamps() {
 async fn queue_positions_include_other_organizations_without_exposing_their_sessions() {
     let kestrel = Kestrel::boot().await;
     sharing_a_serialized_profile(&kestrel, None, 8).await;
-    let other = kestrel.declare_organization("other").await;
-    kestrel
-        .declare_project(
-            &other,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&other, "builder", "opencode", None)
+    Fixture::acme()
+        .organization("other")
+        .declare(&kestrel)
         .await;
     let earlier = kestrel
         .enqueue_session(a_queued_workspace_in(&kestrel, "other", "kestrel").await)
@@ -6115,18 +5834,7 @@ async fn an_unbriefed_session(
 #[tokio::test]
 async fn an_unbriefed_session_stands_beside_the_waiting_ones_without_a_slot_of_its_own() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
 
     let waiting = a_waiting_session(
         &kestrel,
@@ -6177,7 +5885,7 @@ async fn an_unbriefed_session_stands_beside_the_waiting_ones_without_a_slot_of_i
     kestrel
         .post_while_busy(getting_ready, "alice", "what I want")
         .await;
-    assert!(kestrel.has_pending_messages(getting_ready).await);
+    assert!(kestrel.database().holds_messages(getting_ready).await);
     let queue = queue_read(&kestrel).await;
     assert!(unbriefed_row(&queue, &unbriefed.name)["pending_since"].is_string());
 
@@ -6187,18 +5895,7 @@ async fn an_unbriefed_session_stands_beside_the_waiting_ones_without_a_slot_of_i
 #[tokio::test]
 async fn a_queued_session_with_no_brief_waits_only_on_its_instance_and_is_never_numbered() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_limited_organization("acme", 1).await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().limited_to(1).declare(&kestrel).await;
     let holding = kestrel
         .dispatch_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
         .await;
@@ -6365,18 +6062,7 @@ async fn a_waiting_session_with_held_input_waits_on_full_slots_and_on_its_profil
 #[tokio::test]
 async fn a_session_that_failed_to_dispatch_shows_as_ended_and_not_as_waiting() {
     let kestrel = Kestrel::dispatching(supervisor::binary()).await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     let workspace = a_queued_workspace_in(&kestrel, "acme", "kestrel").await;
     let session = kestrel.enqueue_session(workspace).await;
 
@@ -6971,7 +6657,7 @@ async fn transcript_payloads_and_their_entry_roll_back_when_the_payload_write_fa
         .await;
     assert_eq!(started.status(), StatusCode::ACCEPTED);
     let before = payload_entries(&kestrel, &workspace).await;
-    kestrel.refuse_payload_writes().await;
+    kestrel.database().refuse_payload_writes().await;
     let response = link.report_body(&on.instance, Some(&on.credential), &json!({"session":session.id, "seq":2, "kind":"said", "message":"x".repeat(65537), "completion":{"started_at":"2026-09-29T12:00:00Z", "finished_at":"2026-09-29T12:01:00Z", "turn_outcome":null}})).await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(payload_entries(&kestrel, &workspace).await, before);
@@ -7033,8 +6719,17 @@ async fn transcript_payloads_keep_json_plans_and_completion_metadata() {
         serde_json::to_vec(&entries).unwrap()
     );
     kestrel
-        .expire_payload_entry(session.workspace, plan["seq"].as_i64().unwrap())
+        .database()
+        .backdate_entry(
+            session.workspace,
+            plan["seq"].as_i64().unwrap(),
+            jiff::Timestamp::now() - jiff::SignedDuration::from_hours(31 * 24),
+        )
         .await;
+    kestrel
+        .retain_transcript()
+        .await
+        .expect("retention should run");
     let response = reqwest::Client::new()
         .get(format!(
             "{}{}/payloads/{payload}",
@@ -7121,6 +6816,7 @@ async fn retention_expires_sealed_workspace_content_and_preserves_positions_and_
     kestrel.seal_workspace(session.workspace).await;
     let old = "2020-02-01T00:00:00Z";
     kestrel
+        .database()
         .backdate_transcript(session.workspace, old.parse().unwrap())
         .await;
     let before = payload_entries(&kestrel, &workspace).await;
@@ -7256,10 +6952,11 @@ async fn retention_rolls_back_payload_deletion_and_every_tombstone_on_failure() 
         assert_eq!(link.report_body(&on.instance, Some(&on.credential), &report).await.status(), StatusCode::ACCEPTED);
     }
     kestrel
+        .database()
         .backdate_transcript(session.workspace, "2020-02-01T00:00:00Z".parse().unwrap())
         .await;
     let before = payload_entries(&kestrel, &workspace).await;
-    kestrel.refuse_retention_updates(true).await;
+    kestrel.database().refuse_retention().await;
     assert!(kestrel.retain_transcript().await.is_err());
     assert_eq!(payload_entries(&kestrel, &workspace).await, before);
     for record in before.iter().filter(|r| r["kind"] != "shared_state") {
@@ -7286,7 +6983,7 @@ async fn retention_rolls_back_payload_deletion_and_every_tombstone_on_failure() 
         };
         assert_eq!(response.bytes().await.unwrap().as_ref(), expected);
     }
-    kestrel.refuse_retention_updates(false).await;
+    kestrel.database().allow_retention().await;
     assert_eq!(kestrel.retain_transcript().await.unwrap(), 2);
     assert_eq!(
         payload_entries(&kestrel, &workspace)
@@ -7316,6 +7013,7 @@ async fn retention_continues_bounded_batches_and_uses_append_time() {
         );
     }
     kestrel
+        .database()
         .backdate_transcript(
             session.workspace,
             jiff::Timestamp::now() - jiff::SignedDuration::from_hours(29 * 24),
@@ -7323,6 +7021,7 @@ async fn retention_continues_bounded_batches_and_uses_append_time() {
         .await;
     assert_eq!(kestrel.retain_transcript().await.unwrap(), 0);
     kestrel
+        .database()
         .backdate_transcript(
             session.workspace,
             jiff::Timestamp::now() - jiff::SignedDuration::from_hours(31 * 24),
@@ -7416,6 +7115,7 @@ async fn retention_work_role_finds_due_entries_on_startup() {
         StatusCode::ACCEPTED
     );
     kestrel
+        .database()
         .backdate_transcript(session.workspace, "2020-02-01T00:00:00Z".parse().unwrap())
         .await;
     let kestrel = kestrel.kill_and_restart().await;
