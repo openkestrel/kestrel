@@ -13,6 +13,7 @@ use crate::domain::{
 use crate::fanout::Touched;
 use crate::instance::Observed;
 use crate::link::{Instruction, SentInstruction};
+use crate::live_work::Summary;
 use crate::reference::{self, Candidate, Reference};
 use crate::store::{agent, due, organization, profile, project, timestamp};
 
@@ -1750,6 +1751,53 @@ impl<'a> Workspaces<'a> {
                 })
             })
             .transpose()
+    }
+
+    pub async fn record_work_report(
+        &mut self,
+        workspace: WorkspaceId,
+        instance: &str,
+        summary: &Summary,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO instance_work_report (workspace_id, instance, repositories, reported_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (workspace_id, instance)
+             DO UPDATE SET repositories = excluded.repositories, reported_at = excluded.reported_at",
+        )
+        .bind(workspace.to_string())
+        .bind(instance)
+        .bind(serde_json::to_string(&summary.repositories)?)
+        .bind(due(summary.reported_at))
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("recording the work the instance {instance} reported"))?;
+
+        Ok(())
+    }
+
+    pub async fn last_work_report(
+        &mut self,
+        workspace: WorkspaceId,
+    ) -> Result<Option<(String, Summary)>> {
+        sqlx::query(
+            "SELECT instance, repositories, reported_at FROM instance_work_report
+             WHERE workspace_id = ? ORDER BY reported_at DESC, instance LIMIT 1",
+        )
+        .bind(workspace.to_string())
+        .fetch_optional(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading the work last reported in the workspace {workspace}"))?
+        .map(|row| {
+            Ok((
+                row.get("instance"),
+                Summary {
+                    repositories: serde_json::from_str(row.get("repositories"))?,
+                    reported_at: row.get::<String, _>("reported_at").parse()?,
+                },
+            ))
+        })
+        .transpose()
     }
 
     /// Its credential goes with it, so nothing presenting that credential is let on the link again.

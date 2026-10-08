@@ -14,3 +14,12 @@ CREATE TABLE instance_idle_hint (
     idle_since TEXT NOT NULL,
     archive_deadline TEXT NOT NULL
 ) STRICT;
+
+-- History, never authority: it outlives its Instance and decides no hold, seal or release.
+CREATE TABLE instance_work_report (
+    workspace_id TEXT NOT NULL REFERENCES workspace (id),
+    instance TEXT NOT NULL,
+    repositories TEXT NOT NULL,
+    reported_at TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, instance)
+) STRICT;

@@ -37,7 +37,7 @@ fn identifiers_are_uuids_and_timestamps_preserve_wire_text() {
         .unwrap();
     assert!(matches!(event, Event::FollowerEvent(value) if value.id == id));
     let reported: WorkReported = serde_json::from_str(
-        r#"{"state":"reported","repositories":[],"reported_at":"2026-10-06T00:00:00.123456789+00:00"}"#,
+        r#"{"state":"reported","repositories":[],"reported_at":"2026-10-06T00:00:00.123456789+00:00","last_report":{"report":"none"}}"#,
     ).unwrap();
     let timestamp: String = reported.reported_at;
     assert_eq!(timestamp, "2026-10-06T00:00:00.123456789+00:00");
