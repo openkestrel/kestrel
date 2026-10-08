@@ -288,6 +288,19 @@ cannot silently replace a newer accepted release. The final operator acceptance 
 journeys, the `0.3` prerequisite and the marker; preparing artifacts never waits on those journeys
 ([release build specification](https://github.com/openkestrel/kestrel/issues/545)).
 
+The final gate uses independent fresh installs for browser-only Claude on Linux amd64 and SSH
+CLI-only Codex on Linux arm64, with a supplementary real OpenCode Session from the browser. Both
+primary journeys open a pull request against the same immutable candidate. Native release checks
+retain coverage of all four CLI targets and eight image builds; contributor validation keeps its
+existing owner. The gate verifies every chosen build owner is complete, records the candidate and
+journey evidence, then verifies promotion before a reviewed marker change
+([final acceptance gate](https://github.com/openkestrel/kestrel/issues/646)).
+
+Fork-upstream declaration or discovery is deferred to `0.7`. The first-run journeys close with
+a selected single-repository App connection and honest pull-request availability before the first
+pull request; they do not require upstream routing
+([fork availability decision](https://github.com/openkestrel/kestrel/issues/444)).
+
 `kestrel login --token` imports an existing token or key through hidden input or stdin;
 `kestrel login --file PATH` imports a login file. Both name their harness and validate the input;
 interactive login prompts for a missing method, and non-interactive login requires one when
@@ -476,6 +489,9 @@ Multi-repository GitHub installations are explicit work at this rung: settle sha
 ownership, repository bindings and authority routing through
 [Define the Integration domain and architecture](https://github.com/openkestrel/kestrel/issues/140).
 `0.4` retains one repository per Integration while making its maintenance and replacement deliberate.
+Fork-upstream declaration or discovery also belongs here, so availability can be established before
+a fork's first pull request arrives
+([fork availability follow-up](https://github.com/openkestrel/kestrel/issues/444)).
 
 Scheduled Triggers join the same Event and Firing path, with intervals and time-zone-aware calendar
 recurrence, including the [cron acceptance slice](https://github.com/jtmthf/kestrel/issues/198).
