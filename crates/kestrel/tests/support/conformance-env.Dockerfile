@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
-# The second agent the conformance suite runs against is reached through an adapter that is a
-# Node program, and the shipped image carries neither (ADR-0007), so it is built into a copy.
+# The second agent the conformance suite runs against is reached through an older adapter
+# release, built into a copy of the shipped image that already carries the current one.
 
 # No default: the tests always pass the `kestrel-env` the run is consuming, and a build by hand
 # must name one rather than quietly derive from an operator's.

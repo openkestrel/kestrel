@@ -1,5 +1,5 @@
 //! The `kestrel` control-plane image: one artifact, every role selected by argv, over the
-//! volume its database lives on, and reached by a Client that is not in it.
+//! volume its database lives on, carrying the `kestrel` Client beside the control plane.
 //!
 //! Every test here builds and runs the image, which a `cargo test` has no business doing on
 //! its own, so they are ignored by default and CI runs them with `--ignored`.
@@ -35,15 +35,18 @@ fn the_image_carries_the_client_its_compute_driver_executes() {
     );
 }
 
-/// The Client is installed where an operator is, never beside the database (ADR-0015).
+/// The Client rides beside the database so an operator reaches it where the control plane
+/// runs, while the image still starts the control plane and nothing else.
 #[test]
 #[ignore = "builds and runs the kestrel image"]
-fn the_image_carries_no_client() {
-    for client in ["kestrel", "kestrel-client"] {
-        let found = control_plane::running(&["sh", "-c", &format!("command -v {client}")]);
+fn the_cli_answers_beside_the_control_plane_it_starts() {
+    let help = control_plane::running(&["kestrel", "--help"]);
 
-        assert_ne!(found.code, 0, "the image carries {client} at {}", found.out);
-    }
+    assert_eq!(help.code, 0, "kestrel --help in the image said {help:?}");
+    assert!(
+        help.out.contains("Reach a kestrel control plane"),
+        "kestrel --help in the image said {help:?}"
+    );
 }
 
 #[test]

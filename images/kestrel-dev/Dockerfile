@@ -7,13 +7,6 @@ FROM rust@sha256:c37af730be4fd8104cbf9aedbd6ab259e51ca2d5437817a0f8680edf66ac6c2
 
 RUN rustup component add rustfmt clippy
 
-# node:24-trixie-slim
-FROM node@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0 AS adapters
-
-WORKDIR /opt/acp
-COPY images/kestrel-dev/package.json images/kestrel-dev/package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts
-
 # debian:trixie-slim
 FROM debian@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS gh
 
@@ -49,10 +42,6 @@ RUN apt-get update \
     && rm --recursive --force /var/lib/apt/lists/*
 
 COPY --from=gh /usr/local/bin/gh /usr/local/bin/gh
-COPY --from=adapters /usr/local/bin/node /usr/local/bin/node
-COPY --from=adapters /opt/acp /opt/acp
-RUN ln --symbolic /opt/acp/node_modules/.bin/claude-agent-acp /usr/local/bin/claude-agent-acp \
-    && ln --symbolic /opt/acp/node_modules/.bin/codex-acp /usr/local/bin/codex-acp
 
 # Owned by the agent's user, because cargo writes its registry and git caches under CARGO_HOME.
 COPY --from=rust --chown=kestrel:kestrel /usr/local/rustup /usr/local/rustup

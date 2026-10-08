@@ -90,18 +90,43 @@ fn the_supervisor_the_harness_and_git_are_each_invocable_in_the_image() {
 
 #[test]
 #[ignore = "builds and runs the kestrel-env image"]
-fn the_image_carries_no_node_runtime_and_no_claude_binary() {
-    assert!(
-        !anything_named(&["kestrel-supervisor"]).is_empty(),
-        "the sweep found nothing at all, so it proves nothing about what is absent"
-    );
+fn the_label_names_the_harnesses_the_image_carries() {
+    assert_eq!(image::declared_harnesses(image::built()), image::HARNESSES);
+}
 
-    let found = anything_named(&["node", "nodejs", "npm", "npx", "bun", "claude"]);
+#[test]
+#[ignore = "builds and runs the kestrel-env image"]
+fn each_catalogued_harness_answers_an_acp_handshake_in_the_image() {
+    image::each_harness_answers(image::built());
+}
 
-    assert!(
-        found.is_empty(),
-        "the image carries what ADR-0007 took out of it:\n{found}"
-    );
+#[test]
+#[ignore = "builds and runs the kestrel-env image"]
+fn the_vendor_sign_in_executables_answer_without_credentials_or_sign_in() {
+    for command in [&["claude", "--version"][..], &["codex", "--version"]] {
+        let ran = image::running(command);
+        assert_eq!(ran.code, 0, "{command:?} in the image said {ran:?}");
+        assert!(
+            !ran.out.is_empty(),
+            "{command:?} in the image answered nothing: {ran:?}"
+        );
+    }
+
+    for (command, usage) in [
+        (&["claude", "setup-token", "--help"][..], "setup-token"),
+        (&["codex", "login", "--help"][..], "device-auth"),
+    ] {
+        let ran = image::running(command);
+        let said = format!("{}\n{}", ran.out, ran.err);
+        assert_eq!(ran.code, 0, "{command:?} in the image said {ran:?}");
+        assert!(
+            said.contains(usage),
+            "{command:?} in the image never named its sign-in command: {ran:?}"
+        );
+    }
+
+    let node = image::running(&["node", "--version"]);
+    assert_eq!(node.code, 0, "node in the image said {node:?}");
 }
 
 #[test]
@@ -185,19 +210,6 @@ async fn killing_the_supervisor_in_the_environment_ends_the_session_and_nothing_
 
     environment.destroy();
     kestrel.teardown().await;
-}
-
-fn anything_named(names: &[&str]) -> String {
-    let mut sweep = vec!["find", "/", "-xdev", "!", "-type", "d", "("];
-    for (nth, name) in names.iter().enumerate() {
-        if nth > 0 {
-            sweep.push("-o");
-        }
-        sweep.extend_from_slice(&["-name", name]);
-    }
-    sweep.push(")");
-
-    image::running(&sweep).out
 }
 
 fn an_environment(kestrel: &Kestrel, on: &OnTheLink) -> Environment {
