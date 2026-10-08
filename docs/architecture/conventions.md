@@ -61,9 +61,7 @@ Patterns the code relies on that no single file states. Comment style is in `AGE
   process against a temp SQLite file and drives it through the operator boundary and link. Assert in
   Workspaces, Sessions and Transcripts; reach `Store` and `Log` only through it.
 - **Ordinary tests share one binary.** `crates/kestrel/tests/suite/` holds a module per area, so the
-  harness compiles once: select with `cargo test -p kestrel --test suite <module>::`. Under plain
-  `cargo test` they share a process, so a test owns its fixture and leans on nothing another left
-  behind; CI's nextest still runs each in its own process.
+  harness compiles once: select with `cargo test -p kestrel --test suite <module>::`.
 - **The real supervisor runs as a local process.** `LocalExec` spawns the `kestrel-supervisor` binary
   against `kestrel-scripted-agent`, so most tests need no Docker.
 - **Heavier tests are `#[ignore]`d and CI runs them**, each suite its own file and binary beside
@@ -74,8 +72,8 @@ Patterns the code relies on that no single file states. Comment style is in `AGE
 - **The supervisor has its own suite** in `crates/kestrel-supervisor/tests/` against a stub link.
 - **Git in tests is hermetic** only if your global config is: run `cargo test` with
   `GIT_CONFIG_GLOBAL=/dev/null` when commit signing is configured.
-- **CI runs the default suite with `cargo nextest`**, one process per test, so a test cannot lean on
-  state another left in the process. `cargo test` still runs it locally.
+- **CI runs the default suite with `cargo nextest`**, one process per test. Plain `cargo test` runs
+  all of `suite` in one process, so a test owns its fixture and leans on nothing another left there.
 - **CI is the merge gate** and a merge queue lands batches ([ADR-0027](../adr/0027-ci-gates-the-merge-and-a-queue-lands-the-batch.md)).
   Change detection is a job in the workflow, never a path filter. A queue entry whose exact tree
   already passed is not run again, and a test that passes only on retry fails the gate

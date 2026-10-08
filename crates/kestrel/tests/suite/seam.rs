@@ -1,5 +1,5 @@
-//! Ticket 02's durability assertions (`suite/cli.rs`), re-expressed against the primary test
-//! seam instead of against the CLI subprocess.
+//! The durability assertions of `cli`, against the primary test seam instead of the CLI
+//! subprocess.
 
 use crate::support;
 
