@@ -182,6 +182,7 @@ class Reads {
 							branch: "main",
 							pull_request: null,
 							last_report: { report: "none" },
+							earlier_reports: [],
 						},
 					),
 				});
@@ -419,6 +420,7 @@ test("changed work and a learned pull request update on a Workspace notice", asy
 				state: "reported",
 				reported_at: new Date().toISOString(),
 				last_report: { report: "none" },
+				earlier_reports: [],
 				repositories: [
 					{
 						repository: "https://github.com/openkestrel/kestrel",
@@ -462,6 +464,7 @@ test("changed work and a learned pull request update on a Workspace notice", asy
 				state: "reported",
 				reported_at: new Date().toISOString(),
 				last_report: { report: "none" },
+				earlier_reports: [],
 				repositories: [
 					{
 						repository: "https://github.com/openkestrel/kestrel",

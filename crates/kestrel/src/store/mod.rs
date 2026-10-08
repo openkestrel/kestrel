@@ -655,10 +655,10 @@ mod tests {
             .await
             .unwrap()
             .workspaces()
-            .last_work_report(workspace.id)
+            .work_reports(workspace.id)
             .await
             .unwrap()
-            .unwrap();
+            .remove(0);
         assert_eq!(last.instance, reporter.instance);
         assert_eq!(last.summary.repositories, repeated.repositories);
         assert_eq!(last.summary.reported_at, repeated.reported_at);

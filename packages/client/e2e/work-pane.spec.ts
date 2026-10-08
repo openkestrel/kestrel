@@ -191,6 +191,7 @@ class Reads {
 							branch: "main",
 							pull_request: null,
 							last_report: { report: "none" },
+							earlier_reports: [],
 						},
 					),
 				});
@@ -364,6 +365,7 @@ test("committed-but-unpushed, changed and untracked work show separately", async
 		state: "reported",
 		reported_at: new Date().toISOString(),
 		last_report: { report: "none" },
+		earlier_reports: [],
 		repositories: [
 			{
 				repository: "https://github.com/openkestrel/kestrel",
@@ -588,6 +590,7 @@ test("stale work and a lost conversation are stated plainly", async ({ page, req
 		state: "not_answering",
 		message: "the Instance isn't answering",
 		last_report: { report: "none" },
+		earlier_reports: [],
 	};
 	reads.sessions = [
 		session(1, {

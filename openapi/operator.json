@@ -2737,13 +2737,21 @@
           },
           "last_report": {
             "$ref": "#/components/schemas/WorkLastReport"
+          },
+          "earlier_reports": {
+            "type": "array",
+            "description": "The last report of each other Instance the Workspace has had, newest first, each history for its own Instance.",
+            "items": {
+              "$ref": "#/components/schemas/WorkInstanceReport"
+            }
           }
         },
         "required": [
           "state",
           "repositories",
           "reported_at",
-          "last_report"
+          "last_report",
+          "earlier_reports"
         ]
       },
       "WorkNoInstance": {
@@ -2763,13 +2771,21 @@
           },
           "last_report": {
             "$ref": "#/components/schemas/WorkLastReport"
+          },
+          "earlier_reports": {
+            "type": "array",
+            "description": "The last report of each other Instance the Workspace has had, newest first, each history for its own Instance.",
+            "items": {
+              "$ref": "#/components/schemas/WorkInstanceReport"
+            }
           }
         },
         "required": [
           "state",
           "branch",
           "pull_request",
-          "last_report"
+          "last_report",
+          "earlier_reports"
         ]
       },
       "WorkNotAnswering": {
@@ -2783,12 +2799,20 @@
           },
           "last_report": {
             "$ref": "#/components/schemas/WorkLastReport"
+          },
+          "earlier_reports": {
+            "type": "array",
+            "description": "The last report of each other Instance the Workspace has had, newest first, each history for its own Instance.",
+            "items": {
+              "$ref": "#/components/schemas/WorkInstanceReport"
+            }
           }
         },
         "required": [
           "state",
           "message",
-          "last_report"
+          "last_report",
+          "earlier_reports"
         ]
       },
       "WorkLastReport": {
