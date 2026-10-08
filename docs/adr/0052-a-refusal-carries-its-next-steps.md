@@ -22,8 +22,12 @@ on stderr. Successful output stays on stdout. Evidence is sanitized and carries 
 
 Readiness means there is a usable path to starting work. An unused broken sign-in is a warning;
 work that selects it gets a contextual blocking gap. Readiness reads answer HTTP 200 and reuse
-the reason and next-step vocabulary. A request missing a setup prerequisite answers 409 with a
-typed gap. The CLI retains exits 0–5 and adds 78 for blocked readiness; bare `kestrel` and
+the reason and next-step vocabulary. Applying work without a setup prerequisite answers 409 with a
+typed gap. A valid partial start preview answers 200 with resolved values, saved prerequisites and
+all missing inputs that can be established, without writes or secrets; malformed input and
+unavailable inspections retain typed failures. This inspection/apply distinction was agreed in
+[Specify the Operator, readiness and CLI 0.4 build tickets](https://github.com/openkestrel/kestrel/issues/535).
+The CLI retains exits 0–5 and adds 78 for blocked readiness; bare `kestrel` and
 `kestrel status` return 78 when blocked, 0 when ready. Connection failures remain exit 5.
 
 Session failure evidence crosses the link as generic facts: authentication required, a missing

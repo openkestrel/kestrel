@@ -228,6 +228,13 @@ Session. Saving the Operator's name is one prerequisite, not the end of setup: r
 first confirmed start succeeds resumes the remaining steps. Later gaps use contextual fix-it states
 and settings ([browser setup decision](https://github.com/openkestrel/kestrel/issues/491)).
 
+The confirmed start transaction completes initial setup when it commits the Workspace and enqueued
+Session, with completion durable across restarts. Later execution failures use contextual repairs.
+A partial preview returns saved prerequisites, resolved values and all established gaps without
+writes or secrets. Start creates missing Project/Agent declarations and reuses matching ones;
+conflicts require explicit declaration/settings changes before another review
+([shared start decision](https://github.com/openkestrel/kestrel/issues/535)).
+
 The CLI asks "What should the Session do?" and keeps `--brief` for its initial prompt. A start
 without a terminal names all missing inputs it can establish and requires `--yes` before any
 write. Its review distinguishes already-saved setup from the start plan; declining creates no
