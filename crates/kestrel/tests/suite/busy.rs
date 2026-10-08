@@ -113,8 +113,9 @@ async fn a_database_locked_past_the_busy_timeout_stops_neither_the_control_plane
         })
         .await;
 
-    for answered in answers {
-        let answered = answered.expect("both boundaries should answer");
+    let [operator, link] = answers;
+    for answered in [&operator, &link] {
+        let answered = answered.as_ref().expect("both boundaries should answer");
         assert_eq!(
             answered.status(),
             StatusCode::SERVICE_UNAVAILABLE,
@@ -127,6 +128,16 @@ async fn a_database_locked_past_the_busy_timeout_stops_neither_the_control_plane
             answered.url()
         );
     }
+    let refusal: serde_json::Value = operator
+        .expect("the operator boundary should answer")
+        .json()
+        .await
+        .expect("a JSON refusal");
+    assert_eq!(refusal["kind"], "unavailable", "{refusal}");
+    assert_eq!(refusal["context"]["operation"], "list_organizations");
+    assert_eq!(refusal["context"]["retry_after_seconds"], 1);
+    assert_eq!(refusal["next_steps"][0]["action"], "retry_read");
+    assert_eq!(refusal["next_steps"][0]["retry_after_seconds"], 1);
     assert!(
         kestrel.is_running(),
         "the control plane stopped for a busy database"

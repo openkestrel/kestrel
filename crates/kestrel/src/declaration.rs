@@ -271,6 +271,7 @@ fn check_document(document: &Document, mode: &ApplyMode) -> Result<()> {
             field,
             operation,
             constraint,
+            allowed: None,
             message,
         }
         .into())

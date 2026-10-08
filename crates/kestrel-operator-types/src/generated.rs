@@ -9356,6 +9356,14 @@ impl<'de> Deserialize<'de> for Action {
         if input.as_object().is_some_and(|object| {
             true && object.get("action").is_some_and(|value| {
                 value.is_null() || matches!(value.to_string().as_str(), "\"stop_session\"")
+            }) && object.get("effect").is_some_and(|value| {
+                value.is_null()
+                    || matches!(
+                        value.to_string().as_str(),
+                        "\"fails_session\"" | "\"ends_session\"" | "\"discards_unpublished_work\""
+                    )
+            }) && object.get("requires_choice").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "true")
             })
         }) {
             if let Ok(candidate) = serde_json::from_value::<StopSessionAction>(input.clone()) {
@@ -9406,6 +9414,14 @@ impl<'de> Deserialize<'de> for Action {
         if input.as_object().is_some_and(|object| {
             true && object.get("action").is_some_and(|value| {
                 value.is_null() || matches!(value.to_string().as_str(), "\"release_instance\"")
+            }) && object.get("effect").is_some_and(|value| {
+                value.is_null()
+                    || matches!(
+                        value.to_string().as_str(),
+                        "\"fails_session\"" | "\"ends_session\"" | "\"discards_unpublished_work\""
+                    )
+            }) && object.get("requires_choice").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "true")
             })
         }) {
             if let Ok(candidate) = serde_json::from_value::<ReleaseInstanceAction>(input.clone()) {
@@ -9604,7 +9620,9 @@ pub struct StopSessionAction {
     pub action: serde_json::Value,
     ///Display-only explanation of the destructive effect; wording never decides whether confirmation is required.
     pub consequence: String,
+    pub effect: Consequence,
     pub organization: String,
+    pub requires_choice: ExplicitChoice,
     pub session: String,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -9632,10 +9650,45 @@ pub struct RetryReadAction {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ReleaseInstanceAction {
     pub action: serde_json::Value,
+    ///Display-only explanation of the destructive effect; wording never decides whether confirmation is required.
     pub consequence: String,
+    pub effect: Consequence,
     pub instance: Option<String>,
     pub organization: String,
+    pub requires_choice: ExplicitChoice,
     pub workspace: String,
+}
+///A destructive step is taken only by an explicit choice, whatever its consequence says; a Client never runs it as a default or automatic repair.
+pub type ExplicitChoice = serde_json::Value;
+///What a destructive step does to work, typed so a Client never reads it from the consequence sentence.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum Consequence {
+    #[default]
+    #[serde(rename = "fails_session")]
+    FailsSession,
+    #[serde(rename = "ends_session")]
+    EndsSession,
+    #[serde(rename = "discards_unpublished_work")]
+    DiscardsUnpublishedWork,
+}
+impl Consequence {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::FailsSession => "fails_session",
+            Self::EndsSession => "ends_session",
+            Self::DiscardsUnpublishedWork => "discards_unpublished_work",
+        }
+    }
+}
+impl ::std::fmt::Display for Consequence {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for Consequence {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ListResourcesAction {

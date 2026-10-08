@@ -24,43 +24,58 @@ routes.
 
 ### Errors
 
-Domain code refuses with `declined::Declined` when the caller can act on the reason; the boundary
-maps it to a status. Declaration, named-reference, Profile and Provider Credential refusals refuse
-with the typed `declined::Reason` instead, which the boundary maps to a wire `Diagnostic` rather
-than a status alone (ADR-0052): `{ kind, message, field?, context, next_steps }`. `context` is a
-kind-specific record (a missing reference's resource and scope, an invalid field's name and
-constraint, a state conflict's resource and current state); `next_steps` is zero or more typed
-`Action`s — a declaration naming its known inputs and the ones still missing, an inspection, or a
-list, never a shell command or a browser route. `message` and `field` stay in the same place a
-plain `Refusal` carries them, so a Client that only reads those two keeps working; `kind`,
-`context` and `next_steps` land for each surface as its own migration ticket does. Anything else is
-`Unavailable`. An invalid field's `constraint` and a state conflict's `state` are short tokens
-(`declined::Constraint`, `owned_by_another`), never the display sentence.
+Domain code refuses with the typed `declined::Reason`, which the boundary maps to a wire
+`Diagnostic` (ADR-0052): `{ kind, message, field?, context, next_steps }`. `context` is a
+kind-specific record (a missing reference's resource and scope, an invalid field's name,
+constraint and allowed values, a state conflict's resource, current state and holding Session);
+`next_steps` is an ordered list of typed `Action`s, never a shell command or a browser route. A
+`Reason` about a request field is wrapped in `declined::Concerning`, which sets `field`. `message`
+is display only: nothing classifies it, so rewording one cannot change a status or a step. Tokens
+in `context` (`declined::Constraint`, a state such as `session_in_flight`, `sealed`,
+`no_instance` or a Session's phase) are short and stable, never the display sentence.
 
-A route documented with the `Diagnosed` response may still answer a refusal no producer types yet
-with the plain `Refusal` on the same status: the `DiagnosedRefusal` schema admits both, and only
-`kind` tells them apart. 400 and 503 always answer the plain `Refusal`.
+A state conflict's, forbidden action's or expiry's steps are a `declined::Next`: an inspection of
+the record to look at first, then any steps a person may choose — enqueueing in a Workspace that
+continues, stopping the Session that holds it, releasing an Instance that may hold the only copy
+of its work. A stopping or releasing step carries a display `consequence`, a typed `effect`
+(`fails_session`, `ends_session`, `discards_unpublished_work`) and `requires_choice: true`; a Client
+asks before taking one and never takes it as an automatic repair. Held Message refusals inspect
+their Workspace, and changing one another participant wrote is a `forbidden_action` on its
+author, not a Policy.
+
+A malformed request and a control plane that could not answer are raised without naming an
+operation; `operator::diagnosing` fills it in from the route, as the route's `operationId` in
+snake case (`operator::operation`, pinned against the document by a unit test). A 503 on a read
+offers `retry_read`; on a write it offers `inspect_operation` with `uncertain: true`, because an
+unanswered write may have landed and is never replayed. A busy database carries the same delay in
+`Retry-After` and `retry_after_seconds`.
+
+`declined::Declined` remains for producers no ticket has typed yet (Integration registration,
+the GitHub App flow, starts, Trigger declaration and supervisor-relayed read refusals); they answer
+a plain `Refusal` (`message` only) on their status, and the shared `Refused` response's
+`DiagnosedRefusal` schema admits both, told apart by `kind`. The loopback guard's 403 and an unknown
+follower lease's 404 are also plain. Anything else is `Unavailable`.
 
 | Refusal | Status | Client exit |
 | --- | --- | --- |
 | `Reason::MissingReference`, `Reason::AmbiguousReference` | 404 | 3 unresolved |
+| Malformed request, bad cursor | 400 | 4 rejected |
+| `Reason::Forbidden` | 403 | 4 rejected |
+| `Reason::StateConflict` | 409 | 4 rejected |
+| `Reason::Expired` | 410 | 4 rejected |
 | `Reason::InvalidField` | 422 | 4 rejected |
-| `Reason::Taken` (an existing record's state conflicts) | 409 | 4 rejected |
 | `Declined::Unacceptable` | 422 | 4 rejected |
 | `Declined::Missing`, `Declined::Ambiguous` | 404 | 3 unresolved |
 | `Declined::Taken` | 409 | 4 rejected |
-| Malformed request, bad cursor | 400 | 4 rejected |
 | SQLite busy | 503 with `Retry-After: 1` | 5 unavailable |
+| `Reason::InstanceTimeout` | 504 | 5 unavailable |
 | Anything else | 503 | 5 unavailable |
 
 The exit numbers are published by `kestrel exit-codes` and never move (`kestrel-client/src/exit.rs`).
-The body of a refusal not yet carrying a Diagnostic is the reason alone, written to be shown to a
-person, plus the `field` the reason concerns when it is about one (a declared `participant`, for
-instance). The complete Diagnostic/Action contract — every `kind` and `action`, including the
-setup, failure and Client-local variants no producer raises yet — is authored once in
-`openapi/operator.json` under `Diagnostic` and `Action`; Workspace and Session operations, Held
-Messages and link evidence grow their own producers under later tickets without changing this
-shared shape.
+The complete Diagnostic/Action contract — every `kind` and `action`, including the setup, failure
+and Client-local variants no producer raises yet — is authored once in `openapi/operator.json`
+under `Diagnostic` and `Action`; link evidence grows its producers under its own ticket without
+changing this shared shape.
 
 ### References
 

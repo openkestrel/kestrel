@@ -194,7 +194,7 @@ pub fn router(store: Store, shutdown: CancellationToken, live: crate::live::Live
 pub async fn start(store: &Store, session: &Session, harness: Harness) -> Result<SentInstruction> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(session.workspace).await?;
-    workspace.accepts("turn")?;
+    workspace.accepts("start_turn", "turn")?;
     let prompt = instruction(&mut tx, &workspace).await?.ok_or_else(|| {
         anyhow::anyhow!(
             "the workspace {} has no unfollowed brief and nothing posted since its last session \
@@ -226,7 +226,7 @@ pub async fn unbriefed(
 ) -> Result<SentInstruction> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(session.workspace).await?;
-    workspace.accepts("turn")?;
+    workspace.accepts("start_turn", "turn")?;
     let sent = sent_on(
         &mut tx,
         session,
@@ -289,7 +289,7 @@ pub async fn instruct(
 ) -> Result<SentInstruction> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(session.workspace).await?;
-    workspace.accepts("turn")?;
+    workspace.accepts("start_turn", "turn")?;
     let sent = sent_on(&mut tx, session, instruction).await?;
     tx.commit().await?;
 

@@ -92,6 +92,7 @@ pub async fn declare(
             field: "owner",
             operation: "declare_subscription_profile",
             constraint: Constraint::NonEmpty,
+            allowed: None,
             message: "a subscription profile belongs to a person, and none was named".to_owned(),
         });
     }
@@ -116,6 +117,7 @@ pub async fn hold(
             field: "secret",
             operation: "hold_subscription_profile_entry",
             constraint: Constraint::NonEmpty,
+            allowed: None,
             message: format!("a {} with nothing in it is no login", entry.kind.as_str()),
         });
     }
@@ -207,6 +209,7 @@ fn within_a_home(path: &str) -> Result<()> {
             field: "path",
             operation: "hold_subscription_profile_entry",
             constraint: Constraint::BeneathHome,
+            allowed: None,
             message: format!("{path} is not a path beneath the agent's home"),
         });
     }

@@ -174,8 +174,9 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   acceptance gate, CLI distribution or generated digest-pinned release Compose. Main still moves
   `latest`; the decided release process reserves it for accepted releases.
 
-- **Typed next steps** ([ADR-0052](../adr/0052-a-refusal-carries-its-next-steps.md)): refusal
-  sentences still determine some statuses and CLI corrections; readiness and structured Session
+- **Typed next steps** ([ADR-0052](../adr/0052-a-refusal-carries-its-next-steps.md)): the CLI
+  and browser still read refusal sentences for corrections; Integration, GitHub App, start and
+  Trigger declaration refusals still answer a plain `Refusal`; readiness and structured Session
   failure evidence do not yet carry the shared diagnostic contract.
 
 - **Integration identity** ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)): the

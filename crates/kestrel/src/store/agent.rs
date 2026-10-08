@@ -84,6 +84,7 @@ impl<'a> Agents<'a> {
                 resource: Resource::Agent,
                 reference: name.to_owned(),
                 organization: Some(organization.name.clone()),
+                within: None,
                 message: format!(
                     "no agent named {name} in the organization {}",
                     organization.name

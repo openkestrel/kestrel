@@ -248,11 +248,15 @@ impl<'a> Triggers<'a> {
             .bind(name)
             .fetch_optional(&mut *self.connection)
             .await?
-            .with_context(|| {
-                format!(
+            .ok_or_else(|| crate::declined::Reason::MissingReference {
+                resource: crate::declined::Resource::Trigger,
+                reference: name.to_owned(),
+                organization: Some(organization.name.clone()),
+                within: None,
+                message: format!(
                     "no trigger named {name} in the organization {}",
                     organization.name
-                )
+                ),
             })?;
 
         trigger(self.connection, &row).await

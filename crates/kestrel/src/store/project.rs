@@ -99,6 +99,7 @@ impl<'a> Projects<'a> {
                 resource: Resource::Project,
                 reference: name.to_owned(),
                 organization: Some(organization.name.clone()),
+                within: None,
                 message: format!(
                     "no project named {name} in the organization {}",
                     organization.name

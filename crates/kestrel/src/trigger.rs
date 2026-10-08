@@ -452,11 +452,16 @@ async fn tested(
         Against::Event(event) => {
             let event = tx.integrations().event(event).await?;
             if event.organization != trigger.organization.id {
-                bail!(
-                    "no event {} in the organization {}",
-                    event.record_id,
-                    trigger.organization.name
-                );
+                bail!(crate::declined::Reason::MissingReference {
+                    resource: crate::declined::Resource::Event,
+                    reference: event.record_id.to_string(),
+                    organization: Some(trigger.organization.name.clone()),
+                    within: None,
+                    message: format!(
+                        "no event {} in the organization {}",
+                        event.record_id, trigger.organization.name
+                    ),
+                });
             }
             let matches = tx.triggers().matches(trigger, &event).await?;
             (matches, event, None)

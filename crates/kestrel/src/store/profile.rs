@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
-use crate::declined::{Reason, Resource};
+use crate::declined::{Next, Reason, Resource};
 use crate::domain::{Organization, SubscriptionProfile, SubscriptionProfileId};
 use crate::keyring::Keyring;
 use crate::profile::{Contents, Entry, Held, Kind};
@@ -32,12 +32,14 @@ impl<'a> Profiles<'a> {
     ) -> Result<Declared<SubscriptionProfile>> {
         if let Some(found) = self.find(organization, name).await? {
             if found.owner != owner {
-                bail!(Reason::Taken {
+                bail!(Reason::StateConflict {
                     operation: "declare_subscription_profile",
                     state: "owned_by_another",
                     resource: Resource::SubscriptionProfile,
                     reference: name.to_owned(),
                     organization: Some(organization.name.clone()),
+                    holding_session: None,
+                    next: Next::inspect(Resource::SubscriptionProfile, name),
                     message: format!(
                         "the subscription profile {name} belongs to {}, and a profile never \
                          changes hands",
@@ -86,6 +88,7 @@ impl<'a> Profiles<'a> {
                 resource: Resource::SubscriptionProfile,
                 reference: name.to_owned(),
                 organization: Some(organization.name.clone()),
+                within: None,
                 message: format!(
                     "no subscription profile named {name} in the organization {}",
                     organization.name

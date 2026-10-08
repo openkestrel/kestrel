@@ -85,6 +85,7 @@ impl<'a> Organizations<'a> {
                 resource: Resource::Organization,
                 reference: name.to_owned(),
                 organization: None,
+                within: None,
                 message: format!("no organization named {name}"),
             }
             .into()

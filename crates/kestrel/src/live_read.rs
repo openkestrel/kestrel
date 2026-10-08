@@ -12,7 +12,7 @@ use tokio::time::Instant;
 use tracing::info;
 use uuid::Uuid;
 
-use crate::declined::Declined;
+use crate::declined::{Declined, Reason};
 use crate::store::Store;
 
 const ANSWER_BEGUN_WITHIN: Duration = Duration::from_secs(10);
@@ -38,6 +38,18 @@ pub enum Read {
     },
     Commits,
     Stashes,
+}
+
+impl Read {
+    pub const fn operation(&self) -> &'static str {
+        match self {
+            Read::Files { .. } => "workspace_files",
+            Read::File { .. } => "workspace_file",
+            Read::Changes { .. } => "workspace_changes",
+            Read::Commits => "workspace_commits",
+            Read::Stashes => "workspace_stashes",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -360,19 +372,36 @@ pub async fn read(
     reference: &str,
     read: Read,
 ) -> anyhow::Result<AnswerBody> {
+    let operation = read.operation();
     let mut tx = store.read().await?;
     let organization = tx.organizations().named(organization).await?;
     let workspace = tx.workspaces().resolved(&organization, reference).await?;
     let Some(instance) = tx.workspaces().instance(workspace.id).await? else {
-        return Err(Declined::Unacceptable(format!(
-            "the Workspace {} has no Instance to read; its work is on the branch {}",
-            workspace.name, workspace.checkout.branch
-        ))
+        return Err(crate::workspace::workspace_conflict(
+            operation,
+            &workspace,
+            "no_instance",
+            format!(
+                "the Workspace {} has no Instance to read; its work is on the branch {}",
+                workspace.name, workspace.checkout.branch
+            ),
+        )
         .into());
     };
     drop(tx);
 
-    reads.read(&instance, read).await
+    reads.read(&instance, read).await.map_err(|error| {
+        if !error.is::<NotAnswering>() {
+            return error;
+        }
+        Reason::InstanceTimeout {
+            operation,
+            workspace: workspace.id.to_string(),
+            instance: instance.clone(),
+            message: NotAnswering.to_string(),
+        }
+        .into()
+    })
 }
 
 #[cfg(test)]
