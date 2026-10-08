@@ -2734,12 +2734,78 @@
           "reported_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "last_report": {
+            "$ref": "#/components/schemas/WorkLastReport"
           }
         },
         "required": [
           "state",
           "repositories",
-          "reported_at"
+          "reported_at",
+          "last_report"
+        ]
+      },
+      "WorkLastReport": {
+        "description": "The latest complete work report any of the Workspace's Instances sent, kept through link loss, release and restarts. It is history, never current work: it does not establish Unpublished Work or make a read live.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/WorkNoReport"
+          },
+          {
+            "$ref": "#/components/schemas/WorkInstanceReport"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "report",
+          "mapping": {
+            "none": "#/components/schemas/WorkNoReport",
+            "received": "#/components/schemas/WorkInstanceReport"
+          }
+        }
+      },
+      "WorkNoReport": {
+        "type": "object",
+        "properties": {
+          "report": {
+            "const": "none"
+          }
+        },
+        "required": [
+          "report"
+        ]
+      },
+      "WorkInstanceReport": {
+        "type": "object",
+        "properties": {
+          "report": {
+            "const": "received"
+          },
+          "instance": {
+            "type": "string",
+            "description": "The Instance that sent the report."
+          },
+          "instance_current": {
+            "type": "boolean",
+            "description": "Whether that Instance is still the Workspace's. When false the report belongs to an Instance the Workspace let go, never to its replacement."
+          },
+          "reported_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkRepository"
+            }
+          }
+        },
+        "required": [
+          "report",
+          "instance",
+          "instance_current",
+          "reported_at",
+          "repositories"
         ]
       },
       "WorkNoInstance": {
@@ -2756,12 +2822,16 @@
               "string",
               "null"
             ]
+          },
+          "last_report": {
+            "$ref": "#/components/schemas/WorkLastReport"
           }
         },
         "required": [
           "state",
           "branch",
-          "pull_request"
+          "pull_request",
+          "last_report"
         ]
       },
       "WorkNotAnswering": {
@@ -2772,11 +2842,15 @@
           },
           "message": {
             "type": "string"
+          },
+          "last_report": {
+            "$ref": "#/components/schemas/WorkLastReport"
           }
         },
         "required": [
           "state",
-          "message"
+          "message",
+          "last_report"
         ]
       },
       "FileListing": {

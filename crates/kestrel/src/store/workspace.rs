@@ -14,6 +14,7 @@ use crate::domain::{
 use crate::fanout::Touched;
 use crate::instance::Observed;
 use crate::link::{Instruction, SentInstruction};
+use crate::live_work::{InstanceReport, Summary};
 use crate::reference::{self, Candidate, Reference};
 use crate::store::{agent, due, organization, profile, project, timestamp};
 
@@ -1573,6 +1574,70 @@ impl<'a> Workspaces<'a> {
         self.touched.workspace_id(organization, workspace);
 
         Ok(())
+    }
+
+    /// Says whether the repositories differ from what the Instance last reported.
+    pub async fn record_work_report(&mut self, linked: &Linked, summary: &Summary) -> Result<bool> {
+        let repositories = serde_json::to_string(&summary.repositories)?;
+        let before: Option<String> =
+            sqlx::query_scalar("SELECT repositories FROM instance_work_report WHERE instance = ?")
+                .bind(&linked.instance)
+                .fetch_optional(&mut *self.connection)
+                .await
+                .with_context(|| {
+                    format!("reading the instance {}'s work report", linked.instance)
+                })?;
+        sqlx::query(
+            "INSERT INTO instance_work_report
+                 (instance, organization_id, workspace_id, repositories, reported_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (instance) DO UPDATE
+             SET repositories = excluded.repositories, reported_at = excluded.reported_at",
+        )
+        .bind(&linked.instance)
+        .bind(linked.organization.to_string())
+        .bind(linked.workspace.to_string())
+        .bind(&repositories)
+        .bind(summary.reported_at.to_string())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("recording the instance {}'s work report", linked.instance))?;
+
+        Ok(before.as_deref() != Some(repositories.as_str()))
+    }
+
+    pub async fn last_work_report(
+        &mut self,
+        workspace: WorkspaceId,
+    ) -> Result<Option<InstanceReport>> {
+        let rows = sqlx::query(
+            "SELECT instance, repositories, reported_at FROM instance_work_report
+             WHERE workspace_id = ?",
+        )
+        .bind(workspace.to_string())
+        .fetch_all(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading the workspace {workspace}'s work reports"))?;
+
+        // Stored timestamps vary in their fractional digits, so they order only once parsed.
+        let mut last: Option<InstanceReport> = None;
+        for row in rows {
+            let report = InstanceReport {
+                instance: row.get("instance"),
+                summary: Summary {
+                    repositories: serde_json::from_str(row.get("repositories"))?,
+                    reported_at: row.get::<String, _>("reported_at").parse()?,
+                },
+            };
+            if last
+                .as_ref()
+                .is_none_or(|last| last.summary.reported_at < report.summary.reported_at)
+            {
+                last = Some(report);
+            }
+        }
+
+        Ok(last)
     }
 
     pub async fn kept_instance(&mut self, workspace: WorkspaceId) -> Result<Option<Kept>> {

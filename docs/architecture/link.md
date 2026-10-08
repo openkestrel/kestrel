@@ -35,8 +35,10 @@ Every supervisor git command sets `GIT_OPTIONAL_LOCKS=0`.
 with their arrival times live only while the Instance has an open instruction stream. Open tools
 and adapter units survive a disconnect until the Session ends, so supervisor loss can close them
 `unresolved` in the same transaction that ends the Session.
-The operator also checks the supervisor's heartbeat freshness before serving a summary. The
-separate numbered `checkout` report remains durable and supplies the reaping gate only.
+The operator also checks the supervisor's heartbeat freshness before serving a summary. Each
+report is also kept per Instance in `instance_work_report` as history that outlives the stream and
+the Instance. The separate numbered `checkout` report remains durable and supplies the reaping
+gate only.
 
 ## Reads
 

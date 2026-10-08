@@ -177,7 +177,12 @@ class Reads {
 					status: 200,
 					contentType: "application/json",
 					body: JSON.stringify(
-						this.work.get(index) ?? { state: "no_instance", branch: "main", pull_request: null },
+						this.work.get(index) ?? {
+							state: "no_instance",
+							branch: "main",
+							pull_request: null,
+							last_report: { report: "none" },
+						},
 					),
 				});
 			},
@@ -412,6 +417,7 @@ test("changed work and a learned pull request update on a Workspace notice", asy
 			21,
 			{
 				state: "reported",
+				last_report: { report: "none" },
 				reported_at: new Date().toISOString(),
 				repositories: [
 					{
@@ -454,6 +460,7 @@ test("changed work and a learned pull request update on a Workspace notice", asy
 			21,
 			{
 				state: "reported",
+				last_report: { report: "none" },
 				reported_at: new Date().toISOString(),
 				repositories: [
 					{

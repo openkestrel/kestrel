@@ -45,10 +45,16 @@ pub struct Commits {
     pub removed: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Summary {
     pub repositories: Vec<Repository>,
     pub reported_at: Timestamp,
+}
+
+#[derive(Debug, Clone)]
+pub struct InstanceReport {
+    pub instance: String,
+    pub summary: Summary,
 }
 
 #[derive(Default)]
@@ -77,17 +83,14 @@ impl Summaries {
 
     /// Reports the repositories the Instance holds and says whether that changed what a reader
     /// sees: a report saying what the last one said raises nothing, and the time still moves.
-    pub fn report(&self, instance: &str, repositories: Vec<Repository>) -> bool {
+    pub fn report(&self, instance: &str, summary: Summary) -> bool {
         let mut summaries = self.0.lock().unwrap();
         let Some(live) = summaries.get_mut(instance) else {
             return false;
         };
-        let changed =
-            live.summary.as_ref().map(|summary| &summary.repositories) != Some(&repositories);
-        live.summary = Some(Summary {
-            repositories,
-            reported_at: Timestamp::now(),
-        });
+        let changed = live.summary.as_ref().map(|summary| &summary.repositories)
+            != Some(&summary.repositories);
+        live.summary = Some(summary);
 
         changed
     }
@@ -119,13 +122,8 @@ impl Drop for Connection {
     }
 }
 
-#[derive(Serialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
 pub enum Work {
-    Reported {
-        #[serde(flatten)]
-        summary: Summary,
-    },
+    Reported(Summary),
     NoInstance {
         branch: String,
         pull_request: Option<String>,
@@ -135,19 +133,42 @@ pub enum Work {
     },
 }
 
+/// The current work beside the last report, which is history whatever the current state says.
+pub struct Read {
+    pub work: Work,
+    pub last_report: Option<LastReport>,
+}
+
+pub struct LastReport {
+    pub report: InstanceReport,
+    pub instance_current: bool,
+}
+
 pub async fn read(
     store: &crate::store::Store,
     summaries: &Summaries,
     organization: &str,
     reference: &str,
-) -> anyhow::Result<Work> {
+) -> anyhow::Result<Read> {
     let mut tx = store.read().await?;
     let organization = tx.organizations().named(organization).await?;
     let workspace = tx.workspaces().resolved(&organization, reference).await?;
-    let Some(instance) = tx.workspaces().instance(workspace.id).await? else {
-        return Ok(Work::NoInstance {
-            branch: workspace.checkout.branch,
-            pull_request: None,
+    let current = tx.workspaces().instance(workspace.id).await?;
+    let last_report = tx
+        .workspaces()
+        .last_work_report(workspace.id)
+        .await?
+        .map(|report| LastReport {
+            instance_current: current.as_deref() == Some(report.instance.as_str()),
+            report,
+        });
+    let Some(instance) = current else {
+        return Ok(Read {
+            work: Work::NoInstance {
+                branch: workspace.checkout.branch,
+                pull_request: None,
+            },
+            last_report,
         });
     };
     let on_the_link = tx
@@ -156,12 +177,13 @@ pub async fn read(
         .await?
         .and_then(|supervisor| supervisor.reached_at)
         .is_some_and(|reached| Timestamp::now().duration_since(reached) < crate::link::ON_THE_LINK);
-    if on_the_link && let Some(summary) = summaries.get(&instance) {
-        return Ok(Work::Reported { summary });
-    }
-    Ok(Work::NotAnswering {
-        message: "the Instance isn't answering",
-    })
+    let work = match summaries.get(&instance) {
+        Some(summary) if on_the_link => Work::Reported(summary),
+        _ => Work::NotAnswering {
+            message: "the Instance isn't answering",
+        },
+    };
+    Ok(Read { work, last_report })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -357,7 +379,12 @@ mod tests {
             },
         };
 
-        assert!(summaries.report("instance", vec![repository()]));
-        assert!(!summaries.report("instance", vec![repository()]));
+        let summary = || Summary {
+            repositories: vec![repository()],
+            reported_at: Timestamp::now(),
+        };
+
+        assert!(summaries.report("instance", summary()));
+        assert!(!summaries.report("instance", summary()));
     }
 }

@@ -14,3 +14,15 @@ CREATE TABLE instance_idle_hint (
     idle_since TEXT NOT NULL,
     archive_deadline TEXT NOT NULL
 ) STRICT;
+
+-- One row per Instance, kept after the Workspace lets it go, so a replacement never inherits it.
+-- Information only: the numbered checkout report in workspace.observed alone gates reaping.
+CREATE TABLE instance_work_report (
+    instance TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL REFERENCES organization (id),
+    workspace_id TEXT NOT NULL REFERENCES workspace (id),
+    repositories TEXT NOT NULL,
+    reported_at TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX instance_work_report_workspace ON instance_work_report (workspace_id);
