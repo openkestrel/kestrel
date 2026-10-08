@@ -5,8 +5,8 @@ The `0.3` acceptance gate ([#426](https://github.com/openkestrel/kestrel/issues/
 met.** Three scripted checks fail and two pass only in part; one critical and one serious axe
 violation appear on live Workspaces; and a lapsed lease could be explained only from the control
 plane's log. The `ROADMAP.md` marker stays at `0.3`; the blockers are under [Result](#result).
-A [rerun](#rerun-the-blockers-fixed) on 6 October at `4d0bfa2` exercised what this attempt left
-failing or untried.
+A [rerun](#rerun-the-blockers-fixed) from 6 October at `4d0bfa2` exercised what this attempt left
+failing or untried, and **meets the gate**.
 
 ## The stack
 
@@ -287,10 +287,10 @@ The gate was run again on 6 October 2026 at `4d0bfa2`, after #500 and #502–#50
 re-checked only what the first attempt left failing or unexercised; live Transcript arrival, late
 join, two people and turns, work state and the options checks held at `5da5466` and were not
 repeated. **At `4d0bfa2` the gate stops again**: axe found 15 serious violations on live
-Workspaces. This branch fixes them, and with the fix every scripted check passes except the
-VoiceOver pass, which the operator deferred to a separate session (see
+Workspaces. This branch fixes them; with the fix every scripted check passes, and the VoiceOver
+pass, run on 8 October, passes too (see
 [Accessibility](#accessibility-and-narrow-screens--passes-after-a-fix) and [Result](#result-1)).
-The `ROADMAP.md` marker stays at `0.3`.
+The `ROADMAP.md` marker moves to `0.4`.
 
 ### The stack
 
@@ -408,7 +408,18 @@ composer for three minutes on each of two working Claude Sessions, which streame
 updates, 14 tool status changes and 16 Transcript entries. Focus never moved, the draft survived,
 and the polite regions announced once: a narration line. The Conversation log is `aria-live="off"`.
 
-**The VoiceOver pass was not run**; the operator deferred it to a separate session.
+VoiceOver passes at 1280 and 375 px on `crisp-acorn`'s live Transcript, driven by guidepup
+against headed Chromium with the operator listening. Headings read in order (the Workspaces,
+Workspace and Work panes at desktop width, the Workspace alone at 375 px), the Transcript reads
+as one article per message, and an Activity reads as "Activity 112–112, 1 tool, 382ms, read ·
+completed, collapsed button" and expands from VO-Space. A message posted from the composer was
+answered by the Muse `builder`, and the operator heard "builder: kestrel heard you", "Session
+trailing" and "Session waiting" announced politely while focus and a second draft stayed in the
+composer; the answer's narration lines were announced too, and no tool update was. VoiceOver's
+landmark command found nothing from the browser chrome, which leaves the missing `main` landmark
+to [#512](https://github.com/openkestrel/kestrel/issues/512). guidepup's `last phrase` captures
+no announcement, even a calibration one, so the announcements are the operator's ears and the
+client's polite regions, logged alongside.
 
 ### Leases across a host sleep
 
@@ -485,15 +496,11 @@ Observations:
 
 ### Result
 
-**The gate is not met**, and the `ROADMAP.md` marker stays at `0.3`. At `4d0bfa2` it stopped on
-15 serious `scrollable-region-focusable` violations. With this branch's fix, no serious or
-critical violation remains in 136 live audits (CI's axe suite runs on the pull request), every
-other scripted check passes, with the caveats #589 and #590 record, and the stretch needed no
-reach past kestrel. Outstanding before the marker can move to `0.4`:
-
-- the VoiceOver pass on a live Transcript at 375 px and at desktop width, which the operator
-  deferred;
-- this branch's fix merged, with CI's axe suite green.
+**The gate is met**, and the `ROADMAP.md` marker moves to `0.4`. At `4d0bfa2` it stopped on 15
+serious `scrollable-region-focusable` violations. With this branch's fix, no serious or critical
+violation remains in 136 live audits and CI's axe suite is green, every other scripted check
+passes, with the caveats #589 and #590 record, the VoiceOver pass passes at 375 px and at desktop
+width, and the stretch needed no reach past kestrel.
 
 The five-day span of the stretch was waived by the operator, as in the first attempt, and Codex's
 share of it is thin.
