@@ -195,8 +195,6 @@ async fn a_held_instance_reports_all_work_on_each_repository_and_the_cli_reads_i
     assert!(result.status.success(), "{}", result.err);
     let out = result.out.join("\n");
     for text in [
-        "kestrel",
-        "companion",
         "Changed: 1 file",
         "Staged: 1 file",
         "Committed: 1 commit",
@@ -205,6 +203,27 @@ async fn a_held_instance_reports_all_work_on_each_repository_and_the_cli_reads_i
         &pushed,
     ] {
         assert!(out.contains(text), "missing {text}: {out}");
+    }
+    assert!(!out.contains("Reported by the supervisor"), "{out}");
+    assert!(
+        !out.lines()
+            .any(|line| line == "kestrel" || line == "companion"),
+        "{out}"
+    );
+    let terminal = client::ran_on_a_terminal_by(
+        &kestrel,
+        &["workspace", "status", &workspace.id.to_string()],
+        client::Invocation::default(),
+        "",
+    )
+    .await;
+    assert!(terminal.status.success(), "{}", terminal.said);
+    for text in ["kestrel", "companion", "Reported by the supervisor"] {
+        assert!(
+            terminal.said.contains(text),
+            "missing {text}: {}",
+            terminal.said
+        );
     }
     assert_eq!(kestrel.transcript(workspace.id).await.len(), before);
     kestrel.teardown().await;
