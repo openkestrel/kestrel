@@ -235,6 +235,14 @@ writes or secrets. Start creates missing Project/Agent declarations and reuses m
 conflicts require explicit declaration/settings changes before another review
 ([shared start decision](https://github.com/openkestrel/kestrel/issues/535)).
 
+Browser setup and Agent settings use the harness default or an explicit model-id override before
+ACP options exist; searchable model choices come from a live Session's offered values. Setup never
+starts a hidden Session to discover them. The browser build slice owns the shared AI Elements Model
+Selector and its live Session integration; the workbench places it in the refined composer. Provider
+marks are bundled locally with attribution and a text fallback, without a runtime `models.dev`
+dependency. Geist and Geist Mono land once through the browser setup slice, for both specs
+([browser setup/settings specification](https://github.com/openkestrel/kestrel/issues/527)).
+
 The CLI asks "What should the Session do?" and keeps `--brief` for its initial prompt. A start
 without a terminal names all missing inputs it can establish and requires `--yes` before any
 write. Its review distinguishes already-saved setup from the start plan; declining creates no
