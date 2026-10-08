@@ -3,7 +3,8 @@
 
 use anyhow::Error;
 
-use crate::declined::Declined;
+pub use crate::declined::Candidate;
+use crate::declined::{Reason, Resource};
 
 /// The word that names the most recent record in scope rather than one by identifier.
 pub const LATEST: &str = "latest";
@@ -56,40 +57,46 @@ impl<'a> Reference<'a> {
     }
 }
 
-/// One record a reference could have meant, named so a refusal can say which ones.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Candidate {
-    pub id: String,
-    pub name: String,
-}
-
 /// Nothing in scope matched, said so that naming one exactly is the obvious next step.
-pub fn missing(what: &str, organization: &str, reference: &str) -> Error {
-    Declined::Missing(format!(
-        "no {what} in the organization {organization} matches {reference}; \
-         name it by its generated name, its identifier, or `{LATEST}`"
-    ))
+pub fn missing(resource: Resource, organization: &str, reference: &str) -> Error {
+    let what = resource.noun();
+    Reason::MissingReference {
+        resource,
+        reference: reference.to_owned(),
+        organization: Some(organization.to_owned()),
+        message: format!(
+            "no {what} in the organization {organization} matches {reference}; \
+             name it by its generated name, its identifier, or `{LATEST}`"
+        ),
+    }
     .into()
 }
 
 /// Several records in scope matched, named rather than chosen between.
 pub fn ambiguous(
-    what: &str,
+    resource: Resource,
     organization: &str,
     reference: &str,
     candidates: &[Candidate],
 ) -> Error {
+    let what = resource.noun();
     let matched = candidates
         .iter()
         .map(|candidate| format!("{} ({})", candidate.name, candidate.id))
         .collect::<Vec<_>>()
         .join(", ");
 
-    Declined::Ambiguous(format!(
-        "{reference} is ambiguous: it matches {} {what}s in the organization {organization}: \
-         {matched}; name one of them exactly",
-        candidates.len()
-    ))
+    Reason::AmbiguousReference {
+        resource,
+        reference: reference.to_owned(),
+        organization: Some(organization.to_owned()),
+        candidates: candidates.to_vec(),
+        message: format!(
+            "{reference} is ambiguous: it matches {} {what}s in the organization {organization}: \
+             {matched}; name one of them exactly",
+            candidates.len()
+        ),
+    }
     .into()
 }
 

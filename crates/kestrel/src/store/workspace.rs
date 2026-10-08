@@ -4,6 +4,7 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 
 use crate::compute::IdleHint;
+use crate::declined::Resource;
 use crate::domain::{
     Agent, ChangingOption, Checkout, Connected, Cost, Declared, Exit, HeldMessage, Interrupting,
     Organization, OrganizationId, Preparing, Project, Session, SessionCommand, SessionId,
@@ -353,7 +354,11 @@ impl<'a> Workspaces<'a> {
             .await
             .context("reading the most recent workspace")?;
             let Some(latest) = latest else {
-                return Err(reference::missing("workspace", &organization.name, typed));
+                return Err(reference::missing(
+                    Resource::Workspace,
+                    &organization.name,
+                    typed,
+                ));
             };
 
             return read(
@@ -396,7 +401,7 @@ impl<'a> Workspaces<'a> {
                 [only] => return read(&mut *self.connection, only.id.parse()?).await,
                 _ => {
                     return Err(reference::ambiguous(
-                        "workspace",
+                        Resource::Workspace,
                         &organization.name,
                         given,
                         &matched,
@@ -405,7 +410,11 @@ impl<'a> Workspaces<'a> {
             }
         }
 
-        Err(reference::missing("workspace", &organization.name, given))
+        Err(reference::missing(
+            Resource::Workspace,
+            &organization.name,
+            given,
+        ))
     }
 
     /// A Session on the same terms as a Workspace.
@@ -427,7 +436,11 @@ impl<'a> Workspaces<'a> {
             .await
             .context("reading the most recent session")?;
             let Some(latest) = latest else {
-                return Err(reference::missing("session", &organization.name, typed));
+                return Err(reference::missing(
+                    Resource::Session,
+                    &organization.name,
+                    typed,
+                ));
             };
 
             return session(&latest);
@@ -466,7 +479,7 @@ impl<'a> Workspaces<'a> {
                 [only] => return self.session(only.id.parse()?).await,
                 _ => {
                     return Err(reference::ambiguous(
-                        "session",
+                        Resource::Session,
                         &organization.name,
                         given,
                         &matched,
@@ -475,7 +488,11 @@ impl<'a> Workspaces<'a> {
             }
         }
 
-        Err(reference::missing("session", &organization.name, given))
+        Err(reference::missing(
+            Resource::Session,
+            &organization.name,
+            given,
+        ))
     }
 
     pub async fn all(&mut self, organization: &Organization) -> Result<Vec<Workspace>> {

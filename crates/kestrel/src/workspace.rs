@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use jiff::{SignedDuration, Timestamp};
 
-use crate::declined::{Declined, FieldRefusal, Kind};
+use crate::declined::{Declined, FieldRefusal, Kind, Reason};
 use crate::domain::{
     Agent, Declared, Exit, HeldMessage, Organization, Preparing, Project, Session, SessionId,
     SessionState, StartedBy, SubscriptionProfile, Workspace, WorkspaceId, WorkspaceState,
@@ -237,22 +237,38 @@ async fn resolved<'a>(
 }
 
 pub(crate) fn named<T>(field: &'static str, named: Result<T>) -> Result<T> {
-    named.map_err(|error| match error.downcast::<Declined>() {
-        Ok(declined) => {
-            let kind = match &declined {
-                Declined::Unacceptable(_) => Kind::Unacceptable,
-                Declined::Missing(_) => Kind::Missing,
-                Declined::Ambiguous(_) => Kind::Ambiguous,
-                Declined::Taken(_) => Kind::Taken,
+    named.map_err(|error| match error.downcast::<Reason>() {
+        Ok(reason) => {
+            let kind = match &reason {
+                Reason::MissingReference { .. } => Kind::Missing,
+                Reason::AmbiguousReference { .. } => Kind::Ambiguous,
+                Reason::InvalidField { .. } => Kind::Unacceptable,
+                Reason::Taken { .. } => Kind::Taken,
             };
             FieldRefusal {
                 field,
-                message: declined.to_string(),
+                message: reason.to_string(),
                 kind,
             }
             .into()
         }
-        Err(error) => error,
+        Err(error) => match error.downcast::<Declined>() {
+            Ok(declined) => {
+                let kind = match &declined {
+                    Declined::Unacceptable(_) => Kind::Unacceptable,
+                    Declined::Missing(_) => Kind::Missing,
+                    Declined::Ambiguous(_) => Kind::Ambiguous,
+                    Declined::Taken(_) => Kind::Taken,
+                };
+                FieldRefusal {
+                    field,
+                    message: declined.to_string(),
+                    kind,
+                }
+                .into()
+            }
+            Err(error) => error,
+        },
     })
 }
 
