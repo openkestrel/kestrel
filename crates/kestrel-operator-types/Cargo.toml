@@ -1,0 +1,25 @@
+[package]
+name = "kestrel-operator-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { version = "1", optional = true }
+openapi-to-rust = { version = "=0.19.0", default-features = false, optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["serde"] }
+
+[features]
+# Only the generate bin needs the generator; the committed lib does not, and
+# its consumers should not pay for openapi-to-rust's dependency tree.
+generate = ["dep:anyhow", "dep:openapi-to-rust"]
+
+[[bin]]
+name = "generate"
+required-features = ["generate"]

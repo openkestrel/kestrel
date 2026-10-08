@@ -45,8 +45,9 @@ Patterns the code relies on that no single file states. Comment style is in `AGE
   until a second real implementation exists ([ADR-0005](../adr/0005-six-ports-at-rung-one-are-named-boundaries.md),
   [ADR-0022](../adr/0022-store-repository-traits-and-enum-dispatch-are-deferred-to-the-postgres-rung.md)).
   `compute::Driver` is an enum, not `dyn`, for the same reason.
-- **No shared types across a process boundary.** The supervisor, control plane and Client each
-  define their own structs for the OpenAPI documents they speak.
+- **Operator wire types come from the document.** The control plane and Rust Client share the
+  generated `kestrel-operator-types` leaf (ADR-0050, ADR-0051); existing endpoint migrations remain
+  incremental. The link keeps independent structs on each side.
 - **No branching on which harness.** The supervisor speaks ACP and nothing else; a harness-specific
   `if` is a bug ([ADR-0007](../adr/0007-acp-is-the-agent-runtime-contract.md)).
   `crates/kestrel-supervisor/tests/boundary.rs` fails the build on any agent name or control-plane

@@ -21,6 +21,8 @@ const CONTROL_PLANE = "http://127.0.0.1:17718";
 const followers: ChildProcess[] = [];
 
 test.beforeAll(async ({ request }) => {
+	// test.setTimeout above covers only the tests; a cold cargo build needs its own raised hook timeout.
+	test.setTimeout(120_000);
 	execFileSync("cargo", ["build", "--quiet", "--locked", "--package", "kestrel-client"], {
 		cwd: ROOT,
 		stdio: "inherit",

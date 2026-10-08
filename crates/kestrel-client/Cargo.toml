@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+kestrel-operator-types = { path = "../kestrel-operator-types" }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 jiff = { version = "0.2", features = ["serde"] }

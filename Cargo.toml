@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/kestrel",
+    "crates/kestrel-operator-types",
     "crates/kestrel-client",
     "crates/kestrel-scripted-agent",
     "crates/kestrel-supervisor",

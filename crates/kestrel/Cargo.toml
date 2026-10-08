@@ -14,6 +14,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+kestrel-operator-types = { path = "../kestrel-operator-types" }
 anyhow = "1"
 async-stream = "0.3"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }

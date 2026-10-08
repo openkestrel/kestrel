@@ -518,15 +518,16 @@ fn the_published_operator_document_describes_the_change_stream_and_its_events() 
         );
     }
 
-    let schemas = events["oneOf"].as_array().expect("the documented events");
+    let schemas = events["anyOf"].as_array().expect("the documented events");
     let change = schemas
         .iter()
         .map(|schema| resolve(&document, schema["$ref"].as_str().expect("a reference")))
         .find(|schema| {
             schema["oneOf"].as_array().is_some_and(|options| {
-                options
-                    .iter()
-                    .any(|option| option["properties"]["resource"]["const"] == "workspace")
+                options.iter().any(|option| {
+                    let option = resolve(&document, option["$ref"].as_str().expect("a reference"));
+                    option["properties"]["resource"]["const"] == "workspace"
+                })
             })
         })
         .expect("the document describes a change");
@@ -536,6 +537,7 @@ fn the_published_operator_document_describes_the_change_stream_and_its_events() 
         .expect("the changed resources")
         .iter()
         .map(|option| {
+            let option = resolve(&document, option["$ref"].as_str().expect("a reference"));
             option["properties"]["resource"]["const"]
                 .as_str()
                 .expect("a named resource")
@@ -543,7 +545,10 @@ fn the_published_operator_document_describes_the_change_stream_and_its_events() 
         .collect();
     assert_eq!(resources, ["workspace", "session", "queue"]);
 
-    let queue = &change["oneOf"][2];
+    let queue = resolve(
+        &document,
+        change["oneOf"][2]["$ref"].as_str().expect("a reference"),
+    );
     assert!(
         queue["properties"].get("id").is_none() && queue["required"] == json!(["resource"]),
         "the document says a queue notice carries an id"
