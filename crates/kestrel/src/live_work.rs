@@ -3,9 +3,14 @@ use std::sync::{Arc, Mutex};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::domain::Usage;
 use crate::log::ToolStatus;
+use crate::store::Store;
+use crate::store::workspace::Linked;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Repository {
@@ -45,16 +50,10 @@ pub struct Commits {
     pub removed: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Summary {
     pub repositories: Vec<Repository>,
     pub reported_at: Timestamp,
-}
-
-#[derive(Debug, Clone)]
-pub struct InstanceReport {
-    pub instance: String,
-    pub summary: Summary,
 }
 
 #[derive(Default)]
@@ -81,23 +80,75 @@ impl Summaries {
         }
     }
 
-    /// Reports the repositories the Instance holds and says whether that changed what a reader
-    /// sees: a report saying what the last one said raises nothing, and the time still moves.
-    pub fn report(&self, instance: &str, summary: Summary) -> bool {
-        let mut summaries = self.0.lock().unwrap();
-        let Some(live) = summaries.get_mut(instance) else {
-            return false;
-        };
-        let changed = live.summary.as_ref().map(|summary| &summary.repositories)
-            != Some(&summary.repositories);
-        live.summary = Some(summary);
-
-        changed
+    pub fn report(&self, instance: &str, summary: Summary) {
+        if let Some(live) = self.0.lock().unwrap().get_mut(instance) {
+            live.summary = Some(summary);
+        }
     }
 
     pub fn get(&self, instance: &str) -> Option<Summary> {
         self.0.lock().unwrap().get(instance)?.summary.clone()
     }
+}
+
+/// Newest per Instance.
+#[derive(Clone, Default)]
+pub struct Unrecorded(Arc<(Mutex<Pending>, Notify)>);
+
+type Pending = HashMap<Linked, Summary>;
+
+impl Unrecorded {
+    pub fn report(&self, reporter: Linked, summary: Summary) {
+        let (pending, wake) = &*self.0;
+        pending.lock().unwrap().insert(reporter, summary);
+        wake.notify_one();
+    }
+
+    /// The only writer, so a report never waits on the write lock: the supervisor waits on each
+    /// report before it takes its next read, and a stalled report would time that read out.
+    pub async fn record(&self, store: &Store, stop: CancellationToken) {
+        let (pending, wake) = &*self.0;
+        loop {
+            let stopping = tokio::select! {
+                () = wake.notified() => false,
+                () = stop.cancelled() => true,
+            };
+            let taken = std::mem::take(&mut *pending.lock().unwrap());
+            if let Err(error) = record_reports(store, &taken).await {
+                warn!(
+                    error = format!("{error:#}"),
+                    reports = taken.len(),
+                    "the work reports could not be recorded"
+                );
+                {
+                    let mut pending = pending.lock().unwrap();
+                    for (reporter, summary) in taken {
+                        pending.entry(reporter).or_insert(summary);
+                    }
+                }
+                if !stopping {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    wake.notify_one();
+                }
+            }
+            if stopping {
+                return;
+            }
+        }
+    }
+}
+
+async fn record_reports(store: &Store, taken: &Pending) -> anyhow::Result<()> {
+    if taken.is_empty() {
+        return Ok(());
+    }
+    let mut tx = store.begin().await?;
+    for (reporter, summary) in taken {
+        tx.workspaces()
+            .record_work_report(reporter, summary)
+            .await?;
+    }
+    tx.commit().await
 }
 
 pub struct Connection {
@@ -122,8 +173,20 @@ impl Drop for Connection {
     }
 }
 
-pub enum Work {
-    Reported(Summary),
+#[derive(Serialize)]
+pub struct Work {
+    #[serde(flatten)]
+    pub current: Current,
+    pub last_report: LastReport,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Current {
+    Reported {
+        #[serde(flatten)]
+        summary: Summary,
+    },
     NoInstance {
         branch: String,
         pull_request: Option<String>,
@@ -133,32 +196,43 @@ pub enum Work {
     },
 }
 
-pub struct Read {
-    pub work: Work,
-    pub instance: Option<String>,
-    /// History whatever `work` says, newest first.
-    pub reports: Vec<InstanceReport>,
+#[derive(Serialize)]
+#[serde(tag = "report", rename_all = "snake_case")]
+pub enum LastReport {
+    None,
+    Received {
+        instance: String,
+        current_instance: bool,
+        #[serde(flatten)]
+        summary: Summary,
+    },
 }
 
 pub async fn read(
-    store: &crate::store::Store,
+    store: &Store,
     summaries: &Summaries,
     organization: &str,
     reference: &str,
-) -> anyhow::Result<Read> {
+) -> anyhow::Result<Work> {
     let mut tx = store.read().await?;
     let organization = tx.organizations().named(organization).await?;
     let workspace = tx.workspaces().resolved(&organization, reference).await?;
-    let current = tx.workspaces().instance(workspace.id).await?;
-    let reports = tx.workspaces().work_reports(workspace.id).await?;
-    let Some(instance) = current else {
-        return Ok(Read {
-            work: Work::NoInstance {
+    let instance = tx.workspaces().instance(workspace.id).await?;
+    let last_report = match tx.workspaces().last_work_report(workspace.id).await? {
+        None => LastReport::None,
+        Some(report) => LastReport::Received {
+            current_instance: instance.as_ref() == Some(&report.instance),
+            instance: report.instance,
+            summary: report.summary,
+        },
+    };
+    let Some(instance) = instance else {
+        return Ok(Work {
+            current: Current::NoInstance {
                 branch: workspace.checkout.branch,
                 pull_request: None,
             },
-            instance: None,
-            reports,
+            last_report,
         });
     };
     let on_the_link = tx
@@ -167,16 +241,15 @@ pub async fn read(
         .await?
         .and_then(|supervisor| supervisor.reached_at)
         .is_some_and(|reached| Timestamp::now().duration_since(reached) < crate::link::ON_THE_LINK);
-    let work = match summaries.get(&instance) {
-        Some(summary) if on_the_link => Work::Reported(summary),
-        _ => Work::NotAnswering {
+    let current = match summaries.get(&instance) {
+        Some(summary) if on_the_link => Current::Reported { summary },
+        _ => Current::NotAnswering {
             message: "the Instance isn't answering",
         },
     };
-    Ok(Read {
-        work,
-        instance: Some(instance),
-        reports,
+    Ok(Work {
+        current,
+        last_report,
     })
 }
 
@@ -342,43 +415,5 @@ mod tests {
             }
         ));
         assert!(summaries.report_session("instance", "session", SessionState::default()));
-    }
-
-    #[test]
-    fn a_work_summary_that_says_what_the_last_one_did_is_not_noticed() {
-        let summaries = Summaries::default();
-        let _connection = summaries.connected("instance");
-        let repository = || Repository {
-            repository: "https://github.com/jtmthf/kestrel".to_owned(),
-            git: Git::Read {
-                branch: Some("main".to_owned()),
-                changed: Changes {
-                    files: 1,
-                    added: 2,
-                    removed: 3,
-                },
-                staged: Changes {
-                    files: 0,
-                    added: 0,
-                    removed: 0,
-                },
-                committed: Commits {
-                    commits: 0,
-                    added: 0,
-                    removed: 0,
-                },
-                pushed: None,
-                untracked: 0,
-                stashed: 0,
-            },
-        };
-
-        let summary = || Summary {
-            repositories: vec![repository()],
-            reported_at: Timestamp::now(),
-        };
-
-        assert!(summaries.report("instance", summary()));
-        assert!(!summaries.report("instance", summary()));
     }
 }

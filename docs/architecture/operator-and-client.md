@@ -170,16 +170,15 @@ Instance it returns `state: no_instance` and the declared branch; its `pull_requ
 learned pull requests are on the Workspace read. A supervisor off the link, or one that has not supplied a summary,
 returns `state: not_answering` rather than a durable checkout observation.
 
-Every state also carries `last_report`: `report: none`, or `report: received` with the latest
-summary any of the Workspace's Instances sent, its `reported_at`, the originating `instance` and
-`instance_current`, false once the Workspace has let that Instance go; `earlier_reports` holds each
-other Instance's last report, newest first. Both survive link loss,
-release and restarts, and are history only: they never establishes Unpublished Work, gates seal or
-release, or makes a Files or Changes read live.
+Every state also carries `last_report`: `report: none` until any of the Workspace's Instances has
+sent a work report, then the newest complete report with the `instance` that sent it and whether
+the Workspace still holds that Instance (`current_instance`). It survives link loss, release and
+restart, and a released or replaced Instance's report is never presented as its successor's. It is
+history only: Unpublished Work, seal, release and reclamation read the numbered `checkout` report,
+and Files and Changes still ask the live Instance.
 
 `kestrel workspace work <workspace>` (alias `status`) prints a heading per repository and how long
-ago its supervisor reported it, and otherwise the last report or "No work report received.", then
-any earlier Instances' reports.
+ago its supervisor reported it, or, when nothing live answers, the last report and its Instance.
 `--json` returns the whole operator response.
 
 `GET …/workspaces/{workspace}/files?path=` lists one directory of the live Instance and

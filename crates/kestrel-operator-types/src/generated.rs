@@ -308,8 +308,6 @@ pub struct WorkspaceChanges {
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WorkReported {
-    ///The last report of each other Instance the Workspace has had, newest first. Every one is history for its own Instance.
-    pub earlier_reports: Vec<WorkInstanceReport>,
     pub last_report: WorkLastReport,
     pub reported_at: String,
     pub repositories: Vec<WorkRepository>,
@@ -317,8 +315,6 @@ pub struct WorkReported {
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WorkNotAnswering {
-    ///The last report of each other Instance the Workspace has had, newest first. Every one is history for its own Instance.
-    pub earlier_reports: Vec<WorkInstanceReport>,
     pub last_report: WorkLastReport,
     pub message: String,
     pub state: serde_json::Value,
@@ -326,13 +322,11 @@ pub struct WorkNotAnswering {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WorkNoInstance {
     pub branch: String,
-    ///The last report of each other Instance the Workspace has had, newest first. Every one is history for its own Instance.
-    pub earlier_reports: Vec<WorkInstanceReport>,
     pub last_report: WorkLastReport,
     pub pull_request: Option<String>,
     pub state: serde_json::Value,
 }
-///The latest complete work report any of the Workspace's Instances sent, kept through link loss, release and restarts. It is history, never current work: it does not establish Unpublished Work or make a read live.
+///The last complete work report any of the Workspace's Instances sent, kept across link loss, release and restart. It is history: it is no evidence of current Unpublished Work, authorizes no seal or release, and makes no Files or Changes read live.
 #[derive(Debug, Clone)]
 pub enum WorkLastReport {
     WorkNoReport(WorkNoReport),
@@ -500,16 +494,17 @@ impl<'de> serde::Deserialize<'de> for WorkLastReport {
         }
     }
 }
+///No Instance of the Workspace has sent a work report.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WorkNoReport {
     pub report: serde_json::Value,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WorkInstanceReport {
+    ///Whether the Workspace still holds that Instance. When false the report belongs to an Instance it released or replaced, never to its current one.
+    pub current_instance: bool,
     ///The Instance that sent the report.
     pub instance: String,
-    ///Whether that Instance is still the Workspace's. When false the report belongs to an Instance the Workspace let go, never to its replacement.
-    pub instance_current: bool,
     pub report: serde_json::Value,
     pub reported_at: String,
     pub repositories: Vec<WorkRepository>,

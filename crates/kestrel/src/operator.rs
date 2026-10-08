@@ -2427,106 +2427,16 @@ async fn open_workspace(
 async fn work_summary(
     State(control_plane): State<ControlPlane>,
     Path((organization, reference)): Path<(String, String)>,
-) -> Result<Json<wire::WorkspaceWork>, Refused> {
-    let read = crate::live_work::read(
-        &control_plane.store,
-        &control_plane.live.summaries,
-        &organization,
-        &reference,
-    )
-    .await?;
-    let instance = read.instance;
-    let mut reports = read
-        .reports
-        .into_iter()
-        .map(|report| wire::WorkInstanceReport {
-            report: serde_json::json!("received"),
-            instance_current: instance.as_deref() == Some(report.instance.as_str()),
-            instance: report.instance,
-            reported_at: report.summary.reported_at.to_string(),
-            repositories: wire_repositories(report.summary.repositories),
-        });
-    let last_report = match reports.next() {
-        None => wire::WorkLastReport::WorkNoReport(wire::WorkNoReport {
-            report: serde_json::json!("none"),
-        }),
-        Some(last) => wire::WorkLastReport::WorkInstanceReport(last),
-    };
-    let earlier_reports: Vec<_> = reports.collect();
-    Ok(Json(match read.work {
-        crate::live_work::Work::Reported(summary) => {
-            wire::WorkspaceWork::WorkReported(wire::WorkReported {
-                state: serde_json::json!("reported"),
-                reported_at: summary.reported_at.to_string(),
-                repositories: wire_repositories(summary.repositories),
-                last_report,
-                earlier_reports,
-            })
-        }
-        crate::live_work::Work::NoInstance {
-            branch,
-            pull_request,
-        } => wire::WorkspaceWork::WorkNoInstance(wire::WorkNoInstance {
-            state: serde_json::json!("no_instance"),
-            branch,
-            pull_request,
-            last_report,
-            earlier_reports,
-        }),
-        crate::live_work::Work::NotAnswering { message } => {
-            wire::WorkspaceWork::WorkNotAnswering(wire::WorkNotAnswering {
-                state: serde_json::json!("not_answering"),
-                message: message.to_owned(),
-                last_report,
-                earlier_reports,
-            })
-        }
-    }))
-}
-
-fn wire_repositories(repositories: Vec<crate::live_work::Repository>) -> Vec<wire::WorkRepository> {
-    use crate::live_work::Git;
-    let count = |count: u64| i64::try_from(count).unwrap_or(i64::MAX);
-    let changes = |changes: crate::live_work::Changes| wire::WorkChanges {
-        files: count(changes.files),
-        added: count(changes.added),
-        removed: count(changes.removed),
-    };
-    repositories
-        .into_iter()
-        .map(|repository| match repository.git {
-            Git::Read {
-                branch,
-                changed,
-                staged,
-                committed,
-                pushed,
-                untracked,
-                stashed,
-            } => wire::WorkRepository::WorkRepositoryRead(wire::WorkRepositoryRead {
-                git: serde_json::json!("read"),
-                repository: repository.repository,
-                branch,
-                changed: changes(changed),
-                staged: changes(staged),
-                committed: wire::WorkCommits {
-                    commits: count(committed.commits),
-                    added: count(committed.added),
-                    removed: count(committed.removed),
-                },
-                pushed,
-                untracked: count(untracked),
-                stashed: count(stashed),
-            }),
-            Git::Unreadable { because } => {
-                wire::WorkRepository::WorkRepositoryUnreadable(wire::WorkRepositoryUnreadable {
-                    git: serde_json::json!("unreadable"),
-                    repository: repository.repository,
-                    because,
-                })
-            }
-        })
-        .collect()
+) -> Result<Json<crate::live_work::Work>, Refused> {
+    Ok(Json(
+        crate::live_work::read(
+            &control_plane.store,
+            &control_plane.live.summaries,
+            &organization,
+            &reference,
+        )
+        .await?,
+    ))
 }
 
 #[derive(Deserialize)]

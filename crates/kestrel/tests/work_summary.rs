@@ -54,27 +54,9 @@ async fn a_workspace_with_no_instance_names_its_declared_branch_without_recordin
     assert_eq!(
         summary(&kestrel, &workspace).await,
         json!({
-            "state": "no_instance",
-            "branch": workspace.checkout.branch,
-            "pull_request": null,
-            "last_report": {"report": "none"},
-            "earlier_reports": []
+            "state": "no_instance", "branch": workspace.checkout.branch, "pull_request": null,
+            "last_report": {"report": "none"}
         })
-    );
-    let shown = support::client::ran_by(
-        &kestrel,
-        &["workspace", "work", &workspace.id.to_string()],
-        support::client::Invocation::default(),
-    )
-    .await;
-    assert!(shown.status.success(), "{}", shown.err);
-    assert!(
-        shown
-            .out
-            .iter()
-            .any(|line| line == "No work report received."),
-        "{:?}",
-        shown.out
     );
     assert_eq!(
         kestrel
@@ -93,18 +75,12 @@ async fn reported(
     workspace: &kestrel::domain::Workspace,
     untracked: u64,
 ) -> Value {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let answer = summary(kestrel, workspace).await;
-        if answer["state"] == "reported" && answer["repositories"][0]["untracked"] == untracked {
-            return answer;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "never reported: {answer}"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
+    answered_with(kestrel, workspace, |answer| {
+        answer["state"] == "reported"
+            && answer["repositories"][0]["untracked"] == untracked
+            && answer["last_report"]["reported_at"] == answer["reported_at"]
+    })
+    .await
 }
 
 fn git(directory: &std::path::Path, args: &[&str]) -> String {
@@ -331,6 +307,122 @@ async fn a_supervisor_off_the_link_never_presents_its_turn_close_report_as_curre
     kestrel.teardown().await;
 }
 
+async fn answered_with(
+    kestrel: &Kestrel,
+    workspace: &kestrel::domain::Workspace,
+    wanted: impl Fn(&Value) -> bool,
+) -> Value {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let answer = summary(kestrel, workspace).await;
+        if wanted(&answer) {
+            return answer;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "never answered: {answer}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_last_report_stays_with_its_instance_through_disconnect_restart_release_and_replacement()
+ {
+    use support::{
+        client,
+        environment::Environment,
+        scripted_agent::{self, Script},
+        supervisor,
+    };
+    let kestrel = Kestrel::dispatching_to(
+        supervisor::binary(),
+        &scripted_agent::playing(Script::Speaks),
+    )
+    .await;
+    let workspace = workspace(&kestrel).await;
+    assert_eq!(
+        summary(&kestrel, &workspace).await["last_report"],
+        json!({"report": "none"})
+    );
+    let session = kestrel.post(workspace.id, "operator", "begin").await;
+    let waiting = kestrel.answered(session.id, 1).await;
+    let first = waiting.instance.clone().unwrap();
+    std::fs::remove_dir_all(Environment::root_of(&first).join(repository::OTHER)).unwrap();
+    kestrel.post(workspace.id, "operator", "again").await;
+    kestrel.answered(session.id, 2).await;
+    let live = answered_with(&kestrel, &workspace, |answer| {
+        answer["state"] == "reported"
+            && answer["repositories"][1]["git"] == "unreadable"
+            && answer["last_report"]["reported_at"] == answer["reported_at"]
+    })
+    .await;
+    let mut last = json!({
+        "report": "received",
+        "instance": first,
+        "current_instance": true,
+        "repositories": live["repositories"],
+        "reported_at": live["reported_at"],
+    });
+    assert_eq!(live["last_report"], last);
+    assert!(
+        live["repositories"][1]["because"]
+            .as_str()
+            .is_some_and(|because| !because.is_empty())
+    );
+
+    kestrel.stop_session(session.id).await;
+    let process = Environment::named(waiting.supervisor.as_deref().unwrap());
+    #[allow(unsafe_code)]
+    unsafe {
+        libc::kill(process.pid(), libc::SIGKILL);
+    }
+    process.is_gone().await;
+    let disconnected = answered_with(&kestrel, &workspace, |answer| {
+        answer["state"] == "not_answering"
+    })
+    .await;
+    assert_eq!(disconnected["last_report"], last);
+
+    let kestrel = kestrel.kill_and_restart().await;
+    let restarted = summary(&kestrel, &workspace).await;
+    assert_eq!(restarted["state"], "not_answering");
+    assert_eq!(restarted["last_report"], last);
+    let result = client::ran_by(
+        &kestrel,
+        &["workspace", "work", &workspace.id.to_string()],
+        client::Invocation::default(),
+    )
+    .await;
+    assert!(result.status.success(), "{}", result.err);
+    let out = result.out.join("\n");
+    assert!(
+        out.contains(&format!("Last reported by the Instance {first} ")),
+        "{out}"
+    );
+
+    kestrel.release_instance(workspace.id).await;
+    let released = summary(&kestrel, &workspace).await;
+    assert_eq!(released["state"], "no_instance");
+    last["current_instance"] = json!(false);
+    assert_eq!(released["last_report"], last);
+
+    let replacement = kestrel.post(workspace.id, "operator", "start over").await;
+    let replaced = answered_with(&kestrel, &workspace, |answer| {
+        if answer["last_report"]["instance"] == first {
+            assert_eq!(answer["last_report"], last, "{answer}");
+        }
+        answer["last_report"]["instance"] != first
+    })
+    .await;
+    let second = kestrel.answered(replacement.id, 1).await.instance.unwrap();
+    assert_ne!(second, first);
+    assert_eq!(replaced["last_report"]["instance"], second);
+    assert_eq!(replaced["last_report"]["current_instance"], true);
+    kestrel.teardown().await;
+}
+
 #[tokio::test]
 async fn stopping_a_turn_reports_work_written_since_its_last_sampling_tick() {
     use support::{
@@ -357,115 +449,5 @@ async fn stopping_a_turn_reports_work_written_since_its_last_sampling_tick() {
     kestrel.stop_session(session.id).await;
     let answer = reported(&kestrel, &workspace, 1).await;
     assert_eq!(answer["repositories"][0]["untracked"], 1);
-    kestrel.teardown().await;
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn the_last_report_outlives_its_instance_and_is_never_attributed_to_a_replacement() {
-    use support::{
-        environment::Environment,
-        scripted_agent::{self, Script},
-        supervisor,
-    };
-    let kestrel = Kestrel::dispatching_to(
-        supervisor::binary(),
-        &scripted_agent::playing(Script::Speaks),
-    )
-    .await;
-    let workspace = workspace(&kestrel).await;
-    let session = kestrel.post(workspace.id, "operator", "work").await;
-    let waiting = kestrel.answered(session.id, 1).await;
-    let first = waiting.instance.clone().unwrap();
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-    let live = loop {
-        let answer = reported(&kestrel, &workspace, 0).await;
-        if answer["last_report"]["reported_at"] == answer["reported_at"] {
-            break answer;
-        }
-        assert!(tokio::time::Instant::now() < deadline, "{answer}");
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    };
-    assert_eq!(
-        live["last_report"],
-        json!({
-            "report": "received",
-            "instance": first,
-            "instance_current": true,
-            "reported_at": live["reported_at"],
-            "repositories": live["repositories"],
-        })
-    );
-
-    kestrel.stop_session(session.id).await;
-    let process = Environment::named(waiting.supervisor.as_deref().unwrap());
-    #[allow(unsafe_code)]
-    unsafe {
-        libc::kill(process.pid(), libc::SIGKILL);
-    }
-    process.is_gone().await;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-    let unanswered = loop {
-        let answer = summary(&kestrel, &workspace).await;
-        if answer["state"] == "not_answering" {
-            break answer;
-        }
-        assert!(tokio::time::Instant::now() < deadline, "{answer}");
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    };
-    let last = unanswered["last_report"].clone();
-    assert_eq!(last["instance"], first);
-    assert_eq!(last["instance_current"], true);
-    assert_eq!(last["repositories"], live["repositories"]);
-
-    assert_eq!(kestrel.release_instance(workspace.id).await, first);
-    let mut historical = last.clone();
-    historical["instance_current"] = json!(false);
-    let released = summary(&kestrel, &workspace).await;
-    assert_eq!(released["state"], "no_instance");
-    assert_eq!(released["last_report"], historical);
-    assert_eq!(released["earlier_reports"], json!([]));
-    let shown = support::client::ran_by(
-        &kestrel,
-        &["workspace", "work", &workspace.id.to_string()],
-        support::client::Invocation::default(),
-    )
-    .await;
-    assert!(shown.status.success(), "{}", shown.err);
-    assert!(
-        shown
-            .out
-            .join("\n")
-            .contains(&format!("Last reported by the earlier Instance {first} at")),
-        "{:?}",
-        shown.out
-    );
-
-    let kestrel = kestrel.kill_and_restart().await;
-    assert_eq!(
-        summary(&kestrel, &workspace).await["last_report"],
-        historical
-    );
-
-    let replacement = kestrel.post(workspace.id, "operator", "again").await;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let answer = summary(&kestrel, &workspace).await;
-        let last = &answer["last_report"];
-        if last["instance"] == first {
-            assert_eq!(*last, historical, "{answer}");
-        } else {
-            assert_eq!(last["report"], "received", "{answer}");
-            assert_eq!(last["instance_current"], true, "{answer}");
-            assert_eq!(
-                Some(last["instance"].as_str().unwrap()),
-                kestrel.session(replacement.id).await.instance.as_deref()
-            );
-            assert_eq!(answer["earlier_reports"], json!([historical]), "{answer}");
-            break;
-        }
-        assert!(tokio::time::Instant::now() < deadline, "{answer}");
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
     kestrel.teardown().await;
 }

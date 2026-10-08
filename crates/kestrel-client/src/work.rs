@@ -1,10 +1,7 @@
 use std::io::{IsTerminal as _, Write};
 
 use anyhow::Result;
-use kestrel_operator_types::{
-    WorkInstanceReport, WorkLastReport, WorkRepository, WorkRepositoryRead,
-    WorkRepositoryUnreadable, WorkspaceWork,
-};
+use kestrel_operator_types::{WorkLastReport, WorkRepository, WorkspaceWork};
 use serde_json::Value;
 
 pub fn show(answer: Value, json: bool) -> Result<()> {
@@ -20,27 +17,21 @@ pub fn show(answer: Value, json: bool) -> Result<()> {
                     writeln!(out, "{pull_request}")?;
                 }
                 last_report(&mut out, work.last_report, terminal)?;
-                earlier(&mut out, work.earlier_reports, terminal)?;
             }
             WorkspaceWork::WorkNotAnswering(work) => {
                 writeln!(out, "{}", work.message)?;
                 last_report(&mut out, work.last_report, terminal)?;
-                earlier(&mut out, work.earlier_reports, terminal)?;
             }
             WorkspaceWork::WorkReported(work) => {
                 if terminal {
-                    let age = work
-                        .reported_at
-                        .parse::<jiff::Timestamp>()
-                        .map(|at| jiff::Timestamp::now().duration_since(at).as_secs().max(0))?;
                     writeln!(
                         out,
-                        "Reported by the supervisor {age}s ago ({})",
+                        "Reported by the supervisor {}s ago ({})",
+                        age(&work.reported_at)?,
                         work.reported_at
                     )?;
                 }
                 repositories(&mut out, work.repositories, terminal)?;
-                earlier(&mut out, work.earlier_reports, terminal)?;
             }
         }
     }
@@ -48,19 +39,21 @@ pub fn show(answer: Value, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn last_report(out: &mut impl Write, last: WorkLastReport, terminal: bool) -> Result<()> {
-    match last {
+fn last_report(out: &mut impl Write, report: WorkLastReport, terminal: bool) -> Result<()> {
+    match report {
         WorkLastReport::WorkNoReport(_) => writeln!(out, "No work report received.")?,
         WorkLastReport::WorkInstanceReport(report) => {
-            let whose = if report.instance_current {
-                "its Instance"
+            let no_longer_held = if report.current_instance {
+                ""
             } else {
-                "the earlier Instance"
+                ", no longer the Workspace's"
             };
             writeln!(
                 out,
-                "Last reported by {whose} {} at {}",
-                report.instance, report.reported_at
+                "\nLast reported by the Instance {}{no_longer_held} {}s ago ({})",
+                report.instance,
+                age(&report.reported_at)?,
+                report.reported_at
             )?;
             repositories(out, report.repositories, terminal)?;
         }
@@ -68,16 +61,11 @@ fn last_report(out: &mut impl Write, last: WorkLastReport, terminal: bool) -> Re
     Ok(())
 }
 
-fn earlier(out: &mut impl Write, reports: Vec<WorkInstanceReport>, terminal: bool) -> Result<()> {
-    for report in reports {
-        writeln!(
-            out,
-            "\nEarlier reported by the Instance {} at {}",
-            report.instance, report.reported_at
-        )?;
-        repositories(out, report.repositories, terminal)?;
-    }
-    Ok(())
+fn age(reported_at: &str) -> Result<i64> {
+    Ok(jiff::Timestamp::now()
+        .duration_since(reported_at.parse()?)
+        .as_secs()
+        .max(0))
 }
 
 fn repositories(
@@ -86,36 +74,26 @@ fn repositories(
     terminal: bool,
 ) -> Result<()> {
     for repository in repositories {
-        if terminal {
-            let (WorkRepository::WorkRepositoryRead(WorkRepositoryRead { repository, .. })
-            | WorkRepository::WorkRepositoryUnreadable(WorkRepositoryUnreadable {
-                repository,
-                ..
-            })) = &repository;
-            writeln!(out, "\n{repository}")?;
-        }
         match repository {
-            WorkRepository::WorkRepositoryUnreadable(WorkRepositoryUnreadable {
-                because, ..
-            }) => {
-                writeln!(out, "  {because}")?;
+            WorkRepository::WorkRepositoryUnreadable(repository) => {
+                if terminal {
+                    writeln!(out, "\n{}", repository.repository)?;
+                }
+                writeln!(out, "  {}", repository.because)?;
             }
-            WorkRepository::WorkRepositoryRead(WorkRepositoryRead {
-                branch,
-                changed,
-                staged,
-                committed,
-                pushed,
-                untracked,
-                stashed,
-                ..
-            }) => {
+            WorkRepository::WorkRepositoryRead(repository) => {
+                if terminal {
+                    writeln!(out, "\n{}", repository.repository)?;
+                }
                 writeln!(
                     out,
                     "On branch {}",
-                    branch.as_deref().unwrap_or("(detached HEAD)")
+                    repository.branch.as_deref().unwrap_or("(detached HEAD)")
                 )?;
-                for (label, changes) in [("Changed", changed), ("Staged", staged)] {
+                for (label, changes) in [
+                    ("Changed", repository.changed),
+                    ("Staged", repository.staged),
+                ] {
                     writeln!(
                         out,
                         "  {label}: {} {}, +{} -{} lines",
@@ -125,6 +103,7 @@ fn repositories(
                         changes.removed
                     )?;
                 }
+                let committed = repository.committed;
                 writeln!(
                     out,
                     "  Committed: {} {}, +{} -{} lines",
@@ -133,9 +112,13 @@ fn repositories(
                     committed.added,
                     committed.removed
                 )?;
-                writeln!(out, "  Pushed: {}", pushed.as_deref().unwrap_or("none"))?;
-                writeln!(out, "  Untracked: {untracked}")?;
-                writeln!(out, "  Stashed: {stashed}")?;
+                writeln!(
+                    out,
+                    "  Pushed: {}",
+                    repository.pushed.as_deref().unwrap_or("none")
+                )?;
+                writeln!(out, "  Untracked: {}", repository.untracked)?;
+                writeln!(out, "  Stashed: {}", repository.stashed)?;
             }
         }
     }

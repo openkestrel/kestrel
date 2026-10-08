@@ -15,13 +15,11 @@ CREATE TABLE instance_idle_hint (
     archive_deadline TEXT NOT NULL
 ) STRICT;
 
--- History only, kept per Instance after the Workspace lets it go: workspace.observed alone gates reaping.
+-- History, never authority: it outlives its Instance and decides no hold, seal or release.
 CREATE TABLE instance_work_report (
-    instance TEXT PRIMARY KEY,
-    organization_id TEXT NOT NULL REFERENCES organization (id),
     workspace_id TEXT NOT NULL REFERENCES workspace (id),
+    instance TEXT NOT NULL,
     repositories TEXT NOT NULL,
-    reported_at TEXT NOT NULL
+    reported_at TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, instance)
 ) STRICT;
-
-CREATE INDEX instance_work_report_workspace ON instance_work_report (workspace_id);
