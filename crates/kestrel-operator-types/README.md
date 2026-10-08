@@ -4,15 +4,20 @@
 and SSE name mappings; domain builders stay in the control plane and presentation stays in
 the Clients. Both Rust consumers depend on the leaf, with their endpoint migrations separate.
 
-Run `cargo run -p kestrel-operator-types --bin generate` from any workspace directory to
-regenerate `src/generated.rs`, `src/sse.rs`, and the browser's `sse.gen.ts`. The generator is
-pinned to `openapi-to-rust =0.19.0` with HTTP/SSE client generation disabled. Rust output is
-formatted by the repository's pinned rustfmt. UUIDs use `uuid::Uuid`; timestamps retain their
-wire text as `String`. Generated descriptions and serialization helpers are kept intact.
+Run `cargo run -p kestrel-operator-types --bin generate --features generate` from any workspace
+directory to regenerate `src/generated.rs`, `src/sse.rs`, and the browser's `sse.gen.ts`. The
+generator is pinned to `openapi-to-rust =0.19.0` with HTTP/SSE client generation disabled. Rust
+output is formatted by the repository's pinned rustfmt. UUIDs use `uuid::Uuid`; timestamps
+retain their wire text as `String`. Generated descriptions and serialization helpers are kept
+intact.
 
-`cargo run -p kestrel-operator-types --bin generate -- --check` checks without writing.
-CI also regenerates and rejects a diff. Change the exact dependency pin and regenerate to
-review a generator upgrade's output alongside its lockfile change.
+`openapi-to-rust` sits behind the `generate` feature: the committed lib needs none of it, and
+gating it keeps the generator's dependency tree out of every build that only consumes the
+generated types.
+
+`cargo run -p kestrel-operator-types --bin generate --features generate -- --check` checks
+without writing. CI also regenerates and rejects a diff. Change the exact dependency pin and
+regenerate to review a generator upgrade's output alongside its lockfile change.
 
 Each streaming union's referenced variant carries `x-sse-event`. The generator emits
 `event_name()` and `from_sse(name, data)` for Rust, plus name constants and payload maps for

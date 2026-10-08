@@ -103,11 +103,11 @@ jobs:
 
       - name: Check generated operator types
         run: |
-          cargo run --locked -p kestrel-operator-types --bin generate
+          cargo run --locked -p kestrel-operator-types --bin generate --features generate
           git diff --exit-code -- crates/kestrel-operator-types/src packages/client/src/operator/sse.gen.ts
 
       - name: Lint
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --features kestrel-operator-types/generate -- -D warnings
 
       - name: Build the binaries
         run: cargo build --locked --workspace
