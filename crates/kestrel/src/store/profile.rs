@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
-use crate::declined::Declined;
+use crate::declined::{Reason, Resource};
 use crate::domain::{Organization, SubscriptionProfile, SubscriptionProfileId};
 use crate::keyring::Keyring;
 use crate::profile::{Contents, Entry, Held, Kind};
@@ -32,11 +32,16 @@ impl<'a> Profiles<'a> {
     ) -> Result<Declared<SubscriptionProfile>> {
         if let Some(found) = self.find(organization, name).await? {
             if found.owner != owner {
-                bail!(Declined::Taken(format!(
-                    "the subscription profile {name} belongs to {}, and a profile never changes \
-                     hands",
-                    found.owner
-                )));
+                bail!(Reason::Taken {
+                    resource: Resource::SubscriptionProfile,
+                    reference: name.to_owned(),
+                    organization: Some(organization.name.clone()),
+                    message: format!(
+                        "the subscription profile {name} belongs to {}, and a profile never \
+                         changes hands",
+                        found.owner
+                    ),
+                });
             }
             return Ok(Declared {
                 record: found,
@@ -75,10 +80,15 @@ impl<'a> Profiles<'a> {
         name: &str,
     ) -> Result<SubscriptionProfile> {
         self.find(organization, name).await?.ok_or_else(|| {
-            Declined::Missing(format!(
-                "no subscription profile named {name} in the organization {}",
-                organization.name
-            ))
+            Reason::MissingReference {
+                resource: Resource::SubscriptionProfile,
+                reference: name.to_owned(),
+                organization: Some(organization.name.clone()),
+                message: format!(
+                    "no subscription profile named {name} in the organization {}",
+                    organization.name
+                ),
+            }
             .into()
         })
     }

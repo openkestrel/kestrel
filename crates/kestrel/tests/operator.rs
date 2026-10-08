@@ -3225,6 +3225,143 @@ async fn a_changed_agent_declaration_converges_on_the_agent_by_that_name() {
 }
 
 #[tokio::test]
+async fn a_missing_reference_offers_the_declaration_that_repairs_it() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+
+    let (status, refusal) = declared(
+        &kestrel,
+        &agents_of("ghost"),
+        &json!({ "name": "builder", "harness": "opencode" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refusal}");
+    assert_eq!(refusal["kind"], "missing_reference");
+    assert_eq!(refusal["context"]["resource"], "organization");
+    assert_eq!(refusal["context"]["reference"], "ghost");
+    assert_eq!(refusal["next_steps"][0]["action"], "declare_organization");
+    assert_eq!(refusal["next_steps"][0]["name"], "ghost");
+
+    let (status, refusal) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &agent_model_of("acme", "ghost"),
+        Some(&json!({ "model": "claude-opus-5" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refusal}");
+    assert_eq!(refusal["kind"], "missing_reference");
+    assert_eq!(refusal["context"]["resource"], "agent");
+    assert_eq!(refusal["context"]["organization"], "acme");
+    let next = &refusal["next_steps"][0];
+    assert_eq!(next["action"], "declare_agent");
+    assert_eq!(next["organization"], "acme");
+    assert_eq!(next["name"], "ghost");
+    assert_eq!(next["missing"], json!(["harness"]));
+
+    let (status, refusal) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &profile_variable_of("acme", "ghost", "ANTHROPIC_API_KEY"),
+        Some(&json!({ "secret": "sk-test" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refusal}");
+    assert_eq!(refusal["kind"], "missing_reference");
+    assert_eq!(refusal["context"]["resource"], "subscription_profile");
+    assert_eq!(
+        refusal["next_steps"][0]["action"],
+        "declare_subscription_profile"
+    );
+    assert_eq!(refusal["next_steps"][0]["missing"], json!(["owner"]));
+
+    let (status, refusal) = requested(
+        &kestrel,
+        reqwest::Method::DELETE,
+        &credential_of("acme", "GHOST_KEY"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refusal}");
+    assert_eq!(refusal["kind"], "missing_reference");
+    assert_eq!(refusal["context"]["resource"], "provider_credential");
+    let next = &refusal["next_steps"][0];
+    assert_eq!(next["action"], "set_provider_credential");
+    assert_eq!(next["organization"], "acme");
+    assert_eq!(next["name"], "GHOST_KEY");
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_invalid_declaration_field_is_typed_and_offers_a_correction() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+
+    let (status, refusal) = declared(
+        &kestrel,
+        &projects_of("acme"),
+        &json!({ "name": "kestrel", "repositories": [], "branch": "main" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(refusal["kind"], "invalid_field");
+    assert_eq!(refusal["field"], "repositories");
+    assert_eq!(refusal["context"]["field"], "repositories");
+    let next = &refusal["next_steps"][0];
+    assert_eq!(next["action"], "correct_field");
+    assert_eq!(next["operation"], "declare_project");
+    assert_eq!(next["field"], "repositories");
+
+    let (status, refusal) = declared(
+        &kestrel,
+        &agents_of("acme"),
+        &json!({ "name": "builder", "harness": "" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(refusal["kind"], "invalid_field");
+    assert_eq!(refusal["field"], "harness");
+
+    let (status, refusal) = declared(
+        &kestrel,
+        &profiles_of("acme"),
+        &json!({ "name": "jack", "owner": "" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(refusal["kind"], "invalid_field");
+    assert_eq!(refusal["field"], "owner");
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_subscription_profile_that_belongs_to_someone_else_is_a_typed_state_conflict() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_profile("acme", "jack", "Jack")
+        .await
+        .expect("the profile should declare");
+
+    let (status, refusal) = declared(
+        &kestrel,
+        &profiles_of("acme"),
+        &json!({ "name": "jack", "owner": "Alex" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["kind"], "state_conflict");
+    assert_eq!(refusal["context"]["resource"], "subscription_profile");
+    assert_eq!(refusal["context"]["reference"], "jack");
+    assert_eq!(refusal["next_steps"][0]["action"], "inspect_resource");
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_client_declaring_into_no_such_organization_is_refused() {
     let kestrel = Kestrel::boot().await;
 

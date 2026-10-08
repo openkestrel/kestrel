@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use anyhow::{Result, bail};
 use jiff::Timestamp;
 
-use crate::declined::Declined;
+use crate::declined::{Reason, Resource};
 use crate::domain::OrganizationId;
 use crate::store::Store;
 
@@ -19,7 +19,7 @@ pub struct Held {
 }
 
 pub async fn hold(store: &Store, organization: &str, variable: &str, secret: &str) -> Result<Held> {
-    holdable(variable, secret)?;
+    holdable("set_provider_credential", variable, secret)?;
 
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
@@ -50,21 +50,28 @@ pub async fn forget(store: &Store, organization: &str, variable: &str) -> Result
         .forget_provider_credential(organization.id, variable)
         .await?
     {
-        bail!(Declined::Missing(format!(
-            "the organization {} holds no provider credential named {variable}",
-            organization.name
-        )));
+        bail!(Reason::MissingReference {
+            resource: Resource::ProviderCredential,
+            reference: variable.to_owned(),
+            organization: Some(organization.name.clone()),
+            message: format!(
+                "the organization {} holds no provider credential named {variable}",
+                organization.name
+            ),
+        });
     }
 
     tx.commit().await
 }
 
-pub(crate) fn holdable(variable: &str, secret: &str) -> Result<()> {
-    named(variable)?;
+pub(crate) fn holdable(operation: &'static str, variable: &str, secret: &str) -> Result<()> {
+    named(operation, variable)?;
     if secret.is_empty() {
-        bail!(Declined::Unacceptable(
-            "a provider credential with nothing in it is not one".to_owned()
-        ));
+        bail!(Reason::InvalidField {
+            field: "secret",
+            operation,
+            message: "a provider credential with nothing in it is not one".to_owned(),
+        });
     }
 
     Ok(())
@@ -93,11 +100,13 @@ pub async fn reaching(
         .await
 }
 
-pub(crate) fn named(variable: &str) -> Result<()> {
+pub(crate) fn named(operation: &'static str, variable: &str) -> Result<()> {
     if variable.starts_with("KESTREL_") {
-        bail!(Declined::Unacceptable(
-            "KESTREL_ is reserved for the supervisor".to_owned()
-        ));
+        bail!(Reason::InvalidField {
+            field: "variable",
+            operation,
+            message: "KESTREL_ is reserved for the supervisor".to_owned(),
+        });
     }
 
     let acceptable = variable
@@ -109,9 +118,13 @@ pub(crate) fn named(variable: &str) -> Result<()> {
         .is_some_and(|first| first.is_ascii_alphabetic() || first == '_');
 
     if !acceptable || !starts {
-        bail!(Declined::Unacceptable(format!(
-            "{variable} is not an environment variable a Harness could be spawned with"
-        )));
+        bail!(Reason::InvalidField {
+            field: "variable",
+            operation,
+            message: format!(
+                "{variable} is not an environment variable a Harness could be spawned with"
+            ),
+        });
     }
 
     Ok(())
@@ -123,14 +136,17 @@ mod tests {
 
     #[test]
     fn a_credential_is_named_by_the_variable_a_harness_reads_it_from() {
-        assert!(named("ANTHROPIC_API_KEY").is_ok());
-        assert!(named("_KEY2").is_ok());
+        assert!(named("set_provider_credential", "ANTHROPIC_API_KEY").is_ok());
+        assert!(named("set_provider_credential", "_KEY2").is_ok());
     }
 
     #[test]
     fn a_name_no_process_could_carry_is_refused() {
         for refused in ["", "2KEY", "A KEY", "A=KEY", "A-KEY", "clé"] {
-            assert!(named(refused).is_err(), "{refused} was accepted");
+            assert!(
+                named("set_provider_credential", refused).is_err(),
+                "{refused} was accepted"
+            );
         }
     }
 }

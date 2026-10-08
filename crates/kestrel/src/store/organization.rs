@@ -6,6 +6,7 @@ use jiff::Timestamp;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
+use crate::declined::{Reason, Resource};
 use crate::domain::{Organization, OrganizationId};
 use crate::keyring::Keyring;
 use crate::provider::Held;
@@ -80,8 +81,11 @@ impl<'a> Organizations<'a> {
 
     pub async fn named(&mut self, name: &str) -> Result<Organization> {
         self.find(name).await?.ok_or_else(|| {
-            NoSuchOrganization {
-                name: name.to_owned(),
+            Reason::MissingReference {
+                resource: Resource::Organization,
+                reference: name.to_owned(),
+                organization: None,
+                message: format!("no organization named {name}"),
             }
             .into()
         })
@@ -205,19 +209,6 @@ impl<'a> Organizations<'a> {
         Ok(forgotten.rows_affected() > 0)
     }
 }
-
-#[derive(Debug)]
-pub struct NoSuchOrganization {
-    pub name: String,
-}
-
-impl std::fmt::Display for NoSuchOrganization {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "no organization named {}", self.name)
-    }
-}
-
-impl std::error::Error for NoSuchOrganization {}
 
 pub(crate) async fn with_id(
     connection: &mut SqliteConnection,

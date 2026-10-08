@@ -6265,6 +6265,766 @@ impl AsRef<str> for EndBecause {
         self.as_str()
     }
 }
+///Why kestrel would not do what it was asked, and the ordered, typed next steps that repair, inspect or retry it (ADR-0052). `message` is display only; a Client never classifies it.
+#[derive(Debug, Clone)]
+pub enum Diagnostic {
+    MissingReferenceDiagnostic(MissingReferenceDiagnostic),
+    AmbiguousReferenceDiagnostic(AmbiguousReferenceDiagnostic),
+    MalformedRequestDiagnostic(MalformedRequestDiagnostic),
+    ForbiddenActionDiagnostic(ForbiddenActionDiagnostic),
+    StateConflictDiagnostic(StateConflictDiagnostic),
+    ExpiredResourceDiagnostic(ExpiredResourceDiagnostic),
+    InvalidFieldDiagnostic(InvalidFieldDiagnostic),
+    SetupGapDiagnostic(SetupGapDiagnostic),
+    UnavailableDiagnostic(UnavailableDiagnostic),
+    InstanceTimeoutDiagnostic(InstanceTimeoutDiagnostic),
+    AuthenticationFailedDiagnostic(AuthenticationFailedDiagnostic),
+    ExecutableMissingDiagnostic(ExecutableMissingDiagnostic),
+    UnknownFailureDiagnostic(UnknownFailureDiagnostic),
+    ConnectionFailedDiagnostic(ConnectionFailedDiagnostic),
+    ClientFailureDiagnostic(ClientFailureDiagnostic),
+    UnknownResponseDiagnostic(UnknownResponseDiagnostic),
+}
+impl Serialize for Diagnostic {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::MissingReferenceDiagnostic(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::AmbiguousReferenceDiagnostic(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::MalformedRequestDiagnostic(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::ForbiddenActionDiagnostic(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::StateConflictDiagnostic(value) => serde::Serialize::serialize(value, serializer),
+            Self::ExpiredResourceDiagnostic(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::InvalidFieldDiagnostic(value) => serde::Serialize::serialize(value, serializer),
+            Self::SetupGapDiagnostic(value) => serde::Serialize::serialize(value, serializer),
+            Self::UnavailableDiagnostic(value) => serde::Serialize::serialize(value, serializer),
+            Self::InstanceTimeoutDiagnostic(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::AuthenticationFailedDiagnostic(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::ExecutableMissingDiagnostic(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::UnknownFailureDiagnostic(value) => serde::Serialize::serialize(value, serializer),
+            Self::ConnectionFailedDiagnostic(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::ClientFailureDiagnostic(value) => serde::Serialize::serialize(value, serializer),
+            Self::UnknownResponseDiagnostic(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+        }
+    }
+}
+impl<'de> Deserialize<'de> for Diagnostic {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        fn exact_json_integer(number: &serde_json::Number) -> Option<i128> {
+            number
+                .as_i64()
+                .map(i128::from)
+                .or_else(|| number.as_u64().map(i128::from))
+        }
+        fn json_numbers_have_same_value(
+            encoded: &serde_json::Number,
+            input: &serde_json::Number,
+        ) -> bool {
+            match (exact_json_integer(encoded), exact_json_integer(input)) {
+                (Some(encoded), Some(input)) => encoded == input,
+                (Some(encoded), None) => input.as_f64().is_some_and(|input| {
+                    input.is_finite() && input.fract() == 0.0 && input as i128 == encoded
+                }),
+                (None, Some(input)) => encoded.as_f64().is_some_and(|encoded| {
+                    encoded.is_finite() && encoded.fract() == 0.0 && encoded as i128 == input
+                }),
+                (None, None) => encoded.as_f64() == input.as_f64(),
+            }
+        }
+        /// `nulls_may_be_absent` also accepts an input `null` that the
+        /// branch omits, as a skipped `None` does. Extra encoded
+        /// keys are allowed only by the pre-existing anyOf match.
+        fn preserves_complete_json_input(
+            encoded: &serde_json::Value,
+            input: &serde_json::Value,
+            nulls_may_be_absent: bool,
+            encoded_keys_may_be_extra: bool,
+        ) -> bool {
+            match (encoded, input) {
+                (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
+                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                        && input.iter().all(|(key, value)| match encoded.get(key) {
+                            Some(encoded_value) => preserves_complete_json_input(
+                                encoded_value,
+                                value,
+                                nulls_may_be_absent,
+                                encoded_keys_may_be_extra,
+                            ),
+                            None => nulls_may_be_absent && value.is_null(),
+                        })
+                }
+                (serde_json::Value::Array(encoded), serde_json::Value::Array(input)) => {
+                    encoded.len() == input.len()
+                        && encoded.iter().zip(input).all(|(encoded, input)| {
+                            preserves_complete_json_input(
+                                encoded,
+                                input,
+                                nulls_may_be_absent,
+                                encoded_keys_may_be_extra,
+                            )
+                        })
+                }
+                (serde_json::Value::Number(encoded), serde_json::Value::Number(input)) => {
+                    json_numbers_have_same_value(encoded, input)
+                }
+                _ => encoded == input,
+            }
+        }
+        let input = <serde_json::Value as Deserialize>::deserialize(deserializer)?;
+        let mut matched = None;
+        let mut equivalent = None;
+        let mut equivalent_matches = 0usize;
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"missing_reference\"")
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<MissingReferenceDiagnostic>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::MissingReferenceDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::MissingReferenceDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"ambiguous_reference\"")
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<AmbiguousReferenceDiagnostic>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::AmbiguousReferenceDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::AmbiguousReferenceDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"malformed_request\"")
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<MalformedRequestDiagnostic>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::MalformedRequestDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::MalformedRequestDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"forbidden_action\"")
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<ForbiddenActionDiagnostic>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::ForbiddenActionDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::ForbiddenActionDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"state_conflict\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<StateConflictDiagnostic>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::StateConflictDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::StateConflictDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"expired_resource\"")
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<ExpiredResourceDiagnostic>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::ExpiredResourceDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::ExpiredResourceDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"invalid_field\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<InvalidFieldDiagnostic>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::InvalidFieldDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::InvalidFieldDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"setup_gap\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<SetupGapDiagnostic>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::SetupGapDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::SetupGapDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"unavailable\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<UnavailableDiagnostic>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::UnavailableDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::UnavailableDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"instance_timeout\"")
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<InstanceTimeoutDiagnostic>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::InstanceTimeoutDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::InstanceTimeoutDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"authentication_failed\"")
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<AuthenticationFailedDiagnostic>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::AuthenticationFailedDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::AuthenticationFailedDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"executable_missing\"")
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<ExecutableMissingDiagnostic>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::ExecutableMissingDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::ExecutableMissingDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"unknown_failure\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<UnknownFailureDiagnostic>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::UnknownFailureDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::UnknownFailureDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"connection_failed\"")
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<ConnectionFailedDiagnostic>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::ConnectionFailedDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::ConnectionFailedDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"client_failure\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<ClientFailureDiagnostic>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::ClientFailureDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::ClientFailureDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"unknown_response\"")
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<UnknownResponseDiagnostic>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::UnknownResponseDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::UnknownResponseDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(matched) = matched {
+            return Ok(matched);
+        }
+        if equivalent_matches > 1 {
+            return Err(serde::de::Error::custom(concat!(
+                "ambiguous oneOf value for ",
+                stringify!(Diagnostic),
+                ": more than one branch preserved an equivalent input",
+            )));
+        }
+        equivalent.ok_or_else(|| {
+            serde::de::Error::custom(concat!(
+                "no oneOf branch for ",
+                stringify!(Diagnostic),
+                " preserved the complete input",
+            ))
+        })
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UnknownResponseDiagnostic {
+    pub context: UnknownResponseContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UnknownResponseContext {
+    pub evidence: Option<String>,
+    pub operation: String,
+    pub service: String,
+    pub status: Option<i64>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UnknownFailureDiagnostic {
+    pub context: UnknownFailureContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UnknownFailureContext {
+    pub evidence: Option<String>,
+    pub resource: Option<String>,
+    pub session: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UnavailableDiagnostic {
+    pub context: UnavailableContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UnavailableContext {
+    pub operation: String,
+    pub resource: Option<String>,
+    pub retry_after_seconds: Option<i64>,
+    pub service: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StateConflictDiagnostic {
+    pub context: StateConflictContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StateConflictContext {
+    ///The Session holding the conflicting state, when the conflict is one.
+    pub holding_session: Option<String>,
+    pub operation: String,
+    pub organization: Option<String>,
+    pub reference: String,
+    pub resource: Resource,
+    pub state: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SetupGapDiagnostic {
+    pub context: SetupGapContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SetupGapContext {
+    pub harness: Option<String>,
+    pub method: Option<String>,
+    pub organization: Option<String>,
+    pub prerequisite: String,
+    pub reference: Option<String>,
+    pub resource: Option<Resource>,
+    pub sign_in: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MissingReferenceDiagnostic {
+    pub context: MissingReferenceContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MissingReferenceContext {
+    ///Null when the resource is not scoped to an Organization.
+    pub organization: Option<String>,
+    pub reference: String,
+    pub resource: Resource,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MalformedRequestDiagnostic {
+    pub context: MalformedRequestContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MalformedRequestContext {
+    pub field: Option<String>,
+    pub operation: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct InvalidFieldDiagnostic {
+    pub context: InvalidFieldContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct InvalidFieldContext {
+    pub allowed_values: Option<Vec<String>>,
+    pub constraint: String,
+    pub field: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct InstanceTimeoutDiagnostic {
+    pub context: InstanceTimeoutContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct InstanceTimeoutContext {
+    pub instance: Option<String>,
+    pub operation: String,
+    pub workspace: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ForbiddenActionDiagnostic {
+    pub context: ForbiddenActionContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ForbiddenActionContext {
+    ///The existing author/name constraint the action violates, when established.
+    pub constraint: Option<String>,
+    pub operation: String,
+    pub organization: Option<String>,
+    pub reference: String,
+    pub resource: Resource,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExpiredResourceDiagnostic {
+    pub context: ExpiredResourceContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExpiredResourceContext {
+    pub operation: String,
+    pub organization: Option<String>,
+    pub reference: String,
+    pub resource: Resource,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExecutableMissingDiagnostic {
+    pub context: ExecutableMissingContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExecutableMissingContext {
+    pub evidence: String,
+    pub executable: String,
+    pub harness: String,
+    pub image: Option<String>,
+    pub session: String,
+}
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DeclarationDocument {
     pub agent: AgentDeclaration,
@@ -6890,6 +7650,19 @@ impl AgentDeclarationBuilder {
     }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConnectionFailedDiagnostic {
+    pub context: ConnectionFailedContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConnectionFailedContext {
+    pub operation: String,
+    pub url: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Completion {
     pub finished_at: String,
     pub started_at: String,
@@ -7194,6 +7967,19 @@ pub struct TurnOutcomeCancelled {
 pub struct TurnOutcomeAnswered {
     pub status: serde_json::Value,
     pub stop_reason: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ClientFailureDiagnostic {
+    pub context: ClientFailureContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ClientFailureContext {
+    pub evidence: Option<String>,
+    pub operation: String,
 }
 ///SSE names: open (ChangesOpen) on connect and on reconnect, change (Change) for one resource that changed, and resync (ChangesResync) for a subscriber that fell behind the bounded buffer. No event carries an id.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -7627,6 +8413,25 @@ impl AsRef<str> for PayloadReferenceMediaType {
 }
 pub type InlineBrief = String;
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthenticationFailedDiagnostic {
+    pub context: AuthenticationFailedContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthenticationFailedContext {
+    pub covered: Option<bool>,
+    pub evidence: String,
+    ///Established only from evidence; never inferred from arbitrary harness output.
+    pub expired: Option<bool>,
+    pub harness: String,
+    pub image: Option<String>,
+    pub session: String,
+    pub sign_in: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppliedTriggers {
     pub admitting_outsiders: Vec<String>,
     pub changes: Vec<AppliedTriggersChangesItem>,
@@ -7748,6 +8553,27 @@ impl AsRef<str> for DeclarationDiffAction {
         self.as_str()
     }
 }
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AmbiguousReferenceDiagnostic {
+    pub context: AmbiguousReferenceContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AmbiguousReferenceContext {
+    pub candidates: Vec<Candidate>,
+    pub organization: Option<String>,
+    pub reference: String,
+    pub resource: Resource,
+}
+///One record an ambiguous reference could have meant.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Candidate {
+    pub id: String,
+    pub name: String,
+}
 ///Read-time summary of omitted narration and detail between consecutive shared-state entries. first_seq identifies the whole Activity, including selected kinds, and stays stable across pages and reconnects. last_seq is the highest Activity seq examined; its SSE id advances the global cursor. A closed replacement precedes the closing shared-state entry even when no detail was added. No summary is stored.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Activity {
@@ -7862,6 +8688,780 @@ impl AsRef<str> for OccupantPhase {
     fn as_ref(&self) -> &str {
         self.as_str()
     }
+}
+///A typed corrective, inspective or retry step a Diagnostic offers, naming its own inputs rather than a shell command or browser route (ADR-0052). A Client binds it to a form, a flag or an API call.
+#[derive(Debug, Clone)]
+pub enum Action {
+    DeclareOrganizationAction(DeclareOrganizationAction),
+    DeclareProjectAction(DeclareProjectAction),
+    DeclareAgentAction(DeclareAgentAction),
+    DeclareSubscriptionProfileAction(DeclareSubscriptionProfileAction),
+    SetProviderCredentialAction(SetProviderCredentialAction),
+    InspectResourceAction(InspectResourceAction),
+    ListResourcesAction(ListResourcesAction),
+    StopSessionAction(StopSessionAction),
+    EnqueueSessionAction(EnqueueSessionAction),
+    ReleaseInstanceAction(ReleaseInstanceAction),
+    CorrectFieldAction(CorrectFieldAction),
+    SignInAction(SignInAction),
+    InspectHarnessImageAction(InspectHarnessImageAction),
+    CheckConnectionAction(CheckConnectionAction),
+    RetryReadAction(RetryReadAction),
+    InspectOperationAction(InspectOperationAction),
+}
+impl Serialize for Action {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::DeclareOrganizationAction(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::DeclareProjectAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::DeclareAgentAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::DeclareSubscriptionProfileAction(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::SetProviderCredentialAction(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::InspectResourceAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::ListResourcesAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::StopSessionAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::EnqueueSessionAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::ReleaseInstanceAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::CorrectFieldAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::SignInAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::InspectHarnessImageAction(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::CheckConnectionAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::RetryReadAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::InspectOperationAction(value) => serde::Serialize::serialize(value, serializer),
+        }
+    }
+}
+impl<'de> Deserialize<'de> for Action {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        fn exact_json_integer(number: &serde_json::Number) -> Option<i128> {
+            number
+                .as_i64()
+                .map(i128::from)
+                .or_else(|| number.as_u64().map(i128::from))
+        }
+        fn json_numbers_have_same_value(
+            encoded: &serde_json::Number,
+            input: &serde_json::Number,
+        ) -> bool {
+            match (exact_json_integer(encoded), exact_json_integer(input)) {
+                (Some(encoded), Some(input)) => encoded == input,
+                (Some(encoded), None) => input.as_f64().is_some_and(|input| {
+                    input.is_finite() && input.fract() == 0.0 && input as i128 == encoded
+                }),
+                (None, Some(input)) => encoded.as_f64().is_some_and(|encoded| {
+                    encoded.is_finite() && encoded.fract() == 0.0 && encoded as i128 == input
+                }),
+                (None, None) => encoded.as_f64() == input.as_f64(),
+            }
+        }
+        /// `nulls_may_be_absent` also accepts an input `null` that the
+        /// branch omits, as a skipped `None` does. Extra encoded
+        /// keys are allowed only by the pre-existing anyOf match.
+        fn preserves_complete_json_input(
+            encoded: &serde_json::Value,
+            input: &serde_json::Value,
+            nulls_may_be_absent: bool,
+            encoded_keys_may_be_extra: bool,
+        ) -> bool {
+            match (encoded, input) {
+                (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
+                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                        && input.iter().all(|(key, value)| match encoded.get(key) {
+                            Some(encoded_value) => preserves_complete_json_input(
+                                encoded_value,
+                                value,
+                                nulls_may_be_absent,
+                                encoded_keys_may_be_extra,
+                            ),
+                            None => nulls_may_be_absent && value.is_null(),
+                        })
+                }
+                (serde_json::Value::Array(encoded), serde_json::Value::Array(input)) => {
+                    encoded.len() == input.len()
+                        && encoded.iter().zip(input).all(|(encoded, input)| {
+                            preserves_complete_json_input(
+                                encoded,
+                                input,
+                                nulls_may_be_absent,
+                                encoded_keys_may_be_extra,
+                            )
+                        })
+                }
+                (serde_json::Value::Number(encoded), serde_json::Value::Number(input)) => {
+                    json_numbers_have_same_value(encoded, input)
+                }
+                _ => encoded == input,
+            }
+        }
+        let input = <serde_json::Value as Deserialize>::deserialize(deserializer)?;
+        let mut matched = None;
+        let mut equivalent = None;
+        let mut equivalent_matches = 0usize;
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"declare_organization\"")
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<DeclareOrganizationAction>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::DeclareOrganizationAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::DeclareOrganizationAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"declare_project\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<DeclareProjectAction>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::DeclareProjectAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::DeclareProjectAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"declare_agent\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<DeclareAgentAction>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::DeclareAgentAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::DeclareAgentAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null()
+                    || matches!(
+                        value.to_string().as_str(),
+                        "\"declare_subscription_profile\""
+                    )
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<DeclareSubscriptionProfileAction>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::DeclareSubscriptionProfileAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::DeclareSubscriptionProfileAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null()
+                    || matches!(value.to_string().as_str(), "\"set_provider_credential\"")
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<SetProviderCredentialAction>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::SetProviderCredentialAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::SetProviderCredentialAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"inspect_resource\"")
+            }) && object.get("resource").is_some_and(|value| {
+                value.is_null()
+                    || matches!(
+                        value.to_string().as_str(),
+                        "\"organization\""
+                            | "\"project\""
+                            | "\"agent\""
+                            | "\"subscription_profile\""
+                            | "\"provider_credential\""
+                            | "\"integration\""
+                            | "\"trigger\""
+                            | "\"event\""
+                            | "\"workspace\""
+                            | "\"session\""
+                            | "\"instance\""
+                            | "\"held_message\""
+                            | "\"transcript_payload\""
+                    )
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<InspectResourceAction>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::InspectResourceAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::InspectResourceAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"list_resources\"")
+            }) && object.get("resource").is_some_and(|value| {
+                value.is_null()
+                    || matches!(
+                        value.to_string().as_str(),
+                        "\"organization\""
+                            | "\"project\""
+                            | "\"agent\""
+                            | "\"subscription_profile\""
+                            | "\"provider_credential\""
+                            | "\"integration\""
+                            | "\"trigger\""
+                            | "\"event\""
+                            | "\"workspace\""
+                            | "\"session\""
+                            | "\"instance\""
+                            | "\"held_message\""
+                            | "\"transcript_payload\""
+                    )
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<ListResourcesAction>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::ListResourcesAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::ListResourcesAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"stop_session\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<StopSessionAction>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::StopSessionAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::StopSessionAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"enqueue_session\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<EnqueueSessionAction>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::EnqueueSessionAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::EnqueueSessionAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"release_instance\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<ReleaseInstanceAction>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::ReleaseInstanceAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::ReleaseInstanceAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"correct_field\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<CorrectFieldAction>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::CorrectFieldAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::CorrectFieldAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"sign_in\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<SignInAction>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::SignInAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::SignInAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"inspect_harness_image\"")
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<InspectHarnessImageAction>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::InspectHarnessImageAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::InspectHarnessImageAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"check_connection\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<CheckConnectionAction>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::CheckConnectionAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::CheckConnectionAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"retry_read\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<RetryReadAction>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::RetryReadAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::RetryReadAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"inspect_operation\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<InspectOperationAction>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::InspectOperationAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::InspectOperationAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(matched) = matched {
+            return Ok(matched);
+        }
+        if equivalent_matches > 1 {
+            return Err(serde::de::Error::custom(concat!(
+                "ambiguous oneOf value for ",
+                stringify!(Action),
+                ": more than one branch preserved an equivalent input",
+            )));
+        }
+        equivalent.ok_or_else(|| {
+            serde::de::Error::custom(concat!(
+                "no oneOf branch for ",
+                stringify!(Action),
+                " preserved the complete input",
+            ))
+        })
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StopSessionAction {
+    pub action: serde_json::Value,
+    ///Display-only explanation of the destructive effect; wording never decides whether confirmation is required.
+    pub consequence: String,
+    pub organization: String,
+    pub session: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SignInAction {
+    pub action: serde_json::Value,
+    pub harness: Option<String>,
+    pub method: Option<String>,
+    ///A safe locator for which sign-in to use, never held material.
+    pub sign_in: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SetProviderCredentialAction {
+    pub action: serde_json::Value,
+    ///The credential's variable. Its value is always collected privately and never serialized here.
+    pub name: String,
+    pub organization: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RetryReadAction {
+    pub action: serde_json::Value,
+    pub operation: String,
+    pub resource: Option<String>,
+    pub retry_after_seconds: Option<i64>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReleaseInstanceAction {
+    pub action: serde_json::Value,
+    pub consequence: String,
+    pub instance: Option<String>,
+    pub organization: String,
+    pub workspace: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ListResourcesAction {
+    pub action: serde_json::Value,
+    pub organization: Option<String>,
+    pub resource: Resource,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct InspectResourceAction {
+    pub action: serde_json::Value,
+    pub organization: Option<String>,
+    pub reference: Option<String>,
+    pub resource: Resource,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct InspectOperationAction {
+    pub action: serde_json::Value,
+    pub operation: String,
+    pub resource: Option<String>,
+    ///Whether the operation's result is unknown, used after a lost write response. Never a signal to replay the write.
+    pub uncertain: bool,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct InspectHarnessImageAction {
+    pub action: serde_json::Value,
+    pub command: Option<String>,
+    pub harness: Option<String>,
+    pub image: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EnqueueSessionAction {
+    pub action: serde_json::Value,
+    pub missing: Vec<String>,
+    pub organization: String,
+    pub workspace: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DeclareSubscriptionProfileAction {
+    pub action: serde_json::Value,
+    ///Which of this action's fixed inputs are not yet known, from `name`, `owner`.
+    pub missing: Vec<String>,
+    pub name: Option<String>,
+    pub organization: String,
+    pub owner: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DeclareProjectAction {
+    pub action: serde_json::Value,
+    pub branch: Option<String>,
+    ///Which of this action's fixed inputs are not yet known, from `name`, `repositories`, `branch`.
+    pub missing: Vec<String>,
+    pub name: Option<String>,
+    pub organization: String,
+    pub repositories: Option<Vec<String>>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DeclareOrganizationAction {
+    pub action: serde_json::Value,
+    ///Which of this action's fixed inputs are not yet known, from `name`.
+    pub missing: Vec<String>,
+    pub name: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DeclareAgentAction {
+    pub action: serde_json::Value,
+    pub harness: Option<String>,
+    ///Which of this action's fixed inputs are not yet known, from `name`, `harness`.
+    pub missing: Vec<String>,
+    pub name: Option<String>,
+    pub organization: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CorrectFieldAction {
+    pub action: serde_json::Value,
+    pub allowed_values: Option<Vec<String>>,
+    pub constraint: String,
+    pub field: String,
+    pub operation: String,
+    pub resource: Option<Resource>,
+}
+///A kind of record a reference, a declaration or an action names (ADR-0052).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum Resource {
+    #[default]
+    #[serde(rename = "organization")]
+    Organization,
+    #[serde(rename = "project")]
+    Project,
+    #[serde(rename = "agent")]
+    Agent,
+    #[serde(rename = "subscription_profile")]
+    SubscriptionProfile,
+    #[serde(rename = "provider_credential")]
+    ProviderCredential,
+    #[serde(rename = "integration")]
+    Integration,
+    #[serde(rename = "trigger")]
+    Trigger,
+    #[serde(rename = "event")]
+    Event,
+    #[serde(rename = "workspace")]
+    Workspace,
+    #[serde(rename = "session")]
+    Session,
+    #[serde(rename = "instance")]
+    Instance,
+    #[serde(rename = "held_message")]
+    HeldMessage,
+    #[serde(rename = "transcript_payload")]
+    TranscriptPayload,
+}
+impl Resource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Organization => "organization",
+            Self::Project => "project",
+            Self::Agent => "agent",
+            Self::SubscriptionProfile => "subscription_profile",
+            Self::ProviderCredential => "provider_credential",
+            Self::Integration => "integration",
+            Self::Trigger => "trigger",
+            Self::Event => "event",
+            Self::Workspace => "workspace",
+            Self::Session => "session",
+            Self::Instance => "instance",
+            Self::HeldMessage => "held_message",
+            Self::TranscriptPayload => "transcript_payload",
+        }
+    }
+}
+impl ::std::fmt::Display for Resource {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for Resource {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CheckConnectionAction {
+    pub action: serde_json::Value,
+    ///Whether Compose-specific checks apply, known only from the selected deployment's own evidence.
+    pub compose: bool,
+    pub service: String,
 }
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct AgentModel {

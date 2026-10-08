@@ -84,7 +84,7 @@
             "$ref": "#/components/responses/Refused"
           },
           "422": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "$ref": "#/components/responses/Refused"
@@ -140,7 +140,7 @@
             }
           },
           "404": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "$ref": "#/components/responses/Refused"
@@ -208,10 +208,10 @@
             "$ref": "#/components/responses/Refused"
           },
           "404": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "422": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "$ref": "#/components/responses/Refused"
@@ -238,7 +238,7 @@
             }
           },
           "404": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "$ref": "#/components/responses/Refused"
@@ -306,10 +306,10 @@
             "$ref": "#/components/responses/Refused"
           },
           "404": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "422": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "$ref": "#/components/responses/Refused"
@@ -330,8 +330,8 @@
         "responses": {
           "200": { "description": "The Agent, working with the model it names from its next Session on.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Agent" } } } },
           "400": { "$ref": "#/components/responses/Refused" },
-          "404": { "$ref": "#/components/responses/Refused" },
-          "422": { "$ref": "#/components/responses/Refused" },
+          "404": { "$ref": "#/components/responses/Diagnosed" },
+          "422": { "$ref": "#/components/responses/Diagnosed" },
           "503": { "$ref": "#/components/responses/Refused" }
         }
       }
@@ -367,8 +367,8 @@
             }
           },
           "400": { "$ref": "#/components/responses/Refused" },
-          "404": { "$ref": "#/components/responses/Refused" },
-          "422": { "$ref": "#/components/responses/Refused" },
+          "404": { "$ref": "#/components/responses/Diagnosed" },
+          "422": { "$ref": "#/components/responses/Diagnosed" },
           "503": { "$ref": "#/components/responses/Refused" }
         }
       }
@@ -403,8 +403,8 @@
             }
           },
           "400": { "$ref": "#/components/responses/Refused" },
-          "404": { "$ref": "#/components/responses/Refused" },
-          "422": { "$ref": "#/components/responses/Refused" },
+          "404": { "$ref": "#/components/responses/Diagnosed" },
+          "422": { "$ref": "#/components/responses/Diagnosed" },
           "503": { "$ref": "#/components/responses/Refused" }
         }
       }
@@ -440,7 +440,7 @@
             }
           },
           "404": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "$ref": "#/components/responses/Refused"
@@ -498,10 +498,10 @@
             "$ref": "#/components/responses/Refused"
           },
           "404": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "422": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "$ref": "#/components/responses/Refused"
@@ -536,7 +536,7 @@
             "description": "The credential is forgotten."
           },
           "404": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "$ref": "#/components/responses/Refused"
@@ -575,7 +575,7 @@
             }
           },
           "404": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "$ref": "#/components/responses/Refused"
@@ -632,13 +632,13 @@
             "$ref": "#/components/responses/Refused"
           },
           "404": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "409": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "422": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "$ref": "#/components/responses/Refused"
@@ -705,10 +705,10 @@
             "$ref": "#/components/responses/Refused"
           },
           "404": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "422": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "$ref": "#/components/responses/Refused"
@@ -752,10 +752,10 @@
             "description": "The login is forgotten."
           },
           "404": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "422": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "$ref": "#/components/responses/Refused"
@@ -822,10 +822,10 @@
             "$ref": "#/components/responses/Refused"
           },
           "404": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "422": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "$ref": "#/components/responses/Refused"
@@ -869,10 +869,10 @@
             "description": "The login is forgotten."
           },
           "404": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "422": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "$ref": "#/components/responses/Refused"
@@ -2442,6 +2442,16 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/Refusal"
+            }
+          }
+        }
+      },
+      "Diagnosed": {
+        "description": "The control plane refused the request with a typed Diagnostic (ADR-0052): 404 is a missing or ambiguous reference; 409 is a state conflict; 422 is an invalid field.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Diagnostic"
             }
           }
         }
@@ -5001,6 +5011,638 @@
         "required": [
           "message"
         ]
+      },
+      "Resource": {
+        "description": "A kind of record a reference, a declaration or an action names (ADR-0052).",
+        "type": "string",
+        "enum": [
+          "organization",
+          "project",
+          "agent",
+          "subscription_profile",
+          "provider_credential",
+          "integration",
+          "trigger",
+          "event",
+          "workspace",
+          "session",
+          "instance",
+          "held_message",
+          "transcript_payload"
+        ]
+      },
+      "Candidate": {
+        "description": "One record an ambiguous reference could have meant.",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" }
+        },
+        "required": ["id", "name"]
+      },
+      "Diagnostic": {
+        "type": "object",
+        "description": "Why kestrel would not do what it was asked, and the ordered, typed next steps that repair, inspect or retry it (ADR-0052). `message` is display only; a Client never classifies it.",
+        "oneOf": [
+          { "$ref": "#/components/schemas/MissingReferenceDiagnostic" },
+          { "$ref": "#/components/schemas/AmbiguousReferenceDiagnostic" },
+          { "$ref": "#/components/schemas/MalformedRequestDiagnostic" },
+          { "$ref": "#/components/schemas/ForbiddenActionDiagnostic" },
+          { "$ref": "#/components/schemas/StateConflictDiagnostic" },
+          { "$ref": "#/components/schemas/ExpiredResourceDiagnostic" },
+          { "$ref": "#/components/schemas/InvalidFieldDiagnostic" },
+          { "$ref": "#/components/schemas/SetupGapDiagnostic" },
+          { "$ref": "#/components/schemas/UnavailableDiagnostic" },
+          { "$ref": "#/components/schemas/InstanceTimeoutDiagnostic" },
+          { "$ref": "#/components/schemas/AuthenticationFailedDiagnostic" },
+          { "$ref": "#/components/schemas/ExecutableMissingDiagnostic" },
+          { "$ref": "#/components/schemas/UnknownFailureDiagnostic" },
+          { "$ref": "#/components/schemas/ConnectionFailedDiagnostic" },
+          { "$ref": "#/components/schemas/ClientFailureDiagnostic" },
+          { "$ref": "#/components/schemas/UnknownResponseDiagnostic" }
+        ]
+      },
+      "MissingReferenceContext": {
+        "properties": {
+          "resource": { "$ref": "#/components/schemas/Resource" },
+          "reference": { "type": "string" },
+          "organization": {
+            "type": ["string", "null"],
+            "description": "Null when the resource is not scoped to an Organization."
+          }
+        },
+        "required": ["resource", "reference", "organization"]
+      },
+      "MissingReferenceDiagnostic": {
+        "properties": {
+          "kind": { "const": "missing_reference" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/MissingReferenceContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "AmbiguousReferenceContext": {
+        "properties": {
+          "resource": { "$ref": "#/components/schemas/Resource" },
+          "reference": { "type": "string" },
+          "organization": { "type": ["string", "null"] },
+          "candidates": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Candidate" }
+          }
+        },
+        "required": ["resource", "reference", "organization", "candidates"]
+      },
+      "AmbiguousReferenceDiagnostic": {
+        "properties": {
+          "kind": { "const": "ambiguous_reference" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/AmbiguousReferenceContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "MalformedRequestContext": {
+        "properties": {
+          "operation": { "type": "string" },
+          "field": { "type": ["string", "null"] }
+        },
+        "required": ["operation", "field"]
+      },
+      "MalformedRequestDiagnostic": {
+        "properties": {
+          "kind": { "const": "malformed_request" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/MalformedRequestContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "ForbiddenActionContext": {
+        "properties": {
+          "operation": { "type": "string" },
+          "resource": { "$ref": "#/components/schemas/Resource" },
+          "reference": { "type": "string" },
+          "organization": { "type": ["string", "null"] },
+          "constraint": {
+            "type": ["string", "null"],
+            "description": "The existing author/name constraint the action violates, when established."
+          }
+        },
+        "required": ["operation", "resource", "reference", "organization", "constraint"]
+      },
+      "ForbiddenActionDiagnostic": {
+        "properties": {
+          "kind": { "const": "forbidden_action" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/ForbiddenActionContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "StateConflictContext": {
+        "properties": {
+          "operation": { "type": "string" },
+          "resource": { "$ref": "#/components/schemas/Resource" },
+          "reference": { "type": "string" },
+          "organization": { "type": ["string", "null"] },
+          "state": { "type": "string" },
+          "holding_session": {
+            "type": ["string", "null"],
+            "description": "The Session holding the conflicting state, when the conflict is one."
+          }
+        },
+        "required": ["operation", "resource", "reference", "organization", "state", "holding_session"]
+      },
+      "StateConflictDiagnostic": {
+        "properties": {
+          "kind": { "const": "state_conflict" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/StateConflictContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "ExpiredResourceContext": {
+        "properties": {
+          "resource": { "$ref": "#/components/schemas/Resource" },
+          "reference": { "type": "string" },
+          "organization": { "type": ["string", "null"] },
+          "operation": { "type": "string" }
+        },
+        "required": ["resource", "reference", "organization", "operation"]
+      },
+      "ExpiredResourceDiagnostic": {
+        "properties": {
+          "kind": { "const": "expired_resource" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/ExpiredResourceContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "InvalidFieldContext": {
+        "properties": {
+          "field": { "type": "string" },
+          "constraint": { "type": "string" },
+          "allowed_values": {
+            "type": ["array", "null"],
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["field", "constraint", "allowed_values"]
+      },
+      "InvalidFieldDiagnostic": {
+        "properties": {
+          "kind": { "const": "invalid_field" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/InvalidFieldContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "SetupGapContext": {
+        "properties": {
+          "prerequisite": { "type": "string" },
+          "resource": {
+            "anyOf": [{ "$ref": "#/components/schemas/Resource" }, { "type": "null" }]
+          },
+          "reference": { "type": ["string", "null"] },
+          "organization": { "type": ["string", "null"] },
+          "harness": { "type": ["string", "null"] },
+          "method": { "type": ["string", "null"] },
+          "sign_in": { "type": ["string", "null"] }
+        },
+        "required": ["prerequisite", "resource", "reference", "organization", "harness", "method", "sign_in"]
+      },
+      "SetupGapDiagnostic": {
+        "properties": {
+          "kind": { "const": "setup_gap" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/SetupGapContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "UnavailableContext": {
+        "properties": {
+          "service": { "type": "string" },
+          "resource": { "type": ["string", "null"] },
+          "operation": { "type": "string" },
+          "retry_after_seconds": { "type": ["integer", "null"] }
+        },
+        "required": ["service", "resource", "operation", "retry_after_seconds"]
+      },
+      "UnavailableDiagnostic": {
+        "properties": {
+          "kind": { "const": "unavailable" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/UnavailableContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "InstanceTimeoutContext": {
+        "properties": {
+          "workspace": { "type": "string" },
+          "instance": { "type": ["string", "null"] },
+          "operation": { "type": "string" }
+        },
+        "required": ["workspace", "instance", "operation"]
+      },
+      "InstanceTimeoutDiagnostic": {
+        "properties": {
+          "kind": { "const": "instance_timeout" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/InstanceTimeoutContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "AuthenticationFailedContext": {
+        "properties": {
+          "session": { "type": "string" },
+          "harness": { "type": "string" },
+          "image": { "type": ["string", "null"] },
+          "evidence": { "type": "string" },
+          "sign_in": { "type": ["string", "null"] },
+          "expired": {
+            "type": ["boolean", "null"],
+            "description": "Established only from evidence; never inferred from arbitrary harness output."
+          },
+          "covered": { "type": ["boolean", "null"] }
+        },
+        "required": ["session", "harness", "image", "evidence", "sign_in", "expired", "covered"]
+      },
+      "AuthenticationFailedDiagnostic": {
+        "properties": {
+          "kind": { "const": "authentication_failed" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/AuthenticationFailedContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "ExecutableMissingContext": {
+        "properties": {
+          "session": { "type": "string" },
+          "harness": { "type": "string" },
+          "image": { "type": ["string", "null"] },
+          "executable": { "type": "string" },
+          "evidence": { "type": "string" }
+        },
+        "required": ["session", "harness", "image", "executable", "evidence"]
+      },
+      "ExecutableMissingDiagnostic": {
+        "properties": {
+          "kind": { "const": "executable_missing" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/ExecutableMissingContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "UnknownFailureContext": {
+        "properties": {
+          "session": { "type": ["string", "null"] },
+          "resource": { "type": ["string", "null"] },
+          "evidence": { "type": ["string", "null"] }
+        },
+        "required": ["session", "resource", "evidence"]
+      },
+      "UnknownFailureDiagnostic": {
+        "properties": {
+          "kind": { "const": "unknown_failure" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/UnknownFailureContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "ConnectionFailedContext": {
+        "properties": {
+          "url": { "type": "string" },
+          "operation": { "type": "string" }
+        },
+        "required": ["url", "operation"]
+      },
+      "ConnectionFailedDiagnostic": {
+        "properties": {
+          "kind": { "const": "connection_failed" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/ConnectionFailedContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "ClientFailureContext": {
+        "properties": {
+          "operation": { "type": "string" },
+          "evidence": { "type": ["string", "null"] }
+        },
+        "required": ["operation", "evidence"]
+      },
+      "ClientFailureDiagnostic": {
+        "properties": {
+          "kind": { "const": "client_failure" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/ClientFailureContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "UnknownResponseContext": {
+        "properties": {
+          "service": { "type": "string" },
+          "operation": { "type": "string" },
+          "status": { "type": ["integer", "null"] },
+          "evidence": { "type": ["string", "null"] }
+        },
+        "required": ["service", "operation", "status", "evidence"]
+      },
+      "UnknownResponseDiagnostic": {
+        "properties": {
+          "kind": { "const": "unknown_response" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/UnknownResponseContext" },
+          "next_steps": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Action" }
+          }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
+      },
+      "Action": {
+        "type": "object",
+        "description": "A typed corrective, inspective or retry step a Diagnostic offers, naming its own inputs rather than a shell command or browser route (ADR-0052). A Client binds it to a form, a flag or an API call.",
+        "oneOf": [
+          { "$ref": "#/components/schemas/DeclareOrganizationAction" },
+          { "$ref": "#/components/schemas/DeclareProjectAction" },
+          { "$ref": "#/components/schemas/DeclareAgentAction" },
+          { "$ref": "#/components/schemas/DeclareSubscriptionProfileAction" },
+          { "$ref": "#/components/schemas/SetProviderCredentialAction" },
+          { "$ref": "#/components/schemas/InspectResourceAction" },
+          { "$ref": "#/components/schemas/ListResourcesAction" },
+          { "$ref": "#/components/schemas/StopSessionAction" },
+          { "$ref": "#/components/schemas/EnqueueSessionAction" },
+          { "$ref": "#/components/schemas/ReleaseInstanceAction" },
+          { "$ref": "#/components/schemas/CorrectFieldAction" },
+          { "$ref": "#/components/schemas/SignInAction" },
+          { "$ref": "#/components/schemas/InspectHarnessImageAction" },
+          { "$ref": "#/components/schemas/CheckConnectionAction" },
+          { "$ref": "#/components/schemas/RetryReadAction" },
+          { "$ref": "#/components/schemas/InspectOperationAction" }
+        ]
+      },
+      "DeclareOrganizationAction": {
+        "properties": {
+          "action": { "const": "declare_organization" },
+          "name": { "type": ["string", "null"] },
+          "missing": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Which of this action's fixed inputs are not yet known, from `name`."
+          }
+        },
+        "required": ["action", "name", "missing"]
+      },
+      "DeclareProjectAction": {
+        "properties": {
+          "action": { "const": "declare_project" },
+          "organization": { "type": "string" },
+          "name": { "type": ["string", "null"] },
+          "repositories": {
+            "type": ["array", "null"],
+            "items": { "type": "string" }
+          },
+          "branch": { "type": ["string", "null"] },
+          "missing": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Which of this action's fixed inputs are not yet known, from `name`, `repositories`, `branch`."
+          }
+        },
+        "required": ["action", "organization", "name", "repositories", "branch", "missing"]
+      },
+      "DeclareAgentAction": {
+        "properties": {
+          "action": { "const": "declare_agent" },
+          "organization": { "type": "string" },
+          "name": { "type": ["string", "null"] },
+          "harness": { "type": ["string", "null"] },
+          "missing": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Which of this action's fixed inputs are not yet known, from `name`, `harness`."
+          }
+        },
+        "required": ["action", "organization", "name", "harness", "missing"]
+      },
+      "DeclareSubscriptionProfileAction": {
+        "properties": {
+          "action": { "const": "declare_subscription_profile" },
+          "organization": { "type": "string" },
+          "name": { "type": ["string", "null"] },
+          "owner": { "type": ["string", "null"] },
+          "missing": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Which of this action's fixed inputs are not yet known, from `name`, `owner`."
+          }
+        },
+        "required": ["action", "organization", "name", "owner", "missing"]
+      },
+      "SetProviderCredentialAction": {
+        "properties": {
+          "action": { "const": "set_provider_credential" },
+          "organization": { "type": "string" },
+          "name": {
+            "type": "string",
+            "description": "The credential's variable. Its value is always collected privately and never serialized here."
+          }
+        },
+        "required": ["action", "organization", "name"]
+      },
+      "InspectResourceAction": {
+        "properties": {
+          "action": { "const": "inspect_resource" },
+          "resource": { "$ref": "#/components/schemas/Resource" },
+          "reference": { "type": ["string", "null"] },
+          "organization": { "type": ["string", "null"] }
+        },
+        "required": ["action", "resource", "reference", "organization"]
+      },
+      "ListResourcesAction": {
+        "properties": {
+          "action": { "const": "list_resources" },
+          "resource": { "$ref": "#/components/schemas/Resource" },
+          "organization": { "type": ["string", "null"] }
+        },
+        "required": ["action", "resource", "organization"]
+      },
+      "StopSessionAction": {
+        "properties": {
+          "action": { "const": "stop_session" },
+          "organization": { "type": "string" },
+          "session": { "type": "string" },
+          "consequence": {
+            "type": "string",
+            "description": "Display-only explanation of the destructive effect; wording never decides whether confirmation is required."
+          }
+        },
+        "required": ["action", "organization", "session", "consequence"]
+      },
+      "EnqueueSessionAction": {
+        "properties": {
+          "action": { "const": "enqueue_session" },
+          "organization": { "type": "string" },
+          "workspace": { "type": "string" },
+          "missing": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["action", "organization", "workspace", "missing"]
+      },
+      "ReleaseInstanceAction": {
+        "properties": {
+          "action": { "const": "release_instance" },
+          "organization": { "type": "string" },
+          "workspace": { "type": "string" },
+          "instance": { "type": ["string", "null"] },
+          "consequence": { "type": "string" }
+        },
+        "required": ["action", "organization", "workspace", "instance", "consequence"]
+      },
+      "CorrectFieldAction": {
+        "properties": {
+          "action": { "const": "correct_field" },
+          "operation": { "type": "string" },
+          "resource": {
+            "anyOf": [{ "$ref": "#/components/schemas/Resource" }, { "type": "null" }]
+          },
+          "field": { "type": "string" },
+          "constraint": { "type": "string" },
+          "allowed_values": {
+            "type": ["array", "null"],
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["action", "operation", "resource", "field", "constraint", "allowed_values"]
+      },
+      "SignInAction": {
+        "properties": {
+          "action": { "const": "sign_in" },
+          "harness": { "type": ["string", "null"] },
+          "method": { "type": ["string", "null"] },
+          "sign_in": {
+            "type": ["string", "null"],
+            "description": "A safe locator for which sign-in to use, never held material."
+          }
+        },
+        "required": ["action", "harness", "method", "sign_in"]
+      },
+      "InspectHarnessImageAction": {
+        "properties": {
+          "action": { "const": "inspect_harness_image" },
+          "harness": { "type": ["string", "null"] },
+          "image": { "type": ["string", "null"] },
+          "command": { "type": ["string", "null"] }
+        },
+        "required": ["action", "harness", "image", "command"]
+      },
+      "CheckConnectionAction": {
+        "properties": {
+          "action": { "const": "check_connection" },
+          "service": { "type": "string" },
+          "compose": {
+            "type": "boolean",
+            "description": "Whether Compose-specific checks apply, known only from the selected deployment's own evidence."
+          }
+        },
+        "required": ["action", "service", "compose"]
+      },
+      "RetryReadAction": {
+        "properties": {
+          "action": { "const": "retry_read" },
+          "operation": { "type": "string" },
+          "resource": { "type": ["string", "null"] },
+          "retry_after_seconds": { "type": ["integer", "null"] }
+        },
+        "required": ["action", "operation", "resource", "retry_after_seconds"]
+      },
+      "InspectOperationAction": {
+        "properties": {
+          "action": { "const": "inspect_operation" },
+          "operation": { "type": "string" },
+          "resource": { "type": ["string", "null"] },
+          "uncertain": {
+            "type": "boolean",
+            "description": "Whether the operation's result is unknown, used after a lost write response. Never a signal to replay the write."
+          }
+        },
+        "required": ["action", "operation", "resource", "uncertain"]
       },
       "End": {
         "description": "The control plane closed the stream on purpose. A stream that closes without one was cut off, and is resumed from the last id delivered.",
