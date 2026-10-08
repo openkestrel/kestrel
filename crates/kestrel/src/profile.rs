@@ -5,7 +5,7 @@ use std::str::FromStr;
 use anyhow::{Result, bail};
 use jiff::Timestamp;
 
-use crate::declined::Declined;
+use crate::declined::{Constraint, Declined, Reason};
 use crate::domain::SubscriptionProfile;
 use crate::provider;
 use crate::store::{Declared, Store, Tx};
@@ -45,7 +45,7 @@ pub struct Entry {
 
 impl Entry {
     pub fn variable(name: &str) -> Result<Self> {
-        provider::named(name)?;
+        provider::named("hold_subscription_profile_entry", name)?;
 
         Ok(Self {
             kind: Kind::Variable,
@@ -88,9 +88,12 @@ pub async fn declare(
     owner: &str,
 ) -> Result<Declared<SubscriptionProfile>> {
     if owner.trim().is_empty() {
-        bail!(Declined::Unacceptable(
-            "a subscription profile belongs to a person, and none was named".to_owned()
-        ));
+        bail!(Reason::InvalidField {
+            field: "owner",
+            operation: "declare_subscription_profile",
+            constraint: Constraint::NonEmpty,
+            message: "a subscription profile belongs to a person, and none was named".to_owned(),
+        });
     }
 
     let mut tx = store.begin().await?;
@@ -109,10 +112,12 @@ pub async fn hold(
     secret: &str,
 ) -> Result<Held> {
     if secret.is_empty() {
-        bail!(Declined::Unacceptable(format!(
-            "a {} with nothing in it is no login",
-            entry.kind.as_str()
-        )));
+        bail!(Reason::InvalidField {
+            field: "secret",
+            operation: "hold_subscription_profile_entry",
+            constraint: Constraint::NonEmpty,
+            message: format!("a {} with nothing in it is no login", entry.kind.as_str()),
+        });
     }
 
     let mut tx = store.begin().await?;
@@ -198,9 +203,12 @@ fn within_a_home(path: &str) -> Result<()> {
         .any(|part| part.is_empty() || part == "." || part == "..");
 
     if path.is_empty() || path.starts_with('/') || climbs || path.contains(['\\', '\0']) {
-        bail!(Declined::Unacceptable(format!(
-            "{path} is not a path beneath the agent's home"
-        )));
+        bail!(Reason::InvalidField {
+            field: "path",
+            operation: "hold_subscription_profile_entry",
+            constraint: Constraint::BeneathHome,
+            message: format!("{path} is not a path beneath the agent's home"),
+        });
     }
 
     Ok(())

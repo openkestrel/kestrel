@@ -1,6 +1,7 @@
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::declined::{Constraint, Reason};
 use crate::domain::{Correlation, Declared, Fires, Templates, Trigger};
 use crate::filter::Filter;
 use crate::store::Store;
@@ -131,7 +132,7 @@ pub async fn apply(
     document: &Document,
     mode: ApplyMode,
 ) -> Result<Applied> {
-    check_document(document)?;
+    check_document(document, &mode)?;
     let parsed = parse_trigger(&document.trigger)?;
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
@@ -260,40 +261,80 @@ pub async fn apply(
     })
 }
 
-fn check_document(document: &Document) -> Result<()> {
-    for name in [
-        &document.project.name,
-        &document.agent.name,
-        &document.trigger.name,
+fn check_document(document: &Document, mode: &ApplyMode) -> Result<()> {
+    let operation = match mode {
+        ApplyMode::Apply => "apply_declaration",
+        ApplyMode::Preview => "preview_declaration",
+    };
+    let invalid = |field: &'static str, constraint: Constraint, message: String| {
+        Err(Reason::InvalidField {
+            field,
+            operation,
+            constraint,
+            message,
+        }
+        .into())
+    };
+
+    for (field, name) in [
+        ("project.name", &document.project.name),
+        ("agent.name", &document.agent.name),
+        ("trigger.name", &document.trigger.name),
     ] {
         if name.is_empty() {
-            bail!("a declaration names each record");
+            return invalid(
+                field,
+                Constraint::NonEmpty,
+                "a declaration names each record".to_owned(),
+            );
         }
     }
     if document.project.repositories.is_empty() {
-        bail!("a project names at least one repository");
+        return invalid(
+            "project.repositories",
+            Constraint::NonEmpty,
+            "a project names at least one repository".to_owned(),
+        );
     }
     if let Some(clash) = sharing_a_directory(&document.project.repositories) {
-        bail!("{clash}");
+        return invalid(
+            "project.repositories",
+            Constraint::DistinctCheckoutDirectories,
+            clash,
+        );
     }
     if document.project.branch.is_empty() {
-        bail!("a project names the branch its work happens on");
+        return invalid(
+            "project.branch",
+            Constraint::NonEmpty,
+            "a project names the branch its work happens on".to_owned(),
+        );
     }
     if document.agent.harness.is_empty() {
-        bail!("an agent names the harness that drives it");
+        return invalid(
+            "agent.harness",
+            Constraint::NonEmpty,
+            "an agent names the harness that drives it".to_owned(),
+        );
     }
     if document.trigger.project != document.project.name {
-        bail!(
-            "the trigger names project {}, not the declared project {}",
-            document.trigger.project,
-            document.project.name
+        return invalid(
+            "trigger.project",
+            Constraint::MatchesDeclared,
+            format!(
+                "the trigger names project {}, not the declared project {}",
+                document.trigger.project, document.project.name
+            ),
         );
     }
     if document.trigger.agent != document.agent.name {
-        bail!(
-            "the trigger names agent {}, not the declared agent {}",
-            document.trigger.agent,
-            document.agent.name
+        return invalid(
+            "trigger.agent",
+            Constraint::MatchesDeclared,
+            format!(
+                "the trigger names agent {}, not the declared agent {}",
+                document.trigger.agent, document.agent.name
+            ),
         );
     }
     Ok(())

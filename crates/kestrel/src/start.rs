@@ -154,7 +154,7 @@ pub async fn start(store: &Store, plan: &Plan) -> Result<Started> {
 
 fn checked(plan: &Plan) -> Result<()> {
     for credential in &plan.credentials {
-        provider::holdable(&credential.variable, &credential.secret)?;
+        provider::holdable("start", &credential.variable, &credential.secret)?;
     }
     let unacceptable = |why: &str| Err(Declined::Unacceptable(why.to_owned()).into());
     if [&plan.organization, &plan.project.name, &plan.agent.name]

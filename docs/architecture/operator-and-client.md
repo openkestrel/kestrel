@@ -24,10 +24,27 @@ Client ([ADR-0015](../adr/0015-the-cli-is-a-client-not-a-role.md)). Server:
 ### Errors
 
 Domain code refuses with `declined::Declined` when the caller can act on the reason; the boundary
-maps it to a status. Anything else is `Unavailable`.
+maps it to a status. Declaration, named-reference, Profile and Provider Credential refusals refuse
+with the typed `declined::Reason` instead, which the boundary maps to a wire `Diagnostic` rather
+than a status alone (ADR-0052): `{ kind, message, field?, context, next_steps }`. `context` is a
+kind-specific record (a missing reference's resource and scope, an invalid field's name and
+constraint, a state conflict's resource and current state); `next_steps` is zero or more typed
+`Action`s — a declaration naming its known inputs and the ones still missing, an inspection, or a
+list, never a shell command or a browser route. `message` and `field` stay in the same place a
+plain `Refusal` carries them, so a Client that only reads those two keeps working; `kind`,
+`context` and `next_steps` land for each surface as its own migration ticket does. Anything else is
+`Unavailable`. An invalid field's `constraint` and a state conflict's `state` are short tokens
+(`declined::Constraint`, `owned_by_another`), never the display sentence.
+
+A route documented with the `Diagnosed` response may still answer a refusal no producer types yet
+with the plain `Refusal` on the same status: the `DiagnosedRefusal` schema admits both, and only
+`kind` tells them apart. 400 and 503 always answer the plain `Refusal`.
 
 | Refusal | Status | Client exit |
 | --- | --- | --- |
+| `Reason::MissingReference`, `Reason::AmbiguousReference` | 404 | 3 unresolved |
+| `Reason::InvalidField` | 422 | 4 rejected |
+| `Reason::Taken` (an existing record's state conflicts) | 409 | 4 rejected |
 | `Declined::Unacceptable` | 422 | 4 rejected |
 | `Declined::Missing`, `Declined::Ambiguous` | 404 | 3 unresolved |
 | `Declined::Taken` | 409 | 4 rejected |
@@ -36,14 +53,20 @@ maps it to a status. Anything else is `Unavailable`.
 | Anything else | 503 | 5 unavailable |
 
 The exit numbers are published by `kestrel exit-codes` and never move (`kestrel-client/src/exit.rs`).
-The body of a refusal is the reason alone, written to be shown to a person, plus the `field` the
-reason concerns when it is about one (a declared `participant`, for instance).
+The body of a refusal not yet carrying a Diagnostic is the reason alone, written to be shown to a
+person, plus the `field` the reason concerns when it is about one (a declared `participant`, for
+instance). The complete Diagnostic/Action contract — every `kind` and `action`, including the
+setup, failure and Client-local variants no producer raises yet — is authored once in
+`openapi/operator.json` under `Diagnostic` and `Action`; Workspace and Session operations, Held
+Messages and link evidence grow their own producers under later tickets without changing this
+shared shape.
 
 ### References
 
 A Workspace or Session in a path is resolved on the server (`reference.rs`): its generated name, its
-UUID, any unambiguous prefix of either, or `latest` for the most recent in scope. Nothing or
-several matching is `Declined::Missing` or `Declined::Ambiguous`, naming the candidates.
+UUID, any unambiguous prefix of either, or `latest` for the most recent in scope. Nothing matching
+is a typed `missing_reference` Diagnostic; several matching is `ambiguous_reference`, naming the
+candidates as `{id, name}` rather than formatting them into the message.
 
 ### Session reads
 

@@ -16,6 +16,7 @@ use axum::routing::{delete, get, post, put};
 use axum::{BoxError, Json, Router};
 use futures_core::Stream;
 use jiff::{SignedDuration, Timestamp};
+use kestrel_operator_types as wire;
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 use tokio_util::sync::CancellationToken;
@@ -24,7 +25,7 @@ use tracing::warn;
 use crate::agent;
 use crate::cron::Cron;
 use crate::declaration;
-use crate::declined::{Declined, FieldRefusal, Kind};
+use crate::declined::{Constraint, Declined, FieldRefusal, Kind, Reason, Resource};
 use crate::domain::{
     self, Agent, Connection, Correlation, Declared, Direction, EventRecordId, EventRefusal, Fires,
     Firing, HeldMessage, Integration, Occurrence, Organization, Project, Schedule, Session,
@@ -40,7 +41,6 @@ use crate::profile::{self, Entry};
 use crate::provider::{self, Held};
 use crate::role::serve;
 use crate::scheduling;
-use crate::store::organization::NoSuchOrganization;
 use crate::store::workspace::HeldMessageRefusal;
 use crate::store::{self, Declared as DeclaredRecord, Store};
 use crate::template::Template;
@@ -1082,7 +1082,7 @@ async fn declare_organization(
     declaration: Result<Json<OrganizationDeclaration>, JsonRejection>,
 ) -> Result<Response, Refused> {
     let Json(declaration) = declaration?;
-    named(&declaration.name)?;
+    named("declare_organization", &declaration.name)?;
 
     let mut tx = control_plane.store.begin().await?;
     let declared = tx
@@ -1111,19 +1111,30 @@ async fn declare_project(
     declaration: Result<Json<ProjectDeclaration>, JsonRejection>,
 ) -> Result<Response, Refused> {
     let Json(declaration) = declaration?;
-    named(&declaration.name)?;
+    named("declare_project", &declaration.name)?;
     if declaration.repositories.is_empty() {
-        return Err(Refused::Unprocessable(
-            "a project names at least one repository".to_owned(),
+        return Err(invalid_field(
+            "declare_project",
+            "repositories",
+            Constraint::NonEmpty,
+            "a project names at least one repository",
         ));
     }
     if declaration.branch.is_empty() {
-        return Err(Refused::Unprocessable(
-            "a project names the branch its work happens on".to_owned(),
+        return Err(invalid_field(
+            "declare_project",
+            "branch",
+            Constraint::NonEmpty,
+            "a project names the branch its work happens on",
         ));
     }
     if let Some(clash) = sharing_a_directory(&declaration.repositories) {
-        return Err(Refused::Unprocessable(clash));
+        return Err(invalid_field(
+            "declare_project",
+            "repositories",
+            Constraint::DistinctCheckoutDirectories,
+            clash,
+        ));
     }
 
     let mut tx = control_plane.store.begin().await?;
@@ -1175,10 +1186,13 @@ async fn declare_agent(
     declaration: Result<Json<AgentDeclaration>, JsonRejection>,
 ) -> Result<Response, Refused> {
     let Json(declaration) = declaration?;
-    named(&declaration.name)?;
+    named("declare_agent", &declaration.name)?;
     if declaration.harness.is_empty() {
-        return Err(Refused::Unprocessable(
-            "an agent names the harness that drives it".to_owned(),
+        return Err(invalid_field(
+            "declare_agent",
+            "harness",
+            Constraint::NonEmpty,
+            "an agent names the harness that drives it",
         ));
     }
 
@@ -1355,7 +1369,7 @@ async fn declare_profile(
     declaration: Result<Json<ProfileDeclaration>, JsonRejection>,
 ) -> Result<Response, Refused> {
     let Json(declaration) = declaration?;
-    named(&declaration.name)?;
+    named("declare_subscription_profile", &declaration.name)?;
 
     let declared = profile::declare(
         &control_plane.store,
@@ -1431,7 +1445,7 @@ async fn start_github_app(
     registration: Result<Json<integration::manifest::Start>, JsonRejection>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), Refused> {
     let Json(registration) = registration?;
-    named(&registration.name)?;
+    named("start_integration_manifest", &registration.name)?;
     Ok((
         StatusCode::CREATED,
         Json(
@@ -1587,7 +1601,7 @@ async fn register_integration(
     registration: Result<Json<IntegrationRegistration>, JsonRejection>,
 ) -> Result<(StatusCode, Json<IntegrationRecord>), Refused> {
     let Json(registration) = registration?;
-    named(&registration.name)?;
+    named("register_integration", &registration.name)?;
 
     let (connecting, carries) = match &registration.connection {
         ConnectionRegistration::Github {
@@ -1721,7 +1735,7 @@ async fn declare_trigger(
     declaration: Result<Json<TriggerDeclaration>, JsonRejection>,
 ) -> Result<(StatusCode, Json<TriggerRecord>), Refused> {
     let Json(declaration) = declaration?;
-    named(&declaration.name)?;
+    named("declare_trigger", &declaration.name)?;
     let (fires, templates) = parse_trigger_declaration(&declaration)?;
     let created = !trigger::triggers(&control_plane.store, &organization)
         .await
@@ -2052,13 +2066,12 @@ fn parse_trigger_declaration(
 }
 
 fn named_refusal(error: anyhow::Error) -> Refused {
+    let error = match error.downcast::<Reason>() {
+        Ok(reason) => return diagnosed(reason),
+        Err(error) => error,
+    };
     let message = error.to_string();
-    if message.starts_with("no organization ")
-        || message.starts_with("no project named ")
-        || message.starts_with("no agent named ")
-        || message.starts_with("no trigger named ")
-        || message.starts_with("no event ")
-    {
+    if message.starts_with("no trigger named ") || message.starts_with("no event ") {
         return Refused::NotFound(message);
     }
 
@@ -2073,12 +2086,11 @@ fn integration_refusal(error: anyhow::Error) -> Refused {
 }
 
 fn declaration_refusal(error: anyhow::Error) -> Refused {
-    let message = error.to_string();
-    if message.starts_with("no organization ") {
-        return Refused::NotFound(message);
-    }
-
-    Refused::Unprocessable(message)
+    let error = match error.downcast::<Reason>() {
+        Ok(reason) => return diagnosed(reason),
+        Err(error) => error,
+    };
+    Refused::Unprocessable(error.to_string())
 }
 
 #[derive(Serialize)]
@@ -2818,14 +2830,12 @@ async fn resolved(
 fn workspace_refusal(error: anyhow::Error) -> Refused {
     if error.downcast_ref::<FieldRefusal>().is_some()
         || error.downcast_ref::<HeldMessageRefusal>().is_some()
+        || error.downcast_ref::<Reason>().is_some()
     {
         return error.into();
     }
     let message = error.to_string();
-    if message.starts_with("no workspace ")
-        || message.starts_with("no project named ")
-        || message.starts_with("no agent named ")
-    {
+    if message.starts_with("no workspace ") {
         return Refused::NotFound(message);
     }
     if message.contains("already has the session")
@@ -2862,9 +2872,14 @@ fn cloned_into(repository: &str) -> &str {
     name.strip_suffix(".git").unwrap_or(name)
 }
 
-fn named(name: &str) -> Result<(), Refused> {
+fn named(operation: &'static str, name: &str) -> Result<(), Refused> {
     if name.is_empty() {
-        return Err(Refused::Unprocessable("a name cannot be empty".to_owned()));
+        return Err(invalid_field(
+            operation,
+            "name",
+            Constraint::NonEmpty,
+            "a name cannot be empty",
+        ));
     }
     Ok(())
 }
@@ -3145,6 +3160,10 @@ enum Refused {
         field: &'static str,
         why: String,
     },
+    Diagnosed {
+        status: StatusCode,
+        diagnostic: Box<wire::Diagnostic>,
+    },
     NotAnswering(String),
     Unavailable(anyhow::Error),
 }
@@ -3160,16 +3179,246 @@ impl Refused {
             | Refused::Unprocessable(why)
             | Refused::Named { why, .. }
             | Refused::NotAnswering(why) => why.into(),
+            Refused::Diagnosed { diagnostic, .. } => {
+                diagnostic_message(&diagnostic).to_owned().into()
+            }
             Refused::Unavailable(error) => error.into(),
         }
     }
 }
 
+/// Never offered for an ambiguous reference: declaring another record cannot resolve one.
+fn declare_or_inspect(
+    resource: Resource,
+    reference: &str,
+    organization: Option<&str>,
+) -> Vec<wire::Action> {
+    match (resource, organization) {
+        (Resource::Organization, _) => vec![wire::Action::DeclareOrganizationAction(
+            wire::DeclareOrganizationAction {
+                action: serde_json::json!("declare_organization"),
+                name: Some(reference.to_owned()),
+                missing: Vec::new(),
+            },
+        )],
+        (Resource::Project, Some(organization)) => vec![wire::Action::DeclareProjectAction(
+            wire::DeclareProjectAction {
+                action: serde_json::json!("declare_project"),
+                organization: organization.to_owned(),
+                name: Some(reference.to_owned()),
+                repositories: None,
+                branch: None,
+                missing: vec!["repositories".to_owned(), "branch".to_owned()],
+            },
+        )],
+        (Resource::Agent, Some(organization)) => {
+            vec![wire::Action::DeclareAgentAction(wire::DeclareAgentAction {
+                action: serde_json::json!("declare_agent"),
+                organization: organization.to_owned(),
+                name: Some(reference.to_owned()),
+                harness: None,
+                missing: vec!["harness".to_owned()],
+            })]
+        }
+        (Resource::SubscriptionProfile, Some(organization)) => {
+            vec![wire::Action::DeclareSubscriptionProfileAction(
+                wire::DeclareSubscriptionProfileAction {
+                    action: serde_json::json!("declare_subscription_profile"),
+                    organization: organization.to_owned(),
+                    name: Some(reference.to_owned()),
+                    owner: None,
+                    missing: vec!["owner".to_owned()],
+                },
+            )]
+        }
+        (Resource::ProviderCredential, Some(organization)) => {
+            vec![wire::Action::SetProviderCredentialAction(
+                wire::SetProviderCredentialAction {
+                    action: serde_json::json!("set_provider_credential"),
+                    organization: organization.to_owned(),
+                    name: reference.to_owned(),
+                },
+            )]
+        }
+        (resource, organization) => list_resources(resource, organization),
+    }
+}
+
+fn list_resources(resource: Resource, organization: Option<&str>) -> Vec<wire::Action> {
+    vec![wire::Action::ListResourcesAction(
+        wire::ListResourcesAction {
+            action: serde_json::json!("list_resources"),
+            organization: organization.map(str::to_owned),
+            resource: wire_resource(resource),
+        },
+    )]
+}
+
+const fn wire_resource(resource: Resource) -> wire::Resource {
+    match resource {
+        Resource::Organization => wire::Resource::Organization,
+        Resource::Project => wire::Resource::Project,
+        Resource::Agent => wire::Resource::Agent,
+        Resource::SubscriptionProfile => wire::Resource::SubscriptionProfile,
+        Resource::ProviderCredential => wire::Resource::ProviderCredential,
+        Resource::Workspace => wire::Resource::Workspace,
+        Resource::Session => wire::Resource::Session,
+    }
+}
+
+fn diagnostic_message(diagnostic: &wire::Diagnostic) -> &str {
+    match diagnostic {
+        wire::Diagnostic::MissingReferenceDiagnostic(d) => &d.message,
+        wire::Diagnostic::AmbiguousReferenceDiagnostic(d) => &d.message,
+        wire::Diagnostic::MalformedRequestDiagnostic(d) => &d.message,
+        wire::Diagnostic::ForbiddenActionDiagnostic(d) => &d.message,
+        wire::Diagnostic::StateConflictDiagnostic(d) => &d.message,
+        wire::Diagnostic::ExpiredResourceDiagnostic(d) => &d.message,
+        wire::Diagnostic::InvalidFieldDiagnostic(d) => &d.message,
+        wire::Diagnostic::SetupGapDiagnostic(d) => &d.message,
+        wire::Diagnostic::UnavailableDiagnostic(d) => &d.message,
+        wire::Diagnostic::InstanceTimeoutDiagnostic(d) => &d.message,
+        wire::Diagnostic::AuthenticationFailedDiagnostic(d) => &d.message,
+        wire::Diagnostic::ExecutableMissingDiagnostic(d) => &d.message,
+        wire::Diagnostic::UnknownFailureDiagnostic(d) => &d.message,
+        wire::Diagnostic::ConnectionFailedDiagnostic(d) => &d.message,
+        wire::Diagnostic::ClientFailureDiagnostic(d) => &d.message,
+        wire::Diagnostic::UnknownResponseDiagnostic(d) => &d.message,
+    }
+}
+
+fn diagnosed(reason: Reason) -> Refused {
+    match reason {
+        Reason::MissingReference {
+            resource,
+            reference,
+            organization,
+            message,
+        } => Refused::Diagnosed {
+            status: StatusCode::NOT_FOUND,
+            diagnostic: Box::new(wire::Diagnostic::MissingReferenceDiagnostic(
+                wire::MissingReferenceDiagnostic {
+                    kind: serde_json::json!("missing_reference"),
+                    message,
+                    field: None,
+                    context: wire::MissingReferenceContext {
+                        resource: wire_resource(resource),
+                        reference: reference.clone(),
+                        organization: organization.clone(),
+                    },
+                    next_steps: declare_or_inspect(resource, &reference, organization.as_deref()),
+                },
+            )),
+        },
+        Reason::AmbiguousReference {
+            resource,
+            reference,
+            organization,
+            candidates,
+            message,
+        } => Refused::Diagnosed {
+            status: StatusCode::NOT_FOUND,
+            diagnostic: Box::new(wire::Diagnostic::AmbiguousReferenceDiagnostic(
+                wire::AmbiguousReferenceDiagnostic {
+                    kind: serde_json::json!("ambiguous_reference"),
+                    message,
+                    field: None,
+                    context: wire::AmbiguousReferenceContext {
+                        resource: wire_resource(resource),
+                        reference,
+                        organization: organization.clone(),
+                        candidates: candidates
+                            .into_iter()
+                            .map(|candidate| wire::Candidate {
+                                id: candidate.id,
+                                name: candidate.name,
+                            })
+                            .collect(),
+                    },
+                    next_steps: list_resources(resource, organization.as_deref()),
+                },
+            )),
+        },
+        Reason::InvalidField {
+            field,
+            operation,
+            constraint,
+            message,
+        } => invalid_field(operation, field, constraint, message),
+        Reason::Taken {
+            operation,
+            state,
+            resource,
+            reference,
+            organization,
+            message,
+        } => Refused::Diagnosed {
+            status: StatusCode::CONFLICT,
+            diagnostic: Box::new(wire::Diagnostic::StateConflictDiagnostic(
+                wire::StateConflictDiagnostic {
+                    kind: serde_json::json!("state_conflict"),
+                    message,
+                    field: None,
+                    context: wire::StateConflictContext {
+                        operation: operation.to_owned(),
+                        resource: wire_resource(resource),
+                        reference: reference.clone(),
+                        organization: organization.clone(),
+                        state: state.to_owned(),
+                        holding_session: None,
+                    },
+                    next_steps: vec![wire::Action::InspectResourceAction(
+                        wire::InspectResourceAction {
+                            action: serde_json::json!("inspect_resource"),
+                            resource: wire_resource(resource),
+                            reference: Some(reference),
+                            organization,
+                        },
+                    )],
+                },
+            )),
+        },
+    }
+}
+
+fn invalid_field(
+    operation: &'static str,
+    field: &'static str,
+    constraint: Constraint,
+    message: impl Into<String>,
+) -> Refused {
+    let message = message.into();
+    Refused::Diagnosed {
+        status: StatusCode::UNPROCESSABLE_ENTITY,
+        diagnostic: Box::new(wire::Diagnostic::InvalidFieldDiagnostic(
+            wire::InvalidFieldDiagnostic {
+                kind: serde_json::json!("invalid_field"),
+                message,
+                field: Some(field.to_owned()),
+                context: wire::InvalidFieldContext {
+                    field: field.to_owned(),
+                    constraint: constraint.as_str().to_owned(),
+                    allowed_values: None,
+                },
+                next_steps: vec![wire::Action::CorrectFieldAction(wire::CorrectFieldAction {
+                    action: serde_json::json!("correct_field"),
+                    operation: operation.to_owned(),
+                    resource: None,
+                    field: field.to_owned(),
+                    constraint: constraint.as_str().to_owned(),
+                    allowed_values: None,
+                })],
+            },
+        )),
+    }
+}
+
 impl From<anyhow::Error> for Refused {
     fn from(error: anyhow::Error) -> Self {
-        if let Some(missing) = error.downcast_ref::<NoSuchOrganization>() {
-            return Refused::NotFound(missing.to_string());
-        }
+        let error = match error.downcast::<Reason>() {
+            Ok(reason) => return diagnosed(reason),
+            Err(error) => error,
+        };
         if let Some(named) = error.downcast_ref::<FieldRefusal>() {
             return Refused::Named {
                 status: match named.kind {
@@ -3220,6 +3469,10 @@ impl From<Unreadable> for Refused {
 
 impl IntoResponse for Refused {
     fn into_response(self) -> Response {
+        if let Refused::Diagnosed { status, diagnostic } = self {
+            return serve::refusal(status, false, Json(diagnostic));
+        }
+
         let busy = matches!(&self, Refused::Unavailable(error) if store::busy(error));
         let (status, message, field) = match self {
             Refused::BadRequest(why) => (StatusCode::BAD_REQUEST, why, None),
@@ -3238,6 +3491,7 @@ impl IntoResponse for Refused {
                     None,
                 )
             }
+            Refused::Diagnosed { .. } => unreachable!("returned above"),
         };
 
         serve::refusal(status, busy, Json(Refusal { message, field }))
