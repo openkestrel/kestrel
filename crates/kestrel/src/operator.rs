@@ -3237,11 +3237,7 @@ async fn open_stream(
     State(control_plane): State<ControlPlane>,
     Path(token): Path<String>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, BoxError>>>, Refused> {
-    let stream::Connection {
-        connected,
-        waiting,
-        mut changes,
-    } = control_plane
+    let connected = control_plane
         .streams
         .connect(reservation(&token)?)
         .map_err(stream_refused)?;
@@ -3250,26 +3246,22 @@ async fn open_stream(
     let framed = async_stream::try_stream! {
         let mut subscriptions = StreamMap::new();
         let mut generations = HashMap::new();
-        for subscribed in waiting {
-            generations.insert(subscribed.id.clone(), subscribed.generation);
-            subscriptions.insert(subscribed.id, cut_off_unless_ended(subscribed.events));
-        }
         loop {
             let (id, emitted) = tokio::select! {
                 () = shutdown.cancelled() => break,
-                change = changes.recv() => {
-                    match change {
-                        Some(stream::Change::Subscribe(subscribed)) => {
-                            generations.insert(subscribed.id.clone(), subscribed.generation);
-                            subscriptions
-                                .insert(subscribed.id, cut_off_unless_ended(subscribed.events));
-                        }
-                        Some(stream::Change::Unsubscribe(id)) => {
-                            generations.remove(&id);
-                            subscriptions.remove(&id);
-                        }
-                        None => break,
+                () = connected.changed() => {
+                    let wanted = connected.wanted();
+                    for subscribed in wanted.unstarted {
+                        generations.insert(subscribed.id.clone(), subscribed.generation);
+                        subscriptions.insert(subscribed.id, cut_off_unless_ended(subscribed.events));
                     }
+                    generations.retain(|id, generation| {
+                        let kept = wanted.held.get(id) == Some(generation);
+                        if !kept {
+                            subscriptions.remove(id);
+                        }
+                        kept
+                    });
                     continue;
                 }
                 Some(next) = subscriptions.next(), if !subscriptions.is_empty() => next,

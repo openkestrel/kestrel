@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use axum::BoxError;
 use futures_core::Stream;
-use tokio::sync::mpsc;
+use tokio::sync::Notify;
 use uuid::Uuid;
 
 use crate::log::Cursor;
@@ -54,27 +54,20 @@ impl Emitted {
             data: serde_json::to_value(data)?,
         })
     }
+
+    pub fn ends(&self) -> bool {
+        self.event == END
+    }
 }
 
 pub type Events = Pin<Box<dyn Stream<Item = Result<Emitted, BoxError>> + Send>>;
 
 pub const END: &str = "end";
 
-impl Emitted {
-    pub fn ends(&self) -> bool {
-        self.event == END
-    }
-}
-
 pub struct Subscribed {
     pub id: String,
     pub generation: u64,
     pub events: Events,
-}
-
-pub enum Change {
-    Subscribe(Subscribed),
-    Unsubscribe(String),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -104,17 +97,14 @@ struct Hub {
     reservations: Mutex<HashMap<Token, Reservation>>,
 }
 
+/// Only the subscriptions the tab wants are kept, never a queue of changes to them, so a
+/// connection that stops reading cannot make them pile up.
 struct Reservation {
-    state: State,
     held: HashMap<String, u64>,
+    unstarted: HashMap<String, Subscribed>,
+    connected: bool,
+    wake: Arc<Notify>,
     generations: u64,
-}
-
-/// Subscriptions made before the connection opens wait in place, so one id held over and over
-/// queues nothing.
-enum State {
-    Waiting(HashMap<String, Subscribed>),
-    Connected(mpsc::UnboundedSender<Change>),
 }
 
 impl Streams {
@@ -137,8 +127,10 @@ impl Streams {
             reservations.insert(
                 token,
                 Reservation {
-                    state: State::Waiting(HashMap::new()),
                     held: HashMap::new(),
+                    unstarted: HashMap::new(),
+                    connected: false,
+                    wake: Arc::new(Notify::new()),
                     generations: 0,
                 },
             );
@@ -150,7 +142,7 @@ impl Streams {
             let mut reservations = hub.reservations.lock().unwrap();
             if reservations
                 .get(&token)
-                .is_some_and(|reservation| matches!(reservation.state, State::Waiting(_)))
+                .is_some_and(|reservation| !reservation.connected)
             {
                 reservations.remove(&token);
             }
@@ -161,23 +153,18 @@ impl Streams {
 
     /// The reservation lasts exactly as long as the connection: once it drops, the tab reserves
     /// again and re-subscribes from the cursors it saw.
-    pub fn connect(&self, token: Token) -> Result<Connection, Refusal> {
+    pub fn connect(&self, token: Token) -> Result<Connected, Refusal> {
         let mut reservations = self.hub.reservations.lock().unwrap();
         let reservation = reservations.get_mut(&token).ok_or(Refusal::Unknown)?;
-        let State::Waiting(waiting) = &mut reservation.state else {
+        if reservation.connected {
             return Err(Refusal::AlreadyConnected);
-        };
-        let waiting = std::mem::take(waiting).into_values().collect();
-        let (sender, changes) = mpsc::unbounded_channel();
-        reservation.state = State::Connected(sender);
+        }
+        reservation.connected = true;
 
-        Ok(Connection {
-            connected: Connected {
-                hub: self.hub.clone(),
-                token,
-            },
-            waiting,
-            changes,
+        Ok(Connected {
+            hub: self.hub.clone(),
+            token,
+            wake: reservation.wake.clone(),
         })
     }
 
@@ -195,19 +182,15 @@ impl Streams {
         reservation.generations += 1;
         let generation = reservation.generations;
         reservation.held.insert(id.clone(), generation);
-        let subscribed = Subscribed {
-            id,
-            generation,
-            events,
-        };
-        match &mut reservation.state {
-            State::Waiting(waiting) => {
-                waiting.insert(subscribed.id.clone(), subscribed);
-            }
-            State::Connected(changes) => {
-                let _ = changes.send(Change::Subscribe(subscribed));
-            }
-        }
+        reservation.unstarted.insert(
+            id.clone(),
+            Subscribed {
+                id,
+                generation,
+                events,
+            },
+        );
+        reservation.wake.notify_one();
 
         Ok(())
     }
@@ -216,33 +199,50 @@ impl Streams {
         let mut reservations = self.hub.reservations.lock().unwrap();
         let reservation = reservations.get_mut(&token).ok_or(Refusal::Unknown)?;
         if reservation.held.remove(&id).is_some() {
-            match &mut reservation.state {
-                State::Waiting(waiting) => {
-                    waiting.remove(&id);
-                }
-                State::Connected(changes) => {
-                    let _ = changes.send(Change::Unsubscribe(id));
-                }
-            }
+            reservation.unstarted.remove(&id);
+            reservation.wake.notify_one();
         }
 
         Ok(())
     }
 }
 
-pub struct Connection {
-    pub connected: Connected,
-    pub waiting: Vec<Subscribed>,
-    pub changes: mpsc::UnboundedReceiver<Change>,
-}
-
 /// Dropping it forgets the reservation, however the connection ended.
 pub struct Connected {
     hub: Arc<Hub>,
     token: Token,
+    wake: Arc<Notify>,
+}
+
+/// What a connection should start, and every id it should hold with the generation it should
+/// hold it at: anything else it runs was replaced or ended.
+pub struct Wanted {
+    pub unstarted: Vec<Subscribed>,
+    pub held: HashMap<String, u64>,
 }
 
 impl Connected {
+    pub async fn changed(&self) {
+        self.wake.notified().await;
+    }
+
+    pub fn wanted(&self) -> Wanted {
+        let mut reservations = self.hub.reservations.lock().unwrap();
+        let Some(reservation) = reservations.get_mut(&self.token) else {
+            return Wanted {
+                unstarted: Vec::new(),
+                held: HashMap::new(),
+            };
+        };
+
+        Wanted {
+            unstarted: std::mem::take(&mut reservation.unstarted)
+                .into_values()
+                .collect(),
+            held: reservation.held.clone(),
+        }
+    }
+
     /// A replacement may already hold the id, so only the generation that ended lets it go.
     pub fn ended(&self, subscribed: &str, generation: u64) {
         let mut reservations = self.hub.reservations.lock().unwrap();
