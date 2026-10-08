@@ -10,8 +10,6 @@ use crate::link::{Evidence, OsError, OsErrorKind};
 
 const SUMMARY_LIMIT: usize = 1024;
 
-/// Why a Session failed: `because` for a person to read, `evidence` for the control plane to act
-/// on (ADR-0052).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failure {
     pub because: String,
@@ -19,14 +17,15 @@ pub struct Failure {
 }
 
 impl Failure {
-    pub fn kestrels(because: impl Into<String>) -> Self {
+    pub fn unevidenced(because: impl Into<String>) -> Self {
         Self {
             because: because.into(),
             evidence: None,
         }
     }
 
-    /// Only the error's code establishes anything; whatever its message says stays unknown.
+    /// Only the error's code establishes anything, and its `data` is the agent's to fill, so the
+    /// summary carries the JSON-RPC message alone.
     pub fn answered(error: &Error, offered: &[String], method: Option<&str>) -> Self {
         let because = error.to_string();
         let evidence = match error.code {
@@ -36,7 +35,7 @@ impl Failure {
                 method: method.map(str::to_owned),
             },
             _ => Evidence::Unknown {
-                summary: because.clone(),
+                summary: error.message.clone(),
             },
         };
 
@@ -84,13 +83,10 @@ impl Failure {
     }
 }
 
-/// What the supervisor handed the harness, which nothing it reports may repeat.
 #[derive(Debug, Clone, Default)]
 pub struct Secrets(Vec<String>);
 
 impl Secrets {
-    /// A login file is redacted token by token as well as whole, since a harness that logs one
-    /// logs a token out of it.
     pub fn of<'a>(handed: impl IntoIterator<Item = &'a String>) -> Self {
         let mut secrets = Vec::new();
         for value in handed {
@@ -183,15 +179,17 @@ mod tests {
     #[test]
     fn an_error_that_only_reads_like_an_expired_login_is_unknown() {
         let failure = Failure::answered(
-            &Error::internal_error().data("401 Unauthorized: login expired"),
+            &Error::new(-32603, "401 Unauthorized").data("login expired"),
             &[],
             None,
         );
 
-        assert!(matches!(
+        assert_eq!(
             failure.evidence,
-            Some(Evidence::Unknown { summary }) if summary.contains("401")
-        ));
+            Some(Evidence::Unknown {
+                summary: "401 Unauthorized".to_owned()
+            })
+        );
     }
 
     #[test]
@@ -200,7 +198,10 @@ mod tests {
         let key = "a-provider-key".to_owned();
         let secrets = Secrets::of([&key, &login]);
         let failure = Failure::answered(
-            &Error::internal_error().data("rejected a-provider-key and a-token-from-a-login-file"),
+            &Error::new(
+                -32603,
+                "rejected a-provider-key and a-token-from-a-login-file",
+            ),
             &[],
             None,
         )
@@ -217,12 +218,8 @@ mod tests {
 
     #[test]
     fn an_unknown_summary_is_bounded() {
-        let failure = Failure::answered(
-            &Error::internal_error().data("é".repeat(SUMMARY_LIMIT)),
-            &[],
-            None,
-        )
-        .redacted(&Secrets::default());
+        let failure = Failure::answered(&Error::new(-32603, "é".repeat(SUMMARY_LIMIT)), &[], None)
+            .redacted(&Secrets::default());
 
         let Some(Evidence::Unknown { summary }) = failure.evidence else {
             panic!("unknown evidence");

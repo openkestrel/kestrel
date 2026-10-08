@@ -714,7 +714,6 @@ pub struct Session {
     pub preparing: Option<Preparing>,
     pub exit: Option<Exit>,
     pub outcome_message: Option<String>,
-    /// What the supervisor established about how the Session failed.
     pub evidence: Option<Evidence>,
     pub instance: Option<String>,
     pub supervisor: Option<String>,

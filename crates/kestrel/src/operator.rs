@@ -769,11 +769,15 @@ struct SessionRecord {
 
 /// The Session's harness is the control plane's to add; no image is recorded against a Session,
 /// and no sign-in is attributed to one yet, so neither expiry nor coverage is ever established.
-fn diagnosed_failure(session: &Session, evidence: domain::Evidence) -> wire::Diagnostic {
+fn diagnosed_failure(
+    session: &Session,
+    organization: &str,
+    evidence: domain::Evidence,
+) -> wire::Diagnostic {
     let harness = session.agent.harness.clone();
     let inspect_session = inspect(
         Locator::new(Resource::Session, session.id.to_string()),
-        None,
+        Some(organization.to_owned()),
     );
     match evidence {
         domain::Evidence::AuthenticationRequired {
@@ -1037,14 +1041,14 @@ impl WorkspaceRecord {
 }
 
 impl SessionRecord {
-    fn read(session: Session, summaries: &crate::live_work::Summaries) -> Self {
+    fn read(session: Session, organization: &str, summaries: &crate::live_work::Summaries) -> Self {
         let (observation, state) = summaries.observed(Some(&session));
         let trailing = session.state == domain::SessionState::Trailing;
         let harness = session.agent.harness.clone();
         let diagnostic = session
             .evidence
             .clone()
-            .map(|evidence| diagnosed_failure(&session, evidence));
+            .map(|evidence| diagnosed_failure(&session, organization, evidence));
         let options = session
             .options
             .into_iter()
@@ -1197,7 +1201,11 @@ async fn start(
             project: started.project,
             agent: started.agent,
             workspace: WorkspaceRecord::read(&control_plane.store, started.workspace).await?,
-            session: SessionRecord::read(started.session, &control_plane.live.summaries),
+            session: SessionRecord::read(
+                started.session,
+                &plan.organization,
+                &control_plane.live.summaries,
+            ),
         }),
     ))
 }
@@ -2490,7 +2498,9 @@ async fn workspaces(
         let session = work::sessions(&control_plane.store, id)
             .await?
             .pop()
-            .map(|session| SessionRecord::read(session, &control_plane.live.summaries));
+            .map(|session| {
+                SessionRecord::read(session, &organization, &control_plane.live.summaries)
+            });
         records.push(WorkspaceListedRecord {
             workspace: WorkspaceRecord::read(&control_plane.store, workspace).await?,
             session,
@@ -2528,7 +2538,7 @@ async fn open_workspace(
         StatusCode::CREATED,
         Json(OpenedRecord {
             workspace: WorkspaceRecord::read(&control_plane.store, workspace).await?,
-            session: SessionRecord::read(session, &control_plane.live.summaries),
+            session: SessionRecord::read(session, &organization, &control_plane.live.summaries),
         }),
     ))
 }
@@ -2677,9 +2687,9 @@ async fn post_to_workspace(
     .await?;
 
     Ok(Json(PostedRecord {
-        session: posted
-            .session
-            .map(|session| SessionRecord::read(session, &control_plane.live.summaries)),
+        session: posted.session.map(|session| {
+            SessionRecord::read(session, &organization, &control_plane.live.summaries)
+        }),
         held_message: posted.held_message,
     }))
 }
@@ -2845,7 +2855,9 @@ async fn sessions(
     Ok(Json(
         sessions
             .into_iter()
-            .map(|session| SessionRecord::read(session, &control_plane.live.summaries))
+            .map(|session| {
+                SessionRecord::read(session, &organization, &control_plane.live.summaries)
+            })
             .collect(),
     ))
 }
@@ -2888,7 +2900,11 @@ async fn enqueue_session(
 
     Ok((
         StatusCode::CREATED,
-        Json(SessionRecord::read(session, &control_plane.live.summaries)),
+        Json(SessionRecord::read(
+            session,
+            &organization,
+            &control_plane.live.summaries,
+        )),
     ))
 }
 
@@ -2898,7 +2914,7 @@ async fn show_session(
     headers: HeaderMap,
 ) -> Result<Response, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
-    let record = SessionRecord::read(session, &control_plane.live.summaries);
+    let record = SessionRecord::read(session, &organization, &control_plane.live.summaries);
     let body = serde_json::to_string(&record).map_err(anyhow::Error::from)?;
     let tag = strong_etag(&body);
 
@@ -2950,6 +2966,7 @@ async fn interrupt_session(
         StatusCode::ACCEPTED,
         Json(SessionRecord::read(
             interrupting,
+            &organization,
             &control_plane.live.summaries,
         )),
     ))
@@ -2967,6 +2984,7 @@ async fn stop_session(
 
     Ok(Json(SessionRecord::read(
         session,
+        &organization,
         &control_plane.live.summaries,
     )))
 }
@@ -3011,6 +3029,7 @@ async fn set_session_option(
         },
         Json(SessionRecord::read(
             written.session,
+            &organization,
             &control_plane.live.summaries,
         )),
     ))

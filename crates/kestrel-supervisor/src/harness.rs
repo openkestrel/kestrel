@@ -248,7 +248,7 @@ impl Conversation {
             ConversationEvent::Worked(Worked {
                 allowed: Vec::new(),
                 on: None,
-                failed: Some(Failure::kestrels(
+                failed: Some(Failure::unevidenced(
                     "the agent conversation ended unannounced",
                 )),
                 usage: None,
@@ -391,7 +391,7 @@ async fn conversing(
                      conversation"
                 ));
             }
-            Err(because) => break Failure::kestrels(because),
+            Err(because) => break Failure::unevidenced(because),
         }
     };
     let _ = turns.send(ConversationEvent::Worked(
@@ -415,7 +415,7 @@ async fn living(
     let spawn = match AcpAgent::from_str(&harness.command) {
         Ok(spawn) => spawn,
         Err(error) => {
-            return Ok(Ended::Over(Failure::kestrels(format!(
+            return Ok(Ended::Over(Failure::unevidenced(format!(
                 "the harness {:?} could not be spawned: {error}",
                 harness.command
             ))));
@@ -519,7 +519,7 @@ async fn living(
                         if let Err(error) =
                             recover(&connection, harness, root, heard, &conversed, recovery, &mut continuity.offered).await
                         {
-                            return Ok(ended(&error, continuity, harness));
+                            return Ok(ended(&error, &continuity.offered, harness.auth.as_deref()));
                         }
                         let _ = turns.send(ConversationEvent::Ready);
                         conversed
@@ -530,7 +530,7 @@ async fn living(
                             let _ = turns.send(ConversationEvent::Ready);
                             conversed
                         }
-                        Err(error) => return Ok(ended(&error, continuity, harness)),
+                        Err(error) => return Ok(ended(&error, &continuity.offered, harness.auth.as_deref())),
                     },
                 };
 
@@ -617,7 +617,7 @@ async fn living(
                                 );
                                 heard.emit(completed);
                                 drop(heard);
-                                return Ok(Ended::Over(Failure::kestrels(format!(
+                                return Ok(Ended::Over(Failure::unevidenced(format!(
                                     "the agent did not answer the interrupt within {:?}, and its ACP \
                                      continuity is lost",
                                     harness.interrupt_deadline
@@ -628,7 +628,7 @@ async fn living(
                     heard.lock().expect("the observation lock").interrupting = false;
                     let answered = match answered {
                         Ok(answered) => answered,
-                        Err(error) => return Ok(ended(&error, continuity, harness)),
+                        Err(error) => return Ok(ended(&error, &continuity.offered, harness.auth.as_deref())),
                     };
                     continuity.answered();
 
@@ -648,11 +648,11 @@ async fn living(
                                 continue;
                             }
                         }
-                        return Ok(Ended::Over(Failure::kestrels(because)));
+                        return Ok(Ended::Over(Failure::unevidenced(because)));
                     }
                     let mut this_turn = heard.lock().expect("the observation lock");
                     let failed = (!this_turn.completer.produced)
-                        .then(|| Failure::kestrels("the agent answered the prompt with nothing"));
+                        .then(|| Failure::unevidenced("the agent answered the prompt with nothing"));
                     let worked = this_turn.worked(failed);
                     drop(this_turn);
                     if turns.send(ConversationEvent::Worked(worked)).is_err() {
@@ -664,14 +664,10 @@ async fn living(
         .await
 }
 
-fn ended(error: &Error, continuity: &Continuity, harness: &Harness) -> Ended {
+fn ended(error: &Error, offered: &[String], method: Option<&str>) -> Ended {
     match is_incoming_transport_closed(error) {
         true => Ended::Lost(described(error)),
-        false => Ended::Over(Failure::answered(
-            error,
-            &continuity.offered,
-            harness.auth.as_deref(),
-        )),
+        false => Ended::Over(Failure::answered(error, offered, method)),
     }
 }
 

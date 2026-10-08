@@ -262,7 +262,9 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
                     because: "the harness could not be spawned".to_owned(),
                 },
                 usage: Some(usage()),
-                evidence: Some(evidence().remove(0)),
+                evidence: Some(link::Evidence::Unknown {
+                    summary: "the agent stopped".to_owned(),
+                }),
             },
         ),
     ]

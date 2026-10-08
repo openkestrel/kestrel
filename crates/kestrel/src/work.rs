@@ -961,8 +961,11 @@ async fn reported(
             usage,
             evidence,
         } => {
+            let failed = matches!(exit, Exit::Failed { .. }).then(|| exit.clone());
             let stands = ending(tx, session, exit).await?;
-            if let Some(evidence) = evidence {
+            if let Some(evidence) = evidence
+                && failed.as_ref() == Some(&stands)
+            {
                 tx.workspaces()
                     .record_failure_evidence(session, &evidence.bounded())
                     .await?;

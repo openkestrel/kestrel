@@ -89,6 +89,7 @@ async fn an_agent_that_must_be_signed_in_leaves_authentication_evidence_on_its_s
     assert_eq!(diagnostic["next_steps"][0]["action"], "sign_in");
     assert_eq!(diagnostic["next_steps"][0]["harness"], HARNESS);
     assert_eq!(diagnostic["next_steps"][1]["action"], "inspect_resource");
+    assert_eq!(diagnostic["next_steps"][1]["organization"], "acme");
 
     kestrel.teardown().await;
 }
@@ -136,10 +137,8 @@ async fn output_that_only_reads_like_an_expired_login_stays_unknown_and_holds_no
     let diagnostic = &read["diagnostic"];
     assert_eq!(diagnostic["kind"], "unknown_failure", "{read:#}");
     assert_eq!(diagnostic["context"]["evidence"]["kind"], "unknown");
-    let summary = diagnostic["context"]["evidence"]["summary"]
-        .as_str()
-        .expect("a summary");
-    assert!(summary.contains("401"), "{summary}");
+    let because = read["exit"]["because"].as_str().expect("why it failed");
+    assert!(because.contains("401"), "{because}");
     assert!(
         !read.to_string().contains(support::A_PROVIDER_KEY),
         "a secret was kept: {read:#}"
