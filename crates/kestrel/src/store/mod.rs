@@ -16,6 +16,7 @@ use std::time::Instant;
 
 use anyhow::{Context as _, Result};
 use jiff::Timestamp;
+use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteRow};
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use tracing::trace;
@@ -61,10 +62,15 @@ impl Store {
             .await
             .with_context(|| format!("opening kestrel's database in {}", data_dir.display()))?;
 
-        sqlx::migrate!("src/store/migrations")
+        let migrator = sqlx::migrate!("src/store/migrations");
+        // A pre-release build never migrates another build's store: read the migration
+        // history before running anything, so an incompatible store is refused without
+        // writing to it.
+        let fresh = compatible(&pool, &migrator, data_dir).await?;
+        migrator
             .run(&pool)
             .await
-            .context("migrating kestrel's database")?;
+            .map_err(|error| migration_failed(error, fresh, data_dir))?;
         let reads = SqlitePool::connect_with(options.read_only(true))
             .await
             .with_context(|| format!("opening kestrel's database in {}", data_dir.display()))?;
@@ -111,6 +117,162 @@ impl Store {
             publishes: None,
         })
     }
+}
+
+/// A store from another build is refused, never migrated: schema changes edit the
+/// migrations in place until release, so a checksum or version mismatch means the volume
+/// holds another pre-release build's database.
+async fn compatible(pool: &SqlitePool, migrator: &Migrator, data_dir: &Path) -> Result<bool> {
+    let tracking: Option<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
+    )
+    .fetch_optional(pool)
+    .await
+    .with_context(|| format!("reading kestrel's database in {}", data_dir.display()))?;
+
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'table' \
+         AND name NOT LIKE 'sqlite_%' AND name != '_sqlx_migrations' ORDER BY name",
+    )
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("reading kestrel's database in {}", data_dir.display()))?;
+
+    let Some(_) = tracking else {
+        if tables.is_empty() {
+            return Ok(true);
+        }
+        return Err(incompatible_store(
+            format!("it holds {} but no migration history", tables.join(", ")),
+            data_dir,
+        ));
+    };
+
+    let applied: Vec<(i64, Vec<u8>, bool)> =
+        sqlx::query_as("SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(pool)
+            .await
+            .with_context(|| format!("reading kestrel's database in {}", data_dir.display()))?;
+
+    if let Some((version, _, _)) = applied.iter().find(|(_, _, success)| !success) {
+        anyhow::bail!(
+            "migration {version} started but never finished applying to kestrel's database in {}",
+            data_dir.display()
+        );
+    }
+
+    for (version, checksum, _) in &applied {
+        let Some(carried) = migrator.iter().find(|carried| carried.version == *version) else {
+            return Err(incompatible_store(
+                format!(
+                    "migration {version} was applied to this store but this build does not carry it"
+                ),
+                data_dir,
+            ));
+        };
+        if carried.checksum.as_ref() != checksum {
+            return Err(incompatible_store(
+                format!(
+                    "migration {version} in this build differs from the migration this store was created with"
+                ),
+                data_dir,
+            ));
+        }
+    }
+
+    Ok(applied.is_empty() && tables.is_empty())
+}
+
+fn migration_failed(error: MigrateError, fresh: bool, data_dir: &Path) -> anyhow::Error {
+    if let Some(detail) = incompatibility(&error, fresh) {
+        return incompatible_store(detail, data_dir);
+    }
+    anyhow::Error::new(error).context(format!(
+        "migrating kestrel's database in {}",
+        data_dir.display()
+    ))
+}
+
+fn incompatibility(error: &MigrateError, fresh: bool) -> Option<String> {
+    match error {
+        MigrateError::VersionMissing(version) => Some(format!(
+            "migration {version} was applied to this store but this build does not carry it"
+        )),
+        MigrateError::VersionMismatch(version) => Some(format!(
+            "migration {version} in this build differs from the migration this store was created with"
+        )),
+        MigrateError::VersionNotPresent(version) => Some(format!(
+            "migration {version} was applied to this store but this build does not carry it"
+        )),
+        MigrateError::VersionTooOld(version, latest) => Some(format!(
+            "migration {version} is older than this store's latest applied migration {latest}"
+        )),
+        MigrateError::VersionTooNew(version, latest) => Some(format!(
+            "migration {version} is newer than this store's latest applied migration {latest}"
+        )),
+        MigrateError::ExecuteMigration(source, version) => conflict(source, Some(*version), fresh),
+        MigrateError::Execute(source) => conflict(source, None, fresh),
+        _ => None,
+    }
+}
+
+/// A pending migration failing against a store that already holds another build's schema
+/// is the same incompatibility; on a fresh store it is this build's own breakage, and a
+/// permission, disk, lock or corruption failure is always its own cause.
+fn conflict(source: &dyn std::fmt::Display, version: Option<i64>, fresh: bool) -> Option<String> {
+    let cause = source.to_string().to_lowercase();
+    if fresh || operational(&cause) || !schema_conflict(&cause) {
+        return None;
+    }
+    match version {
+        Some(version) => Some(format!(
+            "migration {version} cannot apply to this store: {cause}"
+        )),
+        None => Some(format!("this store cannot be migrated: {cause}")),
+    }
+}
+
+fn operational(cause: &str) -> bool {
+    [
+        "readonly",
+        "read-only",
+        "permission",
+        "locked",
+        "busy",
+        "disk",
+        "full",
+        "space",
+        "not a database",
+        "malformed",
+        "corrupt",
+        "io error",
+        "interrupted",
+    ]
+    .iter()
+    .any(|pattern| cause.contains(pattern))
+}
+
+fn schema_conflict(cause: &str) -> bool {
+    [
+        "already exists",
+        "duplicate",
+        "no such table",
+        "no such column",
+        "has no column",
+    ]
+    .iter()
+    .any(|pattern| cause.contains(pattern))
+}
+
+fn incompatible_store(detail: String, data_dir: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "kestrel cannot start with the store in {}: {}.\n\
+         kestrel is pre-release and does not migrate stores between builds.\n\
+         To start over, remove the volume (this deletes all saved kestrel data):\n\n\
+         docker compose down --volumes",
+        data_dir.join(DATABASE).display(),
+        detail
+    )
 }
 
 /// Never a reason to stop: the same work asked again later can succeed.
