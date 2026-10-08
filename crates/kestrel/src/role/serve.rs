@@ -87,6 +87,13 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         );
     }
 
+    let stop_recording = CancellationToken::new();
+    let recording = tokio::spawn({
+        let unrecorded = live.unrecorded.clone();
+        let store = store.clone();
+        let stop = stop_recording.clone();
+        async move { unrecorded.record(&store, stop).await }
+    });
     let followers = crate::presence::Followers::new(follow_lease);
     let link_router = link::router(store.clone(), shutdown.clone(), live.clone())
         .merge(webhook::router(store.clone(), wake));
@@ -98,6 +105,8 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         .with_graceful_shutdown(shutdown.cancelled_owned());
     let (link_served, operators_served) =
         tokio::join!(serving_link.into_future(), serving_operators.into_future());
+    stop_recording.cancel();
+    recording.await.context("recording work reports")?;
     link_served.context("serving the link and the webhooks")?;
     operators_served.context("serving operators")?;
     info!(role = %Role::Serve, "role stopped");

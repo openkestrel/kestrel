@@ -488,11 +488,10 @@ async fn report(
             repositories,
             reported_at: jiff::Timestamp::now(),
         };
-        let mut tx = control_plane.store.begin().await?;
-        tx.workspaces()
-            .record_work_report(linked.workspace, &instance, &summary)
-            .await?;
-        tx.commit().await?;
+        control_plane
+            .live
+            .unrecorded
+            .report(linked.workspace, &instance, summary.clone());
         if control_plane.live.summaries.report(&instance, summary) {
             let mut touched = Touched::default();
             touched.workspace_id(linked.organization, linked.workspace);

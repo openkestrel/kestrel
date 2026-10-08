@@ -36,8 +36,9 @@ with their arrival times live only while the Instance has an open instruction st
 and adapter units survive a disconnect until the Session ends, so supervisor loss can close them
 `unresolved` in the same transaction that ends the Session.
 The operator also checks the supervisor's heartbeat freshness before serving a summary. Each
-accepted `work` report also replaces its Instance's row in `instance_work_report`, the history the
-operator serves as `last_report` once the live summary is gone. The separate numbered `checkout`
+accepted `work` report is also queued for one serve-role writer that replaces its Instance's row in
+`instance_work_report`, newest per Instance, so a report never waits on the write lock. That row is
+the history the operator serves as `last_report` once the live summary is gone. The separate numbered `checkout`
 report remains durable and supplies the reaping gate only.
 
 ## Reads

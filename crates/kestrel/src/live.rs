@@ -4,5 +4,6 @@
 #[derive(Clone, Default)]
 pub struct Live {
     pub summaries: crate::live_work::Summaries,
+    pub unrecorded: crate::live_work::Unrecorded,
     pub reads: crate::live_read::Reads,
 }

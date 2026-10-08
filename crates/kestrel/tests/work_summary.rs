@@ -78,7 +78,10 @@ async fn reported(
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         let answer = summary(kestrel, workspace).await;
-        if answer["state"] == "reported" && answer["repositories"][0]["untracked"] == untracked {
+        if answer["state"] == "reported"
+            && answer["repositories"][0]["untracked"] == untracked
+            && answer["last_report"]["reported_at"] == answer["reported_at"]
+        {
             return answer;
         }
         assert!(

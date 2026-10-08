@@ -3,9 +3,13 @@ use std::sync::{Arc, Mutex};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
-use crate::domain::Usage;
+use crate::domain::{Usage, WorkspaceId};
 use crate::log::ToolStatus;
+use crate::store::Store;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Repository {
@@ -94,6 +98,71 @@ impl Summaries {
     }
 }
 
+/// Reports the serve role has taken and not yet written, newest per Instance.
+#[derive(Clone, Default)]
+pub struct Unrecorded(Arc<(Mutex<Taken>, Notify)>);
+
+type Taken = HashMap<(WorkspaceId, String), Summary>;
+
+impl Unrecorded {
+    pub fn report(&self, workspace: WorkspaceId, instance: &str, summary: Summary) {
+        let (unrecorded, wake) = &*self.0;
+        unrecorded
+            .lock()
+            .unwrap()
+            .insert((workspace, instance.to_owned()), summary);
+        wake.notify_one();
+    }
+
+    /// The only writer, so a report never waits on the write lock and a supervisor's read answers
+    /// never queue behind one.
+    pub async fn record(&self, store: &Store, stop: CancellationToken) {
+        let (unrecorded, wake) = &*self.0;
+        loop {
+            let stopping = tokio::select! {
+                () = wake.notified() => false,
+                () = stop.cancelled() => true,
+            };
+            let taken = std::mem::take(&mut *unrecorded.lock().unwrap());
+            if let Err(error) = write(store, &taken).await {
+                warn!(
+                    error = format!("{error:#}"),
+                    "the work reports could not be recorded"
+                );
+                {
+                    let mut unrecorded = unrecorded.lock().unwrap();
+                    for (key, summary) in taken {
+                        unrecorded.entry(key).or_insert(summary);
+                    }
+                }
+                if !stopping {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    wake.notify_one();
+                }
+            }
+            if stopping {
+                return;
+            }
+        }
+    }
+}
+
+async fn write(
+    store: &Store,
+    taken: &HashMap<(WorkspaceId, String), Summary>,
+) -> anyhow::Result<()> {
+    if taken.is_empty() {
+        return Ok(());
+    }
+    let mut tx = store.begin().await?;
+    for ((workspace, instance), summary) in taken {
+        tx.workspaces()
+            .record_work_report(*workspace, instance, summary)
+            .await?;
+    }
+    tx.commit().await
+}
+
 pub struct Connection {
     summaries: Summaries,
     instance: String,
@@ -152,7 +221,7 @@ pub enum LastReport {
 }
 
 pub async fn read(
-    store: &crate::store::Store,
+    store: &Store,
     summaries: &Summaries,
     organization: &str,
     reference: &str,
