@@ -963,7 +963,7 @@
             "$ref": "#/components/responses/Refused"
           },
           "422": {
-            "$ref": "#/components/responses/Refused"
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "$ref": "#/components/responses/Refused"
@@ -1067,14 +1067,7 @@
             }
           },
           "422": {
-            "description": "Setup refused",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Refusal"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Diagnosed"
           },
           "503": {
             "description": "Setup refused",
@@ -2000,7 +1993,7 @@
           "201": { "description": "The newly declared Trigger.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Trigger" } } } },
           "400": { "$ref": "#/components/responses/Refused" },
           "404": { "$ref": "#/components/responses/Refused" },
-          "422": { "$ref": "#/components/responses/Refused" },
+          "422": { "$ref": "#/components/responses/Diagnosed" },
           "503": { "$ref": "#/components/responses/Refused" }
         }
       }
@@ -2447,11 +2440,11 @@
         }
       },
       "Diagnosed": {
-        "description": "The control plane refused the request with a typed Diagnostic (ADR-0052): 404 is a missing or ambiguous reference; 409 is a state conflict; 422 is an invalid field.",
+        "description": "The control plane refused the request with a typed Diagnostic (ADR-0052): 404 is a missing or ambiguous reference; 409 is a state conflict; 422 is an invalid field. A refusal on the same status that no producer types yet falls back to a plain Refusal.",
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "#/components/schemas/Diagnostic"
+              "$ref": "#/components/schemas/DiagnosedRefusal"
             }
           }
         }
@@ -5010,6 +5003,17 @@
         },
         "required": [
           "message"
+        ]
+      },
+      "DiagnosedRefusal": {
+        "description": "A typed Diagnostic, or the plain Refusal a refusal falls back to until its producer is typed. Only `kind` tells them apart.",
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Diagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/Refusal"
+          }
         ]
       },
       "Resource": {

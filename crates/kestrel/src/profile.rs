@@ -5,7 +5,7 @@ use std::str::FromStr;
 use anyhow::{Result, bail};
 use jiff::Timestamp;
 
-use crate::declined::{Declined, Reason};
+use crate::declined::{Constraint, Declined, Reason};
 use crate::domain::SubscriptionProfile;
 use crate::provider;
 use crate::store::{Declared, Store, Tx};
@@ -91,6 +91,7 @@ pub async fn declare(
         bail!(Reason::InvalidField {
             field: "owner",
             operation: "declare_subscription_profile",
+            constraint: Constraint::NonEmpty,
             message: "a subscription profile belongs to a person, and none was named".to_owned(),
         });
     }
@@ -114,6 +115,7 @@ pub async fn hold(
         bail!(Reason::InvalidField {
             field: "secret",
             operation: "hold_subscription_profile_entry",
+            constraint: Constraint::NonEmpty,
             message: format!("a {} with nothing in it is no login", entry.kind.as_str()),
         });
     }
@@ -204,6 +206,7 @@ fn within_a_home(path: &str) -> Result<()> {
         bail!(Reason::InvalidField {
             field: "path",
             operation: "hold_subscription_profile_entry",
+            constraint: Constraint::BeneathHome,
             message: format!("{path} is not a path beneath the agent's home"),
         });
     }

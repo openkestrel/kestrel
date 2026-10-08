@@ -33,7 +33,12 @@ constraint, a state conflict's resource and current state); `next_steps` is zero
 list, never a shell command or a browser route. `message` and `field` stay in the same place a
 plain `Refusal` carries them, so a Client that only reads those two keeps working; `kind`,
 `context` and `next_steps` land for each surface as its own migration ticket does. Anything else is
-`Unavailable`.
+`Unavailable`. An invalid field's `constraint` and a state conflict's `state` are short tokens
+(`declined::Constraint`, `owned_by_another`), never the display sentence.
+
+A route documented with the `Diagnosed` response may still answer a refusal no producer types yet
+with the plain `Refusal` on the same status: the `DiagnosedRefusal` schema admits both, and only
+`kind` tells them apart. 400 and 503 always answer the plain `Refusal`.
 
 | Refusal | Status | Client exit |
 | --- | --- | --- |

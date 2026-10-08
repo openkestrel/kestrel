@@ -58,8 +58,6 @@ impl fmt::Display for FieldRefusal {
 
 impl std::error::Error for FieldRefusal {}
 
-/// A kind of record a reference or a declaration names, told apart so a boundary can map each
-/// to a wire `Resource` and offer the right next step without parsing prose (ADR-0052).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resource {
     Organization,
@@ -85,17 +83,36 @@ impl Resource {
     }
 }
 
-/// One record an ambiguous reference could have meant, named so a refusal can say which ones
-/// rather than formatting them into a sentence a boundary would have to parse back apart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     pub id: String,
     pub name: String,
 }
 
-/// A typed reason the operator boundary maps to a wire Diagnostic and ordered next steps,
-/// without reading `message` (ADR-0052). `Display` renders the same sentence a person reads
-/// either way; the structured fields exist for the boundary alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Constraint {
+    NonEmpty,
+    DistinctCheckoutDirectories,
+    MatchesDeclared,
+    NotReserved,
+    EnvironmentVariableName,
+    BeneathHome,
+}
+
+impl Constraint {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Constraint::NonEmpty => "non_empty",
+            Constraint::DistinctCheckoutDirectories => "distinct_checkout_directories",
+            Constraint::MatchesDeclared => "matches_declared",
+            Constraint::NotReserved => "not_reserved",
+            Constraint::EnvironmentVariableName => "environment_variable_name",
+            Constraint::BeneathHome => "beneath_home",
+        }
+    }
+}
+
+/// `message` is display only; the boundary maps the other fields without reading it (ADR-0052).
 #[derive(Debug)]
 pub enum Reason {
     MissingReference {
@@ -114,9 +131,12 @@ pub enum Reason {
     InvalidField {
         field: &'static str,
         operation: &'static str,
+        constraint: Constraint,
         message: String,
     },
     Taken {
+        operation: &'static str,
+        state: &'static str,
         resource: Resource,
         reference: String,
         organization: Option<String>,

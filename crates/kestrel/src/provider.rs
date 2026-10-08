@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use anyhow::{Result, bail};
 use jiff::Timestamp;
 
-use crate::declined::{Reason, Resource};
+use crate::declined::{Constraint, Reason, Resource};
 use crate::domain::OrganizationId;
 use crate::store::Store;
 
@@ -70,6 +70,7 @@ pub(crate) fn holdable(operation: &'static str, variable: &str, secret: &str) ->
         bail!(Reason::InvalidField {
             field: "secret",
             operation,
+            constraint: Constraint::NonEmpty,
             message: "a provider credential with nothing in it is not one".to_owned(),
         });
     }
@@ -105,6 +106,7 @@ pub(crate) fn named(operation: &'static str, variable: &str) -> Result<()> {
         bail!(Reason::InvalidField {
             field: "variable",
             operation,
+            constraint: Constraint::NotReserved,
             message: "KESTREL_ is reserved for the supervisor".to_owned(),
         });
     }
@@ -121,6 +123,7 @@ pub(crate) fn named(operation: &'static str, variable: &str) -> Result<()> {
         bail!(Reason::InvalidField {
             field: "variable",
             operation,
+            constraint: Constraint::EnvironmentVariableName,
             message: format!(
                 "{variable} is not an environment variable a Harness could be spawned with"
             ),
