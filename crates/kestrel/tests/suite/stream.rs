@@ -806,3 +806,27 @@ async fn a_transcript_subscription_keeps_activity_and_session_state_semantics() 
 
     kestrel.teardown().await;
 }
+
+#[tokio::test]
+async fn a_subscription_held_over_and_over_before_its_connection_opens_once() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel).await;
+    let token = reserve(&kestrel).await;
+    for _ in 0..5 {
+        subscribe(&kestrel, &token, "org", notices()).await;
+    }
+    subscribe(&kestrel, &token, "gone", notices()).await;
+    unsubscribe(&kestrel, &token, "gone").await;
+
+    let mut connection = Connection::open(&kestrel, &token).await;
+    let frames = connection.until_quiet().await;
+    assert_eq!(
+        frames
+            .iter()
+            .map(|frame| (frame.subscription.as_str(), frame.name.as_str()))
+            .collect::<Vec<_>>(),
+        [("org", "open")]
+    );
+
+    kestrel.teardown().await;
+}

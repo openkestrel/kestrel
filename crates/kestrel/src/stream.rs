@@ -58,6 +58,14 @@ impl Emitted {
 
 pub type Events = Pin<Box<dyn Stream<Item = Result<Emitted, BoxError>> + Send>>;
 
+pub const END: &str = "end";
+
+impl Emitted {
+    pub fn ends(&self) -> bool {
+        self.event == END
+    }
+}
+
 pub struct Subscribed {
     pub id: String,
     pub generation: u64,
@@ -75,7 +83,15 @@ pub enum Refusal {
     AlreadyConnected,
     TooManyReservations,
     TooManySubscriptions,
-    UnreadableId,
+    IdOutOfBounds,
+}
+
+pub fn bounded_id(id: &str) -> Result<(), Refusal> {
+    if id.is_empty() || id.len() > LONGEST_SUBSCRIPTION_ID {
+        return Err(Refusal::IdOutOfBounds);
+    }
+
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -89,10 +105,16 @@ struct Hub {
 }
 
 struct Reservation {
-    changes: mpsc::UnboundedSender<Change>,
-    waiting: Option<mpsc::UnboundedReceiver<Change>>,
+    state: State,
     held: HashMap<String, u64>,
     generations: u64,
+}
+
+/// Subscriptions made before the connection opens wait in place, so one id held over and over
+/// queues nothing.
+enum State {
+    Waiting(HashMap<String, Subscribed>),
+    Connected(mpsc::UnboundedSender<Change>),
 }
 
 impl Streams {
@@ -112,12 +134,10 @@ impl Streams {
             if reservations.len() >= MOST_RESERVATIONS {
                 return Err(Refusal::TooManyReservations);
             }
-            let (changes, waiting) = mpsc::unbounded_channel();
             reservations.insert(
                 token,
                 Reservation {
-                    changes,
-                    waiting: Some(waiting),
+                    state: State::Waiting(HashMap::new()),
                     held: HashMap::new(),
                     generations: 0,
                 },
@@ -130,7 +150,7 @@ impl Streams {
             let mut reservations = hub.reservations.lock().unwrap();
             if reservations
                 .get(&token)
-                .is_some_and(|reservation| reservation.waiting.is_some())
+                .is_some_and(|reservation| matches!(reservation.state, State::Waiting(_)))
             {
                 reservations.remove(&token);
             }
@@ -141,24 +161,24 @@ impl Streams {
 
     /// The reservation lasts exactly as long as the connection: once it drops, the tab reserves
     /// again and re-subscribes from the cursors it saw.
-    pub fn connect(
-        &self,
-        token: Token,
-    ) -> Result<(Connected, mpsc::UnboundedReceiver<Change>), Refusal> {
+    pub fn connect(&self, token: Token) -> Result<Connection, Refusal> {
         let mut reservations = self.hub.reservations.lock().unwrap();
         let reservation = reservations.get_mut(&token).ok_or(Refusal::Unknown)?;
-        let changes = reservation
-            .waiting
-            .take()
-            .ok_or(Refusal::AlreadyConnected)?;
+        let State::Waiting(waiting) = &mut reservation.state else {
+            return Err(Refusal::AlreadyConnected);
+        };
+        let waiting = std::mem::take(waiting).into_values().collect();
+        let (sender, changes) = mpsc::unbounded_channel();
+        reservation.state = State::Connected(sender);
 
-        Ok((
-            Connected {
+        Ok(Connection {
+            connected: Connected {
                 hub: self.hub.clone(),
                 token,
             },
+            waiting,
             changes,
-        ))
+        })
     }
 
     pub fn known(&self, token: Token) -> bool {
@@ -166,9 +186,7 @@ impl Streams {
     }
 
     pub fn subscribe(&self, token: Token, id: String, events: Events) -> Result<(), Refusal> {
-        if id.is_empty() || id.len() > LONGEST_SUBSCRIPTION_ID {
-            return Err(Refusal::UnreadableId);
-        }
+        bounded_id(&id)?;
         let mut reservations = self.hub.reservations.lock().unwrap();
         let reservation = reservations.get_mut(&token).ok_or(Refusal::Unknown)?;
         if !reservation.held.contains_key(&id) && reservation.held.len() >= MOST_SUBSCRIPTIONS {
@@ -177,11 +195,19 @@ impl Streams {
         reservation.generations += 1;
         let generation = reservation.generations;
         reservation.held.insert(id.clone(), generation);
-        let _ = reservation.changes.send(Change::Subscribe(Subscribed {
+        let subscribed = Subscribed {
             id,
             generation,
             events,
-        }));
+        };
+        match &mut reservation.state {
+            State::Waiting(waiting) => {
+                waiting.insert(subscribed.id.clone(), subscribed);
+            }
+            State::Connected(changes) => {
+                let _ = changes.send(Change::Subscribe(subscribed));
+            }
+        }
 
         Ok(())
     }
@@ -190,11 +216,24 @@ impl Streams {
         let mut reservations = self.hub.reservations.lock().unwrap();
         let reservation = reservations.get_mut(&token).ok_or(Refusal::Unknown)?;
         if reservation.held.remove(&id).is_some() {
-            let _ = reservation.changes.send(Change::Unsubscribe(id));
+            match &mut reservation.state {
+                State::Waiting(waiting) => {
+                    waiting.remove(&id);
+                }
+                State::Connected(changes) => {
+                    let _ = changes.send(Change::Unsubscribe(id));
+                }
+            }
         }
 
         Ok(())
     }
+}
+
+pub struct Connection {
+    pub connected: Connected,
+    pub waiting: Vec<Subscribed>,
+    pub changes: mpsc::UnboundedReceiver<Change>,
 }
 
 /// Dropping it forgets the reservation, however the connection ended.

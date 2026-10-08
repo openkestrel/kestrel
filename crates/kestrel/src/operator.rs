@@ -133,7 +133,6 @@ const EVENTS_LISTED: usize = 50;
 
 const POLL: Duration = Duration::from_millis(100);
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
-const END: &str = "end";
 
 #[derive(Clone)]
 struct ControlPlane {
@@ -3110,7 +3109,7 @@ fn transcribed(
                     (false, true) => None,
                 };
                 if let Some(because) = because {
-                    yield Emitted::new(END, None, &End { because })?;
+                    yield Emitted::new(stream::END, None, &End { because })?;
                     break;
                 }
 
@@ -3238,7 +3237,11 @@ async fn open_stream(
     State(control_plane): State<ControlPlane>,
     Path(token): Path<String>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, BoxError>>>, Refused> {
-    let (connected, mut changes) = control_plane
+    let stream::Connection {
+        connected,
+        waiting,
+        mut changes,
+    } = control_plane
         .streams
         .connect(reservation(&token)?)
         .map_err(stream_refused)?;
@@ -3247,6 +3250,10 @@ async fn open_stream(
     let framed = async_stream::try_stream! {
         let mut subscriptions = StreamMap::new();
         let mut generations = HashMap::new();
+        for subscribed in waiting {
+            generations.insert(subscribed.id.clone(), subscribed.generation);
+            subscriptions.insert(subscribed.id, cut_off_unless_ended(subscribed.events));
+        }
         loop {
             let (id, emitted) = tokio::select! {
                 () = shutdown.cancelled() => break,
@@ -3274,7 +3281,7 @@ async fn open_stream(
                     break;
                 }
             };
-            let ended = emitted.event == END;
+            let ended = emitted.ends();
             yield Event::default().event(emitted.event).json_data(wire::StreamEvent {
                 subscription: id.clone(),
                 cursor: emitted.cursor.map(|cursor| cursor.to_string()),
@@ -3298,7 +3305,7 @@ fn cut_off_unless_ended(mut events: stream::Events) -> stream::Events {
     Box::pin(async_stream::try_stream! {
         while let Some(emitted) = events.next().await {
             let emitted = emitted?;
-            let ended = emitted.event == END;
+            let ended = emitted.ends();
             yield emitted;
             if ended {
                 return;
@@ -3314,6 +3321,7 @@ async fn subscribe_stream(
     subscription: Result<Json<wire::StreamSubscription>, JsonRejection>,
 ) -> Result<StatusCode, Refused> {
     let token = reservation(&token)?;
+    stream::bounded_id(&id).map_err(stream_refused)?;
     if !control_plane.streams.known(token) {
         return Err(stream_refused(stream::Refusal::Unknown));
     }
@@ -3386,7 +3394,7 @@ fn stream_refused(refusal: stream::Refusal) -> Refused {
             "a reserved stream holds at most {} subscriptions",
             stream::MOST_SUBSCRIPTIONS
         )),
-        stream::Refusal::UnreadableId => {
+        stream::Refusal::IdOutOfBounds => {
             malformed(None, "a subscription id is between 1 and 64 characters")
         }
         stream::Refusal::TooManyReservations => Refused::Unavailable(anyhow::anyhow!(
