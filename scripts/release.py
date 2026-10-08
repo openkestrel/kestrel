@@ -114,7 +114,7 @@ def prepare(root, version, notes_path):
     lock_path.write_text("[[package]]".join(blocks))
     browser = root / "packages/client/public/version.json"
     browser.parent.mkdir(parents=True, exist_ok=True)
-    browser.write_text(json.dumps({"version": version}) + "\n")
+    browser.write_text(f'{{ "version": "{version}" }}\n')
     header, _, history = changelog.partition("\n")
     changelog_path.write_text(f"{header}\n\n## [{version}]\n\n{notes}\n{history.lstrip()}")
     validate(root, f"v{version}")
