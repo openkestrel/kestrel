@@ -534,8 +534,12 @@ async fn report(
     }
     let connected = matches!(reported.report, work::Report::Connected { .. });
     let finished = matches!(reported.report, work::Report::Finished { .. });
+    let heartbeat = matches!(reported.report, work::Report::Heartbeat);
     let session_id = reported.session;
     work::report(&control_plane.store, &linked.instance, reported).await?;
+    if heartbeat {
+        control_plane.live.summaries.reached(&instance);
+    }
     if finished && let Some(id) = session_id {
         let session = control_plane
             .store

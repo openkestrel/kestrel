@@ -124,7 +124,7 @@ events carry global cursors. The stream sends a `cursor` event when omitted entr
 beyond the last delivered entry or Activity.
 
 A follow starts every connect with a transient `session_state` snapshot, including empty state,
-then sends changes to running tools and adapter units, buffering flags and the usage the harness reports — at most
+then sends changes to its observation, running tools and adapter units, buffering flags and the usage the harness reports — at most
 one usage change a second, at the window's trailing edge, and never a row. These events have no id
 and are never stored. The CLI passes `--kinds` and `--no-summaries` to the read, prints each closed
 Activity once across reconnects, and prints a caught-up open summary on a non-follow read.
@@ -145,6 +145,18 @@ its original bytes and media type. The entry's `payload_fields` lists fields hol
 other JSON values remain inline even if they resemble a reference. A reference identifies its
 Workspace, entry seq and field. Another Workspace's reference is `404`; a reference whose entry
 expired is `410` after its content is removed. Internal prompt and delivery reads resolve references.
+
+### Observing open work
+
+A Session read and the `session_state` event carry `observation`. `availability: current` with
+`observed_at` says the supervisor's snapshot arrived over its open link and it is still reaching
+the control plane; `tools` and `units` then list that snapshot, and empty lists mean nothing is
+open. `availability: unavailable` says nothing current is known: before any snapshot, after link
+loss or silence, after the Session ends and after a restart. `tools` and `units` are then empty,
+and `last` holds the last snapshot this process took, with its `observed_at`, as history only.
+A connected or heartbeating supervisor alone, a reconnect, the Session's state and its lease
+never make an observation current; only a fresh snapshot does, and availability changes
+neither the Session's state nor its scheduling.
 
 ### Held messages
 

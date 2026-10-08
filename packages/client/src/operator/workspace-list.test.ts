@@ -77,6 +77,7 @@ function session(overrides: Partial<Session> = {}): Session {
 		message_buffering: false,
 		thought_buffering: false,
 		last_activity_at: null,
+		observation: { availability: "unavailable", last: null },
 		...overrides,
 	};
 }

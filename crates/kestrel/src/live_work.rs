@@ -59,8 +59,23 @@ pub struct Summary {
 #[derive(Default)]
 struct Live {
     streams: usize,
+    /// Counts every stream opened, so a snapshot taken over an earlier one is never current.
+    connection: u64,
+    reached_at: Option<Timestamp>,
     summary: Option<Summary>,
-    sessions: HashMap<String, SessionState>,
+    sessions: HashMap<String, Held>,
+}
+
+#[derive(Clone, Default)]
+struct Held {
+    state: SessionState,
+    observed: Option<Observed>,
+}
+
+#[derive(Clone, Copy)]
+struct Observed {
+    at: Timestamp,
+    connection: u64,
 }
 
 #[derive(Clone, Default)]
@@ -68,12 +83,12 @@ pub struct Summaries(Arc<Mutex<HashMap<String, Live>>>);
 
 impl Summaries {
     pub fn connected(&self, instance: &str) -> Connection {
-        self.0
-            .lock()
-            .unwrap()
-            .entry(instance.to_owned())
-            .or_default()
-            .streams += 1;
+        let mut summaries = self.0.lock().unwrap();
+        let live = summaries.entry(instance.to_owned()).or_default();
+        live.streams += 1;
+        live.connection += 1;
+        live.reached_at = None;
+        drop(summaries);
         Connection {
             summaries: self.clone(),
             instance: instance.to_owned(),
@@ -163,8 +178,7 @@ impl Drop for Connection {
             live.streams -= 1;
             if live.streams == 0 {
                 live.summary = None;
-                live.sessions
-                    .retain(|_, state| !state.tools.is_empty() || !state.units.is_empty());
+                live.reached_at = None;
                 if live.sessions.is_empty() {
                     summaries.remove(&self.instance);
                 }
@@ -298,6 +312,21 @@ pub struct SessionState {
     pub last_activity_at: Option<Timestamp>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "availability", rename_all = "snake_case")]
+pub enum Observation {
+    Current { observed_at: Timestamp },
+    Unavailable { last: Option<LastObservation> },
+}
+
+/// History only: never evidence the supervisor is still there or that the work is still open.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LastObservation {
+    pub observed_at: Timestamp,
+    pub tools: Vec<RunningTool>,
+    pub units: Vec<RunningUnit>,
+}
+
 impl Summaries {
     /// Reports a Session's live state and says whether a call or unit opened or settled, the only
     /// changes that raise a notice: an update to one already listed raises none (ADR-0037).
@@ -306,9 +335,19 @@ impl Summaries {
         let Some(live) = summaries.get_mut(instance) else {
             return false;
         };
+        let now = Timestamp::now();
+        live.reached_at = Some(now);
+        let held = Held {
+            state: state.clone(),
+            observed: Some(Observed {
+                at: now,
+                connection: live.connection,
+            }),
+        };
         let before = live
             .sessions
-            .insert(session.to_owned(), state.clone())
+            .insert(session.to_owned(), held)
+            .map(|held| held.state)
             .unwrap_or_default();
 
         turned_over(&before.tools, &state.tools, |tool| tool.call_id.clone())
@@ -317,23 +356,75 @@ impl Summaries {
 
     pub fn report_usage(&self, instance: &str, session: &str, usage: Usage) {
         if let Some(live) = self.0.lock().unwrap().get_mut(instance) {
-            live.sessions.entry(session.to_owned()).or_default().usage = Some(usage);
+            live.sessions
+                .entry(session.to_owned())
+                .or_default()
+                .state
+                .usage = Some(usage);
         }
     }
-    pub fn current_session(&self, session: &crate::domain::Session) -> SessionState {
-        if crate::domain::SessionState::LIVE.contains(&session.state)
-            && session
-                .lease_expires_at
-                .is_some_and(|at| at > Timestamp::now())
+
+    pub fn reached(&self, instance: &str) {
+        if let Some(live) = self.0.lock().unwrap().get_mut(instance)
+            && live.streams > 0
         {
-            session
-                .instance
-                .as_deref()
-                .map(|instance| self.session(instance, &session.id.to_string()))
-                .unwrap_or_default()
-        } else {
-            SessionState::default()
+            live.reached_at = Some(Timestamp::now());
         }
+    }
+
+    /// The state is current only with a current observation; otherwise it carries no open work
+    /// and only the usage last held.
+    pub fn observed(&self, session: &crate::domain::Session) -> (Observation, SessionState) {
+        let unavailable = (
+            Observation::Unavailable { last: None },
+            SessionState::default(),
+        );
+        let Some(instance) = session.instance.as_deref() else {
+            return unavailable;
+        };
+        if !crate::domain::SessionState::LIVE.contains(&session.state) {
+            return unavailable;
+        }
+        let summaries = self.0.lock().unwrap();
+        let Some(live) = summaries.get(instance) else {
+            return unavailable;
+        };
+        let Some(held) = live.sessions.get(&session.id.to_string()) else {
+            return unavailable;
+        };
+        let on_the_link = live.streams > 0
+            && live.reached_at.is_some_and(|reached| {
+                Timestamp::now().duration_since(reached) < crate::link::ON_THE_LINK
+            });
+        match held.observed {
+            Some(observed) if on_the_link && observed.connection == live.connection => (
+                Observation::Current {
+                    observed_at: observed.at,
+                },
+                held.state.clone(),
+            ),
+            observed => (
+                Observation::Unavailable {
+                    last: observed.map(|observed| LastObservation {
+                        observed_at: observed.at,
+                        tools: held.state.tools.clone(),
+                        units: held.state.units.clone(),
+                    }),
+                },
+                SessionState {
+                    usage: held.state.usage.clone(),
+                    ..SessionState::default()
+                },
+            ),
+        }
+    }
+
+    pub fn held(&self, session: &crate::domain::Session) -> SessionState {
+        session
+            .instance
+            .as_deref()
+            .map(|instance| self.session(instance, &session.id.to_string()))
+            .unwrap_or_default()
     }
 
     pub fn clear_session(&self, session: &crate::domain::Session) {
@@ -355,7 +446,7 @@ impl Summaries {
             .unwrap()
             .get(instance)
             .and_then(|live| live.sessions.get(session))
-            .cloned()
+            .map(|held| held.state.clone())
             .unwrap_or_default()
     }
 }

@@ -32,9 +32,10 @@ on connect, at turn close, and when a two-second check during a working turn fin
 Every supervisor git command sets `GIT_OPTIONAL_LOCKS=0`.
 
 `live_work::Summaries` is shared by the serve and work roles in one process. Repository summaries
-with their arrival times live only while the Instance has an open instruction stream. Open tools
-and adapter units survive a disconnect until the Session ends, so supervisor loss can close them
-`unresolved` in the same transaction that ends the Session.
+with their arrival times live only while the Instance has an open instruction stream. A Session's
+last `session_state` snapshot survives a disconnect until the Session ends, so supervisor loss can
+close its open tools and units `unresolved` in the same transaction that ends the Session; the
+operator serves it only as a historical observation.
 The operator also checks the supervisor's heartbeat freshness before serving a summary.
 
 Each accepted `work` report is also queued for one serve-role writer, which replaces its Instance's
@@ -161,7 +162,7 @@ effects (ADR-0004).
 | `thought {text, completion}` | yes | Appends narration `Thought`. |
 | `plan {entries, completion}` | yes | Appends one narration plan replacement. |
 | `tool_call {call_id, title, tool_kind, status, input, result, closing_reason, completion}` | yes | Appends one completed detail entry. |
-| `session_state {tools, units, message_buffering, thought_buffering, usage?, last_activity_at?}` | no | Each tool is `{call_id, title, tool_kind, status, started_at}`; `units` are the adapter units still open, which the Session read and `session show` list. Replaces the Session’s transient snapshot in serve-role memory; reconnect resends it. `last_activity_at` is present only while the supervisor trails; a Waiting Session that reports it moves to Trailing. |
+| `session_state {tools, units, message_buffering, thought_buffering, usage?, last_activity_at?}` | no | Each tool is `{call_id, title, tool_kind, status, started_at}`; `units` are the adapter units still open, which the Session read and `session show` list. Replaces the Session’s transient snapshot in serve-role memory, stamped with when it arrived; reconnect resends it. It is the current observation only while the stream it arrived over stays open and the supervisor has reported or heartbeated within 6 s. `last_activity_at` is present only while the supervisor trails; a Waiting Session that reports it moves to Trailing. |
 | `usage {usage}` | no | Held in serve-role memory beside the running tools: at most one a second, at the window's trailing edge, and never recorded (ADR-0041). |
 | `session_info {title, options, commands}` | no | Records the harness's whole bookkeeping state on the Session (ADR-0041). Sent when it changes, at most once a second, and again after a reconnect. |
 | `option_changed {participant, option, category, from?, to?, refused?, options}` | yes | Clears the pending change it answers, records the harness's options when it sends any, and appends shared-state `OptionChanged` naming who asked, with `refused` in place of `to` when the harness refused. Leaves the Session's state as it was. |
