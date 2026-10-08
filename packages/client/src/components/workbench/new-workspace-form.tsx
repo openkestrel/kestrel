@@ -102,7 +102,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 	if (draft === undefined || projects.isPending || agents.isPending || profiles.isPending) {
 		return (
 			<>
-				<PaneHeading>New Workspace</PaneHeading>
+				<PaneHeading level={1}>New Workspace</PaneHeading>
 				<Skeleton className="m-4 h-8" />
 			</>
 		);
@@ -111,7 +111,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 	if (projects.isError || agents.isError || profiles.isError) {
 		return (
 			<>
-				<PaneHeading>New Workspace</PaneHeading>
+				<PaneHeading level={1}>New Workspace</PaneHeading>
 				<div className="p-4">
 					<Refusal error={projects.error ?? agents.error ?? profiles.error} />
 				</div>
@@ -140,7 +140,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 
 	return (
 		<>
-			<PaneHeading>New Workspace</PaneHeading>
+			<PaneHeading level={1}>New Workspace</PaneHeading>
 			<form onSubmit={submit} className="grid gap-4 p-4">
 				{at_the_top && <Refusal error={opening.error} />}
 

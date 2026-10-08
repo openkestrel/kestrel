@@ -13,7 +13,7 @@ function Organization() {
 	return (
 		<Workbench
 			initial="workspaces"
-			workspaces={<WorkspacesPane organization={organization} />}
+			workspaces={<WorkspacesPane organization={organization} headingLevel={1} />}
 			transcript={
 				<>
 					<PaneHeading>Transcript</PaneHeading>
