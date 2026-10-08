@@ -114,3 +114,12 @@ class ReleaseTest(unittest.TestCase):
         before = (self.root / "Cargo.toml").read_bytes()
         self.assertNotEqual(self.run_cli("prepare", "0.4.1", "--notes", str(self.notes)).returncode, 0)
         self.assertEqual((self.root / "Cargo.toml").read_bytes(), before)
+
+    def test_tagged_candidate_requires_notes_in_the_reviewed_commit(self):
+        self.prepare()
+        git = ["git", "-C", self.root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"]
+        subprocess.run([*git, "add", "Cargo.toml", "Cargo.lock", "packages", "crates"], check=True)
+        subprocess.run([*git, "commit", "-qm", "candidate missing reviewed notes"], check=True)
+        subprocess.run([*git, "tag", "v0.4.1"], check=True)
+        result = self.run_cli("validate", "v0.4.1")
+        self.assertNotEqual(result.returncode, 0, "Untracked notes are not part of the tagged commit")

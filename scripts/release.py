@@ -77,6 +77,10 @@ def validate(root, tag, browser_build=None):
     notes_valid(notes)
     existing = subprocess.run(["git", "-C", root, "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}"], capture_output=True, text=True)
     if existing.returncode == 0:
+        reviewed = ["Cargo.toml", "Cargo.lock", "packages/client/public/version.json", "CHANGELOG.md"]
+        tracked = subprocess.run(["git", "-C", root, "ls-files", "--error-unmatch", "--", *reviewed], capture_output=True)
+        if tracked.returncode != 0:
+            raise ValueError("version records and notes must belong to the reviewed release commit")
         head = subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"], text=True).strip()
         dirty = subprocess.check_output(["git", "-C", root, "status", "--porcelain", "--untracked-files=no"], text=True)
         if existing.stdout.strip() != head or dirty:

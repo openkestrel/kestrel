@@ -50,7 +50,7 @@ python3 scripts/release.py validate v0.4.1 --browser-build packages/client/dist/
 
 Validation rejects disagreement among the tag argument, workspace, inherited packages, lockfile,
 browser record and leading curated changelog entry. When the tag already exists locally, it must
-resolve to HEAD and tracked files must be clean. Fetching tags is a prerequisite: the validator
+resolve to HEAD, the version records and notes must be tracked, and tracked files must be clean. Fetching tags is a prerequisite: the validator
 performs no network operation and cannot detect tags that are absent from the checkout.
 
 Review the four changed files, commit them, and open a release PR. The maintainer reviews the
