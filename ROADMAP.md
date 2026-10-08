@@ -272,6 +272,22 @@ version tags and artifacts stay immutable; a failed candidate remains draft and 
 reviewed patch release. Main uses `main` and commit-SHA image tags
 ([ADR-0053](docs/adr/0053-a-tag-prepares-a-release-acceptance-publishes-it.md)).
 
+The CLI distribution includes archives, checksums and a version-selected shell installer, with
+documented retrieval of the exact draft assets for acceptance and a tested Linux glibc 2.35 floor.
+Release checks emit the candidate's checked commit/version identity; native image publication emits
+its platform and multiarch manifest digests. The generated Compose and all CLI assets join those
+records into one verified candidate inventory. Infrastructure retries may fill missing artifacts
+only after verifying existing immutable content; disagreement stops preparation rather than
+replacing a published artifact.
+
+Promotion consumes that exact inventory and the successful acceptance evidence. It preflights all
+references, moves and verifies all four `latest` aliases, then publishes the GitHub release. A
+partial failure remains visibly incomplete and resumable for the same approved inventory, with no
+automatic rollback, rebuild or ROADMAP advancement. Promotions are serialized and an older candidate
+cannot silently replace a newer accepted release. The final operator acceptance ticket owns both
+journeys, the `0.3` prerequisite and the marker; preparing artifacts never waits on those journeys
+([release build specification](https://github.com/openkestrel/kestrel/issues/545)).
+
 `kestrel login --token` imports an existing token or key through hidden input or stdin;
 `kestrel login --file PATH` imports a login file. Both name their harness and validate the input;
 interactive login prompts for a missing method, and non-interactive login requires one when
