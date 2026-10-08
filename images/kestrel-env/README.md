@@ -3,12 +3,15 @@
 The base image a **Session** executes in. Its Dockerfile is here so the image is derivable rather than
 opaque ([ADR-0002](../../docs/adr/0002-two-deployables-the-environment-dials-out.md)).
 
-It carries three things: the **supervisor**, **opencode**, and **git**. Nothing else.
-[ADR-0007](../../docs/adr/0007-acp-is-the-agent-runtime-contract.md) took the `claude` binary out,
-and Node left with it — opencode speaks ACP natively, so nothing stands between the supervisor and
-the agent. A **Project**'s setup layers its repositories' dependencies on top; injecting the
+It carries five things: the **supervisor**, **opencode**, **git**, **Node** with the **Claude Code
+and Codex ACP adapters**, and the **`claude` and `codex` vendor executables** the subscription
+sign-in relays run. Every harness in the catalogue runs here, and the image says so in its
+`dev.kestrel.harnesses` label, which a derived image inherits and overrides when it carries a
+different set ([ADR-0048](../../docs/adr/0048-the-environment-image-carries-every-catalogued-harness.md)).
+A **Project**'s setup layers its repositories' dependencies on top; injecting the
 supervisor into a bring-your-own image is the `0.8` escape hatch, and installing an agent from the
-ACP Registry is `0.8` work under the constraints ADR-0007 records. Nothing here downloads an agent.
+ACP Registry is `0.8` work under the constraints ADR-0007 records. Nothing else here downloads an
+agent.
 
 ## Building it
 
@@ -19,7 +22,8 @@ docker build --file images/kestrel-env/Dockerfile --tag kestrel-env .
 ```
 
 Almost everything the build pulls in is pinned: both base images by digest, the Rust toolchain by
-`rust-toolchain.toml`, the crates by `Cargo.lock` under `--locked`, and opencode by version and
+`rust-toolchain.toml`, the crates by `Cargo.lock` under `--locked`, the adapters and vendor
+executables by `package-lock.json` under `npm ci`, and opencode by version and
 SHA-256. The exception is apt, which resolves `git` and `ca-certificates` to whatever the Debian
 release carries on the day — the one thing here that moves without the Dockerfile changing.
 
@@ -84,9 +88,24 @@ holds it to it.
 
 A derived image adds what one kind of work needs and keeps the supervisor as its entrypoint.
 [`images/kestrel-dev`](../kestrel-dev/README.md) is the one this repository ships. It adds Rust,
-`gh`, and the Claude Code and Codex ACP adapters so Kestrel can work on itself. Those adapters are
-Node programs, which is why they are in a derived image rather than this one. An adapter usually
+`gh`, and nothing else: the adapters and vendor executables it once installed live here now, and
+it inherits them along with the harness label. An adapter usually
 advertises more than one way to sign in, and ACP gives a client no way to choose between them, so an
 Agent on a derived image is configured with `--agent-auth` as well.
 `crates/kestrel/tests/support/conformance-env.Dockerfile` is a smaller worked example. It builds the
 conformance suite's second agent this way and drives it without any Kestrel code branching on it.
+
+## Bumping an adapter or a vendor executable
+
+Change its exact version in `package.json`, then regenerate the lockfile in the same Node image
+the build uses so the Linux optional dependencies are recorded:
+
+```sh
+docker run --rm --volume "$PWD/images/kestrel-env:/w" --workdir /w \
+  node@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0 \
+  npm install --package-lock-only --ignore-scripts
+```
+
+`claude` is a native binary its wrapper's postinstall copies over a stub, and the build keeps
+`--ignore-scripts` for everything else: the Dockerfile runs that one install step explicitly, so a
+release that stops shipping a Linux binary fails the build instead of shipping a stub.

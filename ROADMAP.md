@@ -1,15 +1,15 @@
 # Roadmap
 
-> **We are here: `0.3`, kestrel's work is joinable mid-flight.** `0.2` is closed: kestrel works this
-> repository's backlog. Maintainer comments hand issues to Claude, Codex and OpenCode, their Sessions
-> work in parallel across Workspaces under an Organization's live-Instance cap, and each leaves a
-> branch and pull request. An Instance holding work that exists nowhere else survives failure,
-> quota exhaustion, a control-plane crash and idle sealing, and a waiting Session continues through
-> further Turns. Declaring a Trigger replays no recorded history. The acceptance runs and what they
-> found are [`docs/acceptance-0.1.md`](docs/acceptance-0.1.md) and
-> [`docs/acceptance-0.2.md`](docs/acceptance-0.2.md). The repo holds the vocabulary in
-> [`GLOSSARY.md`](GLOSSARY.md) and the direction in [`README.md`](README.md). A Session that runs out of
-> credits still ends failed and waits on an operator to resume it.
+> **We are here: `0.4`, kestrel starts from one command.** `0.3` is closed: kestrel's work is
+> joinable mid-flight. A person opens a running Workspace in the browser or the CLI, reads a live
+> Transcript that summarizes each Activity and expands it on demand, takes a turn alongside others,
+> and sees the queue, its Instances, the branch and the pull request as current state. Triggers
+> continue an open Workspace instead of opening a second, and a Session's lease survives a sleeping
+> host. The acceptance runs and what they found are [`docs/acceptance-0.1.md`](docs/acceptance-0.1.md),
+> [`docs/acceptance-0.2.md`](docs/acceptance-0.2.md) and
+> [`docs/acceptance-0.3.md`](docs/acceptance-0.3.md). The repo holds the vocabulary in
+> [`GLOSSARY.md`](GLOSSARY.md) and the direction in [`README.md`](README.md). Starting kestrel still
+> means reading a guide.
 
 Eight rungs from an empty repository to v1, and no dates. Each is a `0.N` release, and each is named
 by a class of kestrel's own work rather than by a feature list, because the ladder is walked by
@@ -228,6 +228,21 @@ Session. Saving the Operator's name is one prerequisite, not the end of setup: r
 first confirmed start succeeds resumes the remaining steps. Later gaps use contextual fix-it states
 and settings ([browser setup decision](https://github.com/openkestrel/kestrel/issues/491)).
 
+The confirmed start transaction completes initial setup when it commits the Workspace and enqueued
+Session, with completion durable across restarts. Later execution failures use contextual repairs.
+A partial preview returns saved prerequisites, resolved values and all established gaps without
+writes or secrets. Start creates missing Project/Agent declarations and reuses matching ones;
+conflicts require explicit declaration/settings changes before another review
+([shared start decision](https://github.com/openkestrel/kestrel/issues/535)).
+
+Browser setup and Agent settings use the harness default or an explicit model-id override before
+ACP options exist; searchable model choices come from a live Session's offered values. Setup never
+starts a hidden Session to discover them. The browser build slice owns the shared AI Elements Model
+Selector and its live Session integration; the workbench places it in the refined composer. Provider
+marks are bundled locally with attribution and a text fallback, without a runtime `models.dev`
+dependency. Geist and Geist Mono land once through the browser setup slice, for both specs
+([browser setup/settings specification](https://github.com/openkestrel/kestrel/issues/527)).
+
 The CLI asks "What should the Session do?" and keeps `--brief` for its initial prompt. A start
 without a terminal names all missing inputs it can establish and requires `--yes` before any
 write. Its review distinguishes already-saved setup from the start plan; declining creates no
@@ -257,6 +272,35 @@ version tags and artifacts stay immutable; a failed candidate remains draft and 
 reviewed patch release. Main uses `main` and commit-SHA image tags
 ([ADR-0053](docs/adr/0053-a-tag-prepares-a-release-acceptance-publishes-it.md)).
 
+The CLI distribution includes archives, checksums and a version-selected shell installer, with
+documented retrieval of the exact draft assets for acceptance and a tested Linux glibc 2.35 floor.
+Release checks emit the candidate's checked commit/version identity; native image publication emits
+its platform and multiarch manifest digests. The generated Compose and all CLI assets join those
+records into one verified candidate inventory. Infrastructure retries may fill missing artifacts
+only after verifying existing immutable content; disagreement stops preparation rather than
+replacing a published artifact.
+
+Promotion consumes that exact inventory and the successful acceptance evidence. It preflights all
+references, moves and verifies all four `latest` aliases, then publishes the GitHub release. A
+partial failure remains visibly incomplete and resumable for the same approved inventory, with no
+automatic rollback, rebuild or ROADMAP advancement. Promotions are serialized and an older candidate
+cannot silently replace a newer accepted release. The final operator acceptance ticket owns both
+journeys, the `0.3` prerequisite and the marker; preparing artifacts never waits on those journeys
+([release build specification](https://github.com/openkestrel/kestrel/issues/545)).
+
+The final gate uses independent fresh installs for browser-only Claude on Linux amd64 and SSH
+CLI-only Codex on Linux arm64, with a supplementary real OpenCode Session from the browser. Both
+primary journeys open a pull request against the same immutable candidate. Native release checks
+retain coverage of all four CLI targets and eight image builds; contributor validation keeps its
+existing owner. The gate verifies every chosen build owner is complete, records the candidate and
+journey evidence, then verifies promotion before a reviewed marker change
+([final acceptance gate](https://github.com/openkestrel/kestrel/issues/646)).
+
+Fork-upstream declaration or discovery is deferred to `0.7`. The first-run journeys close with
+a selected single-repository App connection and honest pull-request availability before the first
+pull request; they do not require upstream routing
+([fork availability decision](https://github.com/openkestrel/kestrel/issues/444)).
+
 `kestrel login --token` imports an existing token or key through hidden input or stdin;
 `kestrel login --file PATH` imports a login file. Both name their harness and validate the input;
 interactive login prompts for a missing method, and non-interactive login requires one when
@@ -269,6 +313,15 @@ that partial result. GitHub uses `kestrel integration github connect` and always
 ([ADR-0028](docs/adr/0028-an-integration-lends-a-run-its-identity.md)); registering an existing App
 is the fallback for the manifest flow, never a personal access token.
 
+GitHub setup creates and installs the App before asking which repository to use. Its temporary
+flow lists accessible repositories with their default branches; confirming one creates a
+single-repository Integration. Pending selection resumes across a control-plane restart within
+the flow's one-hour lifetime. Completion, cancellation and expiry erase temporary local secrets;
+they never delete or uninstall the external App. Safe completion state lets either Client observe
+the result without creating another Integration. Browser setup/settings and the CLI use the same
+flow, repository validation and lifecycle contracts
+([GitHub and repository build split](https://github.com/openkestrel/kestrel/issues/534)).
+
 **Polish covers routine use, not only setup.** Failed declaration and queue reads say they failed
 and offer recovery; an unavailable Transcript never looks like empty history. Recovery actions,
 help, branch and People wording, keyboard navigation and moderate accessibility findings are part
@@ -279,9 +332,32 @@ that selection when they open, so replacement never silently changes existing wo
 App key rotation is validated and atomic locally; webhook-secret rotation is resumable across
 Kestrel and GitHub. Polling continues alongside a reachable webhook, preserving its cursor
 ([ADR-0056](docs/adr/0056-an-integration-keeps-its-identity-through-maintenance.md)). Existing `0.3`
-acceptance blockers keep their owners and must pass that gate; unverified cancellation and repository
-validation observations require evidence before they become feature commitments
+acceptance blockers keep their owners and must pass that gate; unverified cancellation observations
+require evidence before they become feature commitments
 ([papercut scope decision](https://github.com/openkestrel/kestrel/issues/494)).
+
+The workbench names open tools and Adapter Units while a Session trails, and otherwise says
+“Checking that background work has settled.” It offers a new Turn immediately without promising a
+completion time. If current Session observations are unavailable, it says so rather than deriving
+quietness from an empty cached list. Last reported work survives disconnection, release and a
+control-plane restart with its report time and originating Instance identity; it remains historical
+and is never attributed to a replacement Instance. A missing report says “No work report received.”
+Lease expiry is displayed as a deadline, never as the last contact or proof of availability; only
+the control plane judges that a Session has ended, including ADR-0054's grace.
+
+Outbound comments preserve the complete ordered agent-message response under “Turn response” in
+`0.4`. ACP supplies no reliable final-answer distinction, so message position, wording and Turn
+boundary metadata are not used to guess one. A future producer contract may select an explicitly
+identified final answer; all messages still belong in the Transcript. Turn comments remain posted
+at the answer, with trailing output recorded separately and existing Outcome deduplication intact
+([workbench polish decision](https://github.com/openkestrel/kestrel/issues/539)).
+
+Repository declarations share syntax validation and GitHub shorthand expansion. Unbound declarations
+do not require a network probe; a selected GitHub Integration must establish repository access and
+the checkout base branch before saving a new or changed binding. Failure preserves the prior
+declaration. GitHub-backed checkout uses HTTPS with the App's authority, while actual checkout
+success remains the supervisor's to establish
+([ADR-0057](docs/adr/0057-a-repository-declaration-is-not-a-successful-checkout.md)).
 
 **The CLI emits complete JSON.** `--json` returns an object for one resource and an array for a
 collection, including `[]` when empty; following emits one JSON object per line. `--jq EXPR` uses
@@ -413,6 +489,9 @@ Multi-repository GitHub installations are explicit work at this rung: settle sha
 ownership, repository bindings and authority routing through
 [Define the Integration domain and architecture](https://github.com/openkestrel/kestrel/issues/140).
 `0.4` retains one repository per Integration while making its maintenance and replacement deliberate.
+Fork-upstream declaration or discovery also belongs here, so availability can be established before
+a fork's first pull request arrives
+([fork availability follow-up](https://github.com/openkestrel/kestrel/issues/444)).
 
 Scheduled Triggers join the same Event and Firing path, with intervals and time-zone-aware calendar
 recurrence, including the [cron acceptance slice](https://github.com/jtmthf/kestrel/issues/198).

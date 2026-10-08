@@ -7,6 +7,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "#/component
 import { Input } from "#/components/ui/input";
 import { Skeleton } from "#/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "#/components/ui/toggle-group";
+import { ScrollablePre } from "#/components/workbench/scrollable-pre";
 import { cn } from "#/lib/utils";
 import { changesQuery, commitsQuery, stashesQuery } from "#/operator/work-queries";
 import { DIFF_SCOPES, repositoryName, scopeLabel } from "#/operator/work-view";
@@ -103,9 +104,9 @@ export function DiffTab({ organization, workspace }: { organization: string; wor
 								))}
 							</ul>
 						)}
-						<pre className="max-h-96 overflow-auto rounded-md border p-2 text-xs">
+						<ScrollablePre className="max-h-96 overflow-auto rounded-md border p-2 text-xs">
 							{repository.diff === "" ? "no changes" : repository.diff}
-						</pre>
+						</ScrollablePre>
 					</article>
 				))
 			)}

@@ -423,6 +423,11 @@ jobs:
           docker buildx build --platform linux/arm64 --target opencode \
             --output type=cacheonly --file images/kestrel-env/Dockerfile .
 
+      - name: Build the adapters for arm64
+        run: |
+          docker buildx build --platform linux/arm64 --target adapters \
+            --output type=cacheonly --file images/kestrel-env/Dockerfile .
+
       - name: Build gh for arm64
         run: |
           docker buildx build --platform linux/arm64 --target gh \

@@ -37,7 +37,7 @@ function WorkspaceView() {
 			workspaces={<WorkspacesPane organization={organization} />}
 			transcript={
 				<>
-					<PaneHeading>{shown.data?.name ?? workspace}</PaneHeading>
+					<PaneHeading level={1}>{shown.data?.name ?? workspace}</PaneHeading>
 					{shown.isPending ? (
 						<Skeleton className="m-4 h-8" />
 					) : shown.isError ? (

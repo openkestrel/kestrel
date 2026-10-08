@@ -11,10 +11,11 @@ work on this repository without setting anything up in its checkout:
 | `git` | inherited from `kestrel-env` |
 | `gh` | `GH_VERSION` and a SHA-256 per architecture |
 | OpenCode 2 (`opencode acp`) | inherited from `kestrel-env` |
-| Claude Code (`claude-agent-acp`) and Codex (`codex-acp`) | `package-lock.json`, installed with `npm ci` |
+| Claude Code (`claude-agent-acp`, `claude setup-token`) and Codex (`codex-acp`, `codex login`) | inherited from `kestrel-env` |
 
-The two Node adapters bring the `node` binary with them, which the base image deliberately leaves
-out ([ADR-0007](../../docs/adr/0007-acp-is-the-agent-runtime-contract.md)).
+Node and both adapters live in the base image now
+([ADR-0048](../../docs/adr/0048-the-environment-image-carries-every-catalogued-harness.md)), along
+with the `dev.kestrel.harnesses` label naming them, so this image declares nothing of its own.
 
 ## Building it
 
@@ -30,14 +31,8 @@ from the `kestrel-env` image the run is consuming: what CI built for the change,
 `kestrel-env:test-<checkout>` the tests built themselves when nothing named one, tagged per
 checkout so two checkouts on one daemon never build over each other's.
 
-To bump an adapter, change its exact version in `package.json`, then regenerate the lockfile in the
-same Node image the build uses so the Linux optional dependencies are recorded:
-
-```sh
-docker run --rm --volume "$PWD/images/kestrel-dev:/w" --workdir /w \
-  node@sha256:50c3b2f6988dfc307b86e5301d69611af31f4789bdf232863b07d3b02fe55ae0 \
-  npm install --package-lock-only --ignore-scripts
-```
+To bump an adapter or a vendor executable, change its exact version in
+`../kestrel-env/package.json`, then regenerate the lockfile the way that image's README says.
 
 To bump `gh`, change `GH_VERSION` along with both digests:
 

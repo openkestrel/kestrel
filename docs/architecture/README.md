@@ -159,6 +159,11 @@ supervisor ([ADR-0026](../adr/0026-kestrel-carries-named-credentials-never-a-run
 
 An accepted ADR is a decision, not a description. These are decided and not yet built:
 
+- **Repository declaration validation** ([ADR-0057](../adr/0057-a-repository-declaration-is-not-a-successful-checkout.md)):
+  declaration paths still save raw repository strings after list/branch and directory-collision checks.
+  Shared syntax validation, GitHub shorthand expansion, selected-App access/branch checks and
+  Integration-backed HTTPS resolution remain to build.
+
 - **Integration maintenance** ([ADR-0056](../adr/0056-an-integration-keeps-its-identity-through-maintenance.md)):
   registration still fixes the entire connection, with no disable, retirement or rotation interface.
   Projects do not select an Integration explicitly and Workspaces do not fix that authority at open;

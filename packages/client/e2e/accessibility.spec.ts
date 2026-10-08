@@ -130,6 +130,20 @@ async function openWorkspace(request: APIRequestContext): Promise<{ id: string; 
 	return { id: body.workspace.id, name: body.workspace.name };
 }
 
+function said(workspace: string, seq: number, message: unknown): WireEvent {
+	return {
+		name: "entry",
+		id: `${workspace}:${seq}`,
+		data: {
+			kind: "shared_state",
+			session_id: null,
+			seq,
+			appended_at: "2026-09-30T10:00:00Z",
+			entry: { type: "said", participant: "jack", message },
+		},
+	};
+}
+
 // A long Transcript with two tool calls whose input and result overflow, plus a payload reference
 // the reader loads on demand.
 async function populated(page: Page, request: APIRequestContext): Promise<void> {
@@ -140,17 +154,6 @@ async function populated(page: Page, request: APIRequestContext): Promise<void> 
 		bytes: payload.length,
 		media_type: "text/plain; charset=utf-8",
 	};
-	const said = (seq: number, message: unknown): WireEvent => ({
-		name: "entry",
-		id: `${id}:${seq}`,
-		data: {
-			kind: "shared_state",
-			session_id: null,
-			seq,
-			appended_at: "2026-09-30T10:00:00Z",
-			entry: { type: "said", participant: "jack", message },
-		},
-	});
 	const tool = (seq: number): WireEvent => ({
 		name: "entry",
 		id: `${id}:${seq}`,
@@ -194,7 +197,7 @@ async function populated(page: Page, request: APIRequestContext): Promise<void> 
 				status: 200,
 				contentType: "text/event-stream",
 				body: wire(
-					...Array.from({ length: 60 }, (_, index) => said(index + 1, `message ${index + 1}`)),
+					...Array.from({ length: 60 }, (_, index) => said(id, index + 1, `message ${index + 1}`)),
 					{
 						name: "activity",
 						id: `${id}:62`,
@@ -276,6 +279,30 @@ test("a long Transcript scrolled away from the bottom names its scroll-to-bottom
 
 	await button.click();
 	await expect(button).toBeHidden();
+});
+
+test("a Transcript of plain messages scrolls by keyboard and has no serious violation", async ({
+	page,
+	request,
+}) => {
+	const { id, name } = await openWorkspace(request);
+	await page.route(
+		(url) => url.pathname.endsWith("/transcript"),
+		(route) =>
+			route.fulfill({
+				status: 200,
+				contentType: "text/event-stream",
+				body: wire(
+					...Array.from({ length: 60 }, (_, index) => said(id, index + 1, `message ${index + 1}`)),
+					{ name: "end", data: { because: "sealed" } },
+				),
+			}),
+	);
+
+	await page.goto(`/organizations/acme/workspaces/${name}`);
+	await expect(page.getByRole("log").getByText("message 60")).toBeVisible();
+	await noSeriousViolation(page);
+	await scrollsByKeyboard(page.getByRole("log").locator(":scope > div"));
 });
 
 test("expanded tool payloads scroll by keyboard and the populated Transcript has no serious violation", async ({
