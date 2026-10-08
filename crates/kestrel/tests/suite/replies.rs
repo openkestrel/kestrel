@@ -149,6 +149,126 @@ async fn report(link: &Link, session: &Session, on: &OnTheLink, seq: i64, report
 }
 
 #[tokio::test]
+async fn a_turn_response_posts_every_completed_message_in_order() {
+    let stub = GithubStub::start();
+    stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
+    let (session, on) = a_working_session(&kestrel, workspace.id).await;
+    let link = Link::to(&kestrel.link());
+    report(&link, &session, &on, 1, Report::Started).await;
+    for (seq, message) in [
+        (2, "Looking into it."),
+        (3, "The first part"),
+        (4, "and the rest."),
+    ] {
+        let mut completion = kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap());
+        if seq == 4 {
+            completion.turn_outcome = Some(kestrel::log::TurnOutcome::Answered {
+                stop_reason: "end_turn".to_owned(),
+            });
+        }
+        report(
+            &link,
+            &session,
+            &on,
+            seq,
+            Report::Said {
+                message: message.to_owned(),
+                completion,
+            },
+        )
+        .await;
+    }
+    report(&link, &session, &on, 5, Report::Answered { usage: None }).await;
+    report(&link, &session, &on, 5, Report::Answered { usage: None }).await;
+    let bodies = replies(&stub, 1).await;
+    assert_eq!(
+        bodies[0],
+        format!(
+            "## Turn response\n\nLooking into it.\n\nThe first part\n\nand the rest.\n\n<!-- kestrel session {} turn 1 -->\n",
+            session.id
+        )
+    );
+    kestrel.stop_session(session.id).await;
+    nothing_more_is_said(&stub, 1).await;
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn streamed_id_less_messages_are_posted_without_thoughts_or_tools() {
+    let stub = GithubStub::start();
+    stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
+    let session = kestrel
+        .claim_session()
+        .await
+        .expect("the firing enqueued a Session");
+    let on = kestrel.on_the_link(&session).await;
+    let supervisor = support::supervisor::Supervisor::provision_playing(
+        &kestrel.link(),
+        &on,
+        support::scripted_agent::Script::StreamsResponse,
+    );
+    kestrel.start(&session, supervisor.harness()).await;
+    kestrel.answering(session.id, 1).await;
+
+    let bodies = replies(&stub, 1).await;
+    assert_eq!(
+        bodies[0],
+        format!(
+            "## Turn response\n\nhalf of one message, and the other half\n\na second message\n\nThe answer starts here\n\nand continues here.\n\n<!-- kestrel session {} turn 1 -->\n",
+            session.id
+        )
+    );
+    let entries = kestrel.every_entry(workspace.id).await;
+    assert!(
+        entries
+            .iter()
+            .any(|entry| matches!(entry, kestrel::log::Entry::Thought { .. }))
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|entry| matches!(entry, kestrel::log::Entry::ToolCall { .. }))
+    );
+    kestrel.stop_session(session.id).await;
+    nothing_more_is_said(&stub, 1).await;
+    supervisor.destroy();
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_turn_without_agent_messages_posts_nothing() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    let workspace = a_workspace_from_the_issue(&kestrel, &stub).await;
+    let (session, on) = a_working_session(&kestrel, workspace.id).await;
+    let link = Link::to(&kestrel.link());
+    report(&link, &session, &on, 1, Report::Started).await;
+    report(
+        &link,
+        &session,
+        &on,
+        2,
+        Report::Thought {
+            text: "considering the issue".to_owned(),
+            completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
+        },
+    )
+    .await;
+    report(&link, &session, &on, 3, Report::Answered { usage: None }).await;
+    report(&link, &session, &on, 4, Report::Settled { usage: None }).await;
+    assert_eq!(
+        kestrel.session(session.id).await.state,
+        SessionState::Waiting
+    );
+    nothing_more_is_said(&stub, 0).await;
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_turns_response_reaches_the_issue_before_the_session_ends() {
     let stub = GithubStub::start();
     stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
@@ -208,11 +328,21 @@ async fn a_turns_response_holds_only_what_was_said_up_to_its_answer() {
     report(&link, &session, &on, 1, Report::Started).await;
     report(&link, &session, &on, 2, said("waiting on the tests")).await;
     report(&link, &session, &on, 3, Report::Answered { usage: None }).await;
+    let posted_at_answer = replies(&stub, 1).await;
+    assert_eq!(
+        kestrel.session(session.id).await.state,
+        SessionState::Trailing
+    );
     report(&link, &session, &on, 4, said("the tests passed")).await;
     report(&link, &session, &on, 5, Report::Settled { usage: None }).await;
 
     let bodies = replies(&stub, 1).await;
-    assert!(bodies[0].contains("waiting on the tests"), "{}", bodies[0]);
+    assert_eq!(bodies, posted_at_answer);
+    assert!(bodies[0].starts_with("## Turn response\n\nwaiting on the tests"));
+    assert!(kestrel.every_entry(workspace.id).await.iter().any(|entry| {
+        matches!(entry, kestrel::log::Entry::Said { message, .. } if message == "the tests passed")
+    }));
+    nothing_more_is_said(&stub, 1).await;
     assert!(
         !bodies[0].contains("the tests passed"),
         "the turn's response took what was said while trailing: {}",
@@ -509,6 +639,8 @@ async fn a_failed_session_posts_its_turns_response_and_then_the_failure() {
         bodies[1]
     );
 
+    kestrel.complete_session(&session).await;
+    nothing_more_is_said(&stub, 2).await;
     kestrel.teardown().await;
 }
 
@@ -535,7 +667,13 @@ async fn a_turn_response_that_landed_while_the_control_plane_died_is_not_posted_
     .await;
     report(&link, &session, &on, 3, Report::Answered { usage: None }).await;
     let landed = replies(&stub, 1).await.remove(0);
-    assert!(landed.contains("the answer that landed"), "{landed}");
+    assert_eq!(
+        landed,
+        format!(
+            "## Turn response\n\nthe answer that landed\n\n<!-- kestrel session {} turn 1 -->\n",
+            session.id
+        )
+    );
 
     // The read-back the retry recognises its own comment by is queued before the control plane
     // comes back, so the window in which it could post a second one has nothing in it.

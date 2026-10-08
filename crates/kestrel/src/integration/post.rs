@@ -60,7 +60,7 @@ pub(crate) async fn record_turn(
     };
 
     let body = format!(
-        "{}\n\n{}\n",
+        "## Turn response\n\n{}\n\n{}\n",
         said.join("\n\n"),
         marker(session.id, Some(turn))
     );

@@ -882,6 +882,14 @@ async fn play(
         SessionUpdate::AgentMessageChunk(chunk(Some("message-1"), "and the other half")),
     )?;
     say(connection, "message-2", "a second message")?;
+    if script == Script::StreamsResponse {
+        for text in ["The answer starts here", "and continues here."] {
+            update(
+                connection,
+                SessionUpdate::AgentMessageChunk(chunk(None, text)),
+            )?;
+        }
+    }
 
     update(
         connection,
