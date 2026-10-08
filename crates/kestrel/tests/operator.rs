@@ -2025,6 +2025,210 @@ async fn the_operator_documents_workspace_and_session_answers_and_refusals() {
     kestrel.teardown().await;
 }
 
+/// A state conflict names the state, inspects before it offers anything that changes work, and
+/// types the consequence and the choice a stopping step needs.
+#[tokio::test]
+async fn workspace_and_session_refusals_carry_their_state_and_inspect_first() {
+    let kestrel = Kestrel::boot().await;
+    ready_to_open(&kestrel).await;
+    let workspaces = operator::WORKSPACES.replace("{organization}", "acme");
+    let (_, opened) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({ "project": "kestrel", "agent": "builder" }),
+    )
+    .await;
+    let workspace = opened["workspace"]["id"].as_str().expect("a workspace id");
+    let session = opened["session"]["id"].as_str().expect("a session id");
+
+    let (status, refusal) = declared(&kestrel, &sessions_of("acme", workspace), &json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["kind"], "state_conflict");
+    assert_eq!(refusal["context"]["operation"], "enqueue_session");
+    assert_eq!(refusal["context"]["resource"], "workspace");
+    assert_eq!(refusal["context"]["reference"], workspace);
+    assert_eq!(refusal["context"]["organization"], "acme");
+    assert_eq!(refusal["context"]["state"], "session_unfinished");
+    assert_eq!(refusal["context"]["holding_session"], session);
+    assert_eq!(
+        refusal["next_steps"],
+        json!([
+            {
+                "action": "inspect_resource",
+                "resource": "session",
+                "reference": session,
+                "organization": "acme",
+            },
+            {
+                "action": "stop_session",
+                "organization": "acme",
+                "session": session,
+                "consequence": "Stopping the session now records it failed.",
+                "effect": "fails_session",
+                "requires_choice": true,
+            },
+        ]),
+        "{refusal}"
+    );
+
+    let (status, refusal) =
+        declared(&kestrel, &workspace_seal_at("acme", workspace), &json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["context"]["state"], "session_in_flight");
+    assert_eq!(refusal["context"]["holding_session"], session);
+    assert_eq!(refusal["next_steps"][0]["action"], "inspect_resource");
+    assert_eq!(refusal["next_steps"][1]["action"], "stop_session");
+
+    let release = operator::WORKSPACE_INSTANCE_RELEASE
+        .replace("{organization}", "acme")
+        .replace("{workspace}", workspace);
+    let (status, refusal) = declared(&kestrel, &release, &json!({ "participant": "alice" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["context"]["operation"], "release_instance");
+    assert_eq!(refusal["context"]["state"], "no_instance");
+    assert_eq!(
+        refusal["next_steps"],
+        json!([{
+            "action": "inspect_resource",
+            "resource": "workspace",
+            "reference": workspace,
+            "organization": "acme",
+        }])
+    );
+
+    let interrupt = operator::SESSION_INTERRUPT
+        .replace("{organization}", "acme")
+        .replace("{session}", session);
+    let (status, refusal) =
+        declared(&kestrel, &interrupt, &json!({ "participant": "alice" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["context"]["resource"], "session");
+    assert_eq!(refusal["context"]["reference"], session);
+    assert_eq!(refusal["context"]["state"], "queued");
+    assert_eq!(refusal["next_steps"].as_array().map(Vec::len), Some(1));
+
+    let options = operator::SESSION_OPTIONS
+        .replace("{organization}", "acme")
+        .replace("{session}", session);
+    let (status, refusal) = declared(
+        &kestrel,
+        &options,
+        &json!({ "participant": "alice", "category": "colour", "value": "blue" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(refusal["kind"], "invalid_field");
+    assert_eq!(refusal["field"], "category");
+    assert_eq!(refusal["context"]["constraint"], "offered");
+    assert_eq!(
+        refusal["context"]["allowed_values"],
+        json!(["model", "mode", "thought_level"])
+    );
+    assert_eq!(refusal["next_steps"][0]["action"], "correct_field");
+    assert_eq!(refusal["next_steps"][0]["operation"], "set_session_option");
+    let (status, refusal) = declared(
+        &kestrel,
+        &options,
+        &json!({ "participant": "alice", "option": "model", "category": "model", "value": "x" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refusal}");
+    assert_eq!(refusal["kind"], "malformed_request");
+    assert_eq!(refusal["context"]["operation"], "set_session_option");
+    assert_eq!(refusal["context"]["field"], "option");
+
+    let unreadable = reqwest::Client::new()
+        .post(format!(
+            "{}{}",
+            kestrel.operator(),
+            workspace_messages_at("acme", workspace)
+        ))
+        .header("content-type", "application/json")
+        .body("{")
+        .send()
+        .await
+        .expect("the operator boundary should answer");
+    assert_eq!(unreadable.status(), StatusCode::BAD_REQUEST);
+    let refusal: Value = unreadable.json().await.expect("a JSON refusal");
+    assert_eq!(refusal["kind"], "malformed_request");
+    assert_eq!(refusal["context"]["operation"], "post_to_workspace");
+    assert_eq!(
+        refusal["next_steps"],
+        json!([{
+            "action": "inspect_operation",
+            "operation": "post_to_workspace",
+            "resource": null,
+            "uncertain": false,
+        }])
+    );
+
+    let (_, other) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({ "project": "kestrel", "agent": "builder" }),
+    )
+    .await;
+    let other = other["workspace"]["id"].as_str().expect("a workspace id");
+    let (status, refusal) = declared(
+        &kestrel,
+        &workspaces,
+        &json!({ "project": "kestrel", "agent": "builder", "continues": other }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["field"], "continues");
+    assert_eq!(refusal["context"]["state"], "open");
+    assert_eq!(
+        refusal["next_steps"],
+        json!([
+            {
+                "action": "inspect_resource",
+                "resource": "workspace",
+                "reference": other,
+                "organization": "acme",
+            },
+            {
+                "action": "enqueue_session",
+                "organization": "acme",
+                "workspace": other,
+                "missing": [],
+            },
+        ])
+    );
+
+    let claimed = kestrel.claim_session().await.expect("the queued session");
+    kestrel.complete_session(&claimed).await;
+    let (status, _) = declared(&kestrel, &workspace_seal_at("acme", workspace), &json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, refusal) =
+        declared(&kestrel, &workspace_seal_at("acme", workspace), &json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["context"]["state"], "sealed");
+    let (status, refusal) = declared(
+        &kestrel,
+        &workspace_messages_at("acme", workspace),
+        &json!({ "participant": "alice", "message": "one more thing" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["context"]["operation"], "post_to_workspace");
+    assert_eq!(refusal["context"]["state"], "sealed");
+    let stop = operator::SESSION_STOP
+        .replace("{organization}", "acme")
+        .replace("{session}", session);
+    let (status, refusal) = declared(&kestrel, &stop, &json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["context"]["resource"], "session");
+    assert_eq!(refusal["context"]["state"], "ended");
+    assert_eq!(
+        refusal["next_steps"].as_array().map(Vec::len),
+        Some(1),
+        "an ended session offers no stop: {refusal}"
+    );
+
+    kestrel.teardown().await;
+}
+
 async fn ready_to_open(kestrel: &Kestrel) -> kestrel::domain::Organization {
     let organization = kestrel.declare_organization("acme").await;
     kestrel
@@ -2315,7 +2519,7 @@ async fn a_continuation_that_is_open_or_names_a_branch_is_refused_and_leaves_not
     )
     .await;
 
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
     assert_eq!(refusal["field"], "continues", "{refusal}");
 
     let opened = kestrel
@@ -2762,6 +2966,20 @@ async fn held_messages_are_listed_edited_and_withdrawn_over_the_boundary() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refusal}");
+    assert_eq!(refusal["kind"], "forbidden_action");
+    assert_eq!(refusal["context"]["operation"], "edit_workspace_message");
+    assert_eq!(refusal["context"]["resource"], "held_message");
+    assert_eq!(refusal["context"]["reference"], id.to_string());
+    assert_eq!(refusal["context"]["constraint"], "author_only");
+    assert_eq!(
+        refusal["next_steps"],
+        json!([{
+            "action": "inspect_resource",
+            "resource": "workspace",
+            "reference": workspace.id.to_string(),
+            "organization": "acme",
+        }])
+    );
     let (status, refusal) = requested(
         &kestrel,
         reqwest::Method::DELETE,
@@ -2809,6 +3027,9 @@ async fn held_messages_are_listed_edited_and_withdrawn_over_the_boundary() {
             .is_some_and(|why| why.contains("already withdrawn")),
         "{refusal}"
     );
+    assert_eq!(refusal["context"]["resource"], "held_message");
+    assert_eq!(refusal["context"]["state"], "withdrawn");
+    assert_eq!(refusal["next_steps"][0]["resource"], "workspace");
 
     let (status, posted) = declared(
         &kestrel,
@@ -2856,6 +3077,11 @@ async fn held_messages_are_listed_edited_and_withdrawn_over_the_boundary() {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{refusal}");
+        assert_eq!(refusal["kind"], "missing_reference");
+        assert_eq!(refusal["context"]["resource"], "held_message");
+        assert_eq!(refusal["context"]["reference"], id);
+        assert_eq!(refusal["next_steps"][0]["action"], "inspect_resource");
+        assert_eq!(refusal["next_steps"][0]["resource"], "workspace");
     }
 
     kestrel.teardown().await;
@@ -6819,6 +7045,13 @@ async fn transcript_payloads_keep_json_plans_and_completion_metadata() {
         .await
         .expect("expired payload response");
     assert_eq!(response.status(), StatusCode::GONE);
+    let refusal: Value = response.json().await.expect("a JSON refusal");
+    assert_eq!(refusal["kind"], "expired_resource");
+    assert_eq!(refusal["context"]["resource"], "transcript_payload");
+    assert_eq!(refusal["context"]["reference"], payload);
+    assert_eq!(refusal["context"]["operation"], "transcript_payload");
+    assert_eq!(refusal["next_steps"][0]["action"], "inspect_resource");
+    assert_eq!(refusal["next_steps"][0]["resource"], "workspace");
     kestrel.teardown().await;
 }
 

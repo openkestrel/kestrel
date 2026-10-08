@@ -1,7 +1,7 @@
 use anyhow::Result;
 use tracing::info;
 
-use crate::declined::FieldRefusal;
+use crate::declined::Reason;
 use crate::domain::{
     Event, EventRecordId, SessionId, StartedBy, Workspace, WorkspaceId, WorkspaceState,
 };
@@ -109,7 +109,15 @@ async fn receiving(store: &Store, event: &Event) -> Result<Received> {
             Ok(posted) => posted.session,
             // A login the name rule refuses is not fed, rather than failing the whole poll; the
             // Event is still taken, so it is never retried forever.
-            Err(error) if error.downcast_ref::<FieldRefusal>().is_some() => {
+            Err(error)
+                if matches!(
+                    error.downcast_ref::<Reason>(),
+                    Some(Reason::InvalidField {
+                        field: crate::participant::FIELD,
+                        ..
+                    })
+                ) =>
+            {
                 info!(
                     workspace = %workspace.id,
                     actor,

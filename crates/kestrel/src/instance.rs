@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::compute::IdleHint;
-use crate::declined::Declined;
+use crate::declined::{Next, Reason, Resource, Step};
 use crate::domain::{Workspace, WorkspaceId, WorkspaceState};
 use crate::log::Entry;
 use crate::store::workspace::Kept;
@@ -262,19 +262,30 @@ async fn judged(tx: &mut Tx<'_>, kept: Kept) -> Result<Option<Held>> {
 pub async fn release(store: &Store, id: WorkspaceId, participant: &str) -> Result<String> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(id).await?;
-    workspace.accepts("release")?;
+    workspace.accepts("release_instance", "release")?;
 
     let Some(kept) = tx.workspaces().kept_instance(id).await? else {
-        bail!("the workspace {id} has no instance to release");
+        bail!(workspace::workspace_conflict(
+            "release_instance",
+            &workspace,
+            "no_instance",
+            format!("the workspace {id} has no instance to release"),
+        ));
     };
     if let Some(holding) = workspace::unfinished_session(&mut tx, &workspace)
         .await?
         .in_flight()
     {
-        bail!(
-            "the session {holding} is still in flight on the instance {}",
-            kept.instance
-        );
+        bail!(workspace::held_by(
+            "release_instance",
+            "session_in_flight",
+            &workspace,
+            holding,
+            format!(
+                "the session {} is still in flight on the instance {}",
+                holding.id, kept.instance
+            ),
+        ));
     }
 
     tx.log()
@@ -305,11 +316,28 @@ pub(crate) async fn archive_on_seal(tx: &mut Tx<'_>, workspace: &Workspace) -> R
     };
 
     if let Some(because) = unpublished(&workspace.checkout.repositories, kept.observed.as_deref()) {
-        bail!(Declined::Taken(format!(
-            "the workspace {}'s instance {} may hold the only copy of its work ({because}); publish \
-             it from a follow-up session, or release the instance to discard it",
-            workspace.id, kept.instance
-        )));
+        let reference = workspace.id.to_string();
+        bail!(Reason::StateConflict {
+            operation: "seal_workspace",
+            resource: Resource::Workspace,
+            reference: reference.clone(),
+            organization: Some(workspace.organization.name.clone()),
+            state: "unpublished_work",
+            holding_session: None,
+            next: Next::inspect(Resource::Workspace, &reference)
+                .then(Step::EnqueueSession {
+                    workspace: reference.clone(),
+                })
+                .then(Step::ReleaseInstance {
+                    workspace: reference,
+                    instance: kept.instance.clone(),
+                }),
+            message: format!(
+                "the workspace {}'s instance {} may hold the only copy of its work ({because}); publish \
+                 it from a follow-up session, or release the instance to discard it",
+                workspace.id, kept.instance
+            ),
+        });
     }
 
     archive(tx, workspace, &kept.instance).await

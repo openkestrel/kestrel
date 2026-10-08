@@ -64,6 +64,7 @@ pub fn missing(resource: Resource, organization: &str, reference: &str) -> Error
         resource,
         reference: reference.to_owned(),
         organization: Some(organization.to_owned()),
+        within: None,
         message: format!(
             "no {what} in the organization {organization} matches {reference}; \
              name it by its generated name, its identifier, or `{LATEST}`"

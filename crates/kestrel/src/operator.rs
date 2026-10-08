@@ -25,7 +25,10 @@ use tracing::warn;
 use crate::agent;
 use crate::cron::Cron;
 use crate::declaration;
-use crate::declined::{Constraint, Declined, FieldRefusal, Kind, Reason, Resource};
+use crate::declined::{
+    self as declined, Concerning, Consequence, Constraint, Declined, Locator, Reason, Resource,
+    Step,
+};
 use crate::domain::{
     self, Agent, Connection, Correlation, Declared, Direction, EventRecordId, EventRefusal, Fires,
     Firing, HeldMessage, Integration, Occurrence, Organization, Project, Schedule, Session,
@@ -307,6 +310,7 @@ pub fn router(
             live,
             followers,
         })
+        .layer(middleware::from_fn(diagnosing))
         .layer(middleware::from_fn(addressed_here))
 }
 
@@ -1245,7 +1249,7 @@ async fn declared_declaration(
     let Json(declaration) = declaration?;
     let applied = declaration::apply(&control_plane.store, &organization, &declaration, mode)
         .await
-        .map_err(declaration_refusal)?;
+        .map_err(named_refusal)?;
 
     Ok(Json(applied))
 }
@@ -1710,9 +1714,7 @@ async fn event(
     State(control_plane): State<ControlPlane>,
     Path(record): Path<String>,
 ) -> Result<Json<EventRecord>, Refused> {
-    let record: EventRecordId = record
-        .parse()
-        .map_err(|_| Refused::NotFound(format!("no event {record}")))?;
+    let record: EventRecordId = record.parse().map_err(|_| no_event(&record, None))?;
     let event = integration::event(&control_plane.store, record).await?;
 
     Ok(Json(EventRecord::read(&control_plane.store, event).await?))
@@ -1792,14 +1794,15 @@ async fn test_trigger(
         .map(|event| {
             event
                 .parse()
-                .map_err(|_| Refused::NotFound(format!("no event {event}")))
+                .map_err(|_| no_event(event, Some(&organization)))
         })
         .transpose()?;
     let github;
     let against = match (event, tested.integration.as_deref(), tested.issue) {
         (Some(_), _, Some(_)) => {
-            return Err(Refused::BadRequest(
-                "a test renders against an event or an issue, not both".to_owned(),
+            return Err(malformed(
+                Some("issue"),
+                "a test renders against an event or an issue, not both",
             ));
         }
         (Some(event), _, None) => trigger::Against::Event(event),
@@ -1812,14 +1815,15 @@ async fn test_trigger(
             }
         }
         (None, None, Some(_)) => {
-            return Err(Refused::BadRequest(
-                "an issue is read through an integration, so a test naming one names both"
-                    .to_owned(),
+            return Err(malformed(
+                Some("integration"),
+                "an issue is read through an integration, so a test naming one names both",
             ));
         }
         (None, Some(_), None) => {
-            return Err(Refused::BadRequest(
-                "an integration is read for an issue, so a test naming one names both".to_owned(),
+            return Err(malformed(
+                Some("issue"),
+                "an integration is read for an issue, so a test naming one names both",
             ));
         }
         (None, None, None) => trigger::Against::NextElapsing,
@@ -1851,7 +1855,7 @@ async fn test_trigger(
         }
         None => trigger::test(&control_plane.store, &organization, &name, against, asked).await,
     }
-    .map_err(integration_refusal)?;
+    .map_err(named_refusal)?;
     let rendered = tested
         .rendered
         .map_err(|error| Refused::Unprocessable(error.to_string()))?;
@@ -1935,7 +1939,7 @@ async fn dispatch_trigger(
         },
     )
     .await
-    .map_err(integration_refusal)?;
+    .map_err(named_refusal)?;
 
     Ok(Json(match fired {
         trigger::Fired::Opened {
@@ -2065,31 +2069,12 @@ fn parse_trigger_declaration(
     Ok((fires, templates))
 }
 
+/// An untyped refusal here is about what the request named, never a control plane that could
+/// not answer.
 fn named_refusal(error: anyhow::Error) -> Refused {
-    let error = match error.downcast::<Reason>() {
-        Ok(reason) => return diagnosed(reason),
-        Err(error) => error,
-    };
-    let message = error.to_string();
-    if message.starts_with("no trigger named ") || message.starts_with("no event ") {
-        return Refused::NotFound(message);
+    if error.is::<Reason>() || error.is::<Concerning>() {
+        return error.into();
     }
-
-    Refused::Unprocessable(message)
-}
-
-fn integration_refusal(error: anyhow::Error) -> Refused {
-    match error.to_string() {
-        missing if missing.starts_with("no integration named ") => Refused::NotFound(missing),
-        _ => named_refusal(error),
-    }
-}
-
-fn declaration_refusal(error: anyhow::Error) -> Refused {
-    let error = match error.downcast::<Reason>() {
-        Ok(reason) => return diagnosed(reason),
-        Err(error) => error,
-    };
     Refused::Unprocessable(error.to_string())
 }
 
@@ -2357,12 +2342,8 @@ async fn release_instance(
 ) -> Result<Json<ReleasedRecord>, Refused> {
     let Json(release) = release?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
-    let instance = instance::release(&control_plane.store, workspace.id, &release.participant)
-        .await
-        .map_err(|error| match error.to_string() {
-            none if none.ends_with("has no instance to release") => Refused::NotFound(none),
-            _ => workspace_refusal(error),
-        })?;
+    let instance =
+        instance::release(&control_plane.store, workspace.id, &release.participant).await?;
 
     Ok(Json(ReleasedRecord { instance }))
 }
@@ -2377,8 +2358,7 @@ async fn workspaces(
     for workspace in workspaces {
         let id = workspace.id;
         let session = work::sessions(&control_plane.store, id)
-            .await
-            .map_err(workspace_refusal)?
+            .await?
             .pop()
             .map(|session| SessionRecord::live(session, &control_plane.live.summaries));
         records.push(WorkspaceListedRecord {
@@ -2412,8 +2392,7 @@ async fn open_workspace(
             depends_on: declaration.depends_on.as_deref().unwrap_or_default(),
         },
     )
-    .await
-    .map_err(workspace_refusal)?;
+    .await?;
 
     Ok((
         StatusCode::CREATED,
@@ -2456,12 +2435,13 @@ async fn workspace_changes(
             .strip_prefix("commit:")
             .is_some_and(|sha| !sha.is_empty() && sha.bytes().all(|byte| byte.is_ascii_hexdigit()))
     {
-        return Err(Refused::BadRequest(
-            "scope must be unpublished, changed, staged or commit:<sha>".to_owned(),
+        return Err(malformed(
+            Some("scope"),
+            "scope must be unpublished, changed, staged or commit:<sha>",
         ));
     }
     let url = reqwest::Url::parse(&format!("http://localhost/?{}", raw.unwrap_or_default()))
-        .map_err(|_| Refused::BadRequest("invalid changes query".to_owned()))?;
+        .map_err(|_| malformed(None, "invalid changes query"))?;
     let paths = url
         .query_pairs()
         .filter(|(name, _)| name == "path")
@@ -2564,8 +2544,7 @@ async fn post_to_workspace(
         message.participant.as_deref().unwrap_or_default(),
         &message.message,
     )
-    .await
-    .map_err(workspace_refusal)?;
+    .await?;
 
     Ok(Json(PostedRecord {
         session: posted.session.map(SessionRecord::read),
@@ -2580,15 +2559,24 @@ async fn edit_workspace_message(
 ) -> Result<Json<HeldMessage>, Refused> {
     let Json(edit) = edit?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
+    let id = held_id(&organization, &workspace, &id)?;
     let edited = workspace::edit_message(
         &control_plane.store,
         workspace.id,
-        held_id(&id)?,
+        id,
         edit.participant.as_deref().unwrap_or_default(),
         &edit.message,
     )
     .await
-    .map_err(workspace_refusal)?;
+    .map_err(|error| {
+        held_refusal(
+            error,
+            "edit_workspace_message",
+            &organization,
+            &workspace,
+            id,
+        )
+    })?;
 
     Ok(Json(edited))
 }
@@ -2600,25 +2588,107 @@ async fn withdraw_workspace_message(
 ) -> Result<StatusCode, Refused> {
     let Json(withdrawal) = withdrawal?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
+    let id = held_id(&organization, &workspace, &id)?;
     workspace::withdraw_message(
         &control_plane.store,
         workspace.id,
-        held_id(&id)?,
+        id,
         withdrawal.participant.as_deref().unwrap_or_default(),
     )
     .await
-    .map_err(workspace_refusal)?;
+    .map_err(|error| {
+        held_refusal(
+            error,
+            "withdraw_workspace_message",
+            &organization,
+            &workspace,
+            id,
+        )
+    })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// An id the Workspace never held answers `404` like one it did and no longer can change.
-fn held_id(id: &str) -> Result<i64, Refused> {
+fn held_id(organization: &str, workspace: &Workspace, id: &str) -> Result<i64, Refused> {
     id.parse().map_err(|_| {
-        Refused::NotFound(format!(
-            "the workspace never held a message with the id {id}"
-        ))
+        never_held(
+            organization,
+            workspace,
+            id,
+            format!("the workspace never held a message with the id {id}"),
+        )
     })
+}
+
+fn never_held(organization: &str, workspace: &Workspace, id: &str, message: String) -> Refused {
+    diagnosed(
+        Reason::MissingReference {
+            resource: Resource::HeldMessage,
+            reference: id.to_owned(),
+            organization: Some(organization.to_owned()),
+            within: Some(Locator::new(Resource::Workspace, workspace.id.to_string())),
+            message,
+        },
+        None,
+    )
+}
+
+/// Every Held Message refusal is answered by inspecting its Workspace; who may change one is
+/// its author, never a Policy.
+fn held_refusal(
+    error: anyhow::Error,
+    operation: &'static str,
+    organization: &str,
+    workspace: &Workspace,
+    id: i64,
+) -> Refused {
+    let Some(refused) = error.downcast_ref::<HeldMessageRefusal>() else {
+        return error.into();
+    };
+    let message = refused.to_string();
+    let reference = id.to_string();
+    let next = declined::Next::inspect(Resource::Workspace, workspace.id.to_string());
+    let conflict = |state| Reason::StateConflict {
+        operation,
+        resource: Resource::HeldMessage,
+        reference: reference.clone(),
+        organization: Some(organization.to_owned()),
+        state,
+        holding_session: None,
+        next: next.clone(),
+        message: message.clone(),
+    };
+    let reason = match refused {
+        HeldMessageRefusal::NeverHeld(_) => {
+            return never_held(organization, workspace, &reference, message);
+        }
+        HeldMessageRefusal::NotTheAuthor(_) => Reason::Forbidden {
+            operation,
+            resource: Resource::HeldMessage,
+            reference: reference.clone(),
+            organization: Some(organization.to_owned()),
+            constraint: "author_only",
+            next: next.clone(),
+            message: message.clone(),
+        },
+        HeldMessageRefusal::AlreadyTaken => conflict("taken"),
+        HeldMessageRefusal::AlreadyWithdrawn => conflict("withdrawn"),
+    };
+    diagnosed(reason, None)
+}
+
+fn no_event(record: &str, organization: Option<&str>) -> Refused {
+    diagnosed(
+        Reason::MissingReference {
+            resource: Resource::Event,
+            reference: record.to_owned(),
+            organization: organization.map(str::to_owned),
+            within: None,
+            message: format!("no event {record}"),
+        },
+        None,
+    )
 }
 
 async fn seal_workspace(
@@ -2626,9 +2696,7 @@ async fn seal_workspace(
     Path((organization, workspace)): Path<(String, String)>,
 ) -> Result<Json<WorkspaceRecord>, Refused> {
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
-    let workspace = workspace::seal(&control_plane.store, workspace.id)
-        .await
-        .map_err(workspace_refusal)?;
+    let workspace = workspace::seal(&control_plane.store, workspace.id).await?;
 
     Ok(Json(
         WorkspaceRecord::read(&control_plane.store, workspace).await?,
@@ -2640,9 +2708,7 @@ async fn sessions(
     Path((organization, workspace)): Path<(String, String)>,
 ) -> Result<Json<Vec<SessionRecord>>, Refused> {
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
-    let sessions = work::sessions(&control_plane.store, workspace.id)
-        .await
-        .map_err(workspace_refusal)?;
+    let sessions = work::sessions(&control_plane.store, workspace.id).await?;
 
     Ok(Json(
         sessions
@@ -2660,11 +2726,24 @@ async fn enqueue_session(
     let Json(declaration) = declaration?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     if !work::has_had_session(&control_plane.store, workspace.id).await? {
-        return Err(Refused::Conflict(format!(
-            "the workspace {} has never had a session, and a workspace's first session starts \
-             with its open",
-            workspace.id
-        )));
+        let reference = workspace.id.to_string();
+        return Err(diagnosed(
+            Reason::StateConflict {
+                operation: "enqueue_session",
+                resource: Resource::Workspace,
+                reference: reference.clone(),
+                organization: Some(organization),
+                state: "never_had_session",
+                holding_session: None,
+                next: declined::Next::inspect(Resource::Workspace, reference),
+                message: format!(
+                    "the workspace {} has never had a session, and a workspace's first session \
+                     starts with its open",
+                    workspace.id
+                ),
+            },
+            None,
+        ));
     }
     let session = work::enqueue(
         &control_plane.store,
@@ -2673,8 +2752,7 @@ async fn enqueue_session(
         declaration.declared(),
         declaration.depends_on.as_deref().unwrap_or_default(),
     )
-    .await
-    .map_err(workspace_refusal)?;
+    .await?;
 
     Ok((StatusCode::CREATED, Json(SessionRecord::read(session))))
 }
@@ -2745,12 +2823,7 @@ async fn stop_session(
 ) -> Result<Json<SessionRecord>, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
     let running = control_plane.live.summaries.current_session(&session).tools;
-    work::stop(&control_plane.store, session.id, &running)
-        .await
-        .map_err(|error| match error.to_string() {
-            ended if ended.ends_with("has already ended") => Refused::Conflict(ended),
-            _ => error.into(),
-        })?;
+    work::stop(&control_plane.store, session.id, &running).await?;
     control_plane.live.summaries.clear_session(&session);
     let session = work::session(&control_plane.store, session.id).await?;
 
@@ -2767,16 +2840,14 @@ async fn set_session_option(
         (Some(option), None) => work::Named::Option(option),
         (None, Some(category)) => work::Named::Category(category),
         (Some(_), Some(_)) => {
-            return Err(Refused::Named {
-                status: StatusCode::BAD_REQUEST,
-                field: "option",
+            return Err(Refused::Malformed {
+                field: Some("option"),
                 why: "an option change names an option or a category, not both".to_owned(),
             });
         }
         (None, None) => {
-            return Err(Refused::Named {
-                status: StatusCode::BAD_REQUEST,
-                field: "option",
+            return Err(Refused::Malformed {
+                field: Some("option"),
                 why: "an option change names an option or a category".to_owned(),
             });
         }
@@ -2789,8 +2860,7 @@ async fn set_session_option(
         named,
         &change.value,
     )
-    .await
-    .map_err(option_refusal)?;
+    .await?;
 
     Ok((
         if written.live {
@@ -2802,53 +2872,12 @@ async fn set_session_option(
     ))
 }
 
-fn option_refusal(refused: work::OptionRefusal) -> Refused {
-    match refused {
-        work::OptionRefusal::Phase(why) => Refused::Conflict(why),
-        work::OptionRefusal::Unacceptable { field, why } => Refused::Named {
-            status: StatusCode::BAD_REQUEST,
-            field,
-            why,
-        },
-        work::OptionRefusal::Missing(why) => Refused::NotFound(why),
-        work::OptionRefusal::Named(error) | work::OptionRefusal::Unavailable(error) => {
-            Refused::from(error)
-        }
-    }
-}
-
 async fn resolved(
     control_plane: &ControlPlane,
     organization: &str,
     workspace: &str,
 ) -> Result<Workspace, Refused> {
-    workspace::resolve(&control_plane.store, organization, workspace)
-        .await
-        .map_err(workspace_refusal)
-}
-
-fn workspace_refusal(error: anyhow::Error) -> Refused {
-    if error.downcast_ref::<FieldRefusal>().is_some()
-        || error.downcast_ref::<HeldMessageRefusal>().is_some()
-        || error.downcast_ref::<Reason>().is_some()
-    {
-        return error.into();
-    }
-    let message = error.to_string();
-    if message.starts_with("no workspace ") {
-        return Refused::NotFound(message);
-    }
-    if message.contains("already has the session")
-        || message.contains("still in flight")
-        || message.contains("already sealed")
-    {
-        return Refused::Conflict(message);
-    }
-    if message.contains("is sealed") || message.contains("is open, and work continues") {
-        return Refused::Unprocessable(message);
-    }
-
-    error.into()
+    Ok(workspace::resolve(&control_plane.store, organization, workspace).await?)
 }
 
 fn sharing_a_directory(repositories: &[String]) -> Option<String> {
@@ -2906,12 +2935,29 @@ async fn transcript_payload(
     let payload = match tx.log().payload(&workspace, &payload).await? {
         log::PayloadRead::Available(payload) => payload,
         log::PayloadRead::Gone => {
-            return Err(Refused::Gone(
-                "the Transcript payload has expired".to_owned(),
+            return Err(diagnosed(
+                Reason::Expired {
+                    operation: "transcript_payload",
+                    resource: Resource::TranscriptPayload,
+                    reference: payload,
+                    organization: Some(organization),
+                    next: declined::Next::inspect(Resource::Workspace, workspace.id.to_string()),
+                    message: "the Transcript payload has expired".to_owned(),
+                },
+                None,
             ));
         }
         log::PayloadRead::Missing => {
-            return Err(Refused::NotFound("no payload in this Workspace".to_owned()));
+            return Err(diagnosed(
+                Reason::MissingReference {
+                    resource: Resource::TranscriptPayload,
+                    reference: payload,
+                    organization: Some(organization),
+                    within: Some(Locator::new(Resource::Workspace, workspace.id.to_string())),
+                    message: "no payload in this Workspace".to_owned(),
+                },
+                None,
+            ));
         }
     };
     Ok((
@@ -2934,7 +2980,7 @@ async fn transcript(
     let name = match following.as_name.as_deref() {
         Some(name) => {
             let mut tx = control_plane.store.read().await?;
-            Some(participant::accepted(&mut tx, &workspace.organization, name).await?)
+            Some(participant::accepted(&mut tx, &workspace.organization, name, "transcript").await?)
         }
         None => None,
     };
@@ -2945,7 +2991,7 @@ async fn transcript(
         .as_deref()
         .map(str::parse::<log::Kinds>)
         .transpose()
-        .map_err(|error| Refused::BadRequest(error.to_string()))?
+        .map_err(|error| malformed(Some("kinds"), error.to_string()))?
         .unwrap_or_default();
     let from = last_event_id(&headers)?;
     let summaries = following.summaries.unwrap_or(true);
@@ -3142,43 +3188,45 @@ fn last_event_id(headers: &HeaderMap) -> Result<Option<Cursor>, Refused> {
 
     cursor
         .to_str()
-        .map_err(|error| Refused::BadRequest(error.to_string()))?
+        .map_err(|error| malformed(None, error.to_string()))?
         .parse()
         .map(Some)
-        .map_err(|error: anyhow::Error| Refused::BadRequest(error.to_string()))
+        .map_err(|error: anyhow::Error| malformed(None, error.to_string()))
 }
 
 enum Refused {
-    BadRequest(String),
-    Forbidden(String),
-    NotFound(String),
-    Gone(String),
-    Conflict(String),
-    Unprocessable(String),
-    Named {
-        status: StatusCode,
-        field: &'static str,
+    /// A request the boundary could not read; its operation is the route's.
+    Malformed {
+        field: Option<&'static str>,
         why: String,
     },
+    Forbidden(String),
+    NotFound(String),
+    Conflict(String),
+    Unprocessable(String),
     Diagnosed {
         status: StatusCode,
         diagnostic: Box<wire::Diagnostic>,
     },
-    NotAnswering(String),
+    /// The control plane could not answer; its operation is the route's.
     Unavailable(anyhow::Error),
+}
+
+fn malformed(field: Option<&'static str>, why: impl Into<String>) -> Refused {
+    Refused::Malformed {
+        field,
+        why: why.into(),
+    }
 }
 
 impl Refused {
     fn into_error(self) -> BoxError {
         match self {
-            Refused::BadRequest(why)
+            Refused::Malformed { why, .. }
             | Refused::Forbidden(why)
             | Refused::NotFound(why)
-            | Refused::Gone(why)
             | Refused::Conflict(why)
-            | Refused::Unprocessable(why)
-            | Refused::Named { why, .. }
-            | Refused::NotAnswering(why) => why.into(),
+            | Refused::Unprocessable(why) => why.into(),
             Refused::Diagnosed { diagnostic, .. } => {
                 diagnostic_message(&diagnostic).to_owned().into()
             }
@@ -3254,6 +3302,76 @@ fn list_resources(resource: Resource, organization: Option<&str>) -> Vec<wire::A
     )]
 }
 
+fn inspect(locator: Locator, organization: Option<String>) -> wire::Action {
+    wire::Action::InspectResourceAction(wire::InspectResourceAction {
+        action: serde_json::json!("inspect_resource"),
+        resource: wire_resource(locator.resource),
+        reference: Some(locator.reference),
+        organization,
+    })
+}
+
+/// A step needing an Organization is never offered without one, though every reason that
+/// carries one is scoped.
+fn next_steps(next: declined::Next, organization: Option<&str>) -> Vec<wire::Action> {
+    let mut steps = vec![inspect(next.inspect, organization.map(str::to_owned))];
+    let Some(organization) = organization else {
+        return steps;
+    };
+    steps.extend(next.then.into_iter().map(|step| match step {
+        Step::StopSession {
+            session,
+            consequence,
+        } => wire::Action::StopSessionAction(wire::StopSessionAction {
+            action: serde_json::json!("stop_session"),
+            organization: organization.to_owned(),
+            session,
+            consequence: explained(consequence).to_owned(),
+            effect: wire_consequence(consequence),
+            requires_choice: serde_json::json!(true),
+        }),
+        Step::EnqueueSession { workspace } => {
+            wire::Action::EnqueueSessionAction(wire::EnqueueSessionAction {
+                action: serde_json::json!("enqueue_session"),
+                organization: organization.to_owned(),
+                workspace,
+                missing: Vec::new(),
+            })
+        }
+        Step::ReleaseInstance {
+            workspace,
+            instance,
+        } => wire::Action::ReleaseInstanceAction(wire::ReleaseInstanceAction {
+            action: serde_json::json!("release_instance"),
+            organization: organization.to_owned(),
+            workspace,
+            instance: Some(instance),
+            consequence: explained(Consequence::DiscardsUnpublishedWork).to_owned(),
+            effect: wire_consequence(Consequence::DiscardsUnpublishedWork),
+            requires_choice: serde_json::json!(true),
+        }),
+    }));
+    steps
+}
+
+const fn explained(consequence: Consequence) -> &'static str {
+    match consequence {
+        Consequence::FailsSession => "Stopping the session now records it failed.",
+        Consequence::EndsSession => "Stopping the session ends it; what it has done stands.",
+        Consequence::DiscardsUnpublishedWork => {
+            "Releasing the instance discards work that may exist nowhere else."
+        }
+    }
+}
+
+const fn wire_consequence(consequence: Consequence) -> wire::Consequence {
+    match consequence {
+        Consequence::FailsSession => wire::Consequence::FailsSession,
+        Consequence::EndsSession => wire::Consequence::EndsSession,
+        Consequence::DiscardsUnpublishedWork => wire::Consequence::DiscardsUnpublishedWork,
+    }
+}
+
 const fn wire_resource(resource: Resource) -> wire::Resource {
     match resource {
         Resource::Organization => wire::Resource::Organization,
@@ -3261,8 +3379,14 @@ const fn wire_resource(resource: Resource) -> wire::Resource {
         Resource::Agent => wire::Resource::Agent,
         Resource::SubscriptionProfile => wire::Resource::SubscriptionProfile,
         Resource::ProviderCredential => wire::Resource::ProviderCredential,
+        Resource::Integration => wire::Resource::Integration,
+        Resource::Trigger => wire::Resource::Trigger,
+        Resource::Event => wire::Resource::Event,
         Resource::Workspace => wire::Resource::Workspace,
         Resource::Session => wire::Resource::Session,
+        Resource::Instance => wire::Resource::Instance,
+        Resource::HeldMessage => wire::Resource::HeldMessage,
+        Resource::TranscriptPayload => wire::Resource::TranscriptPayload,
     }
 }
 
@@ -3287,98 +3411,175 @@ fn diagnostic_message(diagnostic: &wire::Diagnostic) -> &str {
     }
 }
 
-fn diagnosed(reason: Reason) -> Refused {
-    match reason {
+fn diagnosed(reason: Reason, field: Option<&'static str>) -> Refused {
+    let field = field.map(str::to_owned);
+    let (status, diagnostic) = match reason {
         Reason::MissingReference {
             resource,
             reference,
             organization,
+            within,
             message,
-        } => Refused::Diagnosed {
-            status: StatusCode::NOT_FOUND,
-            diagnostic: Box::new(wire::Diagnostic::MissingReferenceDiagnostic(
-                wire::MissingReferenceDiagnostic {
-                    kind: serde_json::json!("missing_reference"),
-                    message,
-                    field: None,
-                    context: wire::MissingReferenceContext {
-                        resource: wire_resource(resource),
-                        reference: reference.clone(),
-                        organization: organization.clone(),
-                    },
-                    next_steps: declare_or_inspect(resource, &reference, organization.as_deref()),
+        } => (
+            StatusCode::NOT_FOUND,
+            wire::Diagnostic::MissingReferenceDiagnostic(wire::MissingReferenceDiagnostic {
+                kind: serde_json::json!("missing_reference"),
+                message,
+                field,
+                next_steps: match within {
+                    Some(within) => vec![inspect(within, organization.clone())],
+                    None => declare_or_inspect(resource, &reference, organization.as_deref()),
                 },
-            )),
-        },
+                context: wire::MissingReferenceContext {
+                    resource: wire_resource(resource),
+                    reference,
+                    organization,
+                },
+            }),
+        ),
         Reason::AmbiguousReference {
             resource,
             reference,
             organization,
             candidates,
             message,
-        } => Refused::Diagnosed {
-            status: StatusCode::NOT_FOUND,
-            diagnostic: Box::new(wire::Diagnostic::AmbiguousReferenceDiagnostic(
-                wire::AmbiguousReferenceDiagnostic {
-                    kind: serde_json::json!("ambiguous_reference"),
-                    message,
-                    field: None,
-                    context: wire::AmbiguousReferenceContext {
-                        resource: wire_resource(resource),
-                        reference,
-                        organization: organization.clone(),
-                        candidates: candidates
-                            .into_iter()
-                            .map(|candidate| wire::Candidate {
-                                id: candidate.id,
-                                name: candidate.name,
-                            })
-                            .collect(),
-                    },
-                    next_steps: list_resources(resource, organization.as_deref()),
+        } => (
+            StatusCode::NOT_FOUND,
+            wire::Diagnostic::AmbiguousReferenceDiagnostic(wire::AmbiguousReferenceDiagnostic {
+                kind: serde_json::json!("ambiguous_reference"),
+                message,
+                field,
+                next_steps: list_resources(resource, organization.as_deref()),
+                context: wire::AmbiguousReferenceContext {
+                    resource: wire_resource(resource),
+                    reference,
+                    organization,
+                    candidates: candidates
+                        .into_iter()
+                        .map(|candidate| wire::Candidate {
+                            id: candidate.id,
+                            name: candidate.name,
+                        })
+                        .collect(),
                 },
-            )),
-        },
+            }),
+        ),
         Reason::InvalidField {
             field,
             operation,
             constraint,
+            allowed,
             message,
-        } => invalid_field(operation, field, constraint, message),
-        Reason::Taken {
+        } => return invalid_value(operation, field, constraint, allowed, message),
+        Reason::StateConflict {
             operation,
-            state,
             resource,
             reference,
             organization,
+            state,
+            holding_session,
+            next,
             message,
-        } => Refused::Diagnosed {
-            status: StatusCode::CONFLICT,
-            diagnostic: Box::new(wire::Diagnostic::StateConflictDiagnostic(
-                wire::StateConflictDiagnostic {
-                    kind: serde_json::json!("state_conflict"),
-                    message,
-                    field: None,
-                    context: wire::StateConflictContext {
-                        operation: operation.to_owned(),
-                        resource: wire_resource(resource),
-                        reference: reference.clone(),
-                        organization: organization.clone(),
-                        state: state.to_owned(),
-                        holding_session: None,
-                    },
-                    next_steps: vec![wire::Action::InspectResourceAction(
-                        wire::InspectResourceAction {
-                            action: serde_json::json!("inspect_resource"),
-                            resource: wire_resource(resource),
-                            reference: Some(reference),
-                            organization,
-                        },
-                    )],
+        } => (
+            StatusCode::CONFLICT,
+            wire::Diagnostic::StateConflictDiagnostic(wire::StateConflictDiagnostic {
+                kind: serde_json::json!("state_conflict"),
+                message,
+                field,
+                next_steps: next_steps(next, organization.as_deref()),
+                context: wire::StateConflictContext {
+                    operation: operation.to_owned(),
+                    resource: wire_resource(resource),
+                    reference,
+                    organization,
+                    state: state.to_owned(),
+                    holding_session,
                 },
-            )),
-        },
+            }),
+        ),
+        Reason::Forbidden {
+            operation,
+            resource,
+            reference,
+            organization,
+            constraint,
+            next,
+            message,
+        } => (
+            StatusCode::FORBIDDEN,
+            wire::Diagnostic::ForbiddenActionDiagnostic(wire::ForbiddenActionDiagnostic {
+                kind: serde_json::json!("forbidden_action"),
+                message,
+                field,
+                next_steps: next_steps(next, organization.as_deref()),
+                context: wire::ForbiddenActionContext {
+                    operation: operation.to_owned(),
+                    resource: wire_resource(resource),
+                    reference,
+                    organization,
+                    constraint: Some(constraint.to_owned()),
+                },
+            }),
+        ),
+        Reason::Expired {
+            operation,
+            resource,
+            reference,
+            organization,
+            next,
+            message,
+        } => (
+            StatusCode::GONE,
+            wire::Diagnostic::ExpiredResourceDiagnostic(wire::ExpiredResourceDiagnostic {
+                kind: serde_json::json!("expired_resource"),
+                message,
+                field,
+                next_steps: next_steps(next, organization.as_deref()),
+                context: wire::ExpiredResourceContext {
+                    resource: wire_resource(resource),
+                    reference,
+                    organization,
+                    operation: operation.to_owned(),
+                },
+            }),
+        ),
+        Reason::InstanceTimeout {
+            operation,
+            workspace,
+            instance,
+            message,
+        } => (
+            StatusCode::GATEWAY_TIMEOUT,
+            wire::Diagnostic::InstanceTimeoutDiagnostic(wire::InstanceTimeoutDiagnostic {
+                kind: serde_json::json!("instance_timeout"),
+                message,
+                field,
+                next_steps: vec![retry_read(operation, Some(Resource::Workspace), None)],
+                context: wire::InstanceTimeoutContext {
+                    workspace,
+                    instance: Some(instance),
+                    operation: operation.to_owned(),
+                },
+            }),
+        ),
+    };
+    Refused::Diagnosed {
+        status,
+        diagnostic: Box::new(diagnostic),
     }
+}
+
+fn retry_read(
+    operation: &str,
+    resource: Option<Resource>,
+    retry_after_seconds: Option<i64>,
+) -> wire::Action {
+    wire::Action::RetryReadAction(wire::RetryReadAction {
+        action: serde_json::json!("retry_read"),
+        operation: operation.to_owned(),
+        resource: resource.map(|resource| wire_resource(resource).as_str().to_owned()),
+        retry_after_seconds,
+    })
 }
 
 fn invalid_field(
@@ -3387,7 +3588,16 @@ fn invalid_field(
     constraint: Constraint,
     message: impl Into<String>,
 ) -> Refused {
-    let message = message.into();
+    invalid_value(operation, field, constraint, None, message.into())
+}
+
+fn invalid_value(
+    operation: &'static str,
+    field: &'static str,
+    constraint: Constraint,
+    allowed: Option<Vec<String>>,
+    message: String,
+) -> Refused {
     Refused::Diagnosed {
         status: StatusCode::UNPROCESSABLE_ENTITY,
         diagnostic: Box::new(wire::Diagnostic::InvalidFieldDiagnostic(
@@ -3398,7 +3608,7 @@ fn invalid_field(
                 context: wire::InvalidFieldContext {
                     field: field.to_owned(),
                     constraint: constraint.as_str().to_owned(),
-                    allowed_values: None,
+                    allowed_values: allowed.clone(),
                 },
                 next_steps: vec![wire::Action::CorrectFieldAction(wire::CorrectFieldAction {
                     action: serde_json::json!("correct_field"),
@@ -3406,7 +3616,7 @@ fn invalid_field(
                     resource: None,
                     field: field.to_owned(),
                     constraint: constraint.as_str().to_owned(),
-                    allowed_values: None,
+                    allowed_values: allowed,
                 })],
             },
         )),
@@ -3416,33 +3626,13 @@ fn invalid_field(
 impl From<anyhow::Error> for Refused {
     fn from(error: anyhow::Error) -> Self {
         let error = match error.downcast::<Reason>() {
-            Ok(reason) => return diagnosed(reason),
+            Ok(reason) => return diagnosed(reason, None),
             Err(error) => error,
         };
-        if let Some(named) = error.downcast_ref::<FieldRefusal>() {
-            return Refused::Named {
-                status: match named.kind {
-                    Kind::Unacceptable => StatusCode::UNPROCESSABLE_ENTITY,
-                    Kind::Missing | Kind::Ambiguous => StatusCode::NOT_FOUND,
-                    Kind::Taken => StatusCode::CONFLICT,
-                },
-                field: named.field,
-                why: named.message.clone(),
-            };
-        }
-        if let Some(silent) = error.downcast_ref::<crate::live_read::NotAnswering>() {
-            return Refused::NotAnswering(silent.to_string());
-        }
-        if let Some(refused) = error.downcast_ref::<HeldMessageRefusal>() {
-            let why = refused.to_string();
-            return match refused {
-                HeldMessageRefusal::NeverHeld(_) => Refused::NotFound(why),
-                HeldMessageRefusal::NotTheAuthor(_) => Refused::Forbidden(why),
-                HeldMessageRefusal::AlreadyTaken | HeldMessageRefusal::AlreadyWithdrawn => {
-                    Refused::Conflict(why)
-                }
-            };
-        }
+        let error = match error.downcast::<Concerning>() {
+            Ok(concerning) => return diagnosed(concerning.reason, Some(concerning.field)),
+            Err(error) => error,
+        };
         match error.downcast::<Declined>() {
             Ok(Declined::Unacceptable(why)) => Refused::Unprocessable(why),
             Ok(Declined::Missing(why) | Declined::Ambiguous(why)) => Refused::NotFound(why),
@@ -3454,55 +3644,217 @@ impl From<anyhow::Error> for Refused {
 
 impl From<JsonRejection> for Refused {
     fn from(rejection: JsonRejection) -> Self {
-        Refused::BadRequest(rejection.body_text())
+        Refused::Malformed {
+            field: None,
+            why: rejection.body_text(),
+        }
     }
 }
 
 impl From<Unreadable> for Refused {
     fn from(unreadable: Unreadable) -> Self {
         match unreadable {
-            Unreadable::Cursor(why) => Refused::BadRequest(why),
+            Unreadable::Cursor(why) => Refused::Malformed { field: None, why },
             Unreadable::Unavailable(error) => Refused::Unavailable(error),
         }
     }
 }
 
+/// What a refusal raised without its operation leaves for `diagnosing`, which knows the route.
+#[derive(Clone)]
+enum Undiagnosed {
+    Malformed {
+        field: Option<&'static str>,
+        message: String,
+    },
+    Unavailable {
+        busy: bool,
+    },
+}
+
 impl IntoResponse for Refused {
     fn into_response(self) -> Response {
-        if let Refused::Diagnosed { status, diagnostic } = self {
-            return serve::refusal(status, false, Json(diagnostic));
-        }
-
-        let busy = matches!(&self, Refused::Unavailable(error) if store::busy(error));
-        let (status, message, field) = match self {
-            Refused::BadRequest(why) => (StatusCode::BAD_REQUEST, why, None),
-            Refused::Forbidden(why) => (StatusCode::FORBIDDEN, why, None),
-            Refused::NotFound(why) => (StatusCode::NOT_FOUND, why, None),
-            Refused::Gone(why) => (StatusCode::GONE, why, None),
-            Refused::Conflict(why) => (StatusCode::CONFLICT, why, None),
-            Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why, None),
-            Refused::Named { status, field, why } => (status, why, Some(field)),
-            Refused::NotAnswering(why) => (StatusCode::GATEWAY_TIMEOUT, why, None),
-            Refused::Unavailable(error) => {
-                warn!(%error, busy, "the operator boundary could not answer");
-                (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "the control plane could not answer".to_owned(),
-                    None,
-                )
+        let (status, message) = match self {
+            Refused::Diagnosed { status, diagnostic } => {
+                return (status, Json(diagnostic)).into_response();
             }
-            Refused::Diagnosed { .. } => unreachable!("returned above"),
+            Refused::Malformed { field, why } => {
+                let mut response = StatusCode::BAD_REQUEST.into_response();
+                response.extensions_mut().insert(Undiagnosed::Malformed {
+                    field,
+                    message: why,
+                });
+                return response;
+            }
+            Refused::Unavailable(error) => {
+                let busy = store::busy(&error);
+                warn!(%error, busy, "the operator boundary could not answer");
+                let mut response = StatusCode::SERVICE_UNAVAILABLE.into_response();
+                response
+                    .extensions_mut()
+                    .insert(Undiagnosed::Unavailable { busy });
+                return response;
+            }
+            Refused::Forbidden(why) => (StatusCode::FORBIDDEN, why),
+            Refused::NotFound(why) => (StatusCode::NOT_FOUND, why),
+            Refused::Conflict(why) => (StatusCode::CONFLICT, why),
+            Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why),
         };
 
-        serve::refusal(status, busy, Json(Refusal { message, field }))
+        (status, Json(Refusal { message })).into_response()
     }
+}
+
+/// A malformed request or an unanswerable one is diagnosed against the route it reached, so
+/// every handler need not name its own operation.
+async fn diagnosing(request: Request, next: Next) -> Response {
+    let read = request.method() == axum::http::Method::GET;
+    let operation = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .and_then(|path| operation(request.method().as_str(), path.as_str()))
+        .unwrap_or("unknown");
+    let response = next.run(request).await;
+    let Some(undiagnosed) = response.extensions().get::<Undiagnosed>().cloned() else {
+        return response;
+    };
+
+    let (status, busy, diagnostic) = match undiagnosed {
+        Undiagnosed::Malformed { field, message } => (
+            StatusCode::BAD_REQUEST,
+            false,
+            wire::Diagnostic::MalformedRequestDiagnostic(wire::MalformedRequestDiagnostic {
+                kind: serde_json::json!("malformed_request"),
+                message,
+                field: field.map(str::to_owned),
+                context: wire::MalformedRequestContext {
+                    operation: operation.to_owned(),
+                    field: field.map(str::to_owned),
+                },
+                next_steps: vec![match field {
+                    Some(field) => wire::Action::CorrectFieldAction(wire::CorrectFieldAction {
+                        action: serde_json::json!("correct_field"),
+                        operation: operation.to_owned(),
+                        resource: None,
+                        field: field.to_owned(),
+                        constraint: "well_formed".to_owned(),
+                        allowed_values: None,
+                    }),
+                    None => inspect_operation(operation, false),
+                }],
+            }),
+        ),
+        Undiagnosed::Unavailable { busy } => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            busy,
+            wire::Diagnostic::UnavailableDiagnostic(wire::UnavailableDiagnostic {
+                kind: serde_json::json!("unavailable"),
+                message: "the control plane could not answer".to_owned(),
+                field: None,
+                context: wire::UnavailableContext {
+                    service: "control_plane".to_owned(),
+                    resource: None,
+                    operation: operation.to_owned(),
+                    retry_after_seconds: busy.then_some(serve::BUSY_RETRY_AFTER_SECONDS),
+                },
+                // A write that went unanswered may have landed, so it is inspected, never replayed.
+                next_steps: vec![if read {
+                    retry_read(
+                        operation,
+                        None,
+                        busy.then_some(serve::BUSY_RETRY_AFTER_SECONDS),
+                    )
+                } else {
+                    inspect_operation(operation, true)
+                }],
+            }),
+        ),
+    };
+
+    serve::refusal(status, busy, Json(diagnostic))
+}
+
+fn inspect_operation(operation: &str, uncertain: bool) -> wire::Action {
+    wire::Action::InspectOperationAction(wire::InspectOperationAction {
+        action: serde_json::json!("inspect_operation"),
+        operation: operation.to_owned(),
+        resource: None,
+        uncertain,
+    })
+}
+
+fn operation(method: &str, path: &str) -> Option<&'static str> {
+    Some(match (method, path) {
+        ("GET", ORGANIZATIONS) => "list_organizations",
+        ("POST", ORGANIZATIONS) => "declare_organization",
+        ("POST", STARTS) => "start",
+        ("GET", PROJECTS) => "list_projects",
+        ("POST", PROJECTS) => "declare_project",
+        ("GET", AGENTS) => "list_agents",
+        ("POST", AGENTS) => "declare_agent",
+        ("PUT", AGENT_MODEL) => "set_agent_model",
+        ("POST", DECLARATION) => "apply_declaration",
+        ("POST", DECLARATION_PREVIEW) => "preview_declaration",
+        ("GET", CREDENTIALS) => "list_provider_credentials",
+        ("PUT", CREDENTIAL) => "hold_provider_credential",
+        ("DELETE", CREDENTIAL) => "forget_provider_credential",
+        ("GET", PROFILES) => "list_subscription_profiles",
+        ("POST", PROFILES) => "declare_subscription_profile",
+        ("PUT", PROFILE_VARIABLE) => "hold_subscription_profile_variable",
+        ("DELETE", PROFILE_VARIABLE) => "forget_subscription_profile_variable",
+        ("PUT", PROFILE_FILE) => "hold_subscription_profile_file",
+        ("DELETE", PROFILE_FILE) => "forget_subscription_profile_file",
+        ("GET", INTEGRATIONS) => "list_integrations",
+        ("POST", INTEGRATIONS) => "register_integration",
+        ("POST", GITHUB_APP) => "start_github_app",
+        ("GET", integration::manifest::PAGE) => "github_app_setup",
+        ("GET", integration::manifest::CALLBACK) => "github_app_callback",
+        ("GET", integration::manifest::INSTALLED) => "github_app_installed",
+        ("DELETE", EVENT_REFUSAL) => "acknowledge_event_refusal",
+        ("GET", EVENTS) => "list_events",
+        ("GET", EVENT) => "show_event",
+        ("GET", TRIGGERS) => "list_triggers",
+        ("POST", TRIGGERS) => "declare_trigger",
+        ("GET", TRIGGER) => "show_trigger",
+        ("POST", TRIGGER_TEST) => "test_trigger",
+        ("POST", TRIGGER_DISABLE) => "disable_trigger",
+        ("POST", TRIGGER_ENABLE) => "enable_trigger",
+        ("POST", TRIGGER_DISPATCH) => "dispatch_trigger",
+        ("POST", APPLIED_TRIGGERS) => "apply_triggers",
+        ("POST", APPLIED_TRIGGERS_PREVIEW) => "preview_applied_triggers",
+        ("GET", INSTANCES) => "list_held_instances",
+        ("GET", QUEUE) => "show_queue",
+        ("GET", WORKSPACES) => "list_workspaces",
+        ("POST", WORKSPACES) => "open_workspace",
+        ("GET", WORKSPACE) => "show_workspace",
+        ("GET", WORKSPACE_WORK) => "workspace_work",
+        ("GET", WORKSPACE_CHANGES) => "workspace_changes",
+        ("GET", WORKSPACE_COMMITS) => "workspace_commits",
+        ("GET", WORKSPACE_STASHES) => "workspace_stashes",
+        ("GET", WORKSPACE_FILES) => "workspace_files",
+        ("GET", WORKSPACE_FILE) => "workspace_file",
+        ("POST", WORKSPACE_MESSAGES) => "post_to_workspace",
+        ("PUT", WORKSPACE_MESSAGE) => "edit_workspace_message",
+        ("DELETE", WORKSPACE_MESSAGE) => "withdraw_workspace_message",
+        ("POST", WORKSPACE_SEAL) => "seal_workspace",
+        ("POST", WORKSPACE_INSTANCE_RELEASE) => "release_instance",
+        ("GET", SESSIONS) => "list_sessions",
+        ("POST", SESSIONS) => "enqueue_session",
+        ("GET", SESSION) => "show_session",
+        ("POST", SESSION_STOP) => "stop_session",
+        ("POST", SESSION_INTERRUPT) => "interrupt_session",
+        ("POST", SESSION_OPTIONS) => "set_session_option",
+        ("GET", TRANSCRIPT) => "transcript",
+        ("POST", FOLLOWER_LEASE) => "renew_follower",
+        ("GET", TRANSCRIPT_PAYLOAD) => "transcript_payload",
+        ("GET", CHANGES) => "changes",
+        _ => return None,
+    })
 }
 
 #[derive(Serialize)]
 struct Refusal {
     message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    field: Option<&'static str>,
 }
 
 #[cfg(test)]
@@ -3526,5 +3878,69 @@ mod tests {
             "Claude keeps the prompt cache across a change of effort"
         );
         assert!(warns_cache("claude", Some("model")));
+    }
+
+    #[test]
+    fn every_route_is_diagnosed_under_the_operation_it_is_documented_as() {
+        let document: serde_json::Value =
+            serde_json::from_str(include_str!("../../../openapi/operator.json"))
+                .expect("a valid operator document");
+        let paths = document["paths"].as_object().expect("paths");
+
+        for (path, operations) in paths {
+            for (method, documented) in operations.as_object().expect("operations") {
+                let Some(id) = documented["operationId"].as_str() else {
+                    continue;
+                };
+                let snake: String = id
+                    .chars()
+                    .flat_map(|character| {
+                        let lower = character.to_ascii_lowercase();
+                        (character.is_ascii_uppercase())
+                            .then_some('_')
+                            .into_iter()
+                            .chain([lower])
+                    })
+                    .collect();
+                assert_eq!(
+                    super::operation(&method.to_ascii_uppercase(), path),
+                    Some(snake.as_str()),
+                    "{method} {path}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_refusals_sentence_never_decides_its_status_or_next_steps() {
+        use crate::declined::{Consequence, Next, Reason, Resource, Step};
+
+        let answered = |message: &str| {
+            let reason = Reason::StateConflict {
+                operation: "seal_workspace",
+                resource: Resource::Workspace,
+                reference: "w".to_owned(),
+                organization: Some("acme".to_owned()),
+                state: "session_in_flight",
+                holding_session: Some("s".to_owned()),
+                next: Next::inspect(Resource::Session, "s").then(Step::StopSession {
+                    session: "s".to_owned(),
+                    consequence: Consequence::FailsSession,
+                }),
+                message: message.to_owned(),
+            };
+            let super::Refused::Diagnosed { status, diagnostic } = super::diagnosed(reason, None)
+            else {
+                panic!("a typed reason is diagnosed");
+            };
+            let mut body = serde_json::to_value(diagnostic).expect("a serializable diagnostic");
+            body["message"] = serde_json::Value::Null;
+            (status, body)
+        };
+
+        assert_eq!(
+            answered("the session s is still in flight in the workspace w"),
+            answered("the workspace w has no instance to release")
+        );
     }
 }

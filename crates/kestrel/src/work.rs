@@ -5,7 +5,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::declined::{Declined, FieldRefusal, Kind};
+use crate::declined::{Constraint, Next, Reason, Resource};
 use crate::domain::{
     ChangingOption, Declared, Exit, HeldMessage, Organization, Session, SessionCommand, SessionId,
     SessionOption, SessionState, Turn, Usage, Workspace, WorkspaceId,
@@ -226,17 +226,23 @@ pub async fn enqueue(
 ) -> Result<Session> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(workspace).await?;
-    workspace.accepts("session")?;
+    workspace.accepts("enqueue_session", "session")?;
     let blockers = blockers(&mut tx, &workspace.organization, depends_on).await?;
 
     if let Some(holding) = workspace::unfinished_session(&mut tx, &workspace)
         .await?
         .refuses_enqueue()
     {
-        bail!(
-            "the workspace {} already has the session {holding} in it, and a workspace has one at a time",
-            workspace.id
-        );
+        bail!(workspace::held_by(
+            "enqueue_session",
+            "session_unfinished",
+            &workspace,
+            holding,
+            format!(
+                "the workspace {} already has the session {} in it, and a workspace has one at a time",
+                workspace.id, holding.id
+            ),
+        ));
     }
 
     let named = match agent {
@@ -273,11 +279,18 @@ pub(crate) async fn blockers(
             } else {
                 format!("the session {reference} ({})", blocker.name)
             };
-            return Err(FieldRefusal {
-                field: "depends_on",
+            let id = blocker.id.to_string();
+            return Err(Reason::StateConflict {
+                operation: "enqueue_session",
+                resource: Resource::Session,
+                reference: id.clone(),
+                organization: Some(organization.name.clone()),
+                state: blocker.state.as_str(),
+                holding_session: None,
+                next: Next::inspect(Resource::Session, id),
                 message: format!("{named} {why}, so nothing can wait on it"),
-                kind: Kind::Taken,
             }
+            .concerning("depends_on")
             .into());
         }
         if !blockers.iter().any(|known| known.id == blocker.id) {
@@ -349,20 +362,6 @@ pub enum Named<'a> {
     Category(&'a str),
 }
 
-pub enum OptionRefusal {
-    Phase(String),
-    Unacceptable { field: &'static str, why: String },
-    Missing(String),
-    Named(anyhow::Error),
-    Unavailable(anyhow::Error),
-}
-
-impl From<anyhow::Error> for OptionRefusal {
-    fn from(error: anyhow::Error) -> Self {
-        Self::Unavailable(error)
-    }
-}
-
 pub struct OptionSet {
     pub session: Session,
     /// Waits on the harness (202) rather than setting a queued Session's declared value at once
@@ -377,13 +376,11 @@ pub async fn set_option(
     participant: &str,
     named: Named<'_>,
     value: &str,
-) -> Result<OptionSet, OptionRefusal> {
+) -> Result<OptionSet> {
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
-    let participant = match participant::accepted(&mut tx, &organization, participant).await {
-        Ok(name) => name,
-        Err(error) => return Err(OptionRefusal::Named(error)),
-    };
+    let participant =
+        participant::accepted(&mut tx, &organization, participant, "set_session_option").await?;
     let session = tx
         .workspaces()
         .resolved_session(&organization, reference)
@@ -393,7 +390,16 @@ pub async fn set_option(
         SessionState::Queued => false,
         SessionState::Waiting | SessionState::Trailing => true,
         SessionState::Unbriefed if !session.options.is_empty() => true,
-        phase => return Err(OptionRefusal::Phase(phase_refusal(phase, &session))),
+        phase => {
+            bail!(session_conflict(
+                "set_session_option",
+                &organization,
+                &session,
+                phase.as_str(),
+                Next::inspect(Resource::Session, session.id.to_string()),
+                phase_refusal(phase, &session),
+            ))
+        }
     };
 
     if live {
@@ -405,20 +411,42 @@ pub async fn set_option(
                 .find(|option| option.is_category(category)),
         };
         let Some(option) = option else {
-            return Err(OptionRefusal::Missing(format!(
-                "the session {} offers no option {}",
-                session.id,
-                match named {
-                    Named::Option(id) => id,
-                    Named::Category(category) => category,
-                }
-            )));
+            let (field, asked, allowed) = match named {
+                Named::Option(id) => (
+                    "option",
+                    id,
+                    session
+                        .options
+                        .iter()
+                        .map(|option| option.id.clone())
+                        .collect(),
+                ),
+                Named::Category(category) => (
+                    "category",
+                    category,
+                    session
+                        .options
+                        .iter()
+                        .filter_map(|option| option.category.clone())
+                        .collect(),
+                ),
+            };
+            bail!(Reason::InvalidField {
+                field,
+                operation: "set_session_option",
+                constraint: Constraint::Offered,
+                allowed: Some(allowed),
+                message: format!("the session {} offers no option {asked}", session.id),
+            });
         };
         let category = option.category.clone().unwrap_or_else(|| option.id.clone());
         if !offers(option, value) {
-            return Err(OptionRefusal::Unacceptable {
+            bail!(Reason::InvalidField {
                 field: "value",
-                why: format!("the {category} option does not offer {value}"),
+                operation: "set_session_option",
+                constraint: Constraint::Offered,
+                allowed: Some(offered(option)),
+                message: format!("the {category} option does not offer {value}"),
             });
         }
 
@@ -442,18 +470,25 @@ pub async fn set_option(
             )
             .await?
             .ok_or_else(|| {
-                OptionRefusal::Phase(format!(
-                    "the session {} is on no instance to change",
-                    session.id
-                ))
+                session_conflict(
+                    "set_session_option",
+                    &organization,
+                    &session,
+                    "no_instance",
+                    Next::inspect(Resource::Session, session.id.to_string()),
+                    format!("the session {} is on no instance to change", session.id),
+                )
             })?;
     } else {
         let category = match named {
             Named::Category(category) => {
                 if !declares(category) {
-                    return Err(OptionRefusal::Unacceptable {
+                    bail!(Reason::InvalidField {
                         field: "category",
-                        why: format!(
+                        operation: "set_session_option",
+                        constraint: Constraint::Offered,
+                        allowed: Some(DECLARED.map(str::to_owned).to_vec()),
+                        message: format!(
                             "a queued session declares {}, {} or {}, not {category}",
                             SessionOption::MODEL,
                             SessionOption::MODE,
@@ -466,10 +501,13 @@ pub async fn set_option(
             // A queued Session has reported no options, so only a category it declares is one.
             Named::Option(option) if declares(option) => option,
             Named::Option(option) => {
-                return Err(OptionRefusal::Missing(format!(
-                    "the queued session {} has no option {option}",
-                    session.id
-                )));
+                bail!(Reason::InvalidField {
+                    field: "option",
+                    operation: "set_session_option",
+                    constraint: Constraint::Offered,
+                    allowed: Some(DECLARED.map(str::to_owned).to_vec()),
+                    message: format!("the queued session {} has no option {option}", session.id),
+                });
             }
         };
         let from = match category {
@@ -521,11 +559,47 @@ fn phase_refusal(phase: SessionState, session: &Session) -> String {
     }
 }
 
+const DECLARED: [&str; 3] = [
+    SessionOption::MODEL,
+    SessionOption::MODE,
+    SessionOption::THOUGHT_LEVEL,
+];
+
 fn declares(category: &str) -> bool {
-    matches!(
-        category,
-        SessionOption::MODEL | SessionOption::MODE | SessionOption::THOUGHT_LEVEL
-    )
+    DECLARED.contains(&category)
+}
+
+fn offered(option: &SessionOption) -> Vec<String> {
+    match &option.kind {
+        crate::domain::SessionOptionKind::Select { values, groups, .. } => values
+            .iter()
+            .chain(groups.iter().flat_map(|group| group.values.iter()))
+            .map(|offered| offered.value.clone())
+            .collect(),
+        crate::domain::SessionOptionKind::Boolean { .. } => {
+            vec!["true".to_owned(), "false".to_owned()]
+        }
+    }
+}
+
+fn session_conflict(
+    operation: &'static str,
+    organization: &Organization,
+    session: &Session,
+    state: &'static str,
+    next: Next,
+    message: String,
+) -> Reason {
+    Reason::StateConflict {
+        operation,
+        resource: Resource::Session,
+        reference: session.id.to_string(),
+        organization: Some(organization.name.clone()),
+        state,
+        holding_session: None,
+        next,
+        message,
+    }
 }
 
 fn offers(option: &SessionOption, value: &str) -> bool {
@@ -991,22 +1065,33 @@ pub async fn interrupt(store: &Store, id: SessionId, participant: &str) -> Resul
     let mut tx = store.begin().await?;
     let session = tx.workspaces().session(id).await?;
     let organization = tx.organizations().by_id(session.organization).await?;
-    let participant = participant::accepted(&mut tx, &organization, participant).await?;
+    let participant =
+        participant::accepted(&mut tx, &organization, participant, "interrupt_session").await?;
 
     match session.state {
         SessionState::Working => {}
         SessionState::Trailing => {
-            return Err(Declined::Taken(format!(
-                "the session {id} is trailing: its turn has already answered, \
-                 so stop the session to end the work its agent is still doing"
-            ))
-            .into());
+            bail!(session_conflict(
+                "interrupt_session",
+                &organization,
+                &session,
+                SessionState::Trailing.as_str(),
+                workspace::stoppable(Next::inspect(Resource::Session, id.to_string()), &session),
+                format!(
+                    "the session {id} is trailing: its turn has already answered, \
+                     so stop the session to end the work its agent is still doing"
+                ),
+            ));
         }
         phase => {
-            return Err(Declined::Taken(format!(
-                "the session {id} is {phase}, and only a working turn can be interrupted"
-            ))
-            .into());
+            bail!(session_conflict(
+                "interrupt_session",
+                &organization,
+                &session,
+                phase.as_str(),
+                Next::inspect(Resource::Session, id.to_string()),
+                format!("the session {id} is {phase}, and only a working turn can be interrupted"),
+            ));
         }
     }
     if tx
@@ -1035,7 +1120,15 @@ pub async fn stop(store: &Store, id: SessionId, running: &[RunningTool]) -> Resu
     let mut tx = store.begin().await?;
     let session = tx.workspaces().session(id).await?;
     let Some(exit) = session.state.stop_exit() else {
-        bail!("the session {id} has already ended");
+        let organization = tx.organizations().by_id(session.organization).await?;
+        bail!(session_conflict(
+            "stop_session",
+            &organization,
+            &session,
+            session.state.as_str(),
+            Next::inspect(Resource::Session, id.to_string()),
+            format!("the session {id} has already ended"),
+        ));
     };
     close_tools(&mut tx, &session, running, ClosingReason::Interrupted).await?;
     let stands = ending(&mut tx, &session, exit).await?;

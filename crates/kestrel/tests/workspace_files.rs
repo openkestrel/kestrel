@@ -428,6 +428,11 @@ async fn a_read_of_an_instance_whose_supervisor_has_stopped_fails_saying_it_did_
     assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
     let refusal: Value = response.json().await.unwrap();
     assert_eq!(refusal["message"], "the Instance didn't answer");
+    assert_eq!(refusal["kind"], "instance_timeout");
+    assert_eq!(refusal["context"]["workspace"], workspace.id.to_string());
+    assert_eq!(refusal["context"]["operation"], "workspace_files");
+    assert_eq!(refusal["next_steps"][0]["action"], "retry_read");
+    assert_eq!(refusal["next_steps"][0]["operation"], "workspace_files");
     kestrel.teardown().await;
 }
 
@@ -438,7 +443,7 @@ async fn a_workspace_with_no_instance_has_nothing_to_read() {
 
     let response = get(&kestrel, &workspace, "files", &[]).await;
 
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(response.status(), StatusCode::CONFLICT);
     let refusal: Value = response.json().await.unwrap();
     assert!(
         refusal["message"]
@@ -447,6 +452,9 @@ async fn a_workspace_with_no_instance_has_nothing_to_read() {
             .contains(&workspace.checkout.branch),
         "{refusal}"
     );
+    assert_eq!(refusal["kind"], "state_conflict");
+    assert_eq!(refusal["context"]["state"], "no_instance");
+    assert_eq!(refusal["next_steps"][0]["action"], "inspect_resource");
     kestrel.teardown().await;
 }
 

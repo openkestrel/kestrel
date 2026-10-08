@@ -248,11 +248,15 @@ impl<'a> Integrations<'a> {
             .bind(name)
             .fetch_optional(&mut *self.connection)
             .await?
-            .ok_or_else(|| {
-                Declined::Missing(format!(
+            .ok_or_else(|| crate::declined::Reason::MissingReference {
+                resource: crate::declined::Resource::Integration,
+                reference: name.to_owned(),
+                organization: Some(organization.name.clone()),
+                within: None,
+                message: format!(
                     "no integration named {name} in the organization {}",
                     organization.name
-                ))
+                ),
             })?;
 
         integration(&row, self.keyring)
@@ -679,7 +683,13 @@ pub(crate) async fn event_with_id(
     .bind(id.to_string())
     .fetch_optional(&mut *connection)
     .await?
-    .ok_or_else(|| Declined::Missing(format!("no event {id}")))?;
+    .ok_or_else(|| crate::declined::Reason::MissingReference {
+        resource: crate::declined::Resource::Event,
+        reference: id.to_string(),
+        organization: None,
+        within: None,
+        message: format!("no event {id}"),
+    })?;
 
     event(&row)
 }

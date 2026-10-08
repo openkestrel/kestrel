@@ -688,9 +688,14 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn accepts(&self, what: &str) -> Result<()> {
+    pub fn accepts(&self, operation: &'static str, what: &str) -> Result<()> {
         if self.state == WorkspaceState::Sealed {
-            bail!("the workspace {} is sealed, and accepts no {what}", self.id);
+            bail!(crate::workspace::workspace_conflict(
+                operation,
+                self,
+                "sealed",
+                format!("the workspace {} is sealed, and accepts no {what}", self.id),
+            ));
         }
 
         Ok(())

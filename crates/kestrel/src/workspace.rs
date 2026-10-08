@@ -1,10 +1,10 @@
 use anyhow::{Result, bail};
 use jiff::{SignedDuration, Timestamp};
 
-use crate::declined::{Declined, FieldRefusal, Kind, Reason};
+use crate::declined::{Consequence, Constraint, Next, Reason, Resource, Step};
 use crate::domain::{
-    Agent, Declared, Exit, HeldMessage, Organization, Preparing, Project, Session, SessionId,
-    SessionState, StartedBy, SubscriptionProfile, Workspace, WorkspaceId, WorkspaceState,
+    Agent, Declared, Exit, HeldMessage, Organization, Preparing, Project, Session, SessionState,
+    StartedBy, SubscriptionProfile, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::instance;
 use crate::log::{BriefSource, Cursor, Entry, Message, Page, Unreadable, Window};
@@ -176,19 +176,29 @@ async fn resolved<'a>(
         None => None,
     };
 
+    let invalid = |field: &'static str, constraint: Constraint, message: String| {
+        anyhow::Error::from(Reason::InvalidField {
+            field,
+            operation: "open_workspace",
+            constraint,
+            allowed: None,
+            message,
+        })
+    };
     if open.branch.is_some_and(|branch| branch.trim().is_empty()) {
-        return Err(FieldRefusal::unacceptable(
+        return Err(invalid(
             "branch",
-            "a branch cannot be empty; omit it for the branch the workspace declares",
-        )
-        .into());
+            Constraint::NonEmpty,
+            "a branch cannot be empty; omit it for the branch the workspace declares".to_owned(),
+        ));
     }
     if open.branch.is_some() && continues.is_some() {
-        return Err(FieldRefusal::unacceptable(
+        return Err(invalid(
             "branch",
-            "a continuation runs on the branch of the workspace it continues, and names none of its own",
-        )
-        .into());
+            Constraint::OmittedWhenContinuing,
+            "a continuation runs on the branch of the workspace it continues, and names none of its own"
+                .to_owned(),
+        ));
     }
     for (field, value) in [
         ("model", &open.declared.model),
@@ -196,30 +206,30 @@ async fn resolved<'a>(
         ("thought_level", &open.declared.thought_level),
     ] {
         if value.as_ref().is_some_and(|value| value.trim().is_empty()) {
-            return Err(FieldRefusal::unacceptable(
+            return Err(invalid(
                 field,
+                Constraint::NonEmpty,
                 format!("a {field} cannot be empty; omit it for the Agent's"),
-            )
-            .into());
+            ));
         }
     }
     if open.brief.is_some_and(|brief| brief.trim().is_empty()) {
-        return Err(FieldRefusal::unacceptable(
+        return Err(invalid(
             "brief",
-            "a brief cannot be empty; omit it to open without one",
-        )
-        .into());
+            Constraint::NonEmpty,
+            "a brief cannot be empty; omit it to open without one".to_owned(),
+        ));
     }
     let participant = match (open.participant, open.brief) {
         (Some(participant), Some(_)) => {
-            Some(participant::accepted(tx, organization, participant).await?)
+            Some(participant::accepted(tx, organization, participant, "open_workspace").await?)
         }
         (Some(_), None) => {
-            return Err(FieldRefusal::unacceptable(
+            return Err(invalid(
                 "participant",
-                "a participant names the author of a brief, and this open carries none",
-            )
-            .into());
+                Constraint::RequiresBrief,
+                "a participant names the author of a brief, and this open carries none".to_owned(),
+            ));
         }
         (None, _) => None,
     };
@@ -238,38 +248,61 @@ async fn resolved<'a>(
 
 pub(crate) fn named<T>(field: &'static str, named: Result<T>) -> Result<T> {
     named.map_err(|error| match error.downcast::<Reason>() {
-        Ok(reason) => {
-            let kind = match &reason {
-                Reason::MissingReference { .. } => Kind::Missing,
-                Reason::AmbiguousReference { .. } => Kind::Ambiguous,
-                Reason::InvalidField { .. } => Kind::Unacceptable,
-                Reason::Taken { .. } => Kind::Taken,
-            };
-            FieldRefusal {
-                field,
-                message: reason.to_string(),
-                kind,
-            }
-            .into()
-        }
-        Err(error) => match error.downcast::<Declined>() {
-            Ok(declined) => {
-                let kind = match &declined {
-                    Declined::Unacceptable(_) => Kind::Unacceptable,
-                    Declined::Missing(_) => Kind::Missing,
-                    Declined::Ambiguous(_) => Kind::Ambiguous,
-                    Declined::Taken(_) => Kind::Taken,
-                };
-                FieldRefusal {
-                    field,
-                    message: declined.to_string(),
-                    kind,
-                }
-                .into()
-            }
-            Err(error) => error,
-        },
+        Ok(reason) => reason.concerning(field).into(),
+        Err(error) => error,
     })
+}
+
+/// The Workspace's own state refuses the operation; inspecting it is the only step offered.
+pub(crate) fn workspace_conflict(
+    operation: &'static str,
+    workspace: &Workspace,
+    state: &'static str,
+    message: String,
+) -> Reason {
+    Reason::StateConflict {
+        operation,
+        resource: Resource::Workspace,
+        reference: workspace.id.to_string(),
+        organization: Some(workspace.organization.name.clone()),
+        state,
+        holding_session: None,
+        next: Next::inspect(Resource::Workspace, workspace.id.to_string()),
+        message,
+    }
+}
+
+pub(crate) fn held_by(
+    operation: &'static str,
+    state: &'static str,
+    workspace: &Workspace,
+    holding: &Session,
+    message: String,
+) -> Reason {
+    let session = holding.id.to_string();
+    Reason::StateConflict {
+        operation,
+        resource: Resource::Workspace,
+        reference: workspace.id.to_string(),
+        organization: Some(workspace.organization.name.clone()),
+        state,
+        holding_session: Some(session.clone()),
+        next: stoppable(Next::inspect(Resource::Session, &session), holding),
+        message,
+    }
+}
+
+pub(crate) fn stoppable(next: Next, session: &Session) -> Next {
+    match session.state.stop_exit() {
+        Some(exit) => next.then(Step::StopSession {
+            session: session.id.to_string(),
+            consequence: match exit {
+                Exit::Succeeded => Consequence::EndsSession,
+                Exit::Failed { .. } => Consequence::FailsSession,
+            },
+        }),
+        None => next,
+    }
 }
 
 pub async fn seal(store: &Store, id: WorkspaceId) -> Result<Workspace> {
@@ -277,10 +310,26 @@ pub async fn seal(store: &Store, id: WorkspaceId) -> Result<Workspace> {
     let workspace = tx.workspaces().get(id).await?;
 
     if workspace.state == WorkspaceState::Sealed {
-        bail!("the workspace {id} is already sealed, and a sealed workspace is never reopened");
+        bail!(workspace_conflict(
+            "seal_workspace",
+            &workspace,
+            "sealed",
+            format!(
+                "the workspace {id} is already sealed, and a sealed workspace is never reopened"
+            ),
+        ));
     }
     if let Some(holding) = unfinished_session(&mut tx, &workspace).await?.in_flight() {
-        bail!("the session {holding} is still in flight in the workspace {id}");
+        bail!(held_by(
+            "seal_workspace",
+            "session_in_flight",
+            &workspace,
+            holding,
+            format!(
+                "the session {} is still in flight in the workspace {id}",
+                holding.id
+            ),
+        ));
     }
     instance::archive_on_seal(&mut tx, &workspace).await?;
 
@@ -364,13 +413,12 @@ pub(crate) enum PostDestination<'a> {
 impl UnfinishedSession {
     /// A waiting or unbriefed Session is not in flight: sealing (ADR-0024) or archiving its
     /// Instance ends it.
-    pub fn in_flight(&self) -> Option<SessionId> {
-        self.session.as_ref().and_then(|session| {
-            (!matches!(
+    pub fn in_flight(&self) -> Option<&Session> {
+        self.session.as_ref().filter(|session| {
+            !matches!(
                 session.state,
                 SessionState::Ended | SessionState::Waiting | SessionState::Unbriefed
-            ) || self.held_input)
-                .then_some(session.id)
+            ) || self.held_input
         })
     }
 
@@ -415,8 +463,8 @@ impl UnfinishedSession {
         }
     }
 
-    pub fn refuses_enqueue(&self) -> Option<SessionId> {
-        self.session.as_ref().map(|session| session.id)
+    pub fn refuses_enqueue(&self) -> Option<&Session> {
+        self.session.as_ref()
     }
 
     pub fn idle(&self) -> bool {
@@ -472,7 +520,13 @@ pub(crate) async fn post_in(
     participant: &str,
     message: &str,
 ) -> Result<Posted> {
-    let participant = participant::accepted(tx, &workspace.organization, participant).await?;
+    let participant = participant::accepted(
+        tx,
+        &workspace.organization,
+        participant,
+        "post_to_workspace",
+    )
+    .await?;
 
     post_as(tx, workspace, &participant, message).await
 }
@@ -483,7 +537,7 @@ pub(crate) async fn post_as(
     participant: &str,
     message: &str,
 ) -> Result<Posted> {
-    workspace.accepts("message")?;
+    workspace.accepts("post_to_workspace", "message")?;
     let unfinished = unfinished_session(tx, workspace).await?;
     match unfinished.post_destination() {
         PostDestination::Start => {
@@ -578,7 +632,13 @@ pub async fn edit_message(
 ) -> Result<HeldMessage> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(workspace).await?;
-    let participant = participant::accepted(&mut tx, &workspace.organization, participant).await?;
+    let participant = participant::accepted(
+        &mut tx,
+        &workspace.organization,
+        participant,
+        "edit_workspace_message",
+    )
+    .await?;
     let edited = tx
         .workspaces()
         .edit_held_message(&workspace, id, &participant, message)
@@ -597,7 +657,13 @@ pub async fn withdraw_message(
 ) -> Result<()> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(workspace).await?;
-    let participant = participant::accepted(&mut tx, &workspace.organization, participant).await?;
+    let participant = participant::accepted(
+        &mut tx,
+        &workspace.organization,
+        participant,
+        "withdraw_workspace_message",
+    )
+    .await?;
     tx.workspaces()
         .withdraw_held_message(&workspace, id, &participant)
         .await?;
@@ -718,7 +784,7 @@ pub(crate) async fn start_in(
     workspace: &Workspace,
     pending: PendingSession,
 ) -> Result<Option<Session>> {
-    workspace.accepts("session")?;
+    workspace.accepts("start_session", "session")?;
 
     let unfinished = unfinished_session(tx, workspace).await?;
     if unfinished.refuses_enqueue().is_none() {
@@ -805,10 +871,21 @@ async fn continued(
     let sealed = tx.workspaces().resolved(organization, reference).await?;
 
     if sealed.state != WorkspaceState::Sealed {
-        bail!(Declined::Unacceptable(format!(
-            "the workspace {} is open, and work continues in it rather than after it",
-            sealed.id
-        )));
+        let workspace = sealed.id.to_string();
+        bail!(Reason::StateConflict {
+            operation: "open_workspace",
+            resource: Resource::Workspace,
+            reference: workspace.clone(),
+            organization: Some(organization.name.clone()),
+            state: "open",
+            holding_session: None,
+            next: Next::inspect(Resource::Workspace, &workspace)
+                .then(Step::EnqueueSession { workspace }),
+            message: format!(
+                "the workspace {} is open, and work continues in it rather than after it",
+                sealed.id
+            ),
+        });
     }
 
     Ok(sealed)
@@ -817,7 +894,7 @@ async fn continued(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{Agent, AgentId, OrganizationId};
+    use crate::domain::{Agent, AgentId, OrganizationId, SessionId};
 
     fn session(state: SessionState) -> Session {
         let organization = OrganizationId::generate();
@@ -899,7 +976,11 @@ mod tests {
             assert_eq!(unfinished.in_flight().is_some(), case.in_flight, "{label}");
             assert_eq!(unfinished.idle(), !case.in_flight, "{label}");
             assert!((case.post)(&unfinished.post_destination()), "{label}");
-            assert_eq!(unfinished.refuses_enqueue(), Some(session.id), "{label}");
+            assert_eq!(
+                unfinished.refuses_enqueue().map(|session| session.id),
+                Some(session.id),
+                "{label}"
+            );
             assert_eq!(
                 unfinished.yielding().is_some(),
                 matches!(case.state, Waiting | Unbriefed),
@@ -912,6 +993,6 @@ mod tests {
         };
         assert!(matches!(empty.post_destination(), PostDestination::Start));
         assert!(empty.idle());
-        assert_eq!(empty.refuses_enqueue(), None);
+        assert!(empty.refuses_enqueue().is_none());
     }
 }

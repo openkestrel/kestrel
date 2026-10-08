@@ -586,8 +586,16 @@ async fn an_unoffered_value_an_unknown_option_and_an_agents_name_are_refused() {
         json!({"participant": "operator", "option": "model", "value": "no-such-model"}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
     assert_eq!(refused["field"], "value");
+    assert_eq!(refused["kind"], "invalid_field");
+    assert_eq!(refused["context"]["constraint"], "offered");
+    assert!(
+        refused["context"]["allowed_values"]
+            .as_array()
+            .is_some_and(|offered| offered.contains(&json!(OTHER_MODEL))),
+        "{refused}"
+    );
 
     let (status, refused) = set_option(
         &kestrel,
@@ -595,7 +603,14 @@ async fn an_unoffered_value_an_unknown_option_and_an_agents_name_are_refused() {
         json!({"participant": "operator", "option": "no-such-option", "value": OTHER_MODEL}),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(refused["field"], "option");
+    assert!(
+        refused["context"]["allowed_values"]
+            .as_array()
+            .is_some_and(|offered| offered.contains(&json!("model"))),
+        "{refused}"
+    );
 
     let (status, refused) = set_option(
         &kestrel,
@@ -629,7 +644,8 @@ async fn a_category_with_no_option_an_ended_session_and_an_undeclarable_category
         json!({"participant": "operator", "category": "mode", "value": SWITCHED_MODE}),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(refused["field"], "category");
 
     kestrel.stop_session(session.id).await;
     let (status, refused) = set_option(
@@ -645,6 +661,8 @@ async fn a_category_with_no_option_an_ended_session_and_an_undeclarable_category
             .is_some_and(|message| message.contains("ended")),
         "{refused}"
     );
+    assert_eq!(refused["context"]["state"], "ended");
+    assert_eq!(refused["next_steps"][0]["action"], "inspect_resource");
 
     let queued = kestrel.enqueue_session(session.workspace).await;
     assert_eq!(queued.state, SessionState::Queued);
@@ -654,7 +672,7 @@ async fn a_category_with_no_option_an_ended_session_and_an_undeclarable_category
         json!({"participant": "operator", "category": "_scripted", "value": "true"}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
     assert_eq!(refused["field"], "category");
     assert!(
         changed_entries(&kestrel, session.workspace)

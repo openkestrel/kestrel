@@ -54,6 +54,7 @@ pub async fn forget(store: &Store, organization: &str, variable: &str) -> Result
             resource: Resource::ProviderCredential,
             reference: variable.to_owned(),
             organization: Some(organization.name.clone()),
+            within: None,
             message: format!(
                 "the organization {} holds no provider credential named {variable}",
                 organization.name
@@ -71,6 +72,7 @@ pub(crate) fn holdable(operation: &'static str, variable: &str, secret: &str) ->
             field: "secret",
             operation,
             constraint: Constraint::NonEmpty,
+            allowed: None,
             message: "a provider credential with nothing in it is not one".to_owned(),
         });
     }
@@ -107,6 +109,7 @@ pub(crate) fn named(operation: &'static str, variable: &str) -> Result<()> {
             field: "variable",
             operation,
             constraint: Constraint::NotReserved,
+            allowed: None,
             message: "KESTREL_ is reserved for the supervisor".to_owned(),
         });
     }
@@ -124,6 +127,7 @@ pub(crate) fn named(operation: &'static str, variable: &str) -> Result<()> {
             field: "variable",
             operation,
             constraint: Constraint::EnvironmentVariableName,
+            allowed: None,
             message: format!(
                 "{variable} is not an environment variable a Harness could be spawned with"
             ),
