@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{IsTerminal as _, Write};
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -59,6 +59,7 @@ struct Commits {
 }
 
 pub fn show(answer: Value, json: bool) -> Result<()> {
+    let terminal = std::io::stdout().is_terminal();
     let mut out = std::io::stdout().lock();
     if json {
         writeln!(out, "{answer}")?;
@@ -82,9 +83,13 @@ pub fn show(answer: Value, json: bool) -> Result<()> {
                     .duration_since(reported_at)
                     .as_secs()
                     .max(0);
-                writeln!(out, "Reported by the supervisor {age}s ago ({reported_at})")?;
+                if terminal {
+                    writeln!(out, "Reported by the supervisor {age}s ago ({reported_at})")?;
+                }
                 for repository in repositories {
-                    writeln!(out, "\n{}", repository.repository)?;
+                    if terminal {
+                        writeln!(out, "\n{}", repository.repository)?;
+                    }
                     match repository.git {
                         Git::Unreadable { because } => writeln!(out, "  {because}")?,
                         Git::Read {

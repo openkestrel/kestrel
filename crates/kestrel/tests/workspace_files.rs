@@ -269,7 +269,26 @@ async fn a_directory_past_five_thousand_entries_is_truncated_with_a_note() {
         .await,
     )
     .unwrap();
-    assert!(shown.contains("5000 of 5001 entries shown"), "{shown}");
+    assert_eq!(shown.lines().count(), 5_000);
+    assert!(!shown.contains("entries shown"), "{shown}");
+    let terminal = client::ran_on_a_terminal_by(
+        &kestrel,
+        &[
+            "workspace",
+            "files",
+            &workspace.id.to_string(),
+            "kestrel/many",
+        ],
+        client::Invocation::default(),
+        "",
+    )
+    .await;
+    assert!(terminal.status.success(), "{}", terminal.said);
+    assert!(
+        terminal.said.contains("5000 of 5001 entries shown"),
+        "{}",
+        terminal.said
+    );
     kestrel.teardown().await;
 }
 
@@ -674,7 +693,21 @@ async fn changes_over_two_mebibytes_keep_complete_stats_and_refuse_escaping_path
         cli_bytes(&kestrel, &["workspace", "diff", &workspace.id.to_string()]).await,
     )
     .unwrap();
-    assert!(shown.contains("diff truncated"));
+    assert!(!shown.contains("diff truncated"));
+    assert!(shown.starts_with("diff --git"));
+    let terminal = client::ran_on_a_terminal_by(
+        &kestrel,
+        &["workspace", "diff", &workspace.id.to_string()],
+        client::Invocation::default(),
+        "",
+    )
+    .await;
+    assert!(terminal.status.success(), "{}", terminal.said);
+    assert!(
+        terminal.said.contains("diff truncated"),
+        "{}",
+        terminal.said
+    );
     std::os::unix::fs::symlink("/etc/hosts", checkout.join("escape")).unwrap();
     for path in [
         "kestrel/../../etc/hosts",
