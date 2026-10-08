@@ -5,6 +5,7 @@ import { Refusal } from "#/components/refusal";
 import { Button } from "#/components/ui/button";
 import { Skeleton } from "#/components/ui/skeleton";
 import { Toggle } from "#/components/ui/toggle";
+import { ScrollablePre } from "#/components/workbench/scrollable-pre";
 import { size } from "#/operator/format";
 import { fileQuery, filesQuery } from "#/operator/work-queries";
 import { breadcrumbs, childPath, fileKindLabel } from "#/operator/work-view";
@@ -116,9 +117,9 @@ export function FilesTab({ organization, workspace }: { organization: string; wo
 					) : file.isError ? (
 						<Refusal error={file.error} />
 					) : file.data.kind === "text" ? (
-						<pre className="max-h-96 overflow-auto rounded-md border p-2 text-xs">
+						<ScrollablePre className="max-h-96 overflow-auto rounded-md border p-2 text-xs">
 							{file.data.text}
-						</pre>
+						</ScrollablePre>
 					) : (
 						<p data-binary className="text-muted-foreground text-xs">
 							binary content · {size(file.data.bytes)}

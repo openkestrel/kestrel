@@ -1,15 +1,15 @@
 # Roadmap
 
-> **We are here: `0.3`, kestrel's work is joinable mid-flight.** `0.2` is closed: kestrel works this
-> repository's backlog. Maintainer comments hand issues to Claude, Codex and OpenCode, their Sessions
-> work in parallel across Workspaces under an Organization's live-Instance cap, and each leaves a
-> branch and pull request. An Instance holding work that exists nowhere else survives failure,
-> quota exhaustion, a control-plane crash and idle sealing, and a waiting Session continues through
-> further Turns. Declaring a Trigger replays no recorded history. The acceptance runs and what they
-> found are [`docs/acceptance-0.1.md`](docs/acceptance-0.1.md) and
-> [`docs/acceptance-0.2.md`](docs/acceptance-0.2.md). The repo holds the vocabulary in
-> [`GLOSSARY.md`](GLOSSARY.md) and the direction in [`README.md`](README.md). A Session that runs out of
-> credits still ends failed and waits on an operator to resume it.
+> **We are here: `0.4`, kestrel starts from one command.** `0.3` is closed: kestrel's work is
+> joinable mid-flight. A person opens a running Workspace in the browser or the CLI, reads a live
+> Transcript that summarizes each Activity and expands it on demand, takes a turn alongside others,
+> and sees the queue, its Instances, the branch and the pull request as current state. Triggers
+> continue an open Workspace instead of opening a second, and a Session's lease survives a sleeping
+> host. The acceptance runs and what they found are [`docs/acceptance-0.1.md`](docs/acceptance-0.1.md),
+> [`docs/acceptance-0.2.md`](docs/acceptance-0.2.md) and
+> [`docs/acceptance-0.3.md`](docs/acceptance-0.3.md). The repo holds the vocabulary in
+> [`GLOSSARY.md`](GLOSSARY.md) and the direction in [`README.md`](README.md). Starting kestrel still
+> means reading a guide.
 
 Eight rungs from an empty repository to v1, and no dates. Each is a `0.N` release, and each is named
 by a class of kestrel's own work rather than by a feature list, because the ladder is walked by

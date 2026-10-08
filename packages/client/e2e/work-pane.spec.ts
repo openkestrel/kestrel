@@ -1,3 +1,4 @@
+import { AxeBuilder } from "@axe-core/playwright";
 import {
 	expect,
 	test,
@@ -513,6 +514,66 @@ test("the Diff reads each scope and one file reads safely", async ({ page, reque
 	await work.getByRole("button", { name: "src" }).click();
 	await expect(work.locator("[data-truncated]")).toContainText("showing 1 of 5 entries");
 });
+
+test("a long diff and a long file are scrollable regions a keyboard can reach", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request, "an opening brief");
+	const reads = new Reads(workspace.name);
+	const long = Array.from({ length: 200 }, (_, index) => `+line ${index}`).join("\n");
+	reads.changes.set("unpublished", {
+		repositories: [
+			{
+				repository: "https://github.com/openkestrel/kestrel",
+				diff: long,
+				files: [{ path: "x", added: 200, removed: 0 }],
+				truncated: false,
+			},
+		],
+	});
+	reads.files.set("", {
+		path: "",
+		entries: [{ name: "kestrel", kind: "directory" }],
+		total: 1,
+		truncated: false,
+	});
+	reads.files.set("kestrel", {
+		path: "kestrel",
+		entries: [{ name: "README.md", kind: "file", size: long.length, git: "tracked" }],
+		total: 1,
+		truncated: false,
+	});
+	reads.file.set("kestrel/README.md", {
+		status: 200,
+		contentType: "application/json",
+		body: JSON.stringify({ path: "kestrel/README.md", text: long }),
+	});
+	await reads.install(page);
+	await viewing(page, workspace.name);
+	const work = workPane(page);
+
+	await work.getByRole("tab", { name: "Diff" }).click();
+	await expect(work.locator("[data-diff] pre")).toContainText("+line 199");
+	await reachable(page);
+
+	await work.getByRole("tab", { name: "Files" }).click();
+	await work.getByRole("button", { name: "kestrel" }).click();
+	await work.getByRole("button", { name: /README\.md/ }).click();
+	await expect(work.locator("[data-file] pre")).toContainText("+line 199");
+	await reachable(page);
+});
+
+// Chromium lets a keyboard into any overflowing scroller, so only axe's rule tells the region
+// is reachable in every browser.
+async function reachable(page: Page): Promise<void> {
+	const { violations } = await new AxeBuilder({ page })
+		.withRules(["scrollable-region-focusable"])
+		.analyze();
+	expect(violations.flatMap(({ nodes }) => nodes.map((node) => node.html.slice(0, 120)))).toEqual(
+		[],
+	);
+}
 
 test("stale work and a lost conversation are stated plainly", async ({ page, request }) => {
 	const workspace = await opened(request, "an opening brief");
