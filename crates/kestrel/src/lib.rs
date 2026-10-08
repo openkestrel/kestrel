@@ -30,6 +30,7 @@ pub mod scheduling;
 pub mod shutdown;
 pub mod start;
 pub mod store;
+pub mod stream;
 pub mod telemetry;
 pub mod template;
 pub mod timer;

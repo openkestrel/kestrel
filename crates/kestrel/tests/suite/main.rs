@@ -42,6 +42,7 @@ mod seam;
 mod session_info;
 mod start;
 mod startup_store;
+mod stream;
 mod trailing;
 mod trigger;
 mod turns;

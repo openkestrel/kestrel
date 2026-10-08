@@ -1,6 +1,7 @@
 //! The boundary a Client reaches the control plane over, specified by `openapi/operator.json`.
 //! It authenticates nobody, so it is served apart from the link and on loopback (ADR-0015).
 
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::Duration;
 
@@ -19,6 +20,7 @@ use jiff::{SignedDuration, Timestamp};
 use kestrel_operator_types as wire;
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
+use tokio_stream::{StreamExt as _, StreamMap};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -46,6 +48,7 @@ use crate::role::serve;
 use crate::scheduling;
 use crate::store::workspace::HeldMessageRefusal;
 use crate::store::{self, Declared as DeclaredRecord, Store};
+use crate::stream::{self, Emitted};
 use crate::template::Template;
 use crate::trigger::{self, apply};
 use crate::{instance, pull_request, start, work, workspace};
@@ -119,6 +122,9 @@ pub const TRANSCRIPT_PAYLOAD: &str =
 pub const FOLLOWER_LEASE: &str =
     "/operator/organizations/{organization}/workspaces/{workspace}/followers/{id}/lease";
 pub const CHANGES: &str = "/operator/organizations/{organization}/changes";
+pub const STREAMS: &str = "/operator/streams";
+pub const STREAM: &str = "/operator/streams/{token}";
+pub const STREAM_SUBSCRIPTION: &str = "/operator/streams/{token}/subscriptions/{id}";
 /// One read of a Workspace's queue: the limits, their occupancy, and the queued Sessions in
 /// dispatch order.
 pub const QUEUE: &str = "/operator/organizations/{organization}/queue";
@@ -127,6 +133,7 @@ const EVENTS_LISTED: usize = 50;
 
 const POLL: Duration = Duration::from_millis(100);
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
+const END: &str = "end";
 
 #[derive(Clone)]
 struct ControlPlane {
@@ -134,6 +141,7 @@ struct ControlPlane {
     shutdown: CancellationToken,
     live: crate::live::Live,
     followers: crate::presence::Followers,
+    streams: stream::Streams,
 }
 
 #[derive(Deserialize)]
@@ -242,6 +250,7 @@ pub fn router(
     shutdown: CancellationToken,
     live: crate::live::Live,
     followers: crate::presence::Followers,
+    streams: stream::Streams,
 ) -> Router {
     Router::new()
         .route(ORGANIZATIONS, get(organizations).post(declare_organization))
@@ -304,11 +313,18 @@ pub fn router(
         .route(TRANSCRIPT_PAYLOAD, get(transcript_payload))
         .route(FOLLOWER_LEASE, post(renew_follower))
         .route(CHANGES, get(changes))
+        .route(STREAMS, put(reserve_stream))
+        .route(STREAM, get(open_stream))
+        .route(
+            STREAM_SUBSCRIPTION,
+            put(subscribe_stream).delete(unsubscribe_stream),
+        )
         .with_state(ControlPlane {
             store,
             shutdown,
             live,
             followers,
+            streams,
         })
         .layer(middleware::from_fn(diagnosing))
         .layer(middleware::from_fn(addressed_here))
@@ -2984,62 +3000,107 @@ async fn transcript(
         }
         None => None,
     };
-    let workspace = workspace.id;
-    let follow = following.follow.unwrap_or(true);
-    let kinds = following
-        .kinds
-        .as_deref()
-        .map(str::parse::<log::Kinds>)
-        .transpose()
-        .map_err(|error| malformed(Some("kinds"), error.to_string()))?
-        .unwrap_or_default();
-    let from = last_event_id(&headers)?;
-    let summaries = following.summaries.unwrap_or(true);
     let range = log::SeqRange {
         first_seq: following.first_seq,
         last_seq: following.last_seq,
     };
     range.validate()?;
-    let mut read = reading(&control_plane, workspace, from, &kinds, summaries, range).await?;
+    let transcribing = Transcribing {
+        workspace: workspace.id,
+        name,
+        follow: following.follow.unwrap_or(true),
+        kinds: kinds(following.kinds.as_deref())?,
+        summaries: following.summaries.unwrap_or(true),
+        range,
+        from: last_event_id(&headers)?,
+    };
+    let read = transcribing.read(&control_plane).await?;
 
-    let stream = async_stream::try_stream! {
+    Ok(per_resource(transcribed(control_plane, transcribing, read)))
+}
+
+struct Transcribing {
+    workspace: WorkspaceId,
+    name: Option<String>,
+    follow: bool,
+    kinds: log::Kinds,
+    summaries: bool,
+    range: log::SeqRange,
+    from: Option<Cursor>,
+}
+
+impl Transcribing {
+    async fn read(&self, control_plane: &ControlPlane) -> Result<Read, Refused> {
+        reading(
+            control_plane,
+            self.workspace,
+            self.from,
+            &self.kinds,
+            self.summaries,
+            self.range,
+        )
+        .await
+    }
+}
+
+fn kinds(kinds: Option<&str>) -> Result<log::Kinds, Refused> {
+    kinds
+        .map(str::parse::<log::Kinds>)
+        .transpose()
+        .map_err(|error| malformed(Some("kinds"), error.to_string()))
+        .map(Option::unwrap_or_default)
+}
+
+fn transcribed(
+    control_plane: ControlPlane,
+    transcribing: Transcribing,
+    mut read: Read,
+) -> stream::Events {
+    let Transcribing {
+        workspace,
+        name,
+        follow,
+        kinds,
+        summaries,
+        range,
+        from,
+    } = transcribing;
+
+    Box::pin(async_stream::try_stream! {
         let mut joined: Option<crate::presence::Joined> = None;
         let mut delivered = from;
         let mut session_state = read.session_state.clone();
         if follow {
-            yield Event::default().event("session_state").json_data(&session_state)?;
+            yield Emitted::new("session_state", None, &session_state)?;
         }
         loop {
             if follow && read.session_state != session_state {
                 session_state = read.session_state.clone();
-                yield Event::default().event("session_state").json_data(&session_state)?;
+                yield Emitted::new("session_state", None, &session_state)?;
             }
             let mut activities = read.page.activities.into_iter().peekable();
             for entry in read.page.entries {
                 while activities.peek().is_some_and(|activity| activity.last_seq < entry.seq) {
                     let activity = activities.next().unwrap();
                     delivered = Some(Cursor::at(workspace, activity.last_seq));
-                    yield Event::default().id(delivered.unwrap().to_string()).event("activity").json_data(activity)?;
+                    yield Emitted::new("activity", delivered, &activity)?;
                 }
                 delivered = Some(Cursor::at(workspace, entry.seq));
-                yield Event::default()
-                    .id(Cursor::at(workspace, entry.seq).to_string())
-                    .event("entry")
-                    .json_data(Recorded {
-                        kind: entry.kind,
-                        session_id: entry.session_id,
-                        seq: entry.seq,
-                        appended_at: entry.appended_at.to_string(),
-                        entry: entry.entry,
-                    })?;
+                yield Emitted::new("entry", delivered, &Recorded {
+                    kind: entry.kind,
+                    session_id: entry.session_id,
+                    seq: entry.seq,
+                    appended_at: entry.appended_at.to_string(),
+                    entry: entry.entry,
+                })?;
             }
             for activity in activities {
                 delivered = Some(Cursor::at(workspace, activity.last_seq));
-                yield Event::default().id(delivered.unwrap().to_string()).event("activity").json_data(activity)?;
+                yield Emitted::new("activity", delivered, &activity)?;
             }
             if let Some(cursor) = read.page.cursor && delivered != Some(cursor) {
                 delivered = Some(cursor);
-                yield Event::default().event("cursor").id(cursor.to_string()).json_data(cursor.to_string())?;
+                yield Emitted::new("cursor", delivered, &cursor.to_string())?;
             }
             if !read.page.more {
                 let because = match (read.sealed, follow) {
@@ -3049,17 +3110,17 @@ async fn transcript(
                     (false, true) => None,
                 };
                 if let Some(because) = because {
-                    yield Event::default().event("end").json_data(End { because })?;
+                    yield Emitted::new(END, None, &End { because })?;
                     break;
                 }
 
                 if joined.is_none() {
                     let mut follower = control_plane.followers.join(workspace, name.clone());
-                    yield Event::default().event("follower").json_data(FollowerEvent {
+                    yield Emitted::new("follower", None, &FollowerEvent {
                         id: follower.id,
                         lease_seconds: follower.lease.as_secs(),
                     })?;
-                    yield Event::default().event("presence").json_data(follower.snapshot())?;
+                    yield Emitted::new("presence", None, &follower.snapshot())?;
                     joined = Some(follower);
                 }
 
@@ -3068,7 +3129,7 @@ async fn transcript(
                     break;
                 }
                 if follower.presence.has_changed().unwrap_or(false) {
-                    yield Event::default().event("presence").json_data(follower.snapshot())?;
+                    yield Emitted::new("presence", None, &follower.snapshot())?;
                 }
 
                 tokio::select! {
@@ -3081,9 +3142,7 @@ async fn transcript(
                 .await
                 .map_err(Refused::into_error)?;
         }
-    };
-
-    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(KEEP_ALIVE)))
+    })
 }
 
 /// An unknown or expired follower is a 404, never a fresh registration.
@@ -3105,19 +3164,29 @@ async fn renew_follower(
     }
 }
 
-/// Every subscriber is told to refetch everything on connect, and again if it fell behind the
-/// hub's buffer: a notice is a hint, so a missed one must never look like a quiet stream.
 async fn changes(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, BoxError>>>, Refused> {
+    let notices = noticed(&control_plane, &organization).await?;
+
+    Ok(per_resource(notices))
+}
+
+/// Every subscriber is told to refetch everything on connect, and again if it fell behind the
+/// hub's buffer: a notice is a hint, so a missed one must never look like a quiet stream.
+async fn noticed(
+    control_plane: &ControlPlane,
+    organization: &str,
+) -> Result<stream::Events, Refused> {
     let mut tx = control_plane.store.read().await?;
-    let organization = tx.organizations().named(&organization).await?;
+    let organization = tx.organizations().named(organization).await?;
     let mut subscription = control_plane.store.notices().subscribe(organization.id);
     drop(tx);
+    let control_plane = control_plane.clone();
 
-    let stream = async_stream::try_stream! {
-        yield Event::default().event("open").json_data(Refetch {})?;
+    Ok(Box::pin(async_stream::try_stream! {
+        yield Emitted::new("open", None, &Refetch {})?;
         loop {
             let watch = tokio::select! {
                 () = control_plane.shutdown.cancelled() => break,
@@ -3126,19 +3195,205 @@ async fn changes(
             match watch {
                 Some(fanout::Watch::Change(resource)) => {
                     match Changed::named(&control_plane.store, resource).await {
-                        Ok(changed) => yield Event::default().event("change").json_data(changed)?,
-                        Err(_) => yield Event::default().event("resync").json_data(Refetch {})?,
+                        Ok(changed) => yield Emitted::new("change", None, &changed)?,
+                        Err(_) => yield Emitted::new("resync", None, &Refetch {})?,
                     }
                 }
                 Some(fanout::Watch::Resync) => {
-                    yield Event::default().event("resync").json_data(Refetch {})?;
+                    yield Emitted::new("resync", None, &Refetch {})?;
                 }
                 None => break,
             }
         }
+    }))
+}
+
+fn per_resource(mut events: stream::Events) -> Sse<impl Stream<Item = Result<Event, BoxError>>> {
+    let framed = async_stream::try_stream! {
+        while let Some(emitted) = events.next().await {
+            let emitted = emitted?;
+            let mut event = Event::default().event(emitted.event).json_data(&emitted.data)?;
+            if let Some(cursor) = emitted.cursor {
+                event = event.id(cursor.to_string());
+            }
+            yield event;
+        }
     };
 
-    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(KEEP_ALIVE)))
+    Sse::new(framed).keep_alive(KeepAlive::new().interval(KEEP_ALIVE))
+}
+
+async fn reserve_stream(
+    State(control_plane): State<ControlPlane>,
+) -> Result<(StatusCode, Json<wire::StreamReservation>), Refused> {
+    let token = control_plane.streams.reserve().map_err(stream_refused)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(wire::StreamReservation { token: token.0 }),
+    ))
+}
+
+async fn open_stream(
+    State(control_plane): State<ControlPlane>,
+    Path(token): Path<String>,
+) -> Result<Sse<impl Stream<Item = Result<Event, BoxError>>>, Refused> {
+    let (connected, mut changes) = control_plane
+        .streams
+        .connect(reservation(&token)?)
+        .map_err(stream_refused)?;
+    let shutdown = control_plane.shutdown.clone();
+
+    let framed = async_stream::try_stream! {
+        let mut subscriptions = StreamMap::new();
+        let mut generations = HashMap::new();
+        loop {
+            let (id, emitted) = tokio::select! {
+                () = shutdown.cancelled() => break,
+                change = changes.recv() => {
+                    match change {
+                        Some(stream::Change::Subscribe(subscribed)) => {
+                            generations.insert(subscribed.id.clone(), subscribed.generation);
+                            subscriptions
+                                .insert(subscribed.id, cut_off_unless_ended(subscribed.events));
+                        }
+                        Some(stream::Change::Unsubscribe(id)) => {
+                            generations.remove(&id);
+                            subscriptions.remove(&id);
+                        }
+                        None => break,
+                    }
+                    continue;
+                }
+                Some(next) = subscriptions.next(), if !subscriptions.is_empty() => next,
+            };
+            let emitted: Emitted = match emitted {
+                Ok(emitted) => emitted,
+                Err(error) => {
+                    warn!(%error, subscription = id, "closing a reserved stream");
+                    break;
+                }
+            };
+            let ended = emitted.event == END;
+            yield Event::default().event(emitted.event).json_data(wire::StreamEvent {
+                subscription: id.clone(),
+                cursor: emitted.cursor.map(|cursor| cursor.to_string()),
+                data: emitted.data,
+            })?;
+            if ended {
+                subscriptions.remove(&id);
+                if let Some(generation) = generations.remove(&id) {
+                    connected.ended(&id, generation);
+                }
+            }
+        }
+    };
+
+    Ok(Sse::new(framed).keep_alive(KeepAlive::new().interval(KEEP_ALIVE)))
+}
+
+/// A subscription cut off short of `end` closes its whole connection, so the tab resumes every
+/// subscription from its cursors rather than missing one that went quiet.
+fn cut_off_unless_ended(mut events: stream::Events) -> stream::Events {
+    Box::pin(async_stream::try_stream! {
+        while let Some(emitted) = events.next().await {
+            let emitted = emitted?;
+            let ended = emitted.event == END;
+            yield emitted;
+            if ended {
+                return;
+            }
+        }
+        Err::<(), BoxError>("a subscription was cut off".into())?;
+    })
+}
+
+async fn subscribe_stream(
+    State(control_plane): State<ControlPlane>,
+    Path((token, id)): Path<(String, String)>,
+    subscription: Result<Json<wire::StreamSubscription>, JsonRejection>,
+) -> Result<StatusCode, Refused> {
+    let token = reservation(&token)?;
+    if !control_plane.streams.known(token) {
+        return Err(stream_refused(stream::Refusal::Unknown));
+    }
+    let Json(subscription) = subscription?;
+    let events = match subscription.kind {
+        wire::StreamSubscriptionKind::Notices => {
+            noticed(&control_plane, &subscription.organization).await?
+        }
+        wire::StreamSubscriptionKind::Transcript => {
+            let workspace = subscription.workspace.as_deref().ok_or_else(|| {
+                malformed(
+                    Some("workspace"),
+                    "a transcript subscription names its Workspace",
+                )
+            })?;
+            let workspace = resolved(&control_plane, &subscription.organization, workspace).await?;
+            let transcribing = Transcribing {
+                workspace: workspace.id,
+                name: None,
+                follow: true,
+                kinds: kinds(subscription.kinds.as_deref())?,
+                summaries: true,
+                range: log::SeqRange::default(),
+                from: subscription
+                    .after
+                    .as_deref()
+                    .map(str::parse)
+                    .transpose()
+                    .map_err(|error: anyhow::Error| malformed(Some("after"), error.to_string()))?,
+            };
+            let read = transcribing.read(&control_plane).await?;
+            transcribed(control_plane.clone(), transcribing, read)
+        }
+    };
+    control_plane
+        .streams
+        .subscribe(token, id, events)
+        .map_err(stream_refused)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn unsubscribe_stream(
+    State(control_plane): State<ControlPlane>,
+    Path((token, id)): Path<(String, String)>,
+) -> Result<StatusCode, Refused> {
+    control_plane
+        .streams
+        .unsubscribe(reservation(&token)?, id)
+        .map_err(stream_refused)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn reservation(token: &str) -> Result<stream::Token, Refused> {
+    token
+        .parse()
+        .map_err(|_| stream_refused(stream::Refusal::Unknown))
+}
+
+fn stream_refused(refusal: stream::Refusal) -> Refused {
+    match refusal {
+        stream::Refusal::Unknown => Refused::NotFound(
+            "no such stream reservation, or it has expired; reserve again".to_owned(),
+        ),
+        stream::Refusal::AlreadyConnected => {
+            Refused::Conflict("the reserved stream is already open".to_owned())
+        }
+        stream::Refusal::TooManySubscriptions => Refused::Conflict(format!(
+            "a reserved stream holds at most {} subscriptions",
+            stream::MOST_SUBSCRIPTIONS
+        )),
+        stream::Refusal::UnreadableId => {
+            malformed(None, "a subscription id is between 1 and 64 characters")
+        }
+        stream::Refusal::TooManyReservations => Refused::Unavailable(anyhow::anyhow!(
+            "{} streams are already reserved",
+            stream::MOST_RESERVATIONS
+        )),
+    }
 }
 
 /// The state is read in the transaction the page is, so a Workspace sealed between the two
@@ -3848,6 +4103,10 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("POST", FOLLOWER_LEASE) => "renew_follower",
         ("GET", TRANSCRIPT_PAYLOAD) => "transcript_payload",
         ("GET", CHANGES) => "changes",
+        ("PUT", STREAMS) => "reserve_stream",
+        ("GET", STREAM) => "open_stream",
+        ("PUT", STREAM_SUBSCRIPTION) => "subscribe_stream",
+        ("DELETE", STREAM_SUBSCRIPTION) => "unsubscribe_stream",
         _ => return None,
     })
 }

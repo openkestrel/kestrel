@@ -170,6 +170,29 @@ buffer is sent `resync`. The store transaction collects what its writes touched 
 publishes after commit, so a refused or rolled-back write raises nothing, and a Transcript append
 alone raises nothing. The CLI does not consume it ([ADR-0035](../adr/0035-organization-change-notices-and-workspace-presence.md)).
 
+### One stream per tab
+
+A browser tab follows several resources over one SSE connection
+([ADR-0045](../adr/0045-a-browser-tab-holds-one-stream-and-subscribes-over-requests.md),
+`stream.rs`). `PUT /operator/streams` answers `201` with a `token`; `GET /operator/streams/{token}`
+opens it once (a second open is `409`); `PUT …/subscriptions/{id}` takes `{ kind, organization,
+workspace?, after?, kinds? }` and starts or replaces the subscription under that id, and `DELETE`
+ends it. An unknown, expired or dropped reservation is `404`, which tells the tab to reserve again.
+
+Each subscription is the per-resource stream it names, built by the same generator: a `notices`
+subscription is the Organization's change notices, and a `transcript` one is a follow from `after`
+with summaries on, refused as that read refuses. Every event keeps its per-resource name and
+carries `{ subscription, cursor?, data }`: `data` is the per-resource payload and `cursor` the
+subscription's own Transcript cursor on entry, Activity and cursor events. No event carries an SSE
+id. A Transcript subscription registers an anonymous follower once caught up and is renewed through
+the follower lease route; replacing, ending or dropping it removes the follower.
+
+The reservation is memory only, bounded at 256 reservations and 32 subscriptions each. One never
+opened is forgotten after the follower lease period, and one is forgotten the moment its
+connection closes. A subscription that sends `end` is dropped from the connection; one cut off any
+other way, such as by a lapsed lease, closes the whole connection, so the tab resumes everything
+from its cursors.
+
 ### Pull requests
 
 A Workspace read carries `pull_requests`: one item per fixed repository, in checkout order.
