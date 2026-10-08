@@ -1,7 +1,7 @@
 use std::io::{IsTerminal as _, Write};
 
 use anyhow::Result;
-use kestrel_operator_types::{WorkLastReport, WorkRepository, WorkspaceWork};
+use kestrel_operator_types::{WorkInstanceReport, WorkLastReport, WorkRepository, WorkspaceWork};
 use serde_json::Value;
 
 pub fn show(answer: Value, json: bool) -> Result<()> {
@@ -17,10 +17,12 @@ pub fn show(answer: Value, json: bool) -> Result<()> {
                     writeln!(out, "{pull_request}")?;
                 }
                 last_report(&mut out, work.last_report, terminal)?;
+                earlier_reports(&mut out, work.earlier_reports, terminal)?;
             }
             WorkspaceWork::WorkNotAnswering(work) => {
                 writeln!(out, "{}", work.message)?;
                 last_report(&mut out, work.last_report, terminal)?;
+                earlier_reports(&mut out, work.earlier_reports, terminal)?;
             }
             WorkspaceWork::WorkReported(work) => {
                 if terminal {
@@ -32,6 +34,7 @@ pub fn show(answer: Value, json: bool) -> Result<()> {
                     )?;
                 }
                 repositories(&mut out, work.repositories, terminal)?;
+                earlier_reports(&mut out, work.earlier_reports, terminal)?;
             }
         }
     }
@@ -57,6 +60,24 @@ fn last_report(out: &mut impl Write, report: WorkLastReport, terminal: bool) -> 
             )?;
             repositories(out, report.repositories, terminal)?;
         }
+    }
+    Ok(())
+}
+
+fn earlier_reports(
+    out: &mut impl Write,
+    reports: Vec<WorkInstanceReport>,
+    terminal: bool,
+) -> Result<()> {
+    for report in reports {
+        writeln!(
+            out,
+            "\nEarlier reported by the Instance {} {}s ago ({})",
+            report.instance,
+            age(&report.reported_at)?,
+            report.reported_at
+        )?;
+        repositories(out, report.repositories, terminal)?;
     }
     Ok(())
 }

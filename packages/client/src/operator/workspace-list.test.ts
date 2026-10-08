@@ -233,6 +233,7 @@ describe("the work summary", () => {
 				},
 			],
 			last_report: none,
+			earlier_reports: [],
 		};
 
 		expect(changedWork(work)).toEqual({
@@ -244,19 +245,32 @@ describe("the work summary", () => {
 			unreadable: 1,
 		});
 		expect(
-			changedWork({ state: "no_instance", branch: "main", pull_request: null, last_report: none }),
+			changedWork({
+				state: "no_instance",
+				branch: "main",
+				pull_request: null,
+				last_report: none,
+				earlier_reports: [],
+			}),
 		).toBeUndefined();
 	});
 
 	it("says why a row has no work reading, and how fresh one is", () => {
 		expect(
-			workNote({ state: "no_instance", branch: "main", pull_request: null, last_report: none }),
+			workNote({
+				state: "no_instance",
+				branch: "main",
+				pull_request: null,
+				last_report: none,
+				earlier_reports: [],
+			}),
 		).toBe("no Instance");
 		expect(
 			workNote({
 				state: "not_answering",
 				message: "the Instance isn't answering",
 				last_report: none,
+				earlier_reports: [],
 			}),
 		).toBe("the Instance isn't answering");
 		expect(
@@ -265,6 +279,7 @@ describe("the work summary", () => {
 				repositories: [],
 				reported_at: new Date().toISOString(),
 				last_report: none,
+				earlier_reports: [],
 			}),
 		).toBe("reported just now");
 	});

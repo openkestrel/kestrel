@@ -178,6 +178,8 @@ pub struct Work {
     #[serde(flatten)]
     pub current: Current,
     pub last_report: LastReport,
+    /// Only `Received`, each history for its own Instance.
+    pub earlier_reports: Vec<LastReport>,
 }
 
 #[derive(Serialize)]
@@ -218,14 +220,18 @@ pub async fn read(
     let organization = tx.organizations().named(organization).await?;
     let workspace = tx.workspaces().resolved(&organization, reference).await?;
     let instance = tx.workspaces().instance(workspace.id).await?;
-    let last_report = match tx.workspaces().last_work_report(workspace.id).await? {
-        None => LastReport::None,
-        Some(report) => LastReport::Received {
+    let mut reports = tx
+        .workspaces()
+        .work_reports(workspace.id)
+        .await?
+        .into_iter()
+        .map(|report| LastReport::Received {
             current_instance: instance.as_ref() == Some(&report.instance),
             instance: report.instance,
             summary: report.summary,
-        },
-    };
+        });
+    let last_report = reports.next().unwrap_or(LastReport::None);
+    let earlier_reports = reports.collect();
     let Some(instance) = instance else {
         return Ok(Work {
             current: Current::NoInstance {
@@ -233,6 +239,7 @@ pub async fn read(
                 pull_request: None,
             },
             last_report,
+            earlier_reports,
         });
     };
     let on_the_link = tx
@@ -250,6 +257,7 @@ pub async fn read(
     Ok(Work {
         current,
         last_report,
+        earlier_reports,
     })
 }
 

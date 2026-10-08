@@ -1808,18 +1808,17 @@ impl<'a> Workspaces<'a> {
         Ok(())
     }
 
-    pub async fn last_work_report(
-        &mut self,
-        workspace: WorkspaceId,
-    ) -> Result<Option<InstanceReport>> {
-        sqlx::query(
+    /// Newest first.
+    pub async fn work_reports(&mut self, workspace: WorkspaceId) -> Result<Vec<InstanceReport>> {
+        let mut reports = sqlx::query(
             "SELECT instance, repositories, reported_at FROM instance_work_report
-             WHERE workspace_id = ? ORDER BY reported_at DESC, instance LIMIT 1",
+             WHERE workspace_id = ?",
         )
         .bind(workspace.to_string())
-        .fetch_optional(&mut *self.connection)
+        .fetch_all(&mut *self.connection)
         .await
-        .with_context(|| format!("reading the work last reported in the workspace {workspace}"))?
+        .with_context(|| format!("reading the work reported in the workspace {workspace}"))?
+        .iter()
         .map(|row| {
             Ok(InstanceReport {
                 instance: row.get("instance"),
@@ -1829,7 +1828,11 @@ impl<'a> Workspaces<'a> {
                 },
             })
         })
-        .transpose()
+        .collect::<Result<Vec<_>>>()?;
+        // Stored timestamps vary in their fractional digits, so they order only once parsed.
+        reports.sort_by_key(|report| std::cmp::Reverse(report.summary.reported_at));
+
+        Ok(reports)
     }
 
     /// Its credential goes with it, so nothing presenting that credential is let on the link again.

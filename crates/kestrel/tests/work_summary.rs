@@ -55,7 +55,7 @@ async fn a_workspace_with_no_instance_names_its_declared_branch_without_recordin
         summary(&kestrel, &workspace).await,
         json!({
             "state": "no_instance", "branch": workspace.checkout.branch, "pull_request": null,
-            "last_report": {"report": "none"}
+            "last_report": {"report": "none"}, "earlier_reports": []
         })
     );
     assert_eq!(
@@ -407,6 +407,7 @@ async fn the_last_report_stays_with_its_instance_through_disconnect_restart_rele
     assert_eq!(released["state"], "no_instance");
     last["current_instance"] = json!(false);
     assert_eq!(released["last_report"], last);
+    assert_eq!(released["earlier_reports"], json!([]));
 
     let replacement = kestrel.post(workspace.id, "operator", "start over").await;
     let replaced = answered_with(&kestrel, &workspace, |answer| {
@@ -420,6 +421,19 @@ async fn the_last_report_stays_with_its_instance_through_disconnect_restart_rele
     assert_ne!(second, first);
     assert_eq!(replaced["last_report"]["instance"], second);
     assert_eq!(replaced["last_report"]["current_instance"], true);
+    assert_eq!(replaced["earlier_reports"], json!([last]));
+    let result = client::ran_by(
+        &kestrel,
+        &["workspace", "work", &workspace.id.to_string()],
+        client::Invocation::default(),
+    )
+    .await;
+    assert!(result.status.success(), "{}", result.err);
+    let out = result.out.join("\n");
+    assert!(
+        out.contains(&format!("Earlier reported by the Instance {first} ")),
+        "{out}"
+    );
     kestrel.teardown().await;
 }
 
