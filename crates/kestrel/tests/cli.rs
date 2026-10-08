@@ -1886,7 +1886,7 @@ fn empty_cli_inspection_lists_leave_pipes_empty_and_json_unmodified() {
         for index in 0..19 {
             let request = server.recv().expect("an inspection request");
             let answer = if request.url().contains("/work") && index >= 17 {
-                json!({"state":"reported", "reported_at":"2026-10-07T12:00:00Z", "repositories":[{"repository":"repo", "git":"unreadable", "because":"checkout unavailable"}]})
+                json!({"state":"reported", "reported_at":"2026-10-07T12:00:00Z", "repositories":[{"repository":"repo", "git":"unreadable", "because":"checkout unavailable"}], "last_report":{"report":"none"}})
             } else if index >= 15 {
                 json!({"repositories":[{"repository":"repo", "text":"abcd1234 a local commit\n"}]})
             } else if request.url().contains("/sessions") {
