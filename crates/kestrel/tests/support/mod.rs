@@ -3,8 +3,8 @@
 //! down. Assertions live in the language of Workspaces, Sessions and Transcripts; `Store` and `Log`
 //! stay behind `Kestrel`, never reached for directly.
 
-// Every integration-test binary compiles all of this; a helper one of them does not reach for
-// is not dead, it belongs to a sibling.
+// `suite` and every heavy suite beside it compile all of this; a helper one of them does not
+// reach for is not dead, it belongs to a sibling.
 #![allow(dead_code)]
 
 pub mod built;
