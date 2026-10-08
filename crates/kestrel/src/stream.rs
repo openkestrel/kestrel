@@ -1,7 +1,6 @@
 //! A browser tab's one event stream: soft state the tab rebuilds after any drop (ADR-0045).
 
 use std::collections::HashMap;
-use std::fmt;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -20,12 +19,6 @@ const LONGEST_SUBSCRIPTION_ID: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Token(pub Uuid);
-
-impl fmt::Display for Token {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
 
 impl FromStr for Token {
     type Err = uuid::Error;
