@@ -714,6 +714,8 @@ pub struct Session {
     pub preparing: Option<Preparing>,
     pub exit: Option<Exit>,
     pub outcome_message: Option<String>,
+    /// What the supervisor established about how the Session failed.
+    pub evidence: Option<Evidence>,
     pub instance: Option<String>,
     pub supervisor: Option<String>,
     /// What the Harness reported it worked on.
@@ -1012,6 +1014,83 @@ impl fmt::Display for Exit {
             Exit::Failed { because } => write!(f, "failed: {because}"),
         }
     }
+}
+
+/// Facts about a failure, never a harness's prose: an unknown summary cannot establish that a
+/// sign-in expired or is not covered (ADR-0052).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Evidence {
+    AuthenticationRequired {
+        code: i32,
+        methods: Vec<String>,
+        method: Option<String>,
+    },
+    ExecutableMissing {
+        command: String,
+        error: OsError,
+    },
+    Unknown {
+        summary: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OsError {
+    pub kind: OsErrorKind,
+    pub code: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OsErrorKind {
+    NotFound,
+    PermissionDenied,
+    Other,
+}
+
+impl Evidence {
+    const SUMMARY_LIMIT: usize = 1024;
+    const NAME_LIMIT: usize = 256;
+    const METHODS_LIMIT: usize = 16;
+
+    /// Bounded again on receipt, since a supervisor runs beside the harness it reports on.
+    #[must_use]
+    pub fn bounded(self) -> Self {
+        match self {
+            Evidence::AuthenticationRequired {
+                code,
+                methods,
+                method,
+            } => Evidence::AuthenticationRequired {
+                code,
+                methods: methods
+                    .into_iter()
+                    .take(Self::METHODS_LIMIT)
+                    .map(|method| truncated(method, Self::NAME_LIMIT))
+                    .collect(),
+                method: method.map(|method| truncated(method, Self::NAME_LIMIT)),
+            },
+            Evidence::ExecutableMissing { command, error } => Evidence::ExecutableMissing {
+                command: truncated(command, Self::NAME_LIMIT),
+                error,
+            },
+            Evidence::Unknown { summary } => Evidence::Unknown {
+                summary: truncated(summary, Self::SUMMARY_LIMIT),
+            },
+        }
+    }
+}
+
+fn truncated(mut text: String, limit: usize) -> String {
+    if text.len() > limit {
+        let mut end = limit;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    text
 }
 
 #[derive(Debug, Clone)]

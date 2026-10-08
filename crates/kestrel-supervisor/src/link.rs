@@ -288,6 +288,8 @@ pub enum Report {
         exit: Exit,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<Usage>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        evidence: Option<Evidence>,
     },
 }
 
@@ -397,6 +399,38 @@ pub struct Reported<'a> {
 pub enum Exit {
     Succeeded,
     Failed { because: String },
+}
+
+/// Generic facts about a failure, never a harness's own account of its credentials (ADR-0052).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Evidence {
+    AuthenticationRequired {
+        code: i32,
+        methods: Vec<String>,
+        method: Option<String>,
+    },
+    ExecutableMissing {
+        command: String,
+        error: OsError,
+    },
+    Unknown {
+        summary: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OsError {
+    pub kind: OsErrorKind,
+    pub code: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OsErrorKind {
+    NotFound,
+    PermissionDenied,
+    Other,
 }
 
 /// What the agent has spent so far, cumulative rather than per turn.

@@ -737,6 +737,7 @@ struct SessionRecord {
     preparing: Option<String>,
     exit: Option<domain::Exit>,
     outcome_message: Option<String>,
+    diagnostic: Option<wire::Diagnostic>,
     instance: Option<String>,
     supervisor: Option<String>,
     agent: String,
@@ -764,6 +765,106 @@ struct SessionRecord {
     thought_buffering: bool,
     last_activity_at: Option<Timestamp>,
     observation: crate::live_work::Observation,
+}
+
+/// The Session's harness is the control plane's to add; no image is recorded against a Session,
+/// and no sign-in is attributed to one yet, so neither expiry nor coverage is ever established.
+fn diagnosed_failure(session: &Session, evidence: domain::Evidence) -> wire::Diagnostic {
+    let harness = session.agent.harness.clone();
+    let inspect_session = inspect(
+        Locator::new(Resource::Session, session.id.to_string()),
+        None,
+    );
+    match evidence {
+        domain::Evidence::AuthenticationRequired {
+            code,
+            methods,
+            method,
+        } => {
+            wire::Diagnostic::AuthenticationFailedDiagnostic(wire::AuthenticationFailedDiagnostic {
+                kind: serde_json::json!("authentication_failed"),
+                message: format!("the {harness} harness needed a sign-in before it would work"),
+                field: None,
+                next_steps: vec![
+                    wire::Action::SignInAction(wire::SignInAction {
+                        action: serde_json::json!("sign_in"),
+                        harness: Some(harness.clone()),
+                        method: method.clone(),
+                        sign_in: None,
+                    }),
+                    inspect_session,
+                ],
+                context: wire::AuthenticationFailedContext {
+                    session: session.id.to_string(),
+                    harness,
+                    image: None,
+                    evidence: wire::AuthenticationRequiredEvidence {
+                        kind: serde_json::json!("authentication_required"),
+                        code: code.into(),
+                        methods,
+                        method,
+                    },
+                    sign_in: None,
+                    expired: None,
+                    covered: None,
+                },
+            })
+        }
+        domain::Evidence::ExecutableMissing { command, error } => {
+            wire::Diagnostic::ExecutableMissingDiagnostic(wire::ExecutableMissingDiagnostic {
+                kind: serde_json::json!("executable_missing"),
+                message: format!(
+                    "the {harness} harness's executable {command} could not be spawned"
+                ),
+                field: None,
+                next_steps: vec![
+                    wire::Action::InspectHarnessImageAction(wire::InspectHarnessImageAction {
+                        action: serde_json::json!("inspect_harness_image"),
+                        harness: Some(harness.clone()),
+                        image: None,
+                        command: Some(command.clone()),
+                    }),
+                    inspect_session,
+                ],
+                context: wire::ExecutableMissingContext {
+                    session: session.id.to_string(),
+                    harness,
+                    image: None,
+                    executable: command.clone(),
+                    evidence: wire::ExecutableMissingEvidence {
+                        kind: serde_json::json!("executable_missing"),
+                        command,
+                        error: wire::OsError {
+                            kind: match error.kind {
+                                domain::OsErrorKind::NotFound => wire::OsErrorKind::NotFound,
+                                domain::OsErrorKind::PermissionDenied => {
+                                    wire::OsErrorKind::PermissionDenied
+                                }
+                                domain::OsErrorKind::Other => wire::OsErrorKind::Other,
+                            },
+                            code: error.code.map(i64::from),
+                        },
+                    },
+                },
+            })
+        }
+        domain::Evidence::Unknown { summary } => {
+            wire::Diagnostic::UnknownFailureDiagnostic(wire::UnknownFailureDiagnostic {
+                kind: serde_json::json!("unknown_failure"),
+                message: "the session failed for a reason kestrel could not establish".to_owned(),
+                field: None,
+                next_steps: vec![inspect_session],
+                context: wire::UnknownFailureContext {
+                    session: Some(session.id.to_string()),
+                    resource: Some(wire_resource(Resource::Session).as_str().to_owned()),
+                    evidence: Some(wire::UnknownEvidence {
+                        kind: serde_json::json!("unknown"),
+                        summary,
+                    }),
+                },
+            })
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -940,6 +1041,10 @@ impl SessionRecord {
         let (observation, state) = summaries.observed(Some(&session));
         let trailing = session.state == domain::SessionState::Trailing;
         let harness = session.agent.harness.clone();
+        let diagnostic = session
+            .evidence
+            .clone()
+            .map(|evidence| diagnosed_failure(&session, evidence));
         let options = session
             .options
             .into_iter()
@@ -958,6 +1063,7 @@ impl SessionRecord {
                 .map(|preparing| preparing.as_str().to_owned()),
             exit: session.exit,
             outcome_message: session.outcome_message,
+            diagnostic,
             instance: session.instance,
             supervisor: session.supervisor,
             agent: session.agent.name,

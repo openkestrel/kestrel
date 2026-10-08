@@ -11,6 +11,7 @@ function session(overrides: Partial<Session> = {}): Session {
 		preparing: null,
 		exit: null,
 		outcome_message: null,
+		diagnostic: null,
 		instance: null,
 		supervisor: null,
 		agent: "builder",

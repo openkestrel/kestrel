@@ -161,6 +161,12 @@ async fn main() -> Result<()> {
                 if script == Script::Insists {
                     return responder.respond_with_error(Error::auth_required());
                 }
+                if script == Script::Complains {
+                    return responder.respond_with_error(Error::internal_error().data(format!(
+                        "API Error: 401 Unauthorized · Login expired for {}",
+                        confided()
+                    )));
+                }
 
                 responder.respond(match script {
                     Script::Decides => NewSessionResponse::new(SESSION),

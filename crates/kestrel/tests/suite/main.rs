@@ -14,6 +14,7 @@ mod debuginfo;
 mod deliberate;
 mod events;
 mod exit_codes;
+mod failure_evidence;
 mod follow_up;
 mod forgery;
 mod github_manifest;

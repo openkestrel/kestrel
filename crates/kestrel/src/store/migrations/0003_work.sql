@@ -9,6 +9,7 @@ ALTER TABLE session ADD COLUMN heartbeat_at TEXT;
 ALTER TABLE session ADD COLUMN instance TEXT;
 ALTER TABLE session ADD COLUMN exit TEXT;
 ALTER TABLE session ADD COLUMN exit_because TEXT;
+ALTER TABLE session ADD COLUMN exit_evidence TEXT;
 ALTER TABLE session ADD COLUMN outcome_message TEXT;
 
 CREATE TABLE turn (

@@ -2035,6 +2035,8 @@ pub struct Session {
     pub connected_at: Option<String>,
     ///The Sessions this one was declared to wait on, whether or not they have ended.
     pub depends_on: Vec<SessionReference>,
+    ///Why the Session failed, from the evidence its supervisor established. Null when it has not failed, or failed with no evidence; its presence never makes the read fail (ADR-0052).
+    pub diagnostic: Option<Diagnostic>,
     pub ended_at: Option<String>,
     pub enqueued_at: String,
     pub exit: Option<Exit>,
@@ -7784,9 +7786,16 @@ pub struct UnknownFailureDiagnostic {
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UnknownFailureContext {
-    pub evidence: Option<String>,
+    pub evidence: Option<UnknownEvidence>,
     pub resource: Option<String>,
     pub session: Option<String>,
+}
+///What the agent said, bounded and redacted. It never establishes that a sign-in expired or is not covered.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UnknownEvidence {
+    pub kind: serde_json::Value,
+    ///Constraint: maxLength=1024
+    pub summary: String,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UnavailableDiagnostic {
@@ -7937,11 +7946,51 @@ pub struct ExecutableMissingDiagnostic {
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExecutableMissingContext {
-    pub evidence: String,
+    pub evidence: ExecutableMissingEvidence,
     pub executable: String,
     pub harness: String,
     pub image: Option<String>,
     pub session: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExecutableMissingEvidence {
+    pub command: String,
+    pub error: OsError,
+    pub kind: serde_json::Value,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OsError {
+    pub code: Option<i64>,
+    pub kind: OsErrorKind,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum OsErrorKind {
+    #[default]
+    #[serde(rename = "not_found")]
+    NotFound,
+    #[serde(rename = "permission_denied")]
+    PermissionDenied,
+    #[serde(rename = "other")]
+    Other,
+}
+impl OsErrorKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NotFound => "not_found",
+            Self::PermissionDenied => "permission_denied",
+            Self::Other => "other",
+        }
+    }
+}
+impl ::std::fmt::Display for OsErrorKind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for OsErrorKind {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DeclarationDocument {
@@ -9341,13 +9390,23 @@ pub struct AuthenticationFailedDiagnostic {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AuthenticationFailedContext {
     pub covered: Option<bool>,
-    pub evidence: String,
+    pub evidence: AuthenticationRequiredEvidence,
     ///Established only from evidence; never inferred from arbitrary harness output.
     pub expired: Option<bool>,
     pub harness: String,
     pub image: Option<String>,
     pub session: String,
     pub sign_in: Option<String>,
+}
+///The agent answered with ACP's authentication-required error.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthenticationRequiredEvidence {
+    pub code: i64,
+    pub kind: serde_json::Value,
+    ///The ACP auth method the supervisor was configured to log in with.
+    pub method: Option<String>,
+    ///The ids of the ACP auth methods the agent offered.
+    pub methods: Vec<String>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppliedTriggers {

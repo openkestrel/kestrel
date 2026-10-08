@@ -2,6 +2,7 @@
 //! Harness is on the other end of one.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 use std::sync::{Arc, Mutex};
@@ -29,6 +30,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::completer::{Completed, Completer, Settling, UnitChange};
+use crate::evidence::{self, Failure, Secrets};
 use crate::extension;
 use crate::link::{
     Report, SessionCommand, SessionInfo, SessionOption, SessionOptionGroup, SessionOptionKind,
@@ -62,7 +64,7 @@ const LINE_LIMIT: usize = 4 * 1024;
 pub struct Worked {
     pub allowed: Vec<Subject>,
     pub on: Option<On>,
-    pub failed: Option<String>,
+    pub failed: Option<Failure>,
     pub usage: Option<crate::link::Usage>,
 }
 
@@ -165,6 +167,7 @@ impl Conversation {
     pub fn open(
         harness: &Harness,
         provider: BTreeMap<String, String>,
+        secrets: Secrets,
         first: Option<Turn>,
         root: PathBuf,
     ) -> Self {
@@ -180,6 +183,7 @@ impl Conversation {
         let task = tokio::spawn(conversing(
             harness.clone(),
             provider,
+            secrets,
             root,
             Channels {
                 prompts: prompted,
@@ -244,7 +248,9 @@ impl Conversation {
             ConversationEvent::Worked(Worked {
                 allowed: Vec::new(),
                 on: None,
-                failed: Some("the agent conversation ended unannounced".to_owned()),
+                failed: Some(Failure::kestrels(
+                    "the agent conversation ended unannounced",
+                )),
                 usage: None,
             })
         })
@@ -293,6 +299,7 @@ struct Continuity {
     /// Cleared by an answered turn, so an agent that dies as soon as it is brought back is not
     /// brought back forever.
     recovered: bool,
+    offered: Vec<String>,
 }
 
 impl Continuity {
@@ -332,7 +339,7 @@ impl Continuity {
 
 enum Ended {
     HungUp,
-    Over(String),
+    Over(Failure),
     Lost(String),
 }
 
@@ -340,6 +347,7 @@ enum Ended {
 async fn conversing(
     harness: Harness,
     provider: BTreeMap<String, String>,
+    secrets: Secrets,
     root: PathBuf,
     mut channels: Channels,
     turns: mpsc::UnboundedSender<ConversationEvent>,
@@ -359,7 +367,7 @@ async fn conversing(
     }));
     let mut continuity = Continuity::default();
 
-    let because = loop {
+    let failure = loop {
         let lost = match living(
             &harness,
             &provider,
@@ -372,7 +380,7 @@ async fn conversing(
         .await
         {
             Ok(Ended::HungUp) => return,
-            Ok(Ended::Over(because)) => break because,
+            Ok(Ended::Over(failure)) => break failure,
             Ok(Ended::Lost(because)) => because,
             Err(error) => described(&error),
         };
@@ -383,14 +391,14 @@ async fn conversing(
                      conversation"
                 ));
             }
-            Err(because) => break because,
+            Err(because) => break Failure::kestrels(because),
         }
     };
     let _ = turns.send(ConversationEvent::Worked(
         heard
             .lock()
             .expect("the observation lock")
-            .worked(Some(because)),
+            .worked(Some(failure.redacted(&secrets))),
     ));
 }
 
@@ -407,10 +415,10 @@ async fn living(
     let spawn = match AcpAgent::from_str(&harness.command) {
         Ok(spawn) => spawn,
         Err(error) => {
-            return Ok(Ended::Over(format!(
+            return Ok(Ended::Over(Failure::kestrels(format!(
                 "the harness {:?} could not be spawned: {error}",
                 harness.command
-            )));
+            ))));
         }
     };
     let stderr = harness.stderr.clone();
@@ -425,8 +433,17 @@ async fn living(
     for name in inherited {
         clean = clean.arg("-u").arg(name);
     }
+    let path = provider
+        .get("PATH")
+        .map(OsString::from)
+        .or_else(|| config.environment().get("PATH").map(OsString::from))
+        .or_else(|| std::env::var_os("PATH"));
+    let command = match evidence::executable(config.command(), path) {
+        Ok(command) => command,
+        Err(error) => return Ok(Ended::Over(Failure::unspawnable(config.command(), &error))),
+    };
     let clean = clean
-        .arg(config.command().to_string_lossy().into_owned())
+        .arg(command.to_string_lossy().into_owned())
         .args(config.arguments().iter().cloned())
         .envs(config.environment().clone())
         .envs(provider.clone());
@@ -500,20 +517,20 @@ async fn living(
                 let conversed = match (continuity.conversed.clone(), continuity.recovery) {
                     (Some(conversed), Some(recovery)) => {
                         if let Err(error) =
-                            recover(&connection, harness, root, heard, &conversed, recovery).await
+                            recover(&connection, harness, root, heard, &conversed, recovery, &mut continuity.offered).await
                         {
-                            return Ok(ended(&error));
+                            return Ok(ended(&error, continuity, harness));
                         }
                         let _ = turns.send(ConversationEvent::Ready);
                         conversed
                     }
-                    _ => match set_up(&connection, harness, root, heard).await {
+                    _ => match set_up(&connection, harness, root, heard, &mut continuity.offered).await {
                         Ok((conversed, recovery)) => {
                             continuity.opened(conversed.clone(), recovery);
                             let _ = turns.send(ConversationEvent::Ready);
                             conversed
                         }
-                        Err(error) => return Ok(ended(&error)),
+                        Err(error) => return Ok(ended(&error, continuity, harness)),
                     },
                 };
 
@@ -600,18 +617,18 @@ async fn living(
                                 );
                                 heard.emit(completed);
                                 drop(heard);
-                                return Ok(Ended::Over(format!(
+                                return Ok(Ended::Over(Failure::kestrels(format!(
                                     "the agent did not answer the interrupt within {:?}, and its ACP \
                                      continuity is lost",
                                     harness.interrupt_deadline
-                                )));
+                                ))));
                             }
                         }
                     };
                     heard.lock().expect("the observation lock").interrupting = false;
                     let answered = match answered {
                         Ok(answered) => answered,
-                        Err(error) => return Ok(ended(&error)),
+                        Err(error) => return Ok(ended(&error, continuity, harness)),
                     };
                     continuity.answered();
 
@@ -631,11 +648,11 @@ async fn living(
                                 continue;
                             }
                         }
-                        return Ok(Ended::Over(because));
+                        return Ok(Ended::Over(Failure::kestrels(because)));
                     }
                     let mut this_turn = heard.lock().expect("the observation lock");
                     let failed = (!this_turn.completer.produced)
-                        .then(|| "the agent answered the prompt with nothing".to_owned());
+                        .then(|| Failure::kestrels("the agent answered the prompt with nothing"));
                     let worked = this_turn.worked(failed);
                     drop(this_turn);
                     if turns.send(ConversationEvent::Worked(worked)).is_err() {
@@ -647,10 +664,14 @@ async fn living(
         .await
 }
 
-fn ended(error: &Error) -> Ended {
+fn ended(error: &Error, continuity: &Continuity, harness: &Harness) -> Ended {
     match is_incoming_transport_closed(error) {
         true => Ended::Lost(described(error)),
-        false => Ended::Over(error.to_string()),
+        false => Ended::Over(Failure::answered(
+            error,
+            &continuity.offered,
+            harness.auth.as_deref(),
+        )),
     }
 }
 
@@ -767,6 +788,7 @@ fn described(error: &Error) -> String {
 async fn initialized(
     connection: &ConnectionTo<agent_client_protocol::Agent>,
     auth: Option<&str>,
+    methods: &mut Vec<String>,
 ) -> Result<InitializeResponse, Error> {
     let initialized = connection
         .send_request(
@@ -774,6 +796,11 @@ async fn initialized(
         )
         .block_task()
         .await?;
+    *methods = initialized
+        .auth_methods
+        .iter()
+        .map(|method| method.id().0.to_string())
+        .collect();
     if initialized.protocol_version != ProtocolVersion::V1 {
         return Err(Error::internal_error().data(format!(
             "kestrel speaks ACP v1, and this agent answered v{}",
@@ -946,8 +973,9 @@ async fn set_up(
     harness: &Harness,
     root: &Path,
     heard: &Mutex<Hearing>,
+    offered: &mut Vec<String>,
 ) -> Result<(SessionId, Option<Recovery>), Error> {
-    let initialized = initialized(connection, harness.auth.as_deref()).await?;
+    let initialized = initialized(connection, harness.auth.as_deref(), offered).await?;
 
     let set_up = connection
         .send_request(NewSessionRequest::new(root))
@@ -982,8 +1010,9 @@ async fn recover(
     heard: &Mutex<Hearing>,
     conversed: &SessionId,
     recovery: Recovery,
+    offered: &mut Vec<String>,
 ) -> Result<(), Error> {
-    initialized(connection, harness.auth.as_deref()).await?;
+    initialized(connection, harness.auth.as_deref(), offered).await?;
     {
         let mut heard = heard.lock().expect("the observation lock");
         let completed = heard.completer.boundary(
@@ -1217,7 +1246,7 @@ fn unlogged_in(error: Error, offered_methods: &[AuthMethod]) -> Error {
         return error;
     }
 
-    Error::internal_error().data(format!(
+    Error::auth_required().data(format!(
         "this agent must be logged in before it answers session/new, and kestrel was configured \
          with no method to log it in with. it offers {}",
         offered(offered_methods)
@@ -1624,10 +1653,10 @@ impl Hearing {
         };
         self.emit(completed);
     }
-    fn worked(&mut self, failed: Option<String>) -> Worked {
+    fn worked(&mut self, failed: Option<Failure>) -> Worked {
         let outcome = match &failed {
-            Some(because) => TurnOutcome::Failed {
-                because: because.clone(),
+            Some(failure) => TurnOutcome::Failed {
+                because: failure.because.clone(),
             },
             None => TurnOutcome::Answered {
                 stop_reason: "end_turn".to_owned(),
@@ -2443,6 +2472,7 @@ mod tests {
 
         let refused = unlogged_in(Error::auth_required(), &offered);
 
+        assert_eq!(refused.code, ErrorCode::AuthRequired);
         assert!(
             refused
                 .data

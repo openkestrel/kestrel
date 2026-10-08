@@ -7,8 +7,8 @@ use tracing::{debug, info};
 
 use crate::declined::{Constraint, Next, Reason, Resource};
 use crate::domain::{
-    ChangingOption, Declared, Exit, HeldMessage, Organization, Session, SessionCommand, SessionId,
-    SessionOption, SessionState, Turn, Usage, Workspace, WorkspaceId,
+    ChangingOption, Declared, Evidence, Exit, HeldMessage, Organization, Session, SessionCommand,
+    SessionId, SessionOption, SessionState, Turn, Usage, Workspace, WorkspaceId,
 };
 use crate::instance::Observed;
 use crate::integration::post;
@@ -123,6 +123,8 @@ pub enum Report {
         exit: Exit,
         #[serde(default)]
         usage: Option<Usage>,
+        #[serde(default)]
+        evidence: Option<Evidence>,
     },
 }
 
@@ -954,8 +956,17 @@ async fn reported(
             tx.workspaces().record_checked_out(session).await?;
             info!(session = %session.id, "a supervisor reported what its checkout holds");
         }
-        Report::Finished { exit, usage } => {
+        Report::Finished {
+            exit,
+            usage,
+            evidence,
+        } => {
             let stands = ending(tx, session, exit).await?;
+            if let Some(evidence) = evidence {
+                tx.workspaces()
+                    .record_failure_evidence(session, &evidence.bounded())
+                    .await?;
+            }
             record_usage(tx, session, usage.as_ref()).await?;
             info!(session = %session.id, %stands, "a supervisor reported its session finished");
         }

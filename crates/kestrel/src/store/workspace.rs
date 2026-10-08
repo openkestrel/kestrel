@@ -6,9 +6,9 @@ use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 use crate::compute::IdleHint;
 use crate::declined::Resource;
 use crate::domain::{
-    Agent, ChangingOption, Checkout, Connected, Cost, Declared, Exit, HeldMessage, Interrupting,
-    Organization, OrganizationId, Preparing, Project, Session, SessionCommand, SessionId,
-    SessionOption, SessionState, StartedBy, SubscriptionProfile, Turn, Usage, Workspace,
+    Agent, ChangingOption, Checkout, Connected, Cost, Declared, Evidence, Exit, HeldMessage,
+    Interrupting, Organization, OrganizationId, Preparing, Project, Session, SessionCommand,
+    SessionId, SessionOption, SessionState, StartedBy, SubscriptionProfile, Turn, Usage, Workspace,
     WorkspaceId, WorkspaceState,
 };
 use crate::fanout::Touched;
@@ -26,7 +26,8 @@ macro_rules! sessions_where {
         concat!(
             "SELECT id, name, organization_id, workspace_id, agent_id,
                     (SELECT name FROM agent WHERE agent.id = session.agent_id) AS agent_name,
-                    harness, state, preparing, exit, exit_because, outcome_message, instance,
+                    harness, state, preparing, exit, exit_because, exit_evidence, outcome_message,
+                    instance,
                     supervisor, enqueued_at, started_at, ended_at, lease_expires_at, connected_at,
                     supervisor_version, model, mode, thought_level, worked_model, title,
                     config_options, changing_options, commands, interrupting_participant,
@@ -644,6 +645,7 @@ impl<'a> Workspaces<'a> {
                 preparing: None,
                 exit: None,
                 outcome_message: None,
+                evidence: None,
                 instance: None,
                 supervisor: None,
                 worked_model: None,
@@ -2149,6 +2151,26 @@ impl<'a> Workspaces<'a> {
         Ok(true)
     }
 
+    /// Kept only on a failed Session, and only the first time, so a replayed report changes nothing.
+    pub async fn record_failure_evidence(
+        &mut self,
+        session: &Session,
+        evidence: &Evidence,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE session SET exit_evidence = ?
+             WHERE id = ? AND exit = 'failed' AND exit_evidence IS NULL",
+        )
+        .bind(serde_json::to_string(evidence)?)
+        .bind(session.id.to_string())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("recording how the session {} failed", session.id))?;
+        self.touched.session(session);
+
+        Ok(())
+    }
+
     /// Down the stream of the Instance the Session executes on; `None` for a Session that never
     /// reached one, which has nothing listening for it.
     pub async fn send_instruction(
@@ -2595,6 +2617,11 @@ fn session(row: &SqliteRow) -> Result<Session> {
             .map(|status| Exit::read(&status, row.get("exit_because")))
             .transpose()?,
         outcome_message: row.get("outcome_message"),
+        evidence: row
+            .get::<Option<String>, _>("exit_evidence")
+            .map(|evidence| serde_json::from_str(&evidence))
+            .transpose()
+            .context("reading the session's exit evidence")?,
         instance: row.get("instance"),
         supervisor: row.get("supervisor"),
         worked_model: row.get("worked_model"),
