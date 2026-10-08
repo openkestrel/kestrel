@@ -59,8 +59,8 @@ pub struct Summary {
 #[derive(Default)]
 struct Live {
     streams: usize,
-    /// Counts every stream opened, so a snapshot taken over an earlier one is never current.
-    connection: u64,
+    /// A snapshot that arrived before the latest stream opened is never current.
+    streams_opened: u64,
     reached_at: Option<Timestamp>,
     summary: Option<Summary>,
     sessions: HashMap<String, Held>,
@@ -69,13 +69,13 @@ struct Live {
 #[derive(Clone, Default)]
 struct Held {
     state: SessionState,
-    observed: Option<Observed>,
+    snapshot: Option<Snapshot>,
 }
 
 #[derive(Clone, Copy)]
-struct Observed {
+struct Snapshot {
     at: Timestamp,
-    connection: u64,
+    streams_opened: u64,
 }
 
 #[derive(Clone, Default)]
@@ -86,7 +86,7 @@ impl Summaries {
         let mut summaries = self.0.lock().unwrap();
         let live = summaries.entry(instance.to_owned()).or_default();
         live.streams += 1;
-        live.connection += 1;
+        live.streams_opened += 1;
         live.reached_at = None;
         drop(summaries);
         Connection {
@@ -256,12 +256,12 @@ pub async fn read(
             earlier_reports,
         });
     };
-    let on_the_link = tx
-        .workspaces()
-        .supervisor(&instance)
-        .await?
-        .and_then(|supervisor| supervisor.reached_at)
-        .is_some_and(|reached| Timestamp::now().duration_since(reached) < crate::link::ON_THE_LINK);
+    let on_the_link = crate::link::on_the_link(
+        tx.workspaces()
+            .supervisor(&instance)
+            .await?
+            .and_then(|supervisor| supervisor.reached_at),
+    );
     let current = match summaries.get(&instance) {
         Some(summary) if on_the_link => Current::Reported { summary },
         _ => Current::NotAnswering {
@@ -339,9 +339,9 @@ impl Summaries {
         live.reached_at = Some(now);
         let held = Held {
             state: state.clone(),
-            observed: Some(Observed {
+            snapshot: Some(Snapshot {
                 at: now,
-                connection: live.connection,
+                streams_opened: live.streams_opened,
             }),
         };
         let before = live
@@ -372,13 +372,17 @@ impl Summaries {
         }
     }
 
-    /// The state is current only with a current observation; otherwise it carries no open work
-    /// and only the usage last held.
-    pub fn observed(&self, session: &crate::domain::Session) -> (Observation, SessionState) {
+    pub fn observed(
+        &self,
+        session: Option<&crate::domain::Session>,
+    ) -> (Observation, SessionState) {
         let unavailable = (
             Observation::Unavailable { last: None },
             SessionState::default(),
         );
+        let Some(session) = session else {
+            return unavailable;
+        };
         let Some(instance) = session.instance.as_deref() else {
             return unavailable;
         };
@@ -392,34 +396,29 @@ impl Summaries {
         let Some(held) = live.sessions.get(&session.id.to_string()) else {
             return unavailable;
         };
-        let on_the_link = live.streams > 0
-            && live.reached_at.is_some_and(|reached| {
-                Timestamp::now().duration_since(reached) < crate::link::ON_THE_LINK
-            });
-        match held.observed {
-            Some(observed) if on_the_link && observed.connection == live.connection => (
+        let on_the_link = live.streams > 0 && crate::link::on_the_link(live.reached_at);
+        match held.snapshot {
+            Some(snapshot) if on_the_link && snapshot.streams_opened == live.streams_opened => (
                 Observation::Current {
-                    observed_at: observed.at,
+                    observed_at: snapshot.at,
                 },
                 held.state.clone(),
             ),
-            observed => (
+            snapshot => (
                 Observation::Unavailable {
-                    last: observed.map(|observed| LastObservation {
-                        observed_at: observed.at,
+                    last: snapshot.map(|snapshot| LastObservation {
+                        observed_at: snapshot.at,
                         tools: held.state.tools.clone(),
                         units: held.state.units.clone(),
                     }),
                 },
-                SessionState {
-                    usage: held.state.usage.clone(),
-                    ..SessionState::default()
-                },
+                SessionState::default(),
             ),
         }
     }
 
-    pub fn held(&self, session: &crate::domain::Session) -> SessionState {
+    /// Current or not: what supervisor loss or a stop must close.
+    pub fn last_held(&self, session: &crate::domain::Session) -> SessionState {
         session
             .instance
             .as_deref()

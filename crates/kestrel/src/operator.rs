@@ -904,7 +904,7 @@ impl WorkspaceRecord {
 
 impl SessionRecord {
     fn read(session: Session, summaries: &crate::live_work::Summaries) -> Self {
-        let (observation, state) = summaries.observed(&session);
+        let (observation, state) = summaries.observed(Some(&session));
         let trailing = session.state == domain::SessionState::Trailing;
         let harness = session.agent.harness.clone();
         let options = session
@@ -2821,7 +2821,7 @@ async fn stop_session(
     Path((organization, session)): Path<(String, String)>,
 ) -> Result<Json<SessionRecord>, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
-    let running = control_plane.live.summaries.held(&session).tools;
+    let running = control_plane.live.summaries.last_held(&session).tools;
     work::stop(&control_plane.store, session.id, &running).await?;
     control_plane.live.summaries.clear_session(&session);
     let session = work::session(&control_plane.store, session.id).await?;
@@ -3172,13 +3172,7 @@ async fn reading(
         .unfinished_session(&workspace)
         .await?
         .map(|holding| holding.session);
-    let (observation, state) = match &session {
-        Some(session) => control_plane.live.summaries.observed(session),
-        None => (
-            crate::live_work::Observation::Unavailable { last: None },
-            crate::live_work::SessionState::default(),
-        ),
-    };
+    let (observation, state) = control_plane.live.summaries.observed(session.as_ref());
     let session_state = TranscriptSessionState {
         session_id: session.as_ref().map(|session| session.id),
         state,
