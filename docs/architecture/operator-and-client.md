@@ -22,6 +22,18 @@ routes.
 - Handlers are thin: parse, call the domain module (`workspace`, `work`, `trigger`, `integration`,
   `start`, `declaration`…), and map the result.
 
+### Harness catalogue
+
+`GET /operator/harnesses` reads the product harnesses, default ACP commands and Sign-in Methods.
+The data in `crates/kestrel/src/catalogue/harnesses.json` supplies both the operator metadata and
+unconfigured dispatch commands; explicit harness-command configuration remains authoritative.
+Subscriptions name Operator ownership and keys Organization ownership. Each method names its
+accepted token/file input, a typed variable/file fill target, and any relay or console link.
+Metadata needs no credentials or compute inspection and makes no availability claim.
+`GET /operator/harnesses/{harness}/sign-in-methods/{method}` reads one supported combination;
+unknown harnesses or methods answer a typed `invalid_field` with supported choices. Custom
+harness commands and generic Profiles remain usable without guided methods (ADR-0046).
+
 ### Errors
 
 Domain code refuses with the typed `declined::Reason`, which the boundary maps to a wire

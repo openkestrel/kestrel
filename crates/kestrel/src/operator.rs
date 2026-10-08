@@ -50,6 +50,9 @@ use crate::template::Template;
 use crate::trigger::{self, apply};
 use crate::{instance, pull_request, start, work, workspace};
 
+pub const HARNESSES: &str = "/operator/harnesses";
+pub const SIGN_IN_METHOD: &str = "/operator/harnesses/{harness}/sign-in-methods/{method}";
+
 pub const ORGANIZATIONS: &str = "/operator/organizations";
 pub const STARTS: &str = "/operator/starts";
 pub const PROJECTS: &str = "/operator/organizations/{organization}/projects";
@@ -237,6 +240,19 @@ struct TranscriptSessionState {
     state: crate::live_work::SessionState,
 }
 
+async fn harnesses() -> Json<Vec<wire::HarnessCatalogueEntry>> {
+    Json(crate::catalogue::harnesses().to_vec())
+}
+
+async fn sign_in_method(
+    Path((harness, method)): Path<(String, String)>,
+) -> Result<Json<wire::SignInMethod>, Refused> {
+    crate::catalogue::sign_in_method(&harness, &method)
+        .cloned()
+        .map(Json)
+        .map_err(Into::into)
+}
+
 pub fn router(
     store: Store,
     shutdown: CancellationToken,
@@ -244,6 +260,8 @@ pub fn router(
     followers: crate::presence::Followers,
 ) -> Router {
     Router::new()
+        .route(HARNESSES, get(harnesses))
+        .route(SIGN_IN_METHOD, get(sign_in_method))
         .route(ORGANIZATIONS, get(organizations).post(declare_organization))
         .route(STARTS, post(start))
         .route(PROJECTS, get(projects).post(declare_project))
@@ -3785,6 +3803,8 @@ fn inspect_operation(operation: &str, uncertain: bool) -> wire::Action {
 
 fn operation(method: &str, path: &str) -> Option<&'static str> {
     Some(match (method, path) {
+        ("GET", HARNESSES) => "list_harnesses",
+        ("GET", SIGN_IN_METHOD) => "show_sign_in_method",
         ("GET", ORGANIZATIONS) => "list_organizations",
         ("POST", ORGANIZATIONS) => "declare_organization",
         ("POST", STARTS) => "start",

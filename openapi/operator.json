@@ -22,6 +22,72 @@
   ],
   "security": [],
   "paths": {
+    "/operator/harnesses": {
+      "get": {
+        "operationId": "listHarnesses",
+        "summary": "Read the product harness catalogue",
+        "responses": {
+          "200": {
+            "description": "Catalogue metadata; no image inspection or sign-in is performed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HarnessCatalogueEntry"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/harnesses/{harness}/sign-in-methods/{method}": {
+      "get": {
+        "operationId": "showSignInMethod",
+        "summary": "Read a supported harness and Sign-in Method combination",
+        "responses": {
+          "200": {
+            "description": "Catalogue metadata; no image inspection or sign-in is performed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInMethod"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          }
+        },
+        "parameters": [
+          {
+            "name": "harness",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "method",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/operator/organizations": {
       "get": {
         "operationId": "listOrganizations",
@@ -2453,6 +2519,134 @@
       }
     },
     "schemas": {
+      "HarnessCatalogueEntry": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string",
+            "description": "The default ACP command; explicit harness-command configuration remains authoritative."
+          },
+          "sign_in_methods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignInMethod"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "command",
+          "sign_in_methods"
+        ],
+        "additionalProperties": false
+      },
+      "SignInMethod": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "subscription",
+              "key"
+            ]
+          },
+          "ownership": {
+            "type": "string",
+            "enum": [
+              "operator",
+              "organization"
+            ]
+          },
+          "fills": {
+            "$ref": "#/components/schemas/SignInFill"
+          },
+          "input": {
+            "type": "string",
+            "enum": [
+              "token",
+              "file"
+            ]
+          },
+          "relay": {
+            "type": "string",
+            "enum": [
+              "claude-setup-token",
+              "codex-device-auth"
+            ]
+          },
+          "console_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "ownership",
+          "fills",
+          "input"
+        ],
+        "additionalProperties": false
+      },
+      "SignInFill": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SignInVariableFill"
+          },
+          {
+            "$ref": "#/components/schemas/SignInFileFill"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "variable": "#/components/schemas/SignInVariableFill",
+            "file": "#/components/schemas/SignInFileFill"
+          }
+        }
+      },
+      "SignInVariableFill": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "variable"
+          },
+          "variable": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "variable"
+        ],
+        "additionalProperties": false
+      },
+      "SignInFileFill": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "file"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "path"
+        ],
+        "additionalProperties": false
+      },
       "PayloadReference": {
         "type": "object",
         "description": "A body field exceeding 65536 bytes, fetched under its owning Workspace; message, thought and brief text use raw UTF-8, while plans, batched messages and tool input/results use compact JSON.",
