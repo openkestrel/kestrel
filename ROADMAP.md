@@ -307,6 +307,22 @@ acceptance blockers keep their owners and must pass that gate; unverified cancel
 require evidence before they become feature commitments
 ([papercut scope decision](https://github.com/openkestrel/kestrel/issues/494)).
 
+The workbench names open tools and Adapter Units while a Session trails, and otherwise says
+“Checking that background work has settled.” It offers a new Turn immediately without promising a
+completion time. If current Session observations are unavailable, it says so rather than deriving
+quietness from an empty cached list. Last reported work survives disconnection, release and a
+control-plane restart with its report time and originating Instance identity; it remains historical
+and is never attributed to a replacement Instance. A missing report says “No work report received.”
+Lease expiry is displayed as a deadline, never as the last contact or proof of availability; only
+the control plane judges that a Session has ended, including ADR-0054's grace.
+
+Outbound comments preserve the complete ordered agent-message response under “Turn response” in
+`0.4`. ACP supplies no reliable final-answer distinction, so message position, wording and Turn
+boundary metadata are not used to guess one. A future producer contract may select an explicitly
+identified final answer; all messages still belong in the Transcript. Turn comments remain posted
+at the answer, with trailing output recorded separately and existing Outcome deduplication intact
+([workbench polish decision](https://github.com/openkestrel/kestrel/issues/539)).
+
 Repository declarations share syntax validation and GitHub shorthand expansion. Unbound declarations
 do not require a network probe; a selected GitHub Integration must establish repository access and
 the checkout base branch before saving a new or changed binding. Failure preserves the prior
