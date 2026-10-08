@@ -33,9 +33,12 @@ other agents, so each local cargo run has a real cost.
   crate; it type-checks without codegen, as `cargo check` does.
 - Changed `openapi/*.json`? The Client's types are generated from it:
   `cd packages/client && bun install && bun run typecheck`.
-- Behaves? One test target, filtered to the test: `cargo test -p kestrel --test <file> <name>`.
-  Each file in `crates/*/tests/` is its own binary, and the suite builds the supervisor and
-  scripted agent itself, so a whole-package or workspace run is many builds, not one.
+- Behaves? One test target, filtered to the test:
+  `cargo test -p kestrel --test suite <module>::<name>`. The ordinary control-plane tests are one
+  binary, `crates/kestrel/tests/suite/`, a module per area (`work`, `operator`, …); a heavy
+  suite (`docker`, `image`, `compose`, …) is its own file in `crates/kestrel/tests/` and binary
+  (`--test docker`). The tests build the supervisor and scripted agent themselves, so a
+  whole-package or workspace run is many builds, not one.
 - Batch edits before checking; one check after a coherent change, never one per line.
 - Before pushing, `cargo fmt --all`. Leave the workspace suite and the `#[ignore]`d
   suites to CI. CI runs only on a pull request, so finish by pushing the branch and opening one;

@@ -186,7 +186,12 @@ class Reads {
 					status: 200,
 					contentType: "application/json",
 					body: JSON.stringify(
-						this.work ?? { state: "no_instance", branch: "main", pull_request: null },
+						this.work ?? {
+							state: "no_instance",
+							branch: "main",
+							pull_request: null,
+							last_report: { report: "none" },
+						},
 					),
 				});
 			},
@@ -358,6 +363,7 @@ test("committed-but-unpushed, changed and untracked work show separately", async
 	reads.work = {
 		state: "reported",
 		reported_at: new Date().toISOString(),
+		last_report: { report: "none" },
 		repositories: [
 			{
 				repository: "https://github.com/openkestrel/kestrel",
@@ -578,7 +584,11 @@ async function reachable(page: Page): Promise<void> {
 test("stale work and a lost conversation are stated plainly", async ({ page, request }) => {
 	const workspace = await opened(request, "an opening brief");
 	const reads = new Reads(workspace.name);
-	reads.work = { state: "not_answering", message: "the Instance isn't answering" };
+	reads.work = {
+		state: "not_answering",
+		message: "the Instance isn't answering",
+		last_report: { report: "none" },
+	};
 	reads.sessions = [
 		session(1, {
 			state: "ended",

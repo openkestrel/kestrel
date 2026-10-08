@@ -7,8 +7,8 @@
 //! failure in this file names the promise ACP makes that kestrel relied on and did not get.
 //!
 //! Both agents here advertise a model a client may select, so the harness that advertises none
-//! is the scripted ACP agent's to play, in `tests/acp.rs`; what this suite has instead is each
-//! harness naming the same model differently, and refusing the other's name for it.
+//! is the scripted ACP agent's to play, in `tests/suite/acp.rs`; what this suite has instead is
+//! each harness naming the same model differently, and refusing the other's name for it.
 //!
 //! It costs network and model spend, so it is gated to nightly and to a release rather than run
 //! per commit, and every test is ignored by default. What each Session spent is written to

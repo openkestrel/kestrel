@@ -3,7 +3,8 @@
 The HTTP API a Client drives the control plane through, and the `kestrel` CLI that is the first
 Client ([ADR-0015](../adr/0015-the-cli-is-a-client-not-a-role.md)). Server:
 `crates/kestrel/src/operator.rs`. Client: `crates/kestrel-client/`. Contract:
-`openapi/operator.json`, which `crates/kestrel/tests/operator.rs` checks against the served routes.
+`openapi/operator.json`, which `crates/kestrel/tests/suite/operator.rs` checks against the served
+routes.
 
 ## The boundary
 
@@ -11,8 +12,8 @@ Client ([ADR-0015](../adr/0015-the-cli-is-a-client-not-a-role.md)). Server:
   nobody. Operator identity is `0.5` work; until then, reaching the port is authority.
 - Every route refuses a `Host` that is not loopback and, when the request carries one, an `Origin`
   that is not exactly `http://` and that `Host`; a cross-origin preflight is granted nothing. The
-  guard is `operator::addressed_here`, pinned by `crates/kestrel/tests/forgery.rs`. These checks
-  refuse a rebound name and a browser-driven write, and never replace the loopback limit
+  guard is `operator::addressed_here`, pinned by `crates/kestrel/tests/suite/forgery.rs`. These
+  checks refuse a rebound name and a browser-driven write, and never replace the loopback limit
   ([ADR-0036](../adr/0036-the-browser-client-shares-the-loopback-operator-origin.md), amended by
   [ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md)).
 - Routes live under `/operator/organizations/{organization}/…`, plus a few Organization-free ones
@@ -185,8 +186,16 @@ Instance it returns `state: no_instance` and the declared branch; its `pull_requ
 learned pull requests are on the Workspace read. A supervisor off the link, or one that has not supplied a summary,
 returns `state: not_answering` rather than a durable checkout observation.
 
+Every state also carries `last_report`: `report: none` until any of the Workspace's Instances has
+sent a work report, then the newest complete report with the `instance` that sent it and whether
+the Workspace still holds that Instance (`current_instance`). It survives link loss, release and
+restart, and a released or replaced Instance's report is never presented as its successor's. It is
+history only: Unpublished Work, seal, release and reclamation read the numbered `checkout` report,
+and Files and Changes still ask the live Instance.
+
 `kestrel workspace work <workspace>` (alias `status`) prints a heading per repository and how long
-ago its supervisor reported it. `--json` returns the whole operator response.
+ago its supervisor reported it, or, when nothing live answers, the last report and its Instance.
+`--json` returns the whole operator response.
 
 `GET …/workspaces/{workspace}/files?path=` lists one directory of the live Instance and
 `GET …/file?path=&raw=` reads one file, both asked of the supervisor over the link ([Link](link.md#reads)).

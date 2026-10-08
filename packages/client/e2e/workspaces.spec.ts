@@ -177,7 +177,12 @@ class Reads {
 					status: 200,
 					contentType: "application/json",
 					body: JSON.stringify(
-						this.work.get(index) ?? { state: "no_instance", branch: "main", pull_request: null },
+						this.work.get(index) ?? {
+							state: "no_instance",
+							branch: "main",
+							pull_request: null,
+							last_report: { report: "none" },
+						},
 					),
 				});
 			},
@@ -413,6 +418,7 @@ test("changed work and a learned pull request update on a Workspace notice", asy
 			{
 				state: "reported",
 				reported_at: new Date().toISOString(),
+				last_report: { report: "none" },
 				repositories: [
 					{
 						repository: "https://github.com/openkestrel/kestrel",
@@ -455,6 +461,7 @@ test("changed work and a learned pull request update on a Workspace notice", asy
 			{
 				state: "reported",
 				reported_at: new Date().toISOString(),
+				last_report: { report: "none" },
 				repositories: [
 					{
 						repository: "https://github.com/openkestrel/kestrel",
