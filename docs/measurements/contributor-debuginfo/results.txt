@@ -1,0 +1,98 @@
+
+=== clean control-plane build (reduced) ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 28s
+real 88.54
+
+--- after the clean build (reduced)
+target 1314552 KiB
+/tmp/kestrel-debuginfo/reduced/debug/kestrel-control-plane 67700824
+
+=== one integration-test binary compilation (reduced) ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 50.76s
+real 52.19
+
+--- after the test-binary compile (reduced)
+target 2424892 KiB
+/tmp/kestrel-debuginfo/reduced/debug/kestrel-control-plane 67719528
+/tmp/kestrel-debuginfo/reduced/debug/deps/suite-8f5cde6cb3dd6994 87416136
+
+=== first focused test (reduced) ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.48s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 752 filtered out; finished in 33.22s
+real 36.61
+
+--- after the first focused test (reduced)
+target 3052728 KiB
+/tmp/kestrel-debuginfo/reduced/debug/kestrel-control-plane 67719528
+/tmp/kestrel-debuginfo/reduced/debug/kestrel-scripted-agent 17064232
+/tmp/kestrel-debuginfo/reduced/debug/kestrel-supervisor 27462528
+/tmp/kestrel-debuginfo/reduced/debug/deps/suite-8f5cde6cb3dd6994 87416136
+
+=== warm focused test (reduced) ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 752 filtered out; finished in 1.35s
+real 1.96
+
+=== no-op control-plane build (reduced) ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.26s
+real 0.33
+
+=== incremental control-plane build (reduced) ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.31s
+real 4.39
+
+--- after all workloads (reduced)
+target 3235460 KiB
+/tmp/kestrel-debuginfo/reduced/debug/kestrel-control-plane 67700824
+/tmp/kestrel-debuginfo/reduced/debug/kestrel-scripted-agent 17064232
+/tmp/kestrel-debuginfo/reduced/debug/kestrel-supervisor 27462528
+/tmp/kestrel-debuginfo/reduced/debug/deps/suite-8f5cde6cb3dd6994 87416136
+
+=== clean control-plane build (full-debug) ===
+    Finished `full-debug` profile [unoptimized + debuginfo] target(s) in 1m 42s
+real 102.57
+
+--- after the clean build (full-debug)
+target 2252724 KiB
+/tmp/kestrel-debuginfo/full-debug/full-debug/kestrel-control-plane 75719976
+
+=== one integration-test binary compilation (full-debug) ===
+    Finished `full-debug` profile [unoptimized + debuginfo] target(s) in 1m 01s
+real 62.04
+
+--- after the test-binary compile (full-debug)
+target 3993504 KiB
+/tmp/kestrel-debuginfo/full-debug/full-debug/kestrel-control-plane 75692088
+/tmp/kestrel-debuginfo/full-debug/full-debug/deps/suite-5ff8f6d62b428f60 96225096
+
+=== first focused test (full-debug) ===
+    Finished `full-debug` profile [unoptimized + debuginfo] target(s) in 0.54s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 752 filtered out; finished in 41.98s
+real 43.51
+
+--- after the first focused test (full-debug)
+target 5122464 KiB
+/tmp/kestrel-debuginfo/full-debug/full-debug/kestrel-control-plane 75692088
+/tmp/kestrel-debuginfo/full-debug/full-debug/kestrel-scripted-agent 18929896
+/tmp/kestrel-debuginfo/full-debug/full-debug/kestrel-supervisor 30380144
+/tmp/kestrel-debuginfo/full-debug/full-debug/deps/suite-5ff8f6d62b428f60 96225096
+
+=== warm focused test (full-debug) ===
+    Finished `full-debug` profile [unoptimized + debuginfo] target(s) in 0.40s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 752 filtered out; finished in 1.38s
+real 2.00
+
+=== no-op control-plane build (full-debug) ===
+    Finished `full-debug` profile [unoptimized + debuginfo] target(s) in 0.27s
+real 0.34
+
+=== incremental control-plane build (full-debug) ===
+    Finished `full-debug` profile [unoptimized + debuginfo] target(s) in 4.48s
+real 4.55
+
+--- after all workloads (full-debug)
+target 5311672 KiB
+/tmp/kestrel-debuginfo/full-debug/full-debug/kestrel-control-plane 75719976
+/tmp/kestrel-debuginfo/full-debug/full-debug/kestrel-scripted-agent 18929896
+/tmp/kestrel-debuginfo/full-debug/full-debug/kestrel-supervisor 30380144
+/tmp/kestrel-debuginfo/full-debug/full-debug/deps/suite-5ff8f6d62b428f60 96225096

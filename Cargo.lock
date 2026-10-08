@@ -1827,6 +1827,7 @@ dependencies = [
  "tiny_http",
  "tokio",
  "tokio-util",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "uuid",

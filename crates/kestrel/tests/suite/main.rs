@@ -10,6 +10,7 @@ mod changes;
 mod cli;
 mod continuity;
 mod credential;
+mod debuginfo;
 mod deliberate;
 mod events;
 mod exit_codes;

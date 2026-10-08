@@ -19,3 +19,20 @@ unsafe_code = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# Line tables keep file and line numbers; `--profile full-debug` restores what a debugger needs.
+[profile.dev]
+debug = "line-tables-only"
+
+# Cargo strips debuginfo implicitly when debug is off, which breaks proc-macro dylibs on macOS
+# before rustc 1.98 (rust-lang/rust#157750).
+[profile.dev.package."*"]
+debug = false
+strip = "none"
+
+[profile.full-debug]
+inherits = "dev"
+debug = true
+
+[profile.full-debug.package."*"]
+debug = true
