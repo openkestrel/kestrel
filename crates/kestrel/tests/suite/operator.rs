@@ -4931,21 +4931,13 @@ async fn a_session_of_another_organization_occupying_the_shared_slots_is_counted
 #[tokio::test]
 async fn the_queue_says_when_a_live_instance_limit_is_unbounded_and_what_counts_against_it() {
     let kestrel = Kestrel::boot().await;
-    let organization = kestrel.declare_organization("acme").await;
-    let bounded = kestrel.declare_limited_organization("bounded", 1).await;
-    for (organization, name) in [(&organization, "kestrel"), (&bounded, "held")] {
-        kestrel
-            .declare_project(
-                organization,
-                name,
-                &["https://github.com/jtmthf/kestrel".to_owned()],
-                "main",
-            )
-            .await;
-        kestrel
-            .declare_agent(organization, "builder", "opencode", None)
-            .await;
-    }
+    Fixture::acme().declare(&kestrel).await;
+    Fixture::acme()
+        .organization("bounded")
+        .limited_to(1)
+        .project("held")
+        .declare(&kestrel)
+        .await;
 
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let held = kestrel.dispatch_session(workspace.id).await;

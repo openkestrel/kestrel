@@ -16,7 +16,7 @@ use support::fixture::Fixture;
 use support::github_stub::{self, GithubStub};
 use support::scripted_agent::{self, Script};
 use support::supervisor::{self, Supervisor};
-use support::{A_PROVIDER_KEY, HARNESS, Kestrel, PROVIDER_KEY, labelled_on, repository, templates};
+use support::{Kestrel, labelled_on, repository, templates};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 const REPOSITORY: &str = "jtmthf/kestrel";
@@ -1678,28 +1678,14 @@ async fn a_triggers_declared_mode_overrides_its_agents_for_the_session_it_starts
         &scripted_agent::playing(Script::Speaks),
     )
     .await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent_declaring(
-            &organization,
-            "builder",
-            HARNESS,
-            Declared {
-                mode: Some(STARTING_MODE.to_owned()),
-                ..Declared::default()
-            },
-        )
-        .await;
-    kestrel
-        .hold_provider_credential(&organization, PROVIDER_KEY, A_PROVIDER_KEY)
+    Fixture::acme()
+        .checked_out()
+        .declaring(Declared {
+            mode: Some(STARTING_MODE.to_owned()),
+            ..Declared::default()
+        })
+        .holding_a_provider_key()
+        .declare(&kestrel)
         .await;
     kestrel
         .declare_trigger_declaring(

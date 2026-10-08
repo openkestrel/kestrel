@@ -2,8 +2,7 @@ use kestrel::domain::{Declared, Organization, Workspace};
 
 use super::{A_PROVIDER_KEY, HARNESS, Kestrel, PROVIDER_KEY, repository};
 
-/// The Organization, Project and Agents a test declares before it opens work. The first Agent is
-/// the one a Workspace opens with.
+/// The first Agent is the one a Workspace opens with.
 #[derive(Clone)]
 pub struct Fixture {
     organization: String,
@@ -11,7 +10,7 @@ pub struct Fixture {
     project: String,
     repositories: Vec<String>,
     branch: String,
-    agents: Vec<(String, String, Declared)>,
+    agents: Vec<AgentDeclaration>,
     provider_key: Option<String>,
 }
 
@@ -25,11 +24,7 @@ impl Fixture {
             project: repository::NAME.to_owned(),
             repositories: vec!["https://github.com/jtmthf/kestrel".to_owned()],
             branch: repository::BRANCH.to_owned(),
-            agents: vec![(
-                "builder".to_owned(),
-                HARNESS.to_owned(),
-                Declared::default(),
-            )],
+            agents: vec![AgentDeclaration::new("builder", HARNESS, None)],
             provider_key: None,
         }
     }
@@ -68,7 +63,7 @@ impl Fixture {
     }
 
     pub fn agent_name(mut self, name: &str) -> Self {
-        name.clone_into(&mut self.agents[0].0);
+        name.clone_into(&mut self.agents[0].name);
         self
     }
 
@@ -78,31 +73,22 @@ impl Fixture {
     }
 
     pub fn harness(mut self, harness: &str) -> Self {
-        harness.clone_into(&mut self.agents[0].1);
+        harness.clone_into(&mut self.agents[0].harness);
         self
     }
 
     pub fn model<'m>(self, model: impl Into<Option<&'m str>>) -> Self {
-        self.declaring(Declared {
-            model: model.into().map(str::to_owned),
-            ..Declared::default()
-        })
+        self.declaring(naming(model.into()))
     }
 
     pub fn declaring(mut self, declared: Declared) -> Self {
-        self.agents[0].2 = declared;
+        self.agents[0].declared = declared;
         self
     }
 
     pub fn agent(mut self, name: &str, harness: &str, model: Option<&str>) -> Self {
-        self.agents.push((
-            name.to_owned(),
-            harness.to_owned(),
-            Declared {
-                model: model.map(str::to_owned),
-                ..Declared::default()
-            },
-        ));
+        self.agents
+            .push(AgentDeclaration::new(name, harness, model));
         self
     }
 
@@ -132,9 +118,14 @@ impl Fixture {
                 &self.branch,
             )
             .await;
-        for (name, harness, declared) in &self.agents {
+        for agent in &self.agents {
             kestrel
-                .declare_agent_declaring(&organization, name, harness, declared.clone())
+                .declare_agent_declaring(
+                    &organization,
+                    &agent.name,
+                    &agent.harness,
+                    agent.declared.clone(),
+                )
                 .await;
         }
         if let Some(secret) = &self.provider_key {
@@ -154,7 +145,31 @@ impl Fixture {
     /// Opens a Workspace on what an earlier `declare` or `open` already declared.
     pub async fn open_another(&self, kestrel: &Kestrel) -> Workspace {
         kestrel
-            .open_workspace(&self.organization, &self.project, &self.agents[0].0)
+            .open_workspace(&self.organization, &self.project, &self.agents[0].name)
             .await
+    }
+}
+
+#[derive(Clone)]
+struct AgentDeclaration {
+    name: String,
+    harness: String,
+    declared: Declared,
+}
+
+impl AgentDeclaration {
+    fn new(name: &str, harness: &str, model: Option<&str>) -> Self {
+        Self {
+            name: name.to_owned(),
+            harness: harness.to_owned(),
+            declared: naming(model),
+        }
+    }
+}
+
+fn naming(model: Option<&str>) -> Declared {
+    Declared {
+        model: model.map(str::to_owned),
+        ..Declared::default()
     }
 }

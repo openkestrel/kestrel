@@ -318,7 +318,7 @@ async fn deliveries_older_than_githubs_retention_are_reported_lost() {
     polled(&stub, 1).await;
     kestrel
         .database()
-        .unpolled_since(Timestamp::now() - SignedDuration::from_hours(80))
+        .last_polled_at(Timestamp::now() - SignedDuration::from_hours(80))
         .await;
 
     let deadline = tokio::time::Instant::now() + PATIENCE;

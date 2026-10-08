@@ -31,8 +31,12 @@ impl<'a> Database<'a> {
     }
 
     async fn pool(&self) -> SqlitePool {
+        self.connect("").await
+    }
+
+    async fn connect(&self, options: &str) -> SqlitePool {
         SqlitePool::connect(&format!(
-            "sqlite://{}?mode=rwc",
+            "sqlite://{}{options}",
             self.data_dir.join("kestrel.db").display()
         ))
         .await
@@ -149,8 +153,7 @@ impl<'a> Database<'a> {
         .await;
     }
 
-    /// Every Integration last read and polled at `at`, and due to poll now.
-    pub async fn unpolled_since(&self, at: Timestamp) {
+    pub async fn last_polled_at(&self, at: Timestamp) {
         self.execute(
             "UPDATE integration SET deliveries_read_from = ?, last_polled_at = ?, poll_due_at = ?",
             &[
@@ -229,11 +232,19 @@ impl<'a> Database<'a> {
         pool.close().await;
     }
 
+    /// Creates the database file if nothing has yet.
     pub async fn leave_a_table_without_history(&self) {
-        self.execute("CREATE TABLE leftover (id INTEGER PRIMARY KEY)", &[])
-            .await;
-        self.execute("INSERT INTO leftover (id) VALUES (1)", &[])
-            .await;
+        let pool = self.connect("?mode=rwc").await;
+        for statement in [
+            "CREATE TABLE leftover (id INTEGER PRIMARY KEY)",
+            "INSERT INTO leftover (id) VALUES (1)",
+        ] {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("a table without history");
+        }
+        pool.close().await;
     }
 
     pub async fn rows_left_over(&self) -> Vec<i64> {
