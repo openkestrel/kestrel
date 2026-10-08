@@ -60,11 +60,17 @@ Patterns the code relies on that no single file states. Comment style is in `AGE
 - **The primary seam is the whole control plane.** `crates/kestrel/tests/support/` boots it in
   process against a temp SQLite file and drives it through the operator boundary and link. Assert in
   Workspaces, Sessions and Transcripts; reach `Store` and `Log` only through it.
+- **Ordinary tests share one binary.** `crates/kestrel/tests/suite/` holds a module per area, so the
+  harness compiles once: select with `cargo test -p kestrel --test suite <module>::`. Under plain
+  `cargo test` they share a process, so a test owns its fixture and leans on nothing another left
+  behind; CI's nextest still runs each in its own process.
 - **The real supervisor runs as a local process.** `LocalExec` spawns the `kestrel-supervisor` binary
   against `kestrel-scripted-agent`, so most tests need no Docker.
-- **Heavier tests are `#[ignore]`d and CI runs them**: `docker`, `image`, `opencode`, `development`
-  and `control_plane`, each named in `.github/workflows/ci.yml`. `conformance.yml` drives a second
-  ACP agent to prove nothing branches on the harness.
+- **Heavier tests are `#[ignore]`d and CI runs them**, each suite its own file and binary beside
+  `suite/`: `docker`, `image`, `opencode`, `development`, `control_plane`, `compose` and `cleanup`,
+  each named in `.github/workflows/ci.yml`. `conformance.yml` drives a second ACP agent to prove
+  nothing branches on the harness; `contention` measures load and `subscription` spends a
+  person's model plan, so only a person runs them.
 - **The supervisor has its own suite** in `crates/kestrel-supervisor/tests/` against a stub link.
 - **Git in tests is hermetic** only if your global config is: run `cargo test` with
   `GIT_CONFIG_GLOBAL=/dev/null` when commit signing is configured.

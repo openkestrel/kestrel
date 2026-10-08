@@ -3,7 +3,7 @@
 The HTTP API a Client drives the control plane through, and the `kestrel` CLI that is the first
 Client ([ADR-0015](../adr/0015-the-cli-is-a-client-not-a-role.md)). Server:
 `crates/kestrel/src/operator.rs`. Client: `crates/kestrel-client/`. Contract:
-`openapi/operator.json`, which `crates/kestrel/tests/operator.rs` checks against the served routes.
+`openapi/operator.json`, which `crates/kestrel/tests/suite/operator.rs` checks against the served routes.
 
 ## The boundary
 
@@ -11,7 +11,7 @@ Client ([ADR-0015](../adr/0015-the-cli-is-a-client-not-a-role.md)). Server:
   nobody. Operator identity is `0.5` work; until then, reaching the port is authority.
 - Every route refuses a `Host` that is not loopback and, when the request carries one, an `Origin`
   that is not exactly `http://` and that `Host`; a cross-origin preflight is granted nothing. The
-  guard is `operator::addressed_here`, pinned by `crates/kestrel/tests/forgery.rs`. These checks
+  guard is `operator::addressed_here`, pinned by `crates/kestrel/tests/suite/forgery.rs`. These checks
   refuse a rebound name and a browser-driven write, and never replace the loopback limit
   ([ADR-0036](../adr/0036-the-browser-client-shares-the-loopback-operator-origin.md), amended by
   [ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md)).
