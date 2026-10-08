@@ -2,16 +2,6 @@ name: Release version preparation
 
 on:
   pull_request:
-    paths:
-      - scripts/release.py
-      - scripts/tests/test_release.py
-      - Cargo.toml
-      - Cargo.lock
-      - crates/**/Cargo.toml
-      - packages/**/package.json
-      - packages/client/public/version.json
-      - CHANGELOG.md
-      - .github/workflows/release-version.yml
   merge_group:
 
 permissions:
