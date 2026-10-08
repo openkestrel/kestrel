@@ -35,11 +35,16 @@ Every supervisor git command sets `GIT_OPTIONAL_LOCKS=0`.
 with their arrival times live only while the Instance has an open instruction stream. Open tools
 and adapter units survive a disconnect until the Session ends, so supervisor loss can close them
 `unresolved` in the same transaction that ends the Session.
-The operator also checks the supervisor's heartbeat freshness before serving a summary. Each
-accepted `work` report is also queued for one serve-role writer that replaces its Instance's row in
-`instance_work_report`, newest per Instance, so a report never waits on the write lock. That row is
-the history the operator serves as `last_report` once the live summary is gone. The separate numbered `checkout`
-report remains durable and supplies the reaping gate only.
+The operator also checks the supervisor's heartbeat freshness before serving a summary.
+
+Each accepted `work` report is also queued for one serve-role writer, which replaces its Instance's
+row in `instance_work_report`, newest per Instance; that row is what the operator serves as
+`last_report` once the live summary is gone. The supervisor waits on each report before taking its
+next read, so the report never waits on the write lock. The Workspace notice goes out when that
+write commits a changed summary, and a report saying what the last one said raises none. A
+supervisor reports again whenever it connects, which recovers a report a crashed control plane took
+and had not yet written. The separate numbered `checkout` report remains durable and supplies the
+reaping gate only.
 
 ## Reads
 

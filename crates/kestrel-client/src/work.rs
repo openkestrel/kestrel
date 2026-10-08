@@ -40,14 +40,14 @@ fn last_report(out: &mut impl Write, report: WorkLastReport) -> Result<()> {
     match report {
         WorkLastReport::WorkNoReport(_) => writeln!(out, "No work report received.")?,
         WorkLastReport::WorkInstanceReport(report) => {
-            let held = if report.current_instance {
+            let no_longer_held = if report.current_instance {
                 ""
             } else {
                 ", no longer the Workspace's"
             };
             writeln!(
                 out,
-                "\nLast reported by the Instance {}{held} {}s ago ({})",
+                "\nLast reported by the Instance {}{no_longer_held} {}s ago ({})",
                 report.instance,
                 age(&report.reported_at)?,
                 report.reported_at

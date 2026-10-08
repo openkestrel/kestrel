@@ -484,19 +484,7 @@ async fn report(
 ) -> Result<Response, Refused> {
     let (linked, _) = authenticated(&control_plane, &headers, &instance).await?;
     if let work::Report::Work { repositories } = reported.report {
-        let summary = crate::live_work::Summary {
-            repositories,
-            reported_at: jiff::Timestamp::now(),
-        };
-        control_plane
-            .live
-            .unrecorded
-            .report(linked.workspace, &instance, summary.clone());
-        if control_plane.live.summaries.report(&instance, summary) {
-            let mut touched = Touched::default();
-            touched.workspace_id(linked.organization, linked.workspace);
-            control_plane.store.notices().publish(touched);
-        }
+        control_plane.live.report_work(linked, repositories);
         return Ok(StatusCode::ACCEPTED.into_response());
     }
     if let work::Report::SessionState {

@@ -232,7 +232,7 @@ describe("the work summary", () => {
 					because: "no such directory",
 				},
 			],
-			last_report: { report: "none" },
+			last_report: none,
 		};
 
 		expect(changedWork(work)).toEqual({

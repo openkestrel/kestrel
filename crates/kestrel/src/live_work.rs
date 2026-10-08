@@ -7,9 +7,10 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::domain::{Usage, WorkspaceId};
+use crate::domain::Usage;
 use crate::log::ToolStatus;
 use crate::store::Store;
+use crate::store::workspace::Linked;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Repository {
@@ -79,18 +80,10 @@ impl Summaries {
         }
     }
 
-    /// Reports the repositories the Instance holds and says whether that changed what a reader
-    /// sees: a report saying what the last one said raises nothing, and the time still moves.
-    pub fn report(&self, instance: &str, summary: Summary) -> bool {
-        let mut summaries = self.0.lock().unwrap();
-        let Some(live) = summaries.get_mut(instance) else {
-            return false;
-        };
-        let changed = live.summary.as_ref().map(|summary| &summary.repositories)
-            != Some(&summary.repositories);
-        live.summary = Some(summary);
-
-        changed
+    pub fn report(&self, instance: &str, summary: Summary) {
+        if let Some(live) = self.0.lock().unwrap().get_mut(instance) {
+            live.summary = Some(summary);
+        }
     }
 
     pub fn get(&self, instance: &str) -> Option<Summary> {
@@ -98,41 +91,39 @@ impl Summaries {
     }
 }
 
-/// Reports the serve role has taken and not yet written, newest per Instance.
+/// Newest per Instance.
 #[derive(Clone, Default)]
-pub struct Unrecorded(Arc<(Mutex<Taken>, Notify)>);
+pub struct Unrecorded(Arc<(Mutex<Pending>, Notify)>);
 
-type Taken = HashMap<(WorkspaceId, String), Summary>;
+type Pending = HashMap<Linked, Summary>;
 
 impl Unrecorded {
-    pub fn report(&self, workspace: WorkspaceId, instance: &str, summary: Summary) {
-        let (unrecorded, wake) = &*self.0;
-        unrecorded
-            .lock()
-            .unwrap()
-            .insert((workspace, instance.to_owned()), summary);
+    pub fn report(&self, reporter: Linked, summary: Summary) {
+        let (pending, wake) = &*self.0;
+        pending.lock().unwrap().insert(reporter, summary);
         wake.notify_one();
     }
 
-    /// The only writer, so a report never waits on the write lock and a supervisor's read answers
-    /// never queue behind one.
+    /// The only writer, so a report never waits on the write lock: the supervisor waits on each
+    /// report before it takes its next read, and a stalled report would time that read out.
     pub async fn record(&self, store: &Store, stop: CancellationToken) {
-        let (unrecorded, wake) = &*self.0;
+        let (pending, wake) = &*self.0;
         loop {
             let stopping = tokio::select! {
                 () = wake.notified() => false,
                 () = stop.cancelled() => true,
             };
-            let taken = std::mem::take(&mut *unrecorded.lock().unwrap());
-            if let Err(error) = write(store, &taken).await {
+            let taken = std::mem::take(&mut *pending.lock().unwrap());
+            if let Err(error) = record_reports(store, &taken).await {
                 warn!(
                     error = format!("{error:#}"),
+                    reports = taken.len(),
                     "the work reports could not be recorded"
                 );
                 {
-                    let mut unrecorded = unrecorded.lock().unwrap();
-                    for (key, summary) in taken {
-                        unrecorded.entry(key).or_insert(summary);
+                    let mut pending = pending.lock().unwrap();
+                    for (reporter, summary) in taken {
+                        pending.entry(reporter).or_insert(summary);
                     }
                 }
                 if !stopping {
@@ -147,17 +138,14 @@ impl Unrecorded {
     }
 }
 
-async fn write(
-    store: &Store,
-    taken: &HashMap<(WorkspaceId, String), Summary>,
-) -> anyhow::Result<()> {
+async fn record_reports(store: &Store, taken: &Pending) -> anyhow::Result<()> {
     if taken.is_empty() {
         return Ok(());
     }
     let mut tx = store.begin().await?;
-    for ((workspace, instance), summary) in taken {
+    for (reporter, summary) in taken {
         tx.workspaces()
-            .record_work_report(*workspace, instance, summary)
+            .record_work_report(reporter, summary)
             .await?;
     }
     tx.commit().await
@@ -232,10 +220,10 @@ pub async fn read(
     let instance = tx.workspaces().instance(workspace.id).await?;
     let last_report = match tx.workspaces().last_work_report(workspace.id).await? {
         None => LastReport::None,
-        Some((reporter, summary)) => LastReport::Received {
-            current_instance: instance.as_ref() == Some(&reporter),
-            instance: reporter,
-            summary,
+        Some(report) => LastReport::Received {
+            current_instance: instance.as_ref() == Some(&report.instance),
+            instance: report.instance,
+            summary: report.summary,
         },
     };
     let Some(instance) = instance else {
@@ -427,43 +415,5 @@ mod tests {
             }
         ));
         assert!(summaries.report_session("instance", "session", SessionState::default()));
-    }
-
-    #[test]
-    fn a_work_summary_that_says_what_the_last_one_did_is_not_noticed() {
-        let summaries = Summaries::default();
-        let _connection = summaries.connected("instance");
-        let repository = || Repository {
-            repository: "https://github.com/jtmthf/kestrel".to_owned(),
-            git: Git::Read {
-                branch: Some("main".to_owned()),
-                changed: Changes {
-                    files: 1,
-                    added: 2,
-                    removed: 3,
-                },
-                staged: Changes {
-                    files: 0,
-                    added: 0,
-                    removed: 0,
-                },
-                committed: Commits {
-                    commits: 0,
-                    added: 0,
-                    removed: 0,
-                },
-                pushed: None,
-                untracked: 0,
-                stashed: 0,
-            },
-        };
-
-        let summary = || Summary {
-            repositories: vec![repository()],
-            reported_at: Timestamp::now(),
-        };
-
-        assert!(summaries.report("instance", summary()));
-        assert!(!summaries.report("instance", summary()));
     }
 }

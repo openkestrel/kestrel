@@ -75,21 +75,12 @@ async fn reported(
     workspace: &kestrel::domain::Workspace,
     untracked: u64,
 ) -> Value {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let answer = summary(kestrel, workspace).await;
-        if answer["state"] == "reported"
+    answered_with(kestrel, workspace, |answer| {
+        answer["state"] == "reported"
             && answer["repositories"][0]["untracked"] == untracked
             && answer["last_report"]["reported_at"] == answer["reported_at"]
-        {
-            return answer;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "never reported: {answer}"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
+    })
+    .await
 }
 
 fn git(directory: &std::path::Path, args: &[&str]) -> String {

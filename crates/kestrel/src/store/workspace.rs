@@ -1753,25 +1753,40 @@ impl<'a> Workspaces<'a> {
             .transpose()
     }
 
-    pub async fn record_work_report(
-        &mut self,
-        workspace: WorkspaceId,
-        instance: &str,
-        summary: &Summary,
-    ) -> Result<()> {
+    /// A report saying what the Instance's last one said raises no notice; only its time moves.
+    pub async fn record_work_report(&mut self, reporter: &Linked, summary: &Summary) -> Result<()> {
+        let repositories = serde_json::to_string(&summary.repositories)?;
+        let before: Option<String> = sqlx::query_scalar(
+            "SELECT repositories FROM instance_work_report WHERE workspace_id = ? AND instance = ?",
+        )
+        .bind(reporter.workspace.to_string())
+        .bind(&reporter.instance)
+        .fetch_optional(&mut *self.connection)
+        .await
+        .with_context(|| {
+            format!(
+                "reading the work the instance {} last reported",
+                reporter.instance
+            )
+        })?;
         sqlx::query(
             "INSERT INTO instance_work_report (workspace_id, instance, repositories, reported_at)
              VALUES (?, ?, ?, ?)
              ON CONFLICT (workspace_id, instance)
              DO UPDATE SET repositories = excluded.repositories, reported_at = excluded.reported_at",
         )
-        .bind(workspace.to_string())
-        .bind(instance)
-        .bind(serde_json::to_string(&summary.repositories)?)
+        .bind(reporter.workspace.to_string())
+        .bind(&reporter.instance)
+        .bind(&repositories)
         .bind(due(summary.reported_at))
         .execute(&mut *self.connection)
         .await
-        .with_context(|| format!("recording the work the instance {instance} reported"))?;
+        .with_context(|| format!("recording the work the instance {} reported", reporter.instance))?;
+
+        if before.as_ref() != Some(&repositories) {
+            self.touched
+                .workspace_id(reporter.organization, reporter.workspace);
+        }
 
         Ok(())
     }
@@ -1779,7 +1794,7 @@ impl<'a> Workspaces<'a> {
     pub async fn last_work_report(
         &mut self,
         workspace: WorkspaceId,
-    ) -> Result<Option<(String, Summary)>> {
+    ) -> Result<Option<InstanceReport>> {
         sqlx::query(
             "SELECT instance, repositories, reported_at FROM instance_work_report
              WHERE workspace_id = ? ORDER BY reported_at DESC, instance LIMIT 1",
@@ -1789,13 +1804,13 @@ impl<'a> Workspaces<'a> {
         .await
         .with_context(|| format!("reading the work last reported in the workspace {workspace}"))?
         .map(|row| {
-            Ok((
-                row.get("instance"),
-                Summary {
+            Ok(InstanceReport {
+                instance: row.get("instance"),
+                summary: Summary {
                     repositories: serde_json::from_str(row.get("repositories"))?,
                     reported_at: row.get::<String, _>("reported_at").parse()?,
                 },
-            ))
+            })
         })
         .transpose()
     }
@@ -2408,11 +2423,17 @@ impl<'a> Workspaces<'a> {
     }
 }
 
+pub struct InstanceReport {
+    pub instance: String,
+    pub summary: Summary,
+}
+
 pub struct Supervisor {
     pub name: Option<String>,
     pub reached_at: Option<Timestamp>,
 }
 
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Linked {
     pub instance: String,
     pub workspace: WorkspaceId,
