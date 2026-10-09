@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use reqwest::{Client, RequestBuilder, Response, Url, header};
+use reqwest::{Client, RequestBuilder, Response, Url};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -13,7 +13,6 @@ pub struct ControlPlane {
 }
 
 impl ControlPlane {
-    /// `operation` names the command a lost or unrecognised answer is reported against.
     pub fn at(base: Url, operation: &str) -> Self {
         Self {
             client: Client::new(),
@@ -77,9 +76,12 @@ impl ControlPlane {
     }
 
     async fn sent(&self, request: RequestBuilder, write: bool) -> Result<Response> {
+        if write {
+            diagnostic::writing();
+        }
         let response = request.send().await.map_err(|error| {
             anyhow!(diagnostic::unreachable(
-                self.base.as_str().trim_end_matches('/'),
+                self.base.as_str(),
                 self.request(write),
                 !error.is_connect(),
             ))
@@ -89,14 +91,9 @@ impl ControlPlane {
             return Ok(response);
         }
 
-        let retry_after = retry_after(&response);
-        let body = response.bytes().await.unwrap_or_default();
-        Err(anyhow!(diagnostic::refused(
-            status,
-            retry_after,
-            &body,
-            self.request(write),
-        )))
+        Err(anyhow!(
+            diagnostic::refusal(response, self.request(write)).await
+        ))
     }
 
     fn url(&self, path: &[&str]) -> Result<Url> {
@@ -114,14 +111,4 @@ impl ControlPlane {
 
         Ok(url)
     }
-}
-
-pub fn retry_after(response: &Response) -> Option<i64> {
-    response
-        .headers()
-        .get(header::RETRY_AFTER)?
-        .to_str()
-        .ok()?
-        .parse()
-        .ok()
 }

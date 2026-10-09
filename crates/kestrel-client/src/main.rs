@@ -5,8 +5,10 @@ mod exit;
 mod files;
 mod output;
 mod scope;
+mod shell;
 mod sse;
 mod start;
+mod terminal;
 mod transcript;
 mod view;
 mod work;
@@ -900,7 +902,6 @@ async fn main() -> ExitCode {
     ExitCode::from(exit.code())
 }
 
-/// The subcommand path, such as `session stop`, that a Client-made diagnostic names.
 fn operation(matches: &clap::ArgMatches) -> String {
     let mut words = Vec::new();
     let mut here = matches;
@@ -1591,7 +1592,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                     &client.control_plane,
                     "changes in this comparison",
                     Some(&organization),
-                    &format!("workspace work {}", diagnostic::quoted(&workspace)),
+                    &format!("workspace work {}", shell::quoted(&workspace)),
                 ),
             )?;
         }
@@ -1620,7 +1621,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                     &client.control_plane,
                     read,
                     Some(&organization),
-                    &format!("workspace work {}", diagnostic::quoted(&workspace)),
+                    &format!("workspace work {}", shell::quoted(&workspace)),
                 ),
             )?;
         }
@@ -1646,7 +1647,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                     &client.control_plane,
                     "directory entries",
                     Some(&organization),
-                    &format!("workspace files {}", diagnostic::quoted(&workspace)),
+                    &format!("workspace files {}", shell::quoted(&workspace)),
                 ),
             )?;
         }
@@ -1840,7 +1841,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                     &client.control_plane,
                     "Sessions",
                     Some(&organization),
-                    &format!("workspace show {}", diagnostic::quoted(&workspace)),
+                    &format!("workspace show {}", shell::quoted(&workspace)),
                 ),
             )?;
         }
@@ -2082,14 +2083,14 @@ fn empty_list(
     action: &str,
 ) -> String {
     let scope = organization.map_or_else(String::new, |name| {
-        format!(" in Organization {}", diagnostic::quoted(name))
+        format!(" in Organization {}", shell::quoted(name))
     });
     let flag = organization.map_or_else(String::new, |name| {
-        format!(" --organization {}", diagnostic::quoted(name))
+        format!(" --organization {}", shell::quoted(name))
     });
     format!(
         "No {absent}{scope}.\nInspect the next step with:\n  kestrel{flag} {action} --control-plane {}",
-        diagnostic::quoted(control_plane)
+        shell::quoted(control_plane)
     )
 }
 
@@ -2824,12 +2825,16 @@ fn read_the_secret() -> Result<String> {
 /// nothing driving the Client can block on a prompt it cannot see.
 fn read_standard_input(what: &str) -> Result<String> {
     let mut stdin = std::io::stdin();
-    if stdin.is_terminal() {
-        eprintln!("reading {what} from standard input; end it with ctrl-d");
-    }
+    let unechoed = stdin.is_terminal().then(|| {
+        eprintln!("reading {what} from standard input, unechoed; end it with ctrl-d");
+        terminal::Unechoed::on(&stdin)
+    });
 
     let mut read = String::new();
     stdin.read_to_string(&mut read)?;
+    if unechoed.is_some() {
+        eprintln!();
+    }
 
     Ok(read)
 }

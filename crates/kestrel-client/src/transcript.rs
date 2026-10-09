@@ -24,13 +24,14 @@ const OPERATION: Request<'static> = Request {
 
 enum Cut {
     Refused(Failed),
-    Lost,
+    /// The server's own answer when it gave one, so giving up reports why rather than a lost line.
+    Lost(Option<Failed>),
     Failed(anyhow::Error),
 }
 
 impl From<reqwest::Error> for Cut {
     fn from(_: reqwest::Error) -> Self {
-        Cut::Lost
+        Cut::Lost(None)
     }
 }
 
@@ -71,21 +72,24 @@ pub async fn read(
     let mut activities = Activities::default();
     let mut cursor = from;
     let mut heard = Instant::now();
+    let mut answered = None;
 
     loop {
         match streamed(stream, &mut cursor, &mut heard, &mut activities).await {
             Ok(()) => return Ok(cursor),
             Err(Cut::Refused(failed)) => return Err(failed.into()),
             Err(Cut::Failed(error)) => return Err(error),
-            Err(Cut::Lost) if heard.elapsed() > PATIENCE => {
-                return Err(diagnostic::unreachable(
-                    control_plane.as_str().trim_end_matches('/'),
-                    OPERATION,
-                    true,
-                )
-                .into());
+            Err(Cut::Lost(answer)) => {
+                answered = answer.or(answered);
+                if heard.elapsed() > PATIENCE {
+                    return Err(answered
+                        .unwrap_or_else(|| {
+                            diagnostic::unreachable(control_plane.as_str(), OPERATION, true)
+                        })
+                        .into());
+                }
+                tokio::time::sleep(RETRY).await;
             }
-            Err(Cut::Lost) => tokio::time::sleep(RETRY).await,
         }
     }
 }
@@ -112,18 +116,13 @@ async fn streamed(
 
     let response = request.send().await?;
     let status = response.status();
-    if status.is_client_error() {
-        let retry_after = crate::api::retry_after(&response);
-        let body = response.bytes().await.unwrap_or_default();
-        return Err(Cut::Refused(diagnostic::refused(
-            status,
-            retry_after,
-            &body,
-            OPERATION,
-        )));
-    }
     if !status.is_success() {
-        return Err(Cut::Lost);
+        let refusal = diagnostic::refusal(response, OPERATION).await;
+        return Err(if status.is_client_error() {
+            Cut::Refused(refusal)
+        } else {
+            Cut::Lost(Some(refusal))
+        });
     }
     *heard = Instant::now();
 
@@ -182,7 +181,7 @@ async fn streamed(
         }
     }
 
-    Err(Cut::Lost)
+    Err(Cut::Lost(None))
 }
 
 #[derive(Deserialize)]

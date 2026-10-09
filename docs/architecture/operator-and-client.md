@@ -305,8 +305,8 @@ headings. Each command's `--json` returns the operator response.
   answer. Live work inspection follows git-style prose even when piped, and its `--json` returns
   the whole response. For commands with a `View`, a terminal gets aligned columns; a pipe gets
   delimited rows; `--json a,b` gets exactly those fields in that order.
-- **Secrets** are read from standard input, never from arguments.
-- **Diagnostics** (`diagnostic.rs`): every failure reaches stderr as a typed `Diagnostic`, the
+- **Secrets** are read from standard input, never from arguments, with echo off at a terminal.
+- **Diagnostics** (`diagnostic/`): every failure reaches stderr as a typed `Diagnostic`, the
   control plane's or one the Client makes for a connection failure, an unreadable or unrecognised
   answer, or a local error. The exit comes from its `kind`, falling back to the HTTP status only for
   kinds the table above does not place. Each `Action` renders as a `kestrel` command that keeps the selected
@@ -315,7 +315,8 @@ headings. Each command's `--json` returns the operator response.
   and stdout holds only successful output. When standard input and standard error are both a
   terminal, the Client offers to run a step: it asks for each missing input, asks for an explicit
   yes before a step with a `consequence`, and keeps the original exit whatever the step does. A
-  refused or lost write is never sent again. A Session's own `diagnostic` is part of
+  refused or lost write is never sent again: once an invocation has sent a write, a retry is
+  described, not offered to run. A Session's own `diagnostic` is part of
   `session show`'s successful output.
 - `kestrel start` (`start.rs`) infers an Organization, Project and Agent from the local clone and
   explains every inferred value on stderr before changing anything.

@@ -356,7 +356,7 @@ async fn stopping_the_holding_session_takes_an_explicit_yes() {
     assert!(
         declined
             .said
-            .contains(&format!("2. stop the session {}", session.id)),
+            .contains(&format!("2. stop the Session {}", session.id)),
         "{}",
         declined.said
     );
