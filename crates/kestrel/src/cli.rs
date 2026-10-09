@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use directories::ProjectDirs;
+use url::Url;
 
 use crate::compute::{Docker, Driver, LocalExec};
 use crate::role::serve::Listen;
@@ -13,6 +14,7 @@ use crate::role::work::{Dispatch, HarnessCommand};
 
 const SUPERVISOR: &str = "kestrel-supervisor";
 const IMAGE: &str = "kestrel-env:latest";
+pub const CLIENT_URL: &str = "http://localhost:7719";
 const DEFAULT_MAX_ACTIVE_SESSIONS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 const DEFAULT_FOLLOW_LEASE: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_INTERRUPT_DEADLINE: NonZeroU64 = NonZeroU64::new(30).unwrap();
@@ -82,6 +84,18 @@ pub struct Cli {
         default_value = "127.0.0.1:7718"
     )]
     operator_listen: SocketAddr,
+
+    /// Where a browser opens the Client, which the operator boundary names to anyone who asks
+    /// it instead
+    #[arg(
+        long,
+        env = "KESTREL_CLIENT_URL",
+        global = true,
+        value_name = "URL",
+        default_value = CLIENT_URL,
+        value_parser = client_url
+    )]
+    client_url: Url,
 
     /// Where a supervisor reaches the link, if not the address the control plane bound
     #[arg(long, env = "KESTREL_LINK", global = true, value_name = "URL")]
@@ -203,7 +217,19 @@ pub enum Command {
     Work,
 }
 
+fn client_url(given: &str) -> Result<Url, String> {
+    let url = Url::parse(given).map_err(|error| format!("not a URL: {error}"))?;
+    match url.scheme() {
+        "http" | "https" if url.has_host() => Ok(url),
+        _ => Err("not an http:// or https:// URL with a host".to_owned()),
+    }
+}
+
 impl Cli {
+    pub fn client_url(&self) -> &Url {
+        &self.client_url
+    }
+
     pub fn listen(&self) -> Listen {
         Listen {
             link: self.listen,
@@ -423,6 +449,27 @@ mod tests {
     #[test]
     fn the_operator_boundary_listens_on_loopback_unless_configuration_says_otherwise() {
         assert!(parsed(&[]).listen().operator.ip().is_loopback());
+    }
+
+    #[test]
+    fn the_client_is_on_its_default_port_unless_configuration_says_otherwise() {
+        assert_eq!(parsed(&[]).client_url().as_str(), "http://localhost:7719/");
+        assert_eq!(
+            parsed(&["--client-url", "http://localhost:8000"])
+                .client_url()
+                .as_str(),
+            "http://localhost:8000/"
+        );
+    }
+
+    #[test]
+    fn a_client_url_that_a_browser_could_not_open_is_rejected() {
+        for given in ["localhost:7719", "7719", "file:///srv", "http://"] {
+            assert!(
+                Cli::try_parse_from(["kestrel-control-plane", "--client-url", given]).is_err(),
+                "{given} was accepted"
+            );
+        }
     }
 
     #[test]

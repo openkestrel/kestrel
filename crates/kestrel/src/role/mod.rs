@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::store::Store;
 use crate::timer::Wake;
 use std::time::Duration;
+use url::Url;
 
 pub struct AllInOne {
     store: Store,
@@ -15,12 +16,17 @@ pub struct AllInOne {
 }
 
 /// One process is the only place ingest can wake the sweeps that consume what it recorded.
-pub async fn bind(store: Store, listen: serve::Listen, follow_lease: Duration) -> Result<AllInOne> {
+pub async fn bind(
+    store: Store,
+    listen: serve::Listen,
+    client: Url,
+    follow_lease: Duration,
+) -> Result<AllInOne> {
     let wake = Wake::default();
 
     Ok(AllInOne {
         store: store.clone(),
-        listening: serve::bind(store, listen, wake.clone(), follow_lease).await?,
+        listening: serve::bind(store, listen, client, wake.clone(), follow_lease).await?,
         wake,
     })
 }
