@@ -175,7 +175,8 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   `latest`; the decided release process reserves it for accepted releases.
 
 - **Typed next steps** ([ADR-0052](../adr/0052-a-refusal-carries-its-next-steps.md)): the CLI
-  and browser still read refusal sentences for corrections; Integration, GitHub App, start and
+  still reads refusal sentences for corrections, and the browser has no sign-in or settings
+  screen to bind those steps to; Integration, GitHub App, start and
   Trigger declaration refusals still answer a plain `Refusal`; readiness does not yet carry the
   shared diagnostic contract, and a Session's failure diagnostic attributes no sign-in.
 

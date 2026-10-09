@@ -133,7 +133,11 @@ export class TabStream {
 			);
 		} catch (error) {
 			if (this.token !== token || this.subscribers.get(id) !== subscriber) return;
-			if (error instanceof Refused && error.kind !== undefined && error.status < 500) {
+			if (
+				error instanceof Refused &&
+				error.diagnostic.kind !== "unknown_response" &&
+				error.status < 500
+			) {
 				this.subscribers.delete(id);
 				return;
 			}

@@ -634,3 +634,61 @@ test("stale work and a lost conversation are stated plainly", async ({ page, req
 	await expect(card.locator("[data-session-commands]")).toContainText("compact");
 	await expect(card).toContainText("1.2k/200.0k context");
 });
+
+test("a failed Session's read shows why it failed and how to repair it, as no refusal", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request, "an opening brief");
+	const reads = new Reads(workspace.name);
+	reads.sessions = [
+		session(1, {
+			state: "ended",
+			exit: { status: "failed", because: "authentication required" },
+			diagnostic: {
+				kind: "authentication_failed",
+				message: "the claude harness needed a sign-in before it would work",
+				field: null,
+				context: {
+					session: "s-1",
+					harness: "claude",
+					image: null,
+					evidence: {
+						kind: "authentication_required",
+						code: -32000,
+						methods: ["claude-login"],
+						method: "claude-login",
+					},
+					sign_in: null,
+					expired: null,
+					covered: null,
+				},
+				next_steps: [
+					{ action: "sign_in", harness: "claude", method: "claude-login", sign_in: null },
+					{
+						action: "inspect_resource",
+						resource: "session",
+						reference: "s-1",
+						organization: ORGANIZATION,
+					},
+				],
+			},
+		}),
+	];
+	await reads.install(page);
+	await viewing(page, workspace.name);
+	const work = workPane(page);
+
+	await work.getByRole("tab", { name: "Sessions" }).click();
+	const why = work.getByRole("region", { name: "Why it failed" });
+	await expect(why).toContainText("the claude harness needed a sign-in before it would work");
+	await expect(why).toContainText("claude-login");
+	await expect(why).not.toContainText("Expired");
+	await expect(why.locator('[data-step="sign_in"]')).toHaveText(
+		"Sign in to the claude harness with claude-login",
+	);
+	await expect(why.locator('[data-step="inspect_resource"]')).toHaveText(
+		`Inspect the Session s-1 in ${ORGANIZATION}`,
+	);
+	await expect(work.getByRole("alert")).toHaveCount(0);
+});

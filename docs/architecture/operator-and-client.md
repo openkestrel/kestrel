@@ -96,7 +96,8 @@ follower lease's 404 are also plain. Anything else is `Unavailable`.
 | `Reason::InstanceTimeout` | 504 | 5 unavailable |
 | Anything else | 503 | 5 unavailable |
 
-The exit numbers are published by `kestrel exit-codes` and never move (`kestrel-client/src/exit.rs`).
+A `setup_gap` Diagnostic exits 78 (not ready) whatever its status. The exit numbers are published by
+`kestrel exit-codes` and never move (`kestrel-client/src/exit.rs`).
 The complete Diagnostic/Action contract — every `kind` and `action`, including the setup, failure
 and Client-local variants no producer raises yet — is authored once in `openapi/operator.json`
 under `Diagnostic` and `Action`; link evidence grows its producers under its own ticket without
@@ -305,10 +306,19 @@ headings. Each command's `--json` returns the operator response.
   answer. Live work inspection follows git-style prose even when piped, and its `--json` returns
   the whole response. For commands with a `View`, a terminal gets aligned columns; a pipe gets
   delimited rows; `--json a,b` gets exactly those fields in that order.
-- **Nothing is prompted for.** Whatever drives the Client may have no terminal. Secrets are read
-  from standard input, never from arguments.
-- **Corrections** (`corrective.rs`): a refusal the Client recognises is followed by the command
-  that would fix it.
+- **Secrets** are read from standard input, never from arguments, with echo off at a terminal.
+- **Diagnostics** (`diagnostic/`): every failure reaches stderr as a typed `Diagnostic`, the
+  control plane's or one the Client makes for a connection failure, an unreadable or unrecognised
+  answer, or a local error. The exit comes from its `kind`, falling back to the HTTP status only for
+  kinds the table above does not place. Each `Action` renders as a `kestrel` command that keeps the selected
+  `--organization` and, when it is not the default, `--control-plane`; a missing input appears as
+  the flag it needs and is never guessed. With `--json` the Diagnostic is one JSON line on stderr
+  and stdout holds only successful output. When standard input and standard error are both a
+  terminal, the Client offers to run a step: it asks for each missing input, asks for an explicit
+  yes before a step with a `consequence`, and keeps the original exit whatever the step does. A
+  refused or lost write is never sent again: once an invocation has sent a write, a retry is
+  described, not offered to run. A Session's own `diagnostic` is part of
+  `session show`'s successful output.
 - `kestrel start` (`start.rs`) infers an Organization, Project and Agent from the local clone and
   explains every inferred value on stderr before changing anything.
 
@@ -328,8 +338,16 @@ so each tab holds one event stream and subscribes over requests
 | Anything else | The file if it exists, else `index.html`, uncached, so a deep link survives a refresh |
 
 The Client's types come from
-`openapi/operator.json`; its transport (`src/operator/transport.ts`) parses a refusal's `message`
-and, when present, `kind`, `field` and `phase`. `src/operator/tab-stream.ts` holds the tab's one
+`openapi/operator.json`; its transport (`src/operator/transport.ts`) turns every failure into a
+typed diagnostic: the control plane's own, or an `unknown_response`, `connection_failed` or
+`client_failure` it makes for a plain `Refusal`, a non-JSON answer, no answer or a fault in the
+page, naming its own origin as the control plane. A read offers reading again after any
+`Retry-After`; a write whose answer was lost or unexplained offers inspection, never a resend.
+`src/operator/diagnostic-view.ts` binds each next step to a route link that keeps the
+Organization, a re-read, a field of the form, a write the person chooses (missing inputs
+collected, a destructive one confirmed beside its consequence), or a sentence where the browser
+has no screen; `src/components/refusal.tsx` renders them, and a failed Session's `diagnostic` in
+the Sessions tab. `src/operator/tab-stream.ts` holds the tab's one
 stream: it reserves lazily, subscribes each live read under its own id, and after any drop reserves
 again and re-subscribes from each subscription's current request. A plain `404` on a subscribe is
 the reservation forgotten; a typed one is the subscription refused, which is not retried.
