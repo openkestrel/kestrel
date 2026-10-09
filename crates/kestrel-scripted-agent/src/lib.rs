@@ -98,6 +98,9 @@ pub enum Script {
     Decides,
     /// Will not open a session for a client that has not logged in.
     Insists,
+    /// Will not open a session, with an error that reads like an expired login and repeats the
+    /// Provider Credentials that reached it, though it is no ACP authentication error.
+    Complains,
     /// Works at a turn that never ends, so nothing the agent does is what ends the Session.
     Dawdles,
     Writes,
@@ -197,6 +200,7 @@ impl Script {
             Script::Demands => "demands",
             Script::Decides => "decides",
             Script::Insists => "insists",
+            Script::Complains => "complains",
             Script::Dawdles => "dawdles",
             Script::Writes => "writes",
             Script::Mutters => "mutters",

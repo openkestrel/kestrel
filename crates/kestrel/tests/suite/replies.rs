@@ -391,6 +391,7 @@ async fn a_final_message_repeating_a_combined_turn_response_is_not_posted_again(
         &on,
         6,
         Report::Finished {
+            evidence: None,
             exit: Exit::Succeeded,
             usage: None,
         },
@@ -446,6 +447,7 @@ async fn new_final_information_after_a_turn_is_saved_and_reported_once() {
         &on,
         5,
         Report::Finished {
+            evidence: None,
             exit: Exit::Succeeded,
             usage: None,
         },
@@ -545,6 +547,7 @@ async fn each_turn_of_one_session_says_its_own_response_once() {
         &on,
         8,
         Report::Finished {
+            evidence: None,
             exit: Exit::Succeeded,
             usage: None,
         },
@@ -571,6 +574,7 @@ async fn a_session_that_answered_no_turn_still_says_how_it_ended() {
         &on,
         2,
         Report::Finished {
+            evidence: None,
             exit: Exit::Succeeded,
             usage: None,
         },
@@ -620,6 +624,7 @@ async fn a_failed_session_posts_its_turns_response_and_then_the_failure() {
         &on,
         4,
         Report::Finished {
+            evidence: None,
             exit: Exit::Failed {
                 because: "the agent answered the prompt with nothing".to_owned(),
             },

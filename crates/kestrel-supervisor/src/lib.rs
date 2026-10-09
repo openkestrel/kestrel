@@ -1,6 +1,7 @@
 pub mod changes;
 pub mod checkout;
 pub mod completer;
+pub mod evidence;
 mod extension;
 pub mod files;
 pub mod harness;
@@ -16,6 +17,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
 
+use crate::evidence::Secrets;
 use crate::harness::{Conversation, Harness, Turn};
 use crate::link::{Answer, AnswerBody, Checkout, Down, Exit, Instruction, Link, Read, Report};
 
@@ -845,6 +847,7 @@ async fn start_carrying(
             carrying.saying.push_back(Report::Finished {
                 exit: Exit::Failed { because },
                 usage: carrying.usage.clone(),
+                evidence: None,
             });
         }
     }
@@ -917,6 +920,7 @@ async fn conversation(
 ) -> Result<Option<Conversation>, link::Error> {
     let credentials = link.credentials(&carrying.session).await?;
     let provider = credentials.variables;
+    let secrets = Secrets::of(provider.values().chain(credentials.files.values()));
     if !provider.is_empty() {
         diagnostics.info(&format!(
             "carrying {} into the harness",
@@ -930,6 +934,7 @@ async fn conversation(
             Ok(Some(Conversation::open(
                 &carrying.harness,
                 provider,
+                secrets,
                 carrying.prompt.clone(),
                 checkout::root(Some(&carrying.checkout)),
             )))
@@ -940,6 +945,7 @@ async fn conversation(
             carrying.saying.push_back(Report::Finished {
                 exit: Exit::Failed { because },
                 usage: carrying.usage.clone(),
+                evidence: None,
             });
             Ok(None)
         }
@@ -1012,9 +1018,12 @@ fn everything_left_to_say(
         repositories: observed,
     })
     .chain(std::iter::once(match failed {
-        Some(because) => Report::Finished {
-            exit: Exit::Failed { because },
+        Some(failure) => Report::Finished {
+            exit: Exit::Failed {
+                because: failure.because,
+            },
             usage,
+            evidence: failure.evidence,
         },
         None => Report::Answered { usage },
     }))

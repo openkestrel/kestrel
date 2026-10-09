@@ -1494,6 +1494,10 @@
           "usage": {
             "$ref": "#/components/schemas/Usage",
             "description": "What the Harness had spent when the Session ended. Absent for a supervisor that never heard a usage update."
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/FailureEvidence",
+            "description": "What the supervisor established about a failure before describing it in `because`. Absent when it succeeded, or when the failure was kestrel's own rather than something the harness or its spawn said."
           }
         },
         "required": [
@@ -1526,6 +1530,123 @@
         },
         "required": [
           "status"
+        ]
+      },
+      "FailureEvidence": {
+        "description": "Generic facts about why a Session failed, read from ACP or the operating system rather than from anything a harness wrote. The supervisor interprets no harness's credentials; arbitrary error data, stderr, environment variables and files are never carried.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AuthenticationRequiredEvidence"
+          },
+          {
+            "$ref": "#/components/schemas/ExecutableMissingEvidence"
+          },
+          {
+            "$ref": "#/components/schemas/UnknownEvidence"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "authentication_required": "#/components/schemas/AuthenticationRequiredEvidence",
+            "executable_missing": "#/components/schemas/ExecutableMissingEvidence",
+            "unknown": "#/components/schemas/UnknownEvidence"
+          }
+        }
+      },
+      "AuthenticationRequiredEvidence": {
+        "description": "The agent answered with ACP's authentication-required error.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "authentication_required"
+          },
+          "code": {
+            "type": "integer",
+            "description": "The JSON-RPC error code the agent answered with."
+          },
+          "methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The ids of the ACP auth methods the agent offered."
+          },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The ACP auth method the supervisor was configured to log in with, or null when it was given none."
+          }
+        },
+        "required": [
+          "kind",
+          "code",
+          "methods",
+          "method"
+        ]
+      },
+      "ExecutableMissingEvidence": {
+        "description": "The harness's executable could not be spawned.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "executable_missing"
+          },
+          "command": {
+            "type": "string",
+            "description": "The executable the harness command names."
+          },
+          "error": {
+            "$ref": "#/components/schemas/OsError"
+          }
+        },
+        "required": [
+          "kind",
+          "command",
+          "error"
+        ]
+      },
+      "OsError": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "not_found",
+              "permission_denied",
+              "other"
+            ]
+          },
+          "code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The operating system's error number, when it gave one."
+          }
+        },
+        "required": [
+          "kind",
+          "code"
+        ]
+      },
+      "UnknownEvidence": {
+        "description": "A failure the agent reported that kestrel establishes nothing from. Its summary can never establish that a sign-in expired or is not covered.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "unknown"
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "What the agent said, bounded, with every value the supervisor handed the harness redacted."
+          }
+        },
+        "required": [
+          "kind",
+          "summary"
         ]
       },
       "Usage": {

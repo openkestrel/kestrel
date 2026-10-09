@@ -258,10 +258,35 @@ fn everything_it_reports() -> Vec<(Option<&'static str>, Option<i64>, Report)> {
             Some("a-session"),
             Some(5),
             Report::Finished {
-                exit: Exit::Succeeded,
+                exit: Exit::Failed {
+                    because: "the harness could not be spawned".to_owned(),
+                },
                 usage: Some(usage()),
+                evidence: Some(link::Evidence::Unknown {
+                    summary: "the agent stopped".to_owned(),
+                }),
             },
         ),
+    ]
+}
+
+fn evidence() -> Vec<link::Evidence> {
+    vec![
+        link::Evidence::ExecutableMissing {
+            command: "codex-acp".to_owned(),
+            error: link::OsError {
+                kind: link::OsErrorKind::NotFound,
+                code: Some(2),
+            },
+        },
+        link::Evidence::AuthenticationRequired {
+            code: -32000,
+            methods: vec!["its-own".to_owned()],
+            method: None,
+        },
+        link::Evidence::Unknown {
+            summary: "the agent stopped".to_owned(),
+        },
     ]
 }
 
@@ -624,6 +649,41 @@ fn every_report_the_client_sends_carries_what_the_published_document_requires() 
             );
         }
     }
+}
+
+#[test]
+fn all_the_evidence_the_client_sends_is_what_the_published_document_describes() {
+    let published = published();
+    let mut described = declared(&published, "FailureEvidence");
+
+    for evidence in evidence() {
+        let sent = serde_json::to_value(&evidence).expect("evidence should serialise");
+        let kind = sent["kind"].as_str().expect("evidence carries its kind");
+        let schema = described.remove(kind).unwrap_or_else(|| {
+            panic!("the client sends the evidence {kind}, which is not declared")
+        });
+        let schema = resolve(&published, &schema);
+
+        let mut sent_fields = sent
+            .as_object()
+            .expect("an object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut declared_fields = schema["properties"]
+            .as_object()
+            .expect("declared properties")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        sent_fields.sort();
+        declared_fields.sort();
+        assert_eq!(sent_fields, declared_fields, "{kind}");
+    }
+    assert!(
+        described.is_empty(),
+        "the document declares evidence the client never sends: {described:?}"
+    );
 }
 
 fn instruction(down: Down) -> link::Delivered {

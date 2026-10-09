@@ -346,6 +346,7 @@ async fn reports_record_the_session_and_its_transcript_together() {
         .report(
             Some(4),
             Report::Finished {
+                evidence: None,
                 exit: Exit::Succeeded,
                 usage: Some(usage()),
             },
@@ -453,6 +454,7 @@ async fn numbered_reports_refuse_missing_and_invalid_numbers_without_effects() {
         },
         Report::Answered { usage: None },
         Report::Finished {
+            evidence: None,
             exit: Exit::Succeeded,
             usage: None,
         },
@@ -693,6 +695,7 @@ async fn a_failed_append_rolls_back_the_session_change_and_report_acceptance() {
         .report_on(
             Some(1),
             Report::Finished {
+                evidence: None,
                 exit: Exit::Succeeded,
                 usage: Some(usage()),
             },
@@ -720,6 +723,7 @@ async fn a_finished_report_keeps_the_exit_that_already_stands() {
         .report_on(
             Some(1),
             Report::Finished {
+                evidence: None,
                 exit: Exit::Succeeded,
                 usage: None,
             },
@@ -763,6 +767,7 @@ async fn idle_hint_follows_a_committed_ending_once_with_the_seal_deadline() {
         .report_on(
             Some(2),
             Report::Finished {
+                evidence: None,
                 exit: Exit::Succeeded,
                 usage: None,
             },

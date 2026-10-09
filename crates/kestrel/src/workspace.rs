@@ -914,6 +914,7 @@ mod tests {
             preparing: None,
             exit: None,
             outcome_message: None,
+            evidence: None,
             instance: None,
             supervisor: None,
             worked_model: None,

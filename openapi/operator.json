@@ -4356,6 +4356,7 @@
           "connected_at": { "type": ["string", "null"], "format": "date-time" },
           "supervisor_version": { "type": ["string", "null"] },
           "usage": { "anyOf": [{ "$ref": "#/components/schemas/Usage" }, { "type": "null" }], "description": "What the Harness has spent on the Session: the live figure while its agent works, otherwise the latest its Turn answer or the end of its trailing work reported." },
+          "diagnostic": { "anyOf": [{ "$ref": "#/components/schemas/Diagnostic" }, { "type": "null" }], "description": "Why the Session failed, from the evidence its supervisor established. Null when it has not failed, or failed with no evidence; its presence never makes the read fail (ADR-0052)." },
           "tools": { "type": "array", "description": "Tool calls open in the current observation; empty whenever observation is unavailable.", "items": { "$ref": "#/components/schemas/RunningTool" } },
           "units": { "type": "array", "description": "Adapter units open in the current observation, such as a Claude background task or subagent; they keep a trailing Session trailing. Empty whenever observation is unavailable.", "items": { "$ref": "#/components/schemas/RunningUnit" } },
           "message_buffering": { "type": "boolean" },
@@ -4364,7 +4365,7 @@
           "observation": { "$ref": "#/components/schemas/SessionObservation" },
           "depends_on": { "type": "array", "description": "The Sessions this one was declared to wait on, whether or not they have ended.", "items": { "$ref": "#/components/schemas/SessionReference" } }
         },
-        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "changing_options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "units", "message_buffering", "thought_buffering", "last_activity_at", "observation", "depends_on"]
+        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "changing_options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "diagnostic", "tools", "units", "message_buffering", "thought_buffering", "last_activity_at", "observation", "depends_on"]
       },
       "SessionObservation": {
         "description": "Whether the Session's open work is currently observed. current: its supervisor sent a snapshot over its open link and is still reaching it; tools and units list that snapshot, empty when nothing is open. unavailable: nothing current is known, whatever the Session's state or lease; tools and units are empty and never mean nothing is open. Neither availability changes the Session's state or scheduling.",
@@ -5799,7 +5800,7 @@
           "session": { "type": "string" },
           "harness": { "type": "string" },
           "image": { "type": ["string", "null"] },
-          "evidence": { "type": "string" },
+          "evidence": { "$ref": "#/components/schemas/AuthenticationRequiredEvidence" },
           "sign_in": { "type": ["string", "null"] },
           "expired": {
             "type": ["boolean", "null"],
@@ -5828,7 +5829,7 @@
           "harness": { "type": "string" },
           "image": { "type": ["string", "null"] },
           "executable": { "type": "string" },
-          "evidence": { "type": "string" }
+          "evidence": { "$ref": "#/components/schemas/ExecutableMissingEvidence" }
         },
         "required": ["session", "harness", "image", "executable", "evidence"]
       },
@@ -5849,9 +5850,42 @@
         "properties": {
           "session": { "type": ["string", "null"] },
           "resource": { "type": ["string", "null"] },
-          "evidence": { "type": ["string", "null"] }
+          "evidence": { "anyOf": [{ "$ref": "#/components/schemas/UnknownEvidence" }, { "type": "null" }] }
         },
         "required": ["session", "resource", "evidence"]
+      },
+      "AuthenticationRequiredEvidence": {
+        "description": "The agent answered with ACP's authentication-required error.",
+        "properties": {
+          "kind": { "const": "authentication_required" },
+          "code": { "type": "integer" },
+          "methods": { "type": "array", "items": { "type": "string" }, "description": "The ids of the ACP auth methods the agent offered." },
+          "method": { "type": ["string", "null"], "description": "The ACP auth method the supervisor was configured to log in with." }
+        },
+        "required": ["kind", "code", "methods", "method"]
+      },
+      "ExecutableMissingEvidence": {
+        "properties": {
+          "kind": { "const": "executable_missing" },
+          "command": { "type": "string" },
+          "error": { "$ref": "#/components/schemas/OsError" }
+        },
+        "required": ["kind", "command", "error"]
+      },
+      "OsError": {
+        "properties": {
+          "kind": { "enum": ["not_found", "permission_denied", "other"] },
+          "code": { "type": ["integer", "null"] }
+        },
+        "required": ["kind", "code"]
+      },
+      "UnknownEvidence": {
+        "description": "What the agent said, bounded and redacted. It never establishes that a sign-in expired or is not covered.",
+        "properties": {
+          "kind": { "const": "unknown" },
+          "summary": { "type": "string", "maxLength": 1024 }
+        },
+        "required": ["kind", "summary"]
       },
       "UnknownFailureDiagnostic": {
         "properties": {

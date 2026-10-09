@@ -170,7 +170,7 @@ effects (ADR-0004).
 | `answered {usage?}` | yes | Closes the open Turn, moves the Session to Trailing, clears any pending interrupt, records a post from what was said up to it, and records the usage it carries; held messages become the next Turn at once, so the Session stays Working when there are any. |
 | `interrupted {trailing}` | yes | Closes the interrupted Turn, moves the Session to Waiting, or to Trailing when `trailing` says units the agent started still run, and appends shared-state `TurnInterrupted` naming who asked; held messages become the next Turn at once, so the Session stays Working when there are any. Writes no delivery. |
 | `settled` | yes | Moves a Trailing Session to Waiting and records the Workspace active. Follows the `checkout` observed then. |
-| `finished {exit, usage?}` | yes | Ends the Session, recording the usage it carries. |
+| `finished {exit, usage?, evidence?}` | yes | Ends the Session, recording the usage it carries and, on a failure, its evidence, which the Session read serves as a typed `diagnostic`. |
 
 **Numbered reports are exactly-once.** The supervisor numbers each Session's reports from 1 and
 resends from the first one not acknowledged. The control plane keeps `session.reports_taken`: the
@@ -266,6 +266,12 @@ with no branch on which harness it drives.
   `settled`. Activity after that trails again. A tool still open when trailing ends any other way
   closes unresolved. A tool open when the next Turn starts stays open into it.
 - A Turn in which the agent produced no message, thought, plan or tool call fails the Session.
+- A failure carries generic evidence beside its `because` (ADR-0052): an ACP `AuthRequired` error
+  from any request is `authentication_required` with the methods the agent offered and the one
+  configured; a harness executable not found or not runnable, resolved on the harness's `PATH`
+  before `env` execs it, is `executable_missing` with the OS error; any other ACP error is
+  `unknown`, its summary bounded. kestrel's own failures carry none. Every value handed to the
+  harness, Provider Credentials and Subscription Profile files alike, is redacted from both.
 - `checkout.rs` clones each repository side by side under `/workspace`, cuts the declared branch
   from the base when the remote lacks it, and leaves an existing checkout as an earlier Session
   left it.
