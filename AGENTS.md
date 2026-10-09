@@ -48,6 +48,18 @@ other agents, so each local cargo run has a real cost.
 Where a skill says "the full test suite" or "the project's automated checks", in this repo
 that means pushing and reading CI.
 
+### Debug info
+
+Workspace code builds with line-tables-only debuginfo and dependencies with none, so builds are
+smaller and faster but a debugger sees file and line numbers, not variables or types. Restore
+full debug info with `--profile full-debug`:
+
+    cargo test --profile full-debug -p kestrel --test suite <module>::<name>
+    cargo build --profile full-debug -p kestrel
+
+It builds into `target/full-debug`, so alternating with the default recompiles. `cargo nextest`
+takes the flag as `--cargo-profile full-debug`.
+
 ### Compatibility
 
 Kestrel is an unreleased early prototype with no users. Do not preserve backward compatibility or
