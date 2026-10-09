@@ -44,6 +44,7 @@ use crate::log::{self, Cursor, Unreadable, Window};
 use crate::participant;
 use crate::profile::{self, Entry};
 use crate::provider::{self, Held};
+use crate::repository;
 use crate::role::serve;
 use crate::scheduling;
 use crate::store::workspace::HeldMessageRefusal;
@@ -58,6 +59,7 @@ pub const SIGN_IN_METHOD: &str = "/operator/harnesses/{harness}/sign-in-methods/
 pub const OPERATOR: &str = "/operator/operator";
 pub const ORGANIZATIONS: &str = "/operator/organizations";
 pub const STARTS: &str = "/operator/starts";
+pub const REPOSITORY_RESOLUTIONS: &str = "/operator/repository-resolutions";
 pub const PROJECTS: &str = "/operator/organizations/{organization}/projects";
 pub const AGENTS: &str = "/operator/organizations/{organization}/agents";
 pub const AGENT_MODEL: &str = "/operator/organizations/{organization}/agents/{agent}/model";
@@ -274,6 +276,7 @@ pub fn router(
         .route(OPERATOR, get(show_operator).put(name_operator))
         .route(ORGANIZATIONS, get(organizations).post(declare_organization))
         .route(STARTS, post(start))
+        .route(REPOSITORY_RESOLUTIONS, post(resolve_repositories))
         .route(PROJECTS, get(projects).post(declare_project))
         .route(AGENTS, get(agents).post(declare_agent))
         .route(AGENT_MODEL, put(set_agent_model))
@@ -1211,6 +1214,44 @@ async fn start(
     ))
 }
 
+async fn resolve_repositories(
+    request: Result<Json<wire::RepositoryResolutionRequest>, JsonRejection>,
+) -> Result<Json<wire::RepositoryResolution>, Refused> {
+    let Json(request) = request?;
+    let purpose = match request.purpose.unwrap_or_default() {
+        wire::RepositoryPurpose::Declaration => repository::Purpose::Declaration,
+        wire::RepositoryPurpose::PublicSetup => repository::Purpose::PublicSetup,
+    };
+    let resolved = repository::resolved(
+        "resolve_repositories",
+        "repositories",
+        &request.repositories,
+        purpose,
+    )?;
+    let warnings = match purpose {
+        repository::Purpose::Declaration => Vec::new(),
+        repository::Purpose::PublicSetup => vec![wire::RepositoryWarning {
+            code: wire::RepositoryWarningCode::NoAppPushAuthority,
+            message: "no GitHub App is selected, so nothing App-backed can push to these \
+                      repositories or open pull requests on them; select an Integration to give \
+                      a Workspace that authority"
+                .to_owned(),
+        }],
+    };
+
+    Ok(Json(wire::RepositoryResolution {
+        repositories: resolved
+            .into_iter()
+            .map(|resolved| wire::ResolvedRepository {
+                given: resolved.given,
+                address: resolved.address,
+                checkout_directory: resolved.directory,
+            })
+            .collect(),
+        warnings,
+    }))
+}
+
 async fn organizations(
     State(control_plane): State<ControlPlane>,
 ) -> Result<Json<Vec<OrganizationRecord>>, Refused> {
@@ -1255,28 +1296,18 @@ async fn declare_project(
 ) -> Result<Response, Refused> {
     let Json(declaration) = declaration?;
     named("declare_project", &declaration.name)?;
-    if declaration.repositories.is_empty() {
-        return Err(invalid_field(
-            "declare_project",
-            "repositories",
-            Constraint::NonEmpty,
-            "a project names at least one repository",
-        ));
-    }
+    let repositories = repository::addresses(repository::resolved(
+        "declare_project",
+        "repositories",
+        &declaration.repositories,
+        repository::Purpose::Declaration,
+    )?);
     if declaration.branch.is_empty() {
         return Err(invalid_field(
             "declare_project",
             "branch",
             Constraint::NonEmpty,
             "a project names the branch its work happens on",
-        ));
-    }
-    if let Some(clash) = sharing_a_directory(&declaration.repositories) {
-        return Err(invalid_field(
-            "declare_project",
-            "repositories",
-            Constraint::DistinctCheckoutDirectories,
-            clash,
         ));
     }
 
@@ -1287,7 +1318,7 @@ async fn declare_project(
         .declare(
             &organization,
             &declaration.name,
-            &declaration.repositories,
+            &repositories,
             &declaration.branch,
         )
         .await?;
@@ -3029,27 +3060,6 @@ async fn resolved(
     Ok(workspace::resolve(&control_plane.store, organization, workspace).await?)
 }
 
-fn sharing_a_directory(repositories: &[String]) -> Option<String> {
-    let mut claimed = std::collections::HashMap::new();
-    repositories.iter().find_map(|repository| {
-        let directory = cloned_into(repository);
-        claimed.insert(directory, repository).map(|earlier| {
-            format!("{earlier} and {repository} would both be checked out into {directory}")
-        })
-    })
-}
-
-// Must name the directory kestrel-supervisor's checkout clones into.
-fn cloned_into(repository: &str) -> &str {
-    let name = repository
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or(repository);
-
-    name.strip_suffix(".git").unwrap_or(name)
-}
-
 fn named(operation: &'static str, name: &str) -> Result<(), Refused> {
     if name.is_empty() {
         return Err(invalid_field(
@@ -4234,6 +4244,7 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("GET", ORGANIZATIONS) => "list_organizations",
         ("POST", ORGANIZATIONS) => "declare_organization",
         ("POST", STARTS) => "start",
+        ("POST", REPOSITORY_RESOLUTIONS) => "resolve_repositories",
         ("GET", PROJECTS) => "list_projects",
         ("POST", PROJECTS) => "declare_project",
         ("GET", AGENTS) => "list_agents",

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::declined::{Constraint, Reason};
 use crate::domain::{Correlation, Declared, Fires, Templates, Trigger};
 use crate::filter::Filter;
+use crate::repository::{self, Purpose};
 use crate::store::Store;
 use crate::template::Template;
 use crate::trigger::allowed;
@@ -132,7 +133,7 @@ pub async fn apply(
     document: &Document,
     mode: ApplyMode,
 ) -> Result<Applied> {
-    check_document(document, &mode)?;
+    let repositories = check_document(document, &mode)?;
     let parsed = parse_trigger(&document.trigger)?;
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
@@ -145,6 +146,7 @@ pub async fn apply(
             .iter()
             .find(|project| project.name == document.project.name),
         &document.project,
+        &repositories,
     );
     let agent_change = agent_change(
         agents
@@ -185,7 +187,7 @@ pub async fn apply(
         .declare(
             &organization,
             &document.project.name,
-            &document.project.repositories,
+            &repositories,
             &document.project.branch,
         )
         .await?
@@ -261,7 +263,7 @@ pub async fn apply(
     })
 }
 
-fn check_document(document: &Document, mode: &ApplyMode) -> Result<()> {
+fn check_document(document: &Document, mode: &ApplyMode) -> Result<Vec<String>> {
     let operation = match mode {
         ApplyMode::Apply => "apply_declaration",
         ApplyMode::Preview => "preview_declaration",
@@ -290,20 +292,12 @@ fn check_document(document: &Document, mode: &ApplyMode) -> Result<()> {
             );
         }
     }
-    if document.project.repositories.is_empty() {
-        return invalid(
-            "project.repositories",
-            Constraint::NonEmpty,
-            "a project names at least one repository".to_owned(),
-        );
-    }
-    if let Some(clash) = sharing_a_directory(&document.project.repositories) {
-        return invalid(
-            "project.repositories",
-            Constraint::DistinctCheckoutDirectories,
-            clash,
-        );
-    }
+    let repositories = repository::addresses(repository::resolved(
+        operation,
+        "project.repositories",
+        &document.project.repositories,
+        Purpose::Declaration,
+    )?);
     if document.project.branch.is_empty() {
         return invalid(
             "project.branch",
@@ -338,22 +332,7 @@ fn check_document(document: &Document, mode: &ApplyMode) -> Result<()> {
             ),
         );
     }
-    Ok(())
-}
-
-pub(crate) fn sharing_a_directory(repositories: &[String]) -> Option<String> {
-    let mut claimed = std::collections::HashMap::new();
-    repositories.iter().find_map(|repository| {
-        let name = repository
-            .trim_end_matches('/')
-            .rsplit('/')
-            .next()
-            .unwrap_or(repository);
-        let directory = name.strip_suffix(".git").unwrap_or(name);
-        claimed.insert(directory, repository).map(|earlier| {
-            format!("{earlier} and {repository} would both be checked out into {directory}")
-        })
-    })
+    Ok(repositories)
 }
 
 fn parse_trigger(declaration: &TriggerDeclaration) -> Result<ParsedTrigger> {
@@ -382,9 +361,13 @@ fn parse_trigger(declaration: &TriggerDeclaration) -> Result<ParsedTrigger> {
     })
 }
 
-fn project_change(project: Option<&crate::domain::Project>, declaration: &Project) -> Compared {
+fn project_change(
+    project: Option<&crate::domain::Project>,
+    declaration: &Project,
+    repositories: &[String],
+) -> Compared {
     let becomes = vec![
-        ("repositories", Some(declaration.repositories.join("\n"))),
+        ("repositories", Some(repositories.join("\n"))),
         ("branch", Some(declaration.branch.clone())),
     ];
     compared(

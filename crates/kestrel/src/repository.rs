@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use anyhow::Result;
 use url::Url;
 
 use crate::declined::{Constraint, Reason};
@@ -26,7 +27,7 @@ pub fn resolved(
     field: &'static str,
     repositories: &[String],
     purpose: Purpose,
-) -> Result<Vec<Resolved>, Reason> {
+) -> Result<Vec<Resolved>> {
     let refused = |constraint: Constraint, message: String| Reason::InvalidField {
         field,
         operation,
@@ -38,7 +39,8 @@ pub fn resolved(
         return Err(refused(
             Constraint::NonEmpty,
             "a project names at least one repository".to_owned(),
-        ));
+        )
+        .into());
     }
 
     let mut resolved = Vec::with_capacity(repositories.len());
@@ -52,20 +54,23 @@ pub fn resolved(
                     "{given} is not an HTTPS address: a public repository is given as an \
                      https:// URL, owner/repo or github.com/owner/repo"
                 ),
-            ));
+            )
+            .into());
         }
         let directory = cloned_into(&address);
         if matches!(directory, "" | "." | "..") {
             return Err(refused(
                 Constraint::CheckoutDirectory,
                 format!("{given} names no directory to check it out into"),
-            ));
+            )
+            .into());
         }
         if let Some(earlier) = claimed.insert(directory.to_owned(), given) {
             return Err(refused(
                 Constraint::DistinctCheckoutDirectories,
                 format!("{earlier} and {given} would both be checked out into {directory}"),
-            ));
+            )
+            .into());
         }
         resolved.push(Resolved {
             given: given.clone(),
@@ -185,7 +190,7 @@ fn cloned_into(repository: &str) -> &str {
 mod tests {
     use super::*;
 
-    fn resolving(repositories: &[&str], purpose: Purpose) -> Result<Vec<Resolved>, Reason> {
+    fn resolving(repositories: &[&str], purpose: Purpose) -> Result<Vec<Resolved>> {
         let repositories: Vec<String> = repositories.iter().map(|&r| r.to_owned()).collect();
         resolved("declare_project", "repositories", &repositories, purpose)
     }
@@ -198,13 +203,13 @@ mod tests {
     }
 
     fn refusal(repositories: &[&str], purpose: Purpose) -> (Constraint, String) {
-        match resolving(repositories, purpose) {
-            Err(Reason::InvalidField {
+        match resolving(repositories, purpose).map_err(|error| error.downcast::<Reason>()) {
+            Err(Ok(Reason::InvalidField {
                 constraint,
                 message,
                 field: "repositories",
                 ..
-            }) => (constraint, message),
+            })) => (constraint, message),
             other => panic!("{repositories:?} was not refused on its field: {other:?}"),
         }
     }
