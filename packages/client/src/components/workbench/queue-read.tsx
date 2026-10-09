@@ -129,14 +129,13 @@ export function QueuedSessions({ organization }: { organization: string }) {
 										<QueueItem key={row.name} data-queued={row.name}>
 											<div className="flex items-center gap-2">
 												<QueueItemIndicator />
-												<QueueItemContent>
-													{row.name} · {row.label}
-													{row.position !== null && ` #${row.position}`}
-												</QueueItemContent>
+												<QueueItemContent>{row.name}</QueueItemContent>
 											</div>
-											{row.reasons !== "" && (
-												<QueueItemDescription>{row.reasons}</QueueItemDescription>
-											)}
+											<QueueItemDescription>
+												{row.label}
+												{row.position !== null && ` #${row.position}`}
+												{row.reasons !== "" && ` · ${row.reasons}`}
+											</QueueItemDescription>
 										</QueueItem>
 									))}
 								</QueueList>
