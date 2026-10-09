@@ -6,7 +6,7 @@ set -euo pipefail
 # shell tries to expand against the checkout.
 set -f
 
-readonly areas="rust images arm64 compose client client-image docs"
+readonly areas="rust images arm64 compose client client-image release docs"
 
 # Each area declares the paths that make it run, in one table: `inputs` and `matches` walk the
 # same list, so neither can name an area the other misses. `docs` declares what no heavy area
@@ -21,7 +21,8 @@ area_inputs() {
   compose) echo 3 ;;
   client) echo 4 ;;
   client-image) echo 5 ;;
-  docs) echo 6 ;;
+  release) echo 6 ;;
+  docs) echo 7 ;;
   esac
 }
 readonly inputs=(
@@ -31,6 +32,7 @@ readonly inputs=(
   'compose.yaml crates/** Cargo.toml Cargo.lock rust-toolchain.toml images/** .dockerignore openapi/** .kestrel/** .github/** packages/** package.json bun.lock'
   'packages/** package.json bun.lock mise.toml openapi/** crates/** Cargo.toml Cargo.lock rust-toolchain.toml images/kestrel-client/** .github/**'
   'images/kestrel-client/** .dockerignore packages/** package.json bun.lock openapi/** .github/**'
+  'scripts/** Cargo.toml Cargo.lock crates/**/Cargo.toml CHANGELOG.md package.json packages/**/package.json packages/client/public/version.json mise.toml .github/**'
   'docs/** *.md LICENSE .gitignore .agents/** .claude/** skills-lock.json'
 )
 
@@ -72,7 +74,7 @@ fi
 
 # A path no area declares, or no readable change at all, is a reason to run everything: a
 # required check that silently does not run is worse than a slow one.
-for area in rust images arm64 compose client client-image; do
+for area in rust images arm64 compose client client-image release; do
   changed=$unrecognised
   [[ " $touched " == *" $area "* ]] && changed=true
 
