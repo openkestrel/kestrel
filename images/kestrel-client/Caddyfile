@@ -33,4 +33,10 @@ http://:{$KESTREL_CLIENT_LISTEN_PORT:8080} {
 		try_files {path} /index.html
 		file_server
 	}
+
+	# Only this proxy can tell a control plane that never answered from one that refused.
+	handle_errors 502 503 504 {
+		header @operator Content-Type application/json
+		respond @operator `\{"kind":"connection_failed","message":"kestrel isn't running","field":null,"context":\{"url":"http://{http.request.hostport}","operation":"{http.request.method} {http.request.uri.path}"\},"next_steps":[\{"action":"check_connection","service":"control_plane","compose":{$KESTREL_COMPOSE:false}\}]\}`
+	}
 }

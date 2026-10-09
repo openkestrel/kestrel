@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRouter } from "@tanstack/react-router";
+import { outageOf } from "#/operator/outage";
 import { Refused } from "#/operator/transport";
 import { routeTree } from "./routeTree.gen";
 
@@ -8,7 +9,9 @@ export function getRouter() {
 		defaultOptions: {
 			queries: {
 				retry: (failures, error) =>
-					!(error instanceof Refused && error.status < 500) && failures < 2,
+					!(error instanceof Refused && error.status < 500) &&
+					outageOf(error) === undefined &&
+					failures < 2,
 				retryDelay: (failures, error) =>
 					error instanceof Refused && error.retryAfter !== undefined
 						? error.retryAfter * 1000

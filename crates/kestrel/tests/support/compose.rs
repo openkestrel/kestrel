@@ -206,6 +206,10 @@ impl Stack {
         ran.out.join("\n")
     }
 
+    pub fn stop(&self, service: &str) {
+        completed(&["stop", service], "stopping a service");
+    }
+
     pub fn in_the_control_plane(&self, command: &[&str]) -> Ran {
         let mut exec = vec!["exec", "--no-TTY", CONTROL_PLANE];
         exec.extend_from_slice(command);
@@ -303,7 +307,7 @@ fn tagged(source: &str, named: &str) {
     );
 }
 
-fn rendered(variables: &[(&str, &str)]) -> Ran {
+fn rendered(variables: &[(&str, &str)], options: &[&str]) -> Ran {
     let mut rendering = Command::new("docker");
     rendering.current_dir(repository()).env_clear();
     for kept in ["PATH", "HOME"] {
@@ -315,7 +319,9 @@ fn rendered(variables: &[(&str, &str)]) -> Ran {
         rendering.env(key, value);
     }
     let output = rendering
-        .args(["compose", "config", "--format", "json"])
+        .arg("compose")
+        .args(options)
+        .args(["config", "--format", "json"])
         .output()
         .expect("docker should be reachable");
 
@@ -329,13 +335,22 @@ fn rendered(variables: &[(&str, &str)]) -> Ran {
 /// The compose file rendered with nothing in the environment but a path to docker and the
 /// context it reads: what an operator has to supply shows up here as a warning.
 pub fn rendered_against_an_empty_environment() -> Ran {
-    rendered(&[])
+    rendered(&[], &[])
+}
+
+pub fn rendered_given(variables: &[(&str, &str)]) -> Ran {
+    rendered(variables, &[])
+}
+
+/// The compose file rendered the way a contributor builds every product image from source.
+pub fn rendered_from_source() -> Ran {
+    rendered(&[], &["--env-file", "compose.source.env"])
 }
 
 /// The compose file rendered the way this checkout's suite runs it: every resource the
 /// control plane addresses points into this checkout's namespace.
 pub fn rendered_with_the_checkout_namespace() -> Ran {
-    rendered(&namespace().environment())
+    rendered(&namespace().environment(), &[])
 }
 
 pub fn until<T>(what: &str, ready: impl Fn() -> Option<T>) -> T {

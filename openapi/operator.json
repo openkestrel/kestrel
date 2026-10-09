@@ -22,6 +22,28 @@
   ],
   "security": [],
   "paths": {
+    "/": {
+      "get": {
+        "operationId": "showApiRoot",
+        "summary": "Say that this is the operator API, and where the browser Client is",
+        "description": "For a person who opens the operator port in a browser. The Client URL is the control plane's `KESTREL_CLIENT_URL`; nothing parses this text.",
+        "responses": {
+          "200": {
+            "description": "Plain text naming the API and the configured Client URL.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
     "/operator/harnesses": {
       "get": {
         "operationId": "listHarnesses",

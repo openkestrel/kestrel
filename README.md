@@ -12,17 +12,16 @@ Kestrel starts agent work from the CLI, GitHub events, webhooks, or schedules. E
 
 ## Get started
 
-You need Docker with Compose v2, an amd64 or arm64 machine, and Rust installed through [rustup](https://rustup.rs).
+You need Docker with Compose v2 and an amd64 or arm64 machine.
 
 ```sh
 git clone https://github.com/openkestrel/kestrel
 cd kestrel
 docker compose up -d
-cargo install --locked --path crates/kestrel-client
-kestrel status
+docker compose exec kestrel kestrel status
 ```
 
-The first start builds the container images from source. Follow the [usage guide](USAGE.md) to run your first session and inspect its work.
+Compose pulls the images main last published and opens the browser Client at <http://localhost:7719>. A release will attach its own `compose.yaml` instead, and contributors build the images from source; until main publishes its images, so does everyone (`docker compose --env-file compose.source.env up -d`). The [usage guide](USAGE.md) covers all three, then your first session.
 
 ## Documentation
 

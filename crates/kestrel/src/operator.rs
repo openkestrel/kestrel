@@ -54,6 +54,7 @@ use crate::template::Template;
 use crate::trigger::{self, apply};
 use crate::{instance, pull_request, start, work, workspace};
 
+pub const ROOT: &str = "/";
 pub const HARNESSES: &str = "/operator/harnesses";
 pub const SIGN_IN_METHOD: &str = "/operator/harnesses/{harness}/sign-in-methods/{method}";
 pub const OPERATOR: &str = "/operator/operator";
@@ -319,8 +320,13 @@ pub fn router(
     followers: crate::presence::Followers,
     streams: stream::Streams,
     images: Images,
+    client: url::Url,
 ) -> Router {
+    let root = format!(
+        "kestrel operator API\n\nClients reach this API under /operator. Open the browser Client at {client}\n"
+    );
     Router::new()
+        .route(ROOT, get(move || std::future::ready(root.clone())))
         .route(HARNESSES, get(harnesses))
         .route(SIGN_IN_METHOD, get(sign_in_method))
         .route(OPERATOR, get(show_operator).put(name_operator))
@@ -4387,6 +4393,7 @@ fn inspect_operation(operation: &str, uncertain: bool) -> wire::Action {
 
 fn operation(method: &str, path: &str) -> Option<&'static str> {
     Some(match (method, path) {
+        ("GET", ROOT) => "show_api_root",
         ("GET", HARNESSES) => "list_harnesses",
         ("GET", SIGN_IN_METHOD) => "show_sign_in_method",
         ("GET", OPERATOR) => "show_operator",
