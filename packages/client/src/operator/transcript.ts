@@ -17,12 +17,11 @@ export type Delivered = {
 	entry: Entry;
 };
 
-// `retrying` is whether the follow tries again by itself; a refusal waits for the person.
 export type Connection =
 	| { state: "connecting" }
 	| { state: "live" }
 	| { state: "reconnecting"; failure: unknown }
-	| { state: "unavailable"; failure: unknown; retrying: boolean };
+	| { state: "unavailable"; failure: unknown; retriesItself: boolean };
 
 export type TranscriptSnapshot = {
 	connection: Connection;
@@ -118,11 +117,12 @@ export class TranscriptMirror {
 	// Entries already shown stay through a drop; only the connection changes.
 	dropped(failure: unknown): void {
 		if (this.wasLive) this.connect({ state: "reconnecting", failure });
-		else if (failure !== undefined) this.connect({ state: "unavailable", failure, retrying: true });
+		else if (failure !== undefined)
+			this.connect({ state: "unavailable", failure, retriesItself: true });
 	}
 
 	refused(failure: unknown): void {
-		this.connect({ state: "unavailable", failure, retrying: false });
+		this.connect({ state: "unavailable", failure, retriesItself: false });
 	}
 
 	reconnecting(): void {
@@ -244,7 +244,6 @@ export class FollowSession {
 		clearTimeout(this.renewal);
 	}
 
-	// Cuts a backoff short, or follows again after a refusal stopped the follow.
 	retry(): void {
 		if (this.stopped) return;
 		this.options.mirror.reconnecting();

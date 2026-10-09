@@ -62,9 +62,8 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 	const projects = useQuery(projectsQuery(organization));
 	const agents = useQuery(agentsQuery(organization));
 	const profiles = useQuery(profilesQuery(organization));
-	const queue = useQueueRead(organization);
-	const queueRead = queue.read;
-	const known = knownQueue(queueRead);
+	const queueReading = useQueueRead(organization);
+	const known = knownQueue(queueReading.read);
 
 	const [held, setHeld] = useState<NewWorkspaceDraft | undefined>(() => draftOf(organization));
 	const [name, setName] = useState(() => participant.name() ?? "");
@@ -308,11 +307,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 					<dd>{resolvedModel(draft.model, agent)}</dd>
 					<dt className="text-muted-foreground">Environment</dt>
 					<dd data-environment>
-						{known
-							? resolvedEnvironment(known.work_role)
-							: queueRead.kind === "failed"
-								? "Unknown: the queue could not be read."
-								: "Reading the queue…"}
+						{known ? resolvedEnvironment(known.work_role) : "Unknown until the queue is read."}
 					</dd>
 					{draft.continues !== "" && (
 						<>
@@ -322,7 +317,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 					)}
 				</dl>
 
-				<QueueReadNotice {...queue} />
+				<QueueReadNotice {...queueReading} />
 				{known && (
 					<output data-live className="text-muted-foreground text-xs">
 						{openingQueueLine(known, draft.brief.trim() !== "")}

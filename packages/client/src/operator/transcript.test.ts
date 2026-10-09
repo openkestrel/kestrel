@@ -363,7 +363,7 @@ describe("a follow's connection", () => {
 		expect(connection.state === "unavailable" && diagnosisOf(connection.failure).kind).toBe(
 			"connection_failed",
 		);
-		expect(connection.state === "unavailable" && connection.retrying).toBe(true);
+		expect(connection.state === "unavailable" && connection.retriesItself).toBe(true);
 		expect(mirror.snapshot().entries).toEqual([]);
 	});
 
@@ -424,7 +424,7 @@ describe("a follow's connection", () => {
 		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("unavailable"));
 
 		const refused = mirror.snapshot().connection;
-		expect(refused.state === "unavailable" && refused.retrying).toBe(false);
+		expect(refused.state === "unavailable" && refused.retriesItself).toBe(false);
 		expect(refused.state === "unavailable" && diagnosisOf(refused.failure).message).toBe(
 			"no Workspace is named brave-otter",
 		);

@@ -1,4 +1,4 @@
-import { Refusal } from "#/components/refusal";
+import { Refusal, RetryFallback } from "#/components/refusal";
 import { Button } from "#/components/ui/button";
 import type { Connection } from "#/operator/transcript";
 import { diagnosisOf } from "#/operator/transport";
@@ -34,9 +34,6 @@ export function ConnectionNotice({
 				</div>
 			);
 		case "unavailable": {
-			const offersRetry = diagnosisOf(connection.failure).next_steps.some(
-				(step) => step.action === "retry_read",
-			);
 			return (
 				<section
 					aria-label="Transcript unavailable"
@@ -45,18 +42,8 @@ export function ConnectionNotice({
 				>
 					<p className="font-medium">The Transcript is unavailable.</p>
 					<Refusal error={connection.failure} retry={reconnect} />
-					{!offersRetry && (
-						<Button
-							size="xs"
-							type="button"
-							variant="outline"
-							className="justify-self-start"
-							onClick={reconnect}
-						>
-							Reconnect
-						</Button>
-					)}
-					{connection.retrying && (
+					<RetryFallback error={connection.failure} retry={reconnect} label="Reconnect" />
+					{connection.retriesItself && (
 						<output className="text-muted-foreground">Trying again by itself.</output>
 					)}
 				</section>

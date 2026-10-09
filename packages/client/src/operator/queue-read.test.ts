@@ -48,29 +48,6 @@ describe("a read of the queue", () => {
 		const read = queueRead({ data: undefined, error: unreachable, fetching: true }, false);
 		expect(read).toMatchObject({ kind: "failed", retrying: true });
 	});
-
-	test("tells an empty queue from one with Sessions in it", () => {
-		expect(queueRead({ data: a_queue(), error: null, fetching: false }, false)).toMatchObject({
-			kind: "read",
-			empty: true,
-		});
-		const queue = a_queue({
-			queued: [
-				{
-					position: 1,
-					name: "agile-robin",
-					workspace: "w",
-					agent: "builder",
-					reasons: [],
-					enqueued_at: "2026-09-30T10:00:00Z",
-				},
-			],
-		});
-		expect(queueRead({ data: queue, error: null, fetching: false }, false)).toMatchObject({
-			kind: "read",
-			empty: false,
-		});
-	});
 });
 
 describe("the queued Sessions", () => {

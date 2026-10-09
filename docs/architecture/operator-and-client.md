@@ -345,7 +345,13 @@ page, naming its own origin as the control plane. A read offers reading again af
 `src/operator/diagnostic-view.ts` binds each next step to a route link that keeps the
 Organization, a re-read, a field of the form, a write the person chooses (missing inputs
 collected, a destructive one confirmed beside its consequence), or a sentence where the browser
-has no screen; `src/components/refusal.tsx` renders them, and a failed Session's `diagnostic` in
-the Sessions tab. It reads SSE with `Last-Event-ID` as the cursor.
+has no screen; an inspection or listing also carries the copyable `kestrel` command that does the
+same, as the CLI words it. `src/components/refusal.tsx` renders them, and a failed Session's
+`diagnostic` in the Sessions tab. It reads SSE with `Last-Event-ID` as the cursor.
 `src/operator/follow.ts` holds the two live reads: an Organization route's change notices, which
-invalidate TanStack Query keys, and a Workspace route's Transcript follow.
+invalidate TanStack Query keys and refetch the Organization on every reconnect rather than resume,
+and a Workspace route's Transcript follow. The follow is connecting until its `follower` event says
+the backlog is replayed, reconnecting after a drop with what it showed kept, and unavailable on a
+refusal or before it was ever live, so an unreachable stream never reads as an empty Transcript.
+Every queue reader shares one read (`src/components/workbench/queue-read.tsx`) that says when it is
+slow, and on failure names the error, offers a retry and keeps the last known queue.

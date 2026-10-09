@@ -4,7 +4,7 @@ import type { Queue } from "./generated";
 export type QueueRead =
 	| { kind: "reading"; delayed: boolean }
 	| { kind: "failed"; error: unknown; known: Queue | undefined; retrying: boolean }
-	| { kind: "read"; queue: Queue; empty: boolean };
+	| { kind: "read"; queue: Queue };
 
 export type QueueQueryState = { data: Queue | undefined; error: unknown; fetching: boolean };
 
@@ -13,7 +13,7 @@ export function queueRead({ data, error, fetching }: QueueQueryState, delayed: b
 		return { kind: "failed", error, known: data, retrying: fetching };
 	}
 	if (data === undefined) return { kind: "reading", delayed };
-	return { kind: "read", queue: data, empty: queuedSessions(data).length === 0 };
+	return { kind: "read", queue: data };
 }
 
 export type QueuedSession = {

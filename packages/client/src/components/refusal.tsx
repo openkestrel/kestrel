@@ -36,6 +36,33 @@ export function Refusal({ error, ...repairs }: { error: unknown } & Repairs) {
 	);
 }
 
+// A typed refusal names its own steps; a read that the caller can retry always offers it.
+export function RetryFallback({
+	error,
+	retry,
+	label,
+	disabled = false,
+}: {
+	error: unknown;
+	retry: () => void;
+	label: string;
+	disabled?: boolean;
+}) {
+	if (diagnosisOf(error).next_steps.some((step) => step.action === "retry_read")) return null;
+	return (
+		<Button
+			size="xs"
+			type="button"
+			variant="outline"
+			className="justify-self-start"
+			disabled={disabled}
+			onClick={retry}
+		>
+			{label}
+		</Button>
+	);
+}
+
 export function Diagnosis({ diagnostic }: { diagnostic: Diagnostic }) {
 	return (
 		<section

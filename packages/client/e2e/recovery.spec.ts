@@ -62,14 +62,17 @@ test.describe("a queue read", () => {
 
 		const refusal = page.getByRole("alert").filter({ hasText: "could not be reached" });
 		await expect(refusal).toBeVisible({ timeout: 20_000 });
-		await expect(page.getByText("Unknown: the queue could not be read.")).toBeVisible();
+		await expect(page.getByText("Unknown until the queue is read.")).toBeVisible();
 		await expect(page.getByText("Reading the queue…")).toHaveCount(0);
 		await expect(
 			page.getByRole("status").filter({ hasText: "The queue has not been read." }),
 		).toBeVisible();
 
 		reads.failing = false;
-		await refusal.getByRole("button", { name: "Read again" }).click();
+		const again = refusal.getByRole("button", { name: "Read again" });
+		await again.focus();
+		await expect(again).toBeFocused();
+		await page.keyboard.press("Enter");
 
 		await expect(refusal).toHaveCount(0);
 		await expect(page.getByText("No dispatch configuration is recorded.")).toBeVisible();
@@ -88,7 +91,7 @@ test.describe("a queue read", () => {
 		await page.goto("/organizations/acme/new");
 
 		const reading = page.getByRole("status").filter({ hasText: "Still reading the queue" });
-		await expect(reading).toBeVisible({ timeout: 10_000 });
+		await expect(reading.first()).toBeVisible({ timeout: 10_000 });
 
 		held.resolve();
 
@@ -171,7 +174,10 @@ test.describe("a Transcript follow", () => {
 		);
 
 		cut.failing = false;
-		await unavailable.getByRole("button", { name: "Read again" }).click();
+		const again = unavailable.getByRole("button", { name: "Read again" });
+		await again.focus();
+		await expect(again).toBeFocused();
+		await page.keyboard.press("Enter");
 
 		await expect(page.getByRole("log").getByText(`${ACTOR}: one`)).toBeVisible({
 			timeout: 20_000,

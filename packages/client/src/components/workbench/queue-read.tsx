@@ -12,7 +12,7 @@ import {
 	QueueSectionLabel,
 	QueueSectionTrigger,
 } from "#/components/ai-elements/queue";
-import { Refusal } from "#/components/refusal";
+import { Refusal, RetryFallback } from "#/components/refusal";
 import { Button } from "#/components/ui/button";
 import { ago } from "#/operator/format";
 import { queueQuery } from "#/operator/queries";
@@ -41,11 +41,18 @@ export function useQueueRead(organization: string): QueueReading {
 	};
 }
 
-export function QueueReadNotice({ read, retry, readAt }: QueueReading) {
+// Compact for a header strip: one line, no alert, so one failure never stacks several alerts.
+export function QueueReadNotice({
+	read,
+	retry,
+	readAt,
+	compact = false,
+}: QueueReading & { compact?: boolean }) {
 	switch (read.kind) {
 		case "read":
 			return null;
 		case "reading":
+			if (compact && !read.delayed) return null;
 			return (
 				<output data-queue-read={read.delayed ? "delayed" : "reading"} className="text-xs">
 					{read.delayed
@@ -54,24 +61,33 @@ export function QueueReadNotice({ read, retry, readAt }: QueueReading) {
 				</output>
 			);
 		case "failed": {
-			const offersRetry = diagnosisOf(read.error).next_steps.some(
-				(step) => step.action === "retry_read",
-			);
-			return (
-				<div data-queue-read="failed" className="grid gap-1 text-xs">
-					<Refusal error={read.error} retry={retry} />
-					{!offersRetry && (
+			if (compact) {
+				return (
+					<div data-queue-read="failed" className="flex flex-wrap items-center gap-x-2 text-xs">
+						<output className="text-destructive">
+							The queue could not be read: {diagnosisOf(read.error).message}.
+						</output>
 						<Button
 							size="xs"
 							type="button"
 							variant="outline"
-							className="justify-self-start"
 							disabled={read.retrying}
 							onClick={retry}
 						>
 							Read the queue again
 						</Button>
-					)}
+					</div>
+				);
+			}
+			return (
+				<div data-queue-read="failed" className="grid gap-1 text-xs">
+					<Refusal error={read.error} retry={retry} />
+					<RetryFallback
+						error={read.error}
+						retry={retry}
+						label="Read the queue again"
+						disabled={read.retrying}
+					/>
 					<output className="text-muted-foreground">
 						{read.retrying
 							? "Reading the queue again…"
