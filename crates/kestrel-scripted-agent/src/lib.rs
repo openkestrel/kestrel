@@ -64,6 +64,7 @@ pub const CHILD_SILENT_FOR: std::time::Duration = std::time::Duration::from_secs
 pub enum Script {
     /// Plans, thinks, calls a tool it asks permission for, says two messages and ends the turn.
     Speaks,
+    StreamsResponse,
     SlowTool,
     OversizedTool,
     ReconnectingTools,
@@ -175,6 +176,7 @@ impl Script {
     pub const fn as_str(self) -> &'static str {
         match self {
             Script::Speaks => "speaks",
+            Script::StreamsResponse => "streams-response",
             Script::ReconnectingTools => "reconnecting-tools",
             Script::OversizedTool => "oversized-tool",
             Script::SlowTool => "slow-tool",
