@@ -6269,6 +6269,8 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
     let served = [
         (operator::HARNESSES, "get"),
         (operator::SIGN_IN_METHOD, "get"),
+        (operator::OPERATOR, "get"),
+        (operator::OPERATOR, "put"),
         (operator::ORGANIZATIONS, "get"),
         (operator::ORGANIZATIONS, "post"),
         (operator::STARTS, "post"),
