@@ -7,6 +7,7 @@ use axum::response::{IntoResponse, Response};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+use url::Url;
 
 use crate::cli::Role;
 use crate::integration::webhook;
@@ -26,6 +27,7 @@ pub struct Listening {
     link: TcpListener,
     operator: TcpListener,
     bound: Listen,
+    client: Url,
     store: Store,
     wake: Wake,
     follow_lease: Duration,
@@ -43,6 +45,7 @@ impl Listening {
 pub async fn bind(
     store: Store,
     listen: Listen,
+    client: Url,
     wake: Wake,
     follow_lease: Duration,
 ) -> Result<Listening> {
@@ -61,6 +64,7 @@ pub async fn bind(
         link,
         operator,
         bound,
+        client,
         store,
         wake,
         follow_lease,
@@ -73,6 +77,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         link: link_listener,
         operator: operator_listener,
         bound,
+        client,
         store,
         wake,
         follow_lease,
@@ -98,7 +103,8 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
     let link_router = link::router(store.clone(), shutdown.clone(), live.clone())
         .merge(webhook::router(store.clone(), wake));
     let streams = crate::stream::Streams::new(follow_lease);
-    let operator_router = operator::router(store, shutdown.clone(), live, followers, streams);
+    let operator_router =
+        operator::router(store, shutdown.clone(), live, followers, streams, client);
 
     let serving_link = axum::serve(link_listener, link_router)
         .with_graceful_shutdown(shutdown.clone().cancelled_owned());

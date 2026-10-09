@@ -316,6 +316,34 @@ fn failed(finished: &client::Finished) -> &str {
     &finished.err
 }
 
+/// Someone who opens the operator port in a browser learns it is the API, and where the Client is.
+#[tokio::test]
+async fn the_operator_root_names_the_api_and_the_browser_client() {
+    let kestrel = Kestrel::boot().await;
+
+    let answered = reqwest::get(format!("{}/", kestrel.operator()))
+        .await
+        .expect("the operator boundary should answer");
+    assert_eq!(answered.status(), StatusCode::OK);
+    assert_eq!(
+        answered.headers()[reqwest::header::CONTENT_TYPE],
+        "text/plain; charset=utf-8"
+    );
+    let said = answered.text().await.expect("an answer");
+    assert!(said.contains("kestrel operator API"), "{said}");
+    assert!(said.contains("http://localhost:7719"), "{said}");
+
+    let rebound = reqwest::Client::new()
+        .get(format!("{}/", kestrel.operator()))
+        .header(reqwest::header::HOST, "attacker.example")
+        .send()
+        .await
+        .expect("the operator boundary should answer");
+    assert_eq!(rebound.status(), StatusCode::FORBIDDEN);
+
+    kestrel.teardown().await;
+}
+
 #[tokio::test]
 async fn a_client_declares_and_lists_organizations_without_opening_a_database() {
     let kestrel = Kestrel::boot().await;
@@ -6267,6 +6295,7 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         .collect();
 
     let served = [
+        (operator::ROOT, "get"),
         (operator::HARNESSES, "get"),
         (operator::SIGN_IN_METHOD, "get"),
         (operator::OPERATOR, "get"),

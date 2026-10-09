@@ -50,7 +50,13 @@ pub async fn run(cli: &Cli, shutdown: CancellationToken) -> anyhow::Result<()> {
 
     match cli.command {
         None => {
-            let all_in_one = role::bind(store, cli.listen(), cli.follow_lease()).await?;
+            let all_in_one = role::bind(
+                store,
+                cli.listen(),
+                cli.client_url().clone(),
+                cli.follow_lease(),
+            )
+            .await?;
             let dispatch = cli.dispatch(all_in_one.bound().link)?;
             all_in_one.run(Some(dispatch), shutdown).await
         }
@@ -58,6 +64,7 @@ pub async fn run(cli: &Cli, shutdown: CancellationToken) -> anyhow::Result<()> {
             let listening = role::serve::bind(
                 store,
                 cli.listen(),
+                cli.client_url().clone(),
                 timer::Wake::default(),
                 cli.follow_lease(),
             )

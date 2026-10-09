@@ -4,10 +4,12 @@ import type {
 	FollowerEvent,
 	Presence,
 	Recorded,
+	StreamSubscription,
 	TranscriptKind,
 	TranscriptSessionState,
 } from "./generated";
-import { operatorPath, Refused, type StreamEvent, type Transport } from "./transport";
+import type { Subscribed, Subscriber, TabStream } from "./tab-stream";
+import { operatorPath, type StreamEvent, type Transport } from "./transport";
 
 export type Delivered = {
 	seq: number;
@@ -110,15 +112,12 @@ export class TranscriptMirror {
 		}
 	}
 
-	get live(): boolean {
-		return this.connectionValue.state === "live";
-	}
-
 	// Entries already shown stay through a drop; only the connection changes.
 	dropped(failure: unknown): void {
 		if (this.wasLive) this.connect({ state: "reconnecting", failure });
-		else if (failure !== undefined)
+		else if (failure !== undefined) {
 			this.connect({ state: "unavailable", failure, retriesItself: true });
+		}
 	}
 
 	refused(failure: unknown): void {
@@ -210,10 +209,8 @@ function parsed<T>(data: string): T | undefined {
 	}
 }
 
-const RETRY = 250;
-const RETRY_CAP = 5_000;
-
 export type FollowOptions = {
+	stream: TabStream;
 	operations: Transport;
 	organization: string;
 	workspace: string;
@@ -221,92 +218,53 @@ export type FollowOptions = {
 	mirror: TranscriptMirror;
 };
 
-export class FollowSession {
-	private controller: AbortController | null = null;
+export class FollowSession implements Subscriber {
+	private subscribed: Subscribed | undefined;
 	private renewal: ReturnType<typeof setTimeout> | undefined;
 	private stopped = false;
-	private following = false;
-	private wake: (() => void) | undefined;
 
 	constructor(private readonly options: FollowOptions) {}
 
 	start(): void {
-		this.following = true;
-		void this.loop().finally(() => {
-			this.following = false;
-		});
+		this.subscribed = this.options.stream.subscribe(this);
 	}
 
 	stop(): void {
 		this.stopped = true;
-		this.controller?.abort();
-		this.wake?.();
 		clearTimeout(this.renewal);
+		this.subscribed?.unsubscribe();
+	}
+
+	subscription(): StreamSubscription {
+		const { organization, workspace, participant, mirror } = this.options;
+		return {
+			kind: "transcript",
+			organization,
+			workspace,
+			...(mirror.cursor === undefined ? {} : { after: mirror.cursor }),
+			...(participant ? { participant } : {}),
+		};
 	}
 
 	retry(): void {
 		if (this.stopped) return;
 		this.options.mirror.reconnecting();
-		if (!this.following) this.start();
-		else this.wake?.();
+		this.subscribed?.retry();
 	}
 
-	private async loop(): Promise<void> {
-		const { mirror } = this.options;
-		let backoff = RETRY;
-		while (!this.stopped) {
-			const controller = new AbortController();
-			this.controller = controller;
-			let failure: unknown;
-			try {
-				// oxlint-disable-next-line no-await-in-loop -- a reconnect waits for this attempt before deciding to make the next.
-				await this.consume(controller.signal);
-			} catch (error) {
-				// oxlint-disable-next-line typescript/no-unnecessary-condition -- stop() can set stopped while consume() awaits; TS narrowed it false for the loop.
-				if (this.stopped) return;
-				if (error instanceof Refused && error.status < 500) {
-					mirror.refused(error);
-					return;
-				}
-				failure = error;
-			}
-			// oxlint-disable-next-line typescript/no-unnecessary-condition -- stop() can set stopped while consume() awaits; TS narrowed it false for the loop.
-			if (this.stopped || mirror.sealed) return;
-			if (mirror.live) backoff = RETRY;
-			mirror.dropped(failure);
-			// oxlint-disable-next-line no-await-in-loop -- the backoff must grow between attempts.
-			await this.sleep(backoff);
-			backoff = Math.min(backoff * 2, RETRY_CAP);
-		}
+	dropped(failure: unknown): void {
+		this.options.mirror.dropped(failure);
 	}
 
-	private sleep(milliseconds: number): Promise<void> {
-		return new Promise((resolve) => {
-			const timer = setTimeout(resolve, milliseconds);
-			this.wake = () => {
-				clearTimeout(timer);
-				this.wake = undefined;
-				resolve();
-			};
-		});
+	refused(error: unknown): void {
+		this.options.mirror.refused(error);
 	}
 
-	private async consume(signal: AbortSignal): Promise<void> {
-		const { operations, organization, workspace, participant, mirror } = this.options;
-		const path = transcriptPath(organization, workspace, {
-			follow: true,
-			as: participant ?? undefined,
-		});
-		for await (const event of operations.stream(path, { after: mirror.cursor, signal })) {
-			if (event.event === "end") {
-				mirror.apply(event);
-				return;
-			}
-			mirror.apply(event);
-			if (event.event === "follower") {
-				const follower = parsed<FollowerEvent>(event.data);
-				if (follower) this.schedule(follower);
-			}
+	deliver(event: StreamEvent): void {
+		this.options.mirror.apply(event);
+		if (event.event === "follower") {
+			const follower = parsed<FollowerEvent>(event.data);
+			if (follower) this.schedule(follower);
 		}
 	}
 
@@ -333,7 +291,7 @@ export class FollowSession {
 		} catch {
 			// A lapsed or unknown follower registers again rather than being revived.
 			// oxlint-disable-next-line typescript/no-unnecessary-condition -- stop() can set stopped while the write awaits; TS narrowed it false at the guard above.
-			if (!this.stopped) this.controller?.abort();
+			if (!this.stopped) this.subscribed?.resubscribe();
 			return;
 		}
 		this.schedule(follower);
@@ -350,12 +308,13 @@ export async function readRange(
 	range: Range,
 	signal?: AbortSignal,
 ): Promise<Delivered[]> {
-	const path = transcriptPath(organization, workspace, {
-		follow: false,
+	const parameters = new URLSearchParams({
+		follow: "false",
 		kinds: "shared_state,narration,detail",
-		first: range.first,
-		last: range.last,
+		first_seq: String(range.first),
+		last_seq: String(range.last),
 	});
+	const path = `${operatorPath("organizations", organization, "workspaces", workspace, "transcript")}?${parameters}`;
 	const entries: Delivered[] = [];
 	for await (const event of operations.stream(path, { signal })) {
 		if (event.event === "entry") {
@@ -365,29 +324,6 @@ export async function readRange(
 		if (event.event === "end") break;
 	}
 	return entries;
-}
-
-export type TranscriptQuery = {
-	follow: boolean;
-	as?: string;
-	kinds?: string;
-	summaries?: boolean;
-	first?: number;
-	last?: number;
-};
-
-export function transcriptPath(
-	organization: string,
-	workspace: string,
-	query: TranscriptQuery,
-): string {
-	const parameters = new URLSearchParams({ follow: String(query.follow) });
-	if (query.as) parameters.set("as", query.as);
-	if (query.kinds) parameters.set("kinds", query.kinds);
-	if (query.summaries !== undefined) parameters.set("summaries", String(query.summaries));
-	if (query.first !== undefined) parameters.set("first_seq", String(query.first));
-	if (query.last !== undefined) parameters.set("last_seq", String(query.last));
-	return `${operatorPath("organizations", organization, "workspaces", workspace, "transcript")}?${parameters}`;
 }
 
 export function delivered(recorded: Recorded): Delivered {

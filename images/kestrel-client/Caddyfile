@@ -1,17 +1,11 @@
 {
 	admin off
 	persist_config off
-	# The operator trusts Caddy's local CA once, by hand (USAGE.md); Caddy never edits a trust store.
-	skip_install_trust
-	auto_https disable_redirects
-	# A browser sends no SNI to an IP, and in a container the local address is not 127.0.0.1.
-	default_sni 127.0.0.1
 }
 
-# HTTPS so the browser speaks HTTP/2: over HTTP/1.1 its six connections per origin, shared by every
-# tab, run out once a few event streams are open (ADR-0035).
-https://localhost:{$KESTREL_CLIENT_LISTEN_PORT:8080}, https://127.0.0.1:{$KESTREL_CLIENT_LISTEN_PORT:8080} {
-	tls internal
+# Plain HTTP on loopback: a tab holds one event stream, so HTTP/1.1's six connections per origin
+# carry about five tabs, and a first run trusts no certificate (ADR-0045).
+http://:{$KESTREL_CLIENT_LISTEN_PORT:8080} {
 	root * {$KESTREL_CLIENT_ROOT:/srv}
 
 	# Caddy forwards the browser's Host unchanged, which the operator listener's Host check
@@ -38,5 +32,11 @@ https://localhost:{$KESTREL_CLIENT_LISTEN_PORT:8080}, https://127.0.0.1:{$KESTRE
 		header Cache-Control no-cache
 		try_files {path} /index.html
 		file_server
+	}
+
+	# Only this proxy can tell a control plane that never answered from one that refused.
+	handle_errors 502 503 504 {
+		header @operator Content-Type application/json
+		respond @operator `\{"kind":"connection_failed","message":"kestrel isn't running","field":null,"context":\{"url":"http://{http.request.hostport}","operation":"{http.request.method} {http.request.uri.path}"\},"next_steps":[\{"action":"check_connection","service":"control_plane","compose":{$KESTREL_COMPOSE:false}\}]\}`
 	}
 }
