@@ -8,17 +8,26 @@ export type Subscriber = {
 	// Asked at every subscribe, so a resubscription resumes from the cursor last delivered.
 	subscription(): StreamSubscription;
 	deliver(event: StreamEvent): void;
+	// The connection dropped, with its failure when it failed rather than closed.
+	dropped?(failure: unknown): void;
+	// The subscription itself was refused; it waits for a retry.
+	refused?(error: unknown): void;
 };
 
 export type Subscribed = {
 	unsubscribe(): void;
 	resubscribe(): void;
+	// Subscribes a refused subscription again, or cuts the connection's backoff short.
+	retry(): void;
 };
 
 // One event stream for the tab's whole life (ADR-0045): views subscribe and unsubscribe over
 // requests, and any drop reserves again and re-subscribes everything still wanted.
 export class TabStream {
 	private readonly subscribers = new Map<string, Subscriber>();
+	private readonly refusals = new Map<string, Subscriber>();
+	private failure: unknown;
+	private wake: (() => void) | undefined;
 	private readonly putting = new Map<string, Promise<void>>();
 	private named = 0;
 	private token: string | undefined;
@@ -41,15 +50,25 @@ export class TabStream {
 					void this.put(this.token, id, subscriber);
 				}
 			},
+			retry: () => {
+				if (this.refusals.get(id) === subscriber) {
+					this.refusals.delete(id);
+					this.subscribers.set(id, subscriber);
+					if (this.token !== undefined) void this.put(this.token, id, subscriber);
+				}
+				this.wake?.();
+			},
 		};
 	}
 
 	close(): void {
 		this.closed = true;
 		this.connection?.abort();
+		this.wake?.();
 	}
 
 	private unsubscribe(id: string): void {
+		this.refusals.delete(id);
 		if (!this.subscribers.delete(id) || this.token === undefined) return;
 		const path = operatorPath("streams", this.token, "subscriptions", id);
 		// A DELETE that overtook its PUT would leave the subscription, and its follower, unowned.
@@ -69,6 +88,8 @@ export class TabStream {
 		while (!this.closed) {
 			const connection = new AbortController();
 			this.connection = connection;
+			this.failure = undefined;
+			let failure: unknown;
 			try {
 				// oxlint-disable-next-line no-await-in-loop -- each connection is reserved after the last one dropped.
 				const { token } = await this.operations.write<StreamReservation>(
@@ -86,15 +107,29 @@ export class TabStream {
 					backoff = RETRY;
 					this.dispatch(event);
 				}
-			} catch {}
+			} catch (error) {
+				failure = this.failure ?? error;
+			}
 			this.token = undefined;
 			connection.abort();
 			// oxlint-disable-next-line typescript/no-unnecessary-condition -- close() can run while the stream awaits.
 			if (this.closed) return;
+			for (const subscriber of this.subscribers.values()) subscriber.dropped?.(failure);
 			// oxlint-disable-next-line no-await-in-loop -- the backoff must grow between attempts.
-			await new Promise((resolve) => setTimeout(resolve, backoff));
+			await this.sleep(backoff);
 			backoff = Math.min(backoff * 2, RETRY_CAP);
 		}
+	}
+
+	private sleep(milliseconds: number): Promise<void> {
+		return new Promise((resolve) => {
+			const timer = setTimeout(resolve, milliseconds);
+			this.wake = () => {
+				clearTimeout(timer);
+				this.wake = undefined;
+				resolve();
+			};
+		});
 	}
 
 	private dispatch(event: StreamEvent): void {
@@ -139,8 +174,12 @@ export class TabStream {
 				error.status < 500
 			) {
 				this.subscribers.delete(id);
+				this.refusals.set(id, subscriber);
+				subscriber.refused?.(error);
 				return;
 			}
+			// The connection is cut for this answer, which names the failure better than the abort.
+			this.failure = error;
 			this.connection?.abort();
 		}
 	}

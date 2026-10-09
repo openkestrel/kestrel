@@ -10,6 +10,7 @@ import { Label } from "#/components/ui/label";
 import { NativeSelect } from "#/components/ui/native-select";
 import { Skeleton } from "#/components/ui/skeleton";
 import { Textarea } from "#/components/ui/textarea";
+import { QueueReadNotice, useQueueRead } from "#/components/workbench/queue-read";
 import {
 	AN_EMPTY_DRAFT,
 	draftOf,
@@ -29,8 +30,8 @@ import {
 	resolvedRepositories,
 } from "#/operator/opening";
 import { participant } from "#/operator/participant";
-import { queueQuery } from "#/operator/queries";
 import { openingQueueLine } from "#/operator/queue-line";
+import { knownQueue } from "#/operator/queue-read";
 import { diagnosisOf } from "#/operator/transport";
 import { PaneHeading } from "./workbench";
 
@@ -61,7 +62,8 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 	const projects = useQuery(projectsQuery(organization));
 	const agents = useQuery(agentsQuery(organization));
 	const profiles = useQuery(profilesQuery(organization));
-	const queue = useQuery(queueQuery(organization));
+	const queueReading = useQueueRead(organization);
+	const known = knownQueue(queueReading.read);
 
 	const [held, setHeld] = useState<NewWorkspaceDraft | undefined>(() => draftOf(organization));
 	const [name, setName] = useState(() => participant.name() ?? "");
@@ -304,7 +306,9 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 					<dt className="text-muted-foreground">Model</dt>
 					<dd>{resolvedModel(draft.model, agent)}</dd>
 					<dt className="text-muted-foreground">Environment</dt>
-					<dd>{queue.data ? resolvedEnvironment(queue.data.work_role) : "Reading the queue…"}</dd>
+					<dd data-environment>
+						{known ? resolvedEnvironment(known.work_role) : "Unknown until the queue is read."}
+					</dd>
 					{draft.continues !== "" && (
 						<>
 							<dt className="text-muted-foreground">Continues</dt>
@@ -313,11 +317,12 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 					)}
 				</dl>
 
-				{queue.data ? (
+				<QueueReadNotice {...queueReading} />
+				{known && (
 					<output data-live className="text-muted-foreground text-xs">
-						{openingQueueLine(queue.data, draft.brief.trim() !== "")}
+						{openingQueueLine(known, draft.brief.trim() !== "")}
 					</output>
-				) : null}
+				)}
 
 				<Field
 					label="Brief"

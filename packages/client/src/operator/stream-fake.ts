@@ -23,10 +23,15 @@ export function reservingControlPlane(
 	const deletes: { token: string; id: string }[] = [];
 	const opens: string[] = [];
 	let refuse: ((put: Put) => Response | Promise<Response> | undefined) | undefined;
+	let unreachableFor = 0;
 
 	const fetch = async (url: string, init: RequestInit = {}) => {
 		const path = url.split("/").slice(2);
 		if (url === "/operator/streams" && init.method === "PUT") {
+			if (unreachableFor > 0) {
+				unreachableFor -= 1;
+				throw new TypeError("Failed to fetch");
+			}
 			reserved += 1;
 			return json(201, { token: `token-${reserved}` });
 		}
@@ -60,11 +65,15 @@ export function reservingControlPlane(
 	};
 
 	return {
-		operations: transport(fetch),
+		operations: transport(fetch, "http://localhost"),
 		puts,
 		deletes,
 		opens,
 		reservations: () => reserved,
+		// The next `times` reservations find no control plane.
+		unreachable(times: number) {
+			unreachableFor = times;
+		},
 		refusing(refusal: (put: Put) => Response | Promise<Response> | undefined) {
 			refuse = refusal;
 		},

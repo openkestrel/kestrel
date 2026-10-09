@@ -22,7 +22,7 @@ export const Route = createFileRoute("/organizations/$organization/workspaces/$w
 
 function WorkspaceView() {
 	const { organization, workspace } = Route.useParams();
-	const transcript = useTranscript(organization, workspace);
+	const { transcript, reconnect } = useTranscript(organization, workspace);
 	const shown = useQuery(workspaceQuery(organization, workspace));
 	const sessions = useQuery(workspaceSessionsQuery(organization, workspace));
 	const known = useQuery(workspacesQuery(organization));
@@ -50,6 +50,7 @@ function WorkspaceView() {
 							<SessionStatus organization={organization} record={shown.data} />
 							<TranscriptPane
 								transcript={transcript}
+								reconnect={reconnect}
 								organization={organization}
 								read={shown.data}
 								session={session.data}

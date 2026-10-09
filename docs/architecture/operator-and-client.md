@@ -353,7 +353,8 @@ same `Unreachable` a failed fetch does, keeping its compose evidence. A read off
 `src/operator/diagnostic-view.ts` binds each next step to a route link that keeps the
 Organization, a re-read, a field of the form, a write the person chooses (missing inputs
 collected, a destructive one confirmed beside its consequence), or a sentence where the browser
-has no screen; `src/components/refusal.tsx` renders them, and a failed Session's `diagnostic` in
+has no screen; an inspection or listing also carries the copyable `kestrel` command that does the
+same, as the CLI words it. `src/components/refusal.tsx` renders them, and a failed Session's `diagnostic` in
 the Sessions tab. Only an unreachable control plane is an outage
 (`src/operator/outage.ts`): `src/components/outage.tsx` covers the still-mounted page with "kestrel
 isn't running", the compose commands when the evidence says compose, and checks again at growing
@@ -362,9 +363,14 @@ reads resume without a reload. A refusal or an unreadable answer came from a run
 and keeps its own Refusal. `src/operator/tab-stream.ts` holds the tab's one
 stream: it reserves lazily, subscribes each live read under its own id, and after any drop reserves
 again and re-subscribes from each subscription's current request. A plain `404` on a subscribe is
-the reservation forgotten; a typed one is the subscription refused, which is not retried.
+the reservation forgotten; a typed one is the subscription refused, which waits for the person to
+retry it.
 `src/operator/follow.ts` holds the two live reads over it: an Organization route's change notices,
 whose `open` refetches the Organization and whose changes invalidate TanStack Query keys, and a
 Workspace route's Transcript follow, which resumes from its mirror's cursor and renews its
-follower's lease. About five tabs fit HTTP/1.1's six connections per origin; nothing detects a
+follower's lease. The follow is connecting until its `follower` event says the backlog is replayed,
+reconnecting after a drop with what it showed kept, and unavailable when refused or before it was
+ever live, so an unreachable stream never reads as an empty Transcript. Every queue reader shares
+one read (`src/components/workbench/queue-read.tsx`) that says when it is slow, and on failure
+names the error, offers a retry and keeps the last known queue. About five tabs fit HTTP/1.1's six connections per origin; nothing detects a
 sixth. Browser sign-in progress polls its state read rather than opening a second stream.

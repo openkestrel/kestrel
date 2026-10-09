@@ -1,4 +1,4 @@
-import { ago, reasonText } from "./format";
+import { ago, reasonsText } from "./format";
 import type { PullRequest, Workspace, WorkspaceListed, WorkspaceWork } from "./generated";
 import { phaseOf, type RowPhase } from "./session-state";
 
@@ -31,7 +31,7 @@ function enqueued(row: WorkspaceListed): number {
 
 export function waitingText(row: WorkspaceListed): string | undefined {
 	const reasons = row.queue?.reasons ?? [];
-	if (reasons.length > 0) return reasons.map(reasonText).join("; ");
+	if (reasons.length > 0) return reasonsText(reasons);
 	if (row.queue?.pending_since) return `input held since ${ago(row.queue.pending_since)}`;
 	return undefined;
 }
