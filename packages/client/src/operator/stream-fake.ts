@@ -22,7 +22,7 @@ export function reservingControlPlane(
 	const puts: Put[] = [];
 	const deletes: { token: string; id: string }[] = [];
 	const opens: string[] = [];
-	let refuse: ((put: Put) => Response | undefined) | undefined;
+	let refuse: ((put: Put) => Response | Promise<Response> | undefined) | undefined;
 
 	const fetch = async (url: string, init: RequestInit = {}) => {
 		const path = url.split("/").slice(2);
@@ -50,7 +50,7 @@ export function reservingControlPlane(
 			// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the TabStream sends the generated subscription.
 			const put = { token, id, body: JSON.parse(text) as StreamSubscription };
 			puts.push(put);
-			return refuse?.(put) ?? new Response(null, { status: 204 });
+			return (await refuse?.(put)) ?? new Response(null, { status: 204 });
 		}
 		if (init.method === "DELETE") {
 			deletes.push({ token, id });
@@ -65,7 +65,7 @@ export function reservingControlPlane(
 		deletes,
 		opens,
 		reservations: () => reserved,
-		refusing(refusal: (put: Put) => Response | undefined) {
+		refusing(refusal: (put: Put) => Response | Promise<Response> | undefined) {
 			refuse = refusal;
 		},
 		send(id: string, event: string, data: unknown, cursor?: string) {

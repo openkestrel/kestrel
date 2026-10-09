@@ -33,7 +33,6 @@ export function followChanges(
 				void refetchOrganization(client, organization);
 			}
 		},
-		refused: () => {},
 	});
 }
 

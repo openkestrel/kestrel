@@ -217,8 +217,6 @@ export class FollowSession implements Subscriber {
 		}
 	}
 
-	refused(): void {}
-
 	private schedule(follower: FollowerEvent): void {
 		clearTimeout(this.renewal);
 		this.renewal = setTimeout(() => void this.renew(follower), (follower.lease_seconds * 1000) / 3);
@@ -259,12 +257,13 @@ export async function readRange(
 	range: Range,
 	signal?: AbortSignal,
 ): Promise<Delivered[]> {
-	const path = transcriptPath(organization, workspace, {
-		follow: false,
+	const parameters = new URLSearchParams({
+		follow: "false",
 		kinds: "shared_state,narration,detail",
-		first: range.first,
-		last: range.last,
+		first_seq: String(range.first),
+		last_seq: String(range.last),
 	});
+	const path = `${operatorPath("organizations", organization, "workspaces", workspace, "transcript")}?${parameters}`;
 	const entries: Delivered[] = [];
 	for await (const event of operations.stream(path, { signal })) {
 		if (event.event === "entry") {
@@ -274,29 +273,6 @@ export async function readRange(
 		if (event.event === "end") break;
 	}
 	return entries;
-}
-
-export type TranscriptQuery = {
-	follow: boolean;
-	as?: string;
-	kinds?: string;
-	summaries?: boolean;
-	first?: number;
-	last?: number;
-};
-
-export function transcriptPath(
-	organization: string,
-	workspace: string,
-	query: TranscriptQuery,
-): string {
-	const parameters = new URLSearchParams({ follow: String(query.follow) });
-	if (query.as) parameters.set("as", query.as);
-	if (query.kinds) parameters.set("kinds", query.kinds);
-	if (query.summaries !== undefined) parameters.set("summaries", String(query.summaries));
-	if (query.first !== undefined) parameters.set("first_seq", String(query.first));
-	if (query.last !== undefined) parameters.set("last_seq", String(query.last));
-	return `${operatorPath("organizations", organization, "workspaces", workspace, "transcript")}?${parameters}`;
 }
 
 export function delivered(recorded: Recorded): Delivered {

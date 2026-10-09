@@ -13,9 +13,7 @@ export type Subscribed = {
 // Answers with the per-resource stream's text for this subscription's `attempt`th subscribe.
 type Answer = (subscription: Subscribed, attempt: number) => string | Promise<string>;
 
-// Stands in for the tab's one stream. Each connection answers every subscription made on it with
-// what `answer` gives, framed as the multiplexed stream frames it, and then closes, so the tab
-// reserves again and re-subscribes. Notices open on the first subscribe and say nothing after.
+// Each connection closes once answered, so the tab reserves and re-subscribes for the next attempt.
 export class Streamed {
 	readonly subscriptions: Subscribed[] = [];
 	readonly opened: string[] = [];

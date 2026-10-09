@@ -8,7 +8,6 @@ export type Subscriber = {
 	// Asked at every subscribe, so a resubscription resumes from the cursor last delivered.
 	subscription(): StreamSubscription;
 	deliver(event: StreamEvent): void;
-	refused(error: Refused): void;
 };
 
 export type Subscribed = {
@@ -20,6 +19,7 @@ export type Subscribed = {
 // requests, and any drop reserves again and re-subscribes everything still wanted.
 export class TabStream {
 	private readonly subscribers = new Map<string, Subscriber>();
+	private readonly putting = new Map<string, Promise<void>>();
 	private named = 0;
 	private token: string | undefined;
 	private connection: AbortController | undefined;
@@ -51,8 +51,10 @@ export class TabStream {
 
 	private unsubscribe(id: string): void {
 		if (!this.subscribers.delete(id) || this.token === undefined) return;
-		void this.operations
-			.write("DELETE", operatorPath("streams", this.token, "subscriptions", id))
+		const path = operatorPath("streams", this.token, "subscriptions", id);
+		// A DELETE that overtook its PUT would leave the subscription, and its follower, unowned.
+		void (this.putting.get(id) ?? Promise.resolve())
+			.then(() => this.operations.write("DELETE", path))
 			.catch(() => {});
 	}
 
@@ -113,8 +115,16 @@ export class TabStream {
 		});
 	}
 
+	private put(token: string, id: string, subscriber: Subscriber): Promise<void> {
+		const put = this.subscribing(token, id, subscriber).finally(() => {
+			if (this.putting.get(id) === put) this.putting.delete(id);
+		});
+		this.putting.set(id, put);
+		return put;
+	}
+
 	// A plain 404 is the reservation forgotten; a typed refusal is the subscription's own.
-	private async put(token: string, id: string, subscriber: Subscriber): Promise<void> {
+	private async subscribing(token: string, id: string, subscriber: Subscriber): Promise<void> {
 		try {
 			await this.operations.write(
 				"PUT",
@@ -125,7 +135,6 @@ export class TabStream {
 			if (this.token !== token || this.subscribers.get(id) !== subscriber) return;
 			if (error instanceof Refused && error.kind !== undefined && error.status < 500) {
 				this.subscribers.delete(id);
-				subscriber.refused(error);
 				return;
 			}
 			this.connection?.abort();

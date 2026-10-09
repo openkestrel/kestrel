@@ -6,13 +6,11 @@ import type { StreamEvent } from "./transport";
 
 function recording(subscription: () => StreamSubscription) {
 	const delivered: StreamEvent[] = [];
-	const refused: unknown[] = [];
 	const subscriber: Subscriber = {
 		subscription,
 		deliver: (event) => delivered.push(event),
-		refused: (error) => refused.push(error),
 	};
-	return { subscriber, delivered, refused };
+	return { subscriber, delivered };
 }
 
 describe("a tab's stream", () => {
@@ -155,11 +153,31 @@ describe("a tab's stream", () => {
 			expect(server.puts.map((put) => put.token)).toEqual(["token-1", "token-2"]),
 		);
 		tab.subscribe(missing.subscriber);
-		await vi.waitFor(() => expect(missing.refused).toHaveLength(1));
+		await vi.waitFor(() =>
+			expect(server.puts.filter((put) => put.body.workspace === "nothing")).toHaveLength(1),
+		);
 		await new Promise((resolve) => setTimeout(resolve, 400));
 
 		expect(server.reservations()).toBe(2);
 		expect(server.puts.filter((put) => put.body.workspace === "nothing")).toHaveLength(1);
+		tab.close();
+	});
+
+	it("ends a subscription only after the request that started it has answered", async () => {
+		const server = control();
+		const answered = Promise.withResolvers<Response>();
+		server.refusing(() => answered.promise);
+		const tab = new TabStream(server.operations);
+		const leaving = recording(() => ({ kind: "notices", organization: "acme" }));
+
+		const subscribed = tab.subscribe(leaving.subscriber);
+		await vi.waitFor(() => expect(server.puts).toHaveLength(1));
+		subscribed.unsubscribe();
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(server.deletes).toEqual([]);
+		answered.resolve(new Response(null, { status: 204 }));
+
+		await vi.waitFor(() => expect(server.deletes).toHaveLength(1));
 		tab.close();
 	});
 });
