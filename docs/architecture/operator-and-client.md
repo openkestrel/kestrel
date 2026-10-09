@@ -96,7 +96,8 @@ follower lease's 404 are also plain. Anything else is `Unavailable`.
 | `Reason::InstanceTimeout` | 504 | 5 unavailable |
 | Anything else | 503 | 5 unavailable |
 
-The exit numbers are published by `kestrel exit-codes` and never move (`kestrel-client/src/exit.rs`).
+A `setup_gap` Diagnostic exits 78 (not ready) whatever its status. The exit numbers are published by
+`kestrel exit-codes` and never move (`kestrel-client/src/exit.rs`).
 The complete Diagnostic/Action contract — every `kind` and `action`, including the setup, failure
 and Client-local variants no producer raises yet — is authored once in `openapi/operator.json`
 under `Diagnostic` and `Action`; link evidence grows its producers under its own ticket without
@@ -304,10 +305,18 @@ headings. Each command's `--json` returns the operator response.
   answer. Live work inspection follows git-style prose even when piped, and its `--json` returns
   the whole response. For commands with a `View`, a terminal gets aligned columns; a pipe gets
   delimited rows; `--json a,b` gets exactly those fields in that order.
-- **Nothing is prompted for.** Whatever drives the Client may have no terminal. Secrets are read
-  from standard input, never from arguments.
-- **Corrections** (`corrective.rs`): a refusal the Client recognises is followed by the command
-  that would fix it.
+- **Secrets** are read from standard input, never from arguments.
+- **Diagnostics** (`diagnostic.rs`): every failure reaches stderr as a typed `Diagnostic`, the
+  control plane's or one the Client makes for a connection failure, an unreadable or unrecognised
+  answer, or a local error. The exit comes from its `kind`, falling back to the HTTP status only for
+  kinds the table above does not place. Each `Action` renders as a `kestrel` command that keeps the selected
+  `--organization` and, when it is not the default, `--control-plane`; a missing input appears as
+  the flag it needs and is never guessed. With `--json` the Diagnostic is one JSON line on stderr
+  and stdout holds only successful output. When standard input and standard error are both a
+  terminal, the Client offers to run a step: it asks for each missing input, asks for an explicit
+  yes before a step with a `consequence`, and keeps the original exit whatever the step does. A
+  refused or lost write is never sent again. A Session's own `diagnostic` is part of
+  `session show`'s successful output.
 - `kestrel start` (`start.rs`) infers an Organization, Project and Agent from the local clone and
   explains every inferred value on stderr before changing anything.
 

@@ -2,9 +2,10 @@ use crate::support;
 
 use std::net::TcpListener;
 
-use serde_json::json;
+use kestrel::domain::{Session, Workspace};
+use serde_json::{Value, json};
 use support::Kestrel;
-use support::client::{Finished, Invocation, ran, ran_by};
+use support::client::{Finished, Invocation, ran, ran_by, ran_on_a_terminal_by};
 
 const SUCCESS: i32 = 0;
 const USAGE: i32 = 2;
@@ -52,6 +53,7 @@ fn the_catalog_is_printed_without_reaching_a_control_plane() {
             json!({ "code": 3, "name": "unresolved" }),
             json!({ "code": 4, "name": "rejected" }),
             json!({ "code": 5, "name": "unavailable" }),
+            json!({ "code": 78, "name": "not_ready" }),
         ]
     );
 }
@@ -183,28 +185,83 @@ async fn ambiguous_and_empty_organization_scope_offer_runnable_choices() {
     kestrel.teardown().await;
 }
 
+const OPEN_ABSENT: [&str; 6] = [
+    "workspace",
+    "open",
+    "--project",
+    "absent",
+    "--agent",
+    "agent",
+];
+
 #[tokio::test]
 async fn a_missing_project_names_the_setup_command_and_keeps_its_category() {
     let kestrel = an_organization().await;
-    let finished = ran_by(
-        &kestrel,
-        &[
-            "workspace",
-            "open",
-            "--project",
-            "absent",
-            "--agent",
-            "agent",
-        ],
-        Invocation::default(),
-    )
-    .await;
+    let finished = ran_by(&kestrel, &OPEN_ABSENT, Invocation::default()).await;
 
     exited(&finished, UNRESOLVED);
     assert!(
-        finished.err.contains("kestrel project declare absent"),
+        finished.err.contains(&format!(
+            "kestrel project declare absent --repository <REPOSITORY> --branch <BRANCH> \
+             --organization acme --control-plane {}",
+            kestrel.operator()
+        )),
         "{}",
         finished.err
+    );
+    assert!(
+        finished.err.contains("needs --repository and --branch"),
+        "{}",
+        finished.err
+    );
+    assert!(!finished.err.contains("git "), "{}", finished.err);
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn json_puts_the_typed_diagnostic_on_stderr_and_leaves_stdout_for_success() {
+    let kestrel = an_organization().await;
+    let mut args = OPEN_ABSENT.to_vec();
+    args.extend(["--json", "id"]);
+
+    let finished = ran_by(&kestrel, &args, Invocation::default()).await;
+
+    exited(&finished, UNRESOLVED);
+    assert!(finished.out.is_empty(), "{:?}", finished.out);
+    let diagnostic: Value =
+        serde_json::from_str(finished.err.trim()).expect("stderr should be one diagnostic");
+    assert_eq!(diagnostic["kind"], "missing_reference");
+    assert_eq!(diagnostic["context"]["resource"], "project");
+    assert_eq!(diagnostic["next_steps"][0]["action"], "declare_project");
+    assert_eq!(
+        diagnostic["next_steps"][0]["missing"],
+        json!(["repositories", "branch"])
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_terminal_collects_the_missing_inputs_and_runs_only_the_chosen_step() {
+    let kestrel = an_organization().await;
+
+    let shown = ran_on_a_terminal_by(
+        &kestrel,
+        &OPEN_ABSENT,
+        Invocation::default(),
+        "1\nhttps://example.com/repo\nmain\n",
+    )
+    .await;
+
+    assert_eq!(shown.status.code(), Some(UNRESOLVED), "{}", shown.said);
+    let organization = kestrel.organizations().await.remove(0);
+    let projects = kestrel.projects(&organization).await;
+    assert_eq!(projects.len(), 1, "{}", shown.said);
+    assert_eq!(projects[0].name, "absent");
+    assert_eq!(projects[0].branch, "main");
+    assert!(
+        kestrel.workspaces("acme").await.is_empty(),
+        "the refused open was replayed: {}",
+        shown.said
     );
     kestrel.teardown().await;
 }
@@ -236,8 +293,7 @@ async fn corrective_command_names_the_unencoded_organization() {
     kestrel.teardown().await;
 }
 
-#[tokio::test]
-async fn a_session_in_the_workspace_names_the_session_to_stop_and_stays_rejected() {
+async fn a_session_in_flight() -> (Kestrel, Workspace, Session) {
     let kestrel = an_organization().await;
     let organization = kestrel.organizations().await.remove(0);
     let project = kestrel
@@ -255,6 +311,13 @@ async fn a_session_in_the_workspace_names_the_session_to_stop_and_stays_rejected
         .open_workspace("acme", &project.name, &agent.name)
         .await;
     let session = kestrel.enqueue_session(workspace.id).await;
+
+    (kestrel, workspace, session)
+}
+
+#[tokio::test]
+async fn a_session_in_the_workspace_names_the_session_to_stop_and_stays_rejected() {
+    let (kestrel, workspace, session) = a_session_in_flight().await;
     let finished = ran_by(
         &kestrel,
         &[
@@ -274,6 +337,45 @@ async fn a_session_in_the_workspace_names_the_session_to_stop_and_stays_rejected
             .contains(&format!("kestrel session stop {}", session.id)),
         "{}",
         finished.err
+    );
+    assert!(
+        finished.err.contains("It happens only if you choose it."),
+        "{}",
+        finished.err
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn stopping_the_holding_session_takes_an_explicit_yes() {
+    let (kestrel, workspace, session) = a_session_in_flight().await;
+    let workspace = workspace.id.to_string();
+    let enqueue = ["session", "enqueue", "--workspace", workspace.as_str()];
+    let declined = ran_on_a_terminal_by(&kestrel, &enqueue, Invocation::default(), "2\n\n").await;
+    assert_eq!(declined.status.code(), Some(REJECTED), "{}", declined.said);
+    assert!(
+        declined
+            .said
+            .contains(&format!("2. stop the session {}", session.id)),
+        "{}",
+        declined.said
+    );
+    assert!(declined.said.contains("[y/N]"), "{}", declined.said);
+    let id = session.id;
+    assert!(
+        kestrel.session(id).await.exit.is_none(),
+        "{}",
+        declined.said
+    );
+
+    let chosen = ran_on_a_terminal_by(&kestrel, &enqueue, Invocation::default(), "2\ny\n").await;
+    assert_eq!(chosen.status.code(), Some(REJECTED), "{}", chosen.said);
+    assert!(kestrel.session(id).await.exit.is_some(), "{}", chosen.said);
+    assert_eq!(
+        kestrel.sessions(session.workspace).await.len(),
+        1,
+        "the refused enqueue was replayed: {}",
+        chosen.said
     );
     kestrel.teardown().await;
 }
@@ -341,7 +443,29 @@ async fn a_declined_operation_is_rejected() {
 
 #[test]
 fn a_control_plane_nothing_answers_for_is_unavailable() {
-    let finished = ran(&nowhere(), &["organization", "list"]);
+    let control_plane = nowhere();
+    let finished = ran(&control_plane, &["organization", "list"]);
 
     exited(&finished, UNAVAILABLE);
+    assert!(
+        finished
+            .err
+            .contains(&format!("check that the control plane at {control_plane}")),
+        "{}",
+        finished.err
+    );
+    assert!(!finished.err.contains("Caused by"), "{}", finished.err);
+}
+
+#[test]
+fn an_unreachable_control_plane_is_a_typed_diagnostic_under_json() {
+    let control_plane = nowhere();
+    let finished = ran(&control_plane, &["organization", "list", "--json", "name"]);
+
+    exited(&finished, UNAVAILABLE);
+    let diagnostic: Value =
+        serde_json::from_str(finished.err.trim()).expect("stderr should be one diagnostic");
+    assert_eq!(diagnostic["kind"], "connection_failed");
+    assert_eq!(diagnostic["context"]["url"], control_plane);
+    assert_eq!(diagnostic["next_steps"][0]["action"], "check_connection");
 }

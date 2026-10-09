@@ -146,6 +146,7 @@ pub const SESSION: View = View::Detail(&[
     "preparing",
     "exit.status",
     "exit.because",
+    "diagnostic",
     "outcome_message",
     "instance",
     "supervisor",

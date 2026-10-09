@@ -2,11 +2,12 @@ use std::collections::HashSet;
 use std::io::Write as _;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Context as _, Result, anyhow};
 use reqwest::{Client, StatusCode, Url, header};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::diagnostic::{self, Request};
 use crate::exit::{Exit, Failed};
 use crate::output::Presentation;
 use crate::sse::Events;
@@ -16,20 +17,20 @@ use crate::view;
 const PATIENCE: Duration = Duration::from_secs(30);
 const RETRY: Duration = Duration::from_millis(250);
 
-#[derive(Deserialize)]
-struct Refusal {
-    message: String,
-}
+const OPERATION: Request<'static> = Request {
+    operation: "workspace transcript",
+    write: false,
+};
 
 enum Cut {
-    Refused(StatusCode, String),
-    Lost(anyhow::Error),
+    Refused(Failed),
+    Lost,
     Failed(anyhow::Error),
 }
 
 impl From<reqwest::Error> for Cut {
-    fn from(error: reqwest::Error) -> Self {
-        Cut::Lost(error.into())
+    fn from(_: reqwest::Error) -> Self {
+        Cut::Lost
     }
 }
 
@@ -74,18 +75,17 @@ pub async fn read(
     loop {
         match streamed(stream, &mut cursor, &mut heard, &mut activities).await {
             Ok(()) => return Ok(cursor),
-            Err(Cut::Refused(status, why)) => bail!(Failed::new(
-                crate::api::refused(status),
-                format!("the control plane refused the read: {why}")
-            )),
+            Err(Cut::Refused(failed)) => return Err(failed.into()),
             Err(Cut::Failed(error)) => return Err(error),
-            Err(Cut::Lost(error)) if heard.elapsed() > PATIENCE => {
-                return Err(error.context(Failed::new(
-                    Exit::Unavailable,
-                    format!("reading the transcript from {control_plane}"),
-                )));
+            Err(Cut::Lost) if heard.elapsed() > PATIENCE => {
+                return Err(diagnostic::unreachable(
+                    control_plane.as_str().trim_end_matches('/'),
+                    OPERATION,
+                    true,
+                )
+                .into());
             }
-            Err(Cut::Lost(_)) => tokio::time::sleep(RETRY).await,
+            Err(Cut::Lost) => tokio::time::sleep(RETRY).await,
         }
     }
 }
@@ -113,14 +113,17 @@ async fn streamed(
     let response = request.send().await?;
     let status = response.status();
     if status.is_client_error() {
-        let why = response
-            .json::<Refusal>()
-            .await
-            .map_or_else(|_| status.to_string(), |refusal| refusal.message);
-        return Err(Cut::Refused(status, why));
+        let retry_after = crate::api::retry_after(&response);
+        let body = response.bytes().await.unwrap_or_default();
+        return Err(Cut::Refused(diagnostic::refused(
+            status,
+            retry_after,
+            &body,
+            OPERATION,
+        )));
     }
     if !status.is_success() {
-        return Err(Cut::Lost(anyhow!("the control plane answered {status}")));
+        return Err(Cut::Lost);
     }
     *heard = Instant::now();
 
@@ -179,7 +182,7 @@ async fn streamed(
         }
     }
 
-    Err(Cut::Lost(anyhow!("the stream closed before it ended")))
+    Err(Cut::Lost)
 }
 
 #[derive(Deserialize)]

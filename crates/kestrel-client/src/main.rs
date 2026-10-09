@@ -1,6 +1,6 @@
 mod api;
 mod changes;
-mod corrective;
+mod diagnostic;
 mod exit;
 mod files;
 mod output;
@@ -25,6 +25,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::api::ControlPlane;
+use crate::diagnostic::Invocation;
 use crate::exit::{Exit, Failed};
 use crate::output::{Presentation, collection, show};
 use crate::scope::{Derived, Scope, Scoping, Source};
@@ -880,22 +881,37 @@ enum SessionOptionCommand {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
-    let exit = match run().await {
+    let matches = Client::command()
+        .try_get_matches()
+        .unwrap_or_else(|error| exit_after(&error));
+    let client = Client::from_arg_matches(&matches).unwrap_or_else(|error| exit_after(&error));
+    let invocation = Invocation {
+        elsewhere: matches.value_source("control_plane") != Some(ValueSource::DefaultValue),
+        control_plane: client.control_plane.clone(),
+        operation: operation(&matches),
+        args: std::env::args().skip(1).collect(),
+        json: client.json.is_some(),
+    };
+    let exit = match run(client, &matches, &invocation).await {
         Ok(()) => Exit::Success,
-        Err(error) => {
-            eprintln!("Error: {error:?}");
-            Exit::of(&error)
-        }
+        Err(error) => diagnostic::report(&error, &invocation),
     };
 
     ExitCode::from(exit.code())
 }
 
-async fn run() -> Result<()> {
-    let matches = Client::command()
-        .try_get_matches()
-        .unwrap_or_else(|error| exit_after(&error));
-    let client = Client::from_arg_matches(&matches).unwrap_or_else(|error| exit_after(&error));
+/// The subcommand path, such as `session stop`, that a Client-made diagnostic names.
+fn operation(matches: &clap::ArgMatches) -> String {
+    let mut words = Vec::new();
+    let mut here = matches;
+    while let Some((name, deeper)) = here.subcommand() {
+        words.push(name);
+        here = deeper;
+    }
+    words.join(" ")
+}
+
+async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation) -> Result<()> {
     let presentation = Presentation::chosen(
         if matches!(
             &client.command,
@@ -951,7 +967,7 @@ async fn run() -> Result<()> {
         Some(ValueSource::EnvVariable) => CONTROL_PLANE_VARIABLE,
         _ => "default",
     };
-    let api = ControlPlane::at(control_plane.clone());
+    let api = ControlPlane::at(control_plane.clone(), &invocation.operation);
     let scoping = Scoping::new(&api, named);
 
     match client.command {
@@ -1575,7 +1591,7 @@ async fn run() -> Result<()> {
                     &client.control_plane,
                     "changes in this comparison",
                     Some(&organization),
-                    &format!("workspace work {}", corrective::quoted(&workspace)),
+                    &format!("workspace work {}", diagnostic::quoted(&workspace)),
                 ),
             )?;
         }
@@ -1604,7 +1620,7 @@ async fn run() -> Result<()> {
                     &client.control_plane,
                     read,
                     Some(&organization),
-                    &format!("workspace work {}", corrective::quoted(&workspace)),
+                    &format!("workspace work {}", diagnostic::quoted(&workspace)),
                 ),
             )?;
         }
@@ -1630,7 +1646,7 @@ async fn run() -> Result<()> {
                     &client.control_plane,
                     "directory entries",
                     Some(&organization),
-                    &format!("workspace files {}", corrective::quoted(&workspace)),
+                    &format!("workspace files {}", diagnostic::quoted(&workspace)),
                 ),
             )?;
         }
@@ -1824,7 +1840,7 @@ async fn run() -> Result<()> {
                     &client.control_plane,
                     "Sessions",
                     Some(&organization),
-                    &format!("workspace show {}", corrective::quoted(&workspace)),
+                    &format!("workspace show {}", diagnostic::quoted(&workspace)),
                 ),
             )?;
         }
@@ -1832,6 +1848,7 @@ async fn run() -> Result<()> {
             let organization = scoping.resolve().await?.organization;
             shown_session(
                 &presentation,
+                invocation,
                 &api.get(&["organizations", &organization, "sessions", &session])
                     .await?,
             )?;
@@ -1895,7 +1912,7 @@ async fn run() -> Result<()> {
                 )
                 .await?;
             warn_about_cache(&changed, &option);
-            shown_session(&presentation, &changed)?;
+            shown_session(&presentation, invocation, &changed)?;
         }
         Command::Instance(InstanceCommand::List) => {
             let organization = scoping.resolve().await?.organization;
@@ -2065,20 +2082,30 @@ fn empty_list(
     action: &str,
 ) -> String {
     let scope = organization.map_or_else(String::new, |name| {
-        format!(" in Organization {}", corrective::quoted(name))
+        format!(" in Organization {}", diagnostic::quoted(name))
     });
     let flag = organization.map_or_else(String::new, |name| {
-        format!(" --organization {}", corrective::quoted(name))
+        format!(" --organization {}", diagnostic::quoted(name))
     });
     format!(
         "No {absent}{scope}.\nInspect the next step with:\n  kestrel{flag} {action} --control-plane {}",
-        corrective::quoted(control_plane)
+        diagnostic::quoted(control_plane)
     )
 }
 
-fn shown_session(presentation: &Presentation, session: &Value) -> Result<()> {
+/// A failed Session is still a successful read: its diagnostic is shown, never raised.
+fn shown_session(
+    presentation: &Presentation,
+    invocation: &Invocation,
+    session: &Value,
+) -> Result<()> {
     let mut record = session.clone();
     if !matches!(presentation, Presentation::Json(_)) {
+        record["diagnostic"] =
+            serde_json::from_value::<wire::Diagnostic>(record["diagnostic"].clone())
+                .map_or(Value::Null, |diagnostic| {
+                    Value::from(diagnostic::inline(&diagnostic, invocation))
+                });
         record["options"] = Value::from(session_options(&record["options"]));
         record["changing_options"] = Value::from(changing_options(&record["changing_options"]));
         record["commands"] = Value::from(session_commands(&record["commands"]));
