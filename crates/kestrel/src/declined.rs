@@ -234,7 +234,6 @@ pub enum Reason {
         operation: &'static str,
         harness: Option<String>,
         image: String,
-        missing: bool,
         message: String,
     },
 }

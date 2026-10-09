@@ -63,7 +63,7 @@ harness. An uninspectable image is a 503 `unavailable` (`image_inspection`) whos
 the image and then retry the capability read. Label membership admits a harness and leaves its
 configured command alone; a command still missing at spawn fails the Session with
 `executable_missing` evidence. The serve role logs one inspection at startup and serves either
-way. Readiness and sign-in consumers reuse `Images::read`.
+way. `Images::read` is the one capability read for any later consumer.
 
 ### Errors
 

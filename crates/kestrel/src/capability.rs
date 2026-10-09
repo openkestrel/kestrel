@@ -7,8 +7,8 @@ use tokio::process::Command;
 use crate::compute::Driver;
 use crate::declined::Reason;
 
-/// What an image declares the harnesses it carries in (ADR-0048).
-pub const LABEL: &str = "dev.kestrel.harnesses";
+/// The label an image declares its harnesses in (ADR-0048).
+const LABEL: &str = "dev.kestrel.harnesses";
 
 /// A daemon that does not answer is unavailable, not a reason to hold a request open.
 const PATIENCE: Duration = Duration::from_secs(10);
@@ -28,7 +28,6 @@ struct Inspecting {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Capability {
-    /// The compute driver runs no image, so there is nothing to inspect.
     Unchecked,
     Inspected {
         image: String,
@@ -99,14 +98,6 @@ impl Images {
 }
 
 impl Capability {
-    /// `None` when nothing established whether it does: never a stale or invented answer.
-    pub fn carries(&self, harness: &str) -> Option<bool> {
-        match self {
-            Capability::Inspected { harnesses, .. } => Some(harnesses.contains(harness)),
-            Capability::Unchecked | Capability::Unavailable { .. } => None,
-        }
-    }
-
     pub fn admits(self, harness: &str, operation: &'static str) -> Result<(), Box<Reason>> {
         match self {
             Capability::Unchecked => Ok(()),
@@ -128,7 +119,6 @@ impl Capability {
                 message: unavailable(&image, &cause, Some(harness)),
                 harness: Some(harness.to_owned()),
                 image,
-                missing: cause == Uninspectable::Missing,
             })),
         }
     }
@@ -341,13 +331,11 @@ mod tests {
                 image: "kestrel-env".to_owned(),
                 cause: cause.clone(),
             };
-            assert_eq!(capability.carries("opencode"), None);
             match capability
                 .admits("opencode", "start")
                 .map_err(|reason| *reason)
             {
-                Err(Reason::ImageUnavailable { missing, image, .. }) => {
-                    assert_eq!(missing, cause == Uninspectable::Missing);
+                Err(Reason::ImageUnavailable { image, .. }) => {
                     assert_eq!(image, "kestrel-env");
                 }
                 other => panic!("admitted as {other:?}"),
@@ -357,7 +345,6 @@ mod tests {
 
     #[test]
     fn a_driver_with_no_image_admits_every_harness_and_establishes_nothing() {
-        assert_eq!(Capability::Unchecked.carries("claude"), None);
         assert!(Capability::Unchecked.admits("claude", "start").is_ok());
     }
 }

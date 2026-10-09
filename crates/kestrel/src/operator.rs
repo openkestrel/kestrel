@@ -4107,7 +4107,6 @@ fn diagnosed(reason: Reason, field: Option<&'static str>) -> Refused {
             operation,
             harness,
             image,
-            missing: _,
             message,
         } => (
             StatusCode::SERVICE_UNAVAILABLE,
