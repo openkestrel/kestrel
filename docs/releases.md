@@ -2,7 +2,8 @@
 
 [ADR-0053](adr/0053-a-tag-prepares-a-release-acceptance-publishes-it.md) separates preparation,
 publication into a draft, and operator acceptance. This procedure prepares reviewable source
-files only; it does not cut or accept a release. Python 3.11 or newer is required.
+files only; it does not cut or accept a release. Run `mise install python` to install the Python
+version pinned in `mise.toml`.
 
 Start on a branch from current main, with a clean checkout. Fetch the existing version tags before
 choosing an unused candidate version. The maintainer chooses the version explicitly; after a
@@ -28,8 +29,8 @@ behavior changes, fixes and known limitations; say “None” when a section has
 Prepare the chosen version and notes without creating a tag or publishing anything:
 
 ```sh
-python3 scripts/release.py prepare 0.4.1 --notes /tmp/release-notes.md
-python3 scripts/release.py validate v0.4.1
+mise exec -- python3 scripts/release.py prepare 0.4.1 --notes /tmp/release-notes.md
+mise exec -- python3 scripts/release.py validate v0.4.1
 ```
 
 The preparer changes `Cargo.toml`, the workspace packages in `Cargo.lock`,
@@ -45,13 +46,14 @@ cd packages/client
 bun install --frozen-lockfile
 bun run build
 cd ../..
-python3 scripts/release.py validate v0.4.1 --browser-build packages/client/dist/client
+mise exec -- python3 scripts/release.py validate v0.4.1 --browser-build packages/client/dist/client
 ```
 
 Validation rejects disagreement among the tag argument, workspace, inherited packages, lockfile,
 browser record and leading curated changelog entry. When the tag already exists locally, it must
-resolve to HEAD, the version records and notes must be tracked, and tracked files must be clean. Fetching tags is a prerequisite: the validator
-performs no network operation and cannot detect tags that are absent from the checkout.
+resolve to HEAD, the version records and notes must be tracked, and tracked files must be clean.
+Fetching tags is a prerequisite: the validator performs no network operation and cannot detect tags
+that are absent from the checkout.
 
 Review the four changed files, commit them, and open a release PR. The maintainer reviews the
 chosen version, notes and known limitations, and waits for the PR's checks before merging it.

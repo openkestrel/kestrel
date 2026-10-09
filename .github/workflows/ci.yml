@@ -30,6 +30,7 @@ jobs:
       arm64: ${{ steps.detect.outputs.arm64 }}
       compose: ${{ steps.detect.outputs.compose }}
       client: ${{ steps.detect.outputs.client }}
+      release: ${{ steps.detect.outputs.release }}
       tree: ${{ steps.tree.outputs.sha }}
       reused: ${{ steps.earlier.outputs.run != '' }}
     steps:
@@ -70,7 +71,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -n "${EARLIER}" ]]; then
-            for area in rust images arm64 compose client client-image; do
+            for area in rust images arm64 compose client client-image release; do
               echo "${area}=false" >> "$GITHUB_OUTPUT"
             done
           elif [[ -n "${BASE}" && -n "${HEAD}" ]]; then
@@ -78,6 +79,23 @@ jobs:
           else
             .github/scripts/changed-areas.sh < /dev/null
           fi
+
+  release-version:
+    name: release-version
+    needs: changes
+    if: needs.changes.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v4
+        with:
+          install_args: python
+
+      - name: Test preparation and version refusals
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+        run: mise exec -- python3 -m unittest discover -s scripts/tests -p test_release.py
 
   workspace:
     name: workspace (rust)
@@ -440,6 +458,7 @@ jobs:
     name: gate
     needs:
       - changes
+      - release-version
       - workspace
       - build-env
       - build-control-plane

@@ -36,7 +36,10 @@ def workspace(root):
     for path in [root / "package.json", *root.glob("packages/*/package.json")]:
         package = json.loads(path.read_text())
         if package.get("private") and "version" in package:
-            raise ValueError(f"{path.relative_to(root)} must not independently version a private npm package")
+            raise ValueError(
+                f"{path.relative_to(root)} must not independently version "
+                "a private npm package"
+            )
     return manifest["workspace"]["package"]["version"], packages
 
 
@@ -75,16 +78,38 @@ def validate(root, tag, browser_build=None):
         raise ValueError("changelog must lead with exactly one entry for the candidate")
     notes = re.split(r"^## \[[^\]]+\].*\n", changelog, flags=re.M)[1]
     notes_valid(notes)
-    existing = subprocess.run(["git", "-C", root, "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}"], capture_output=True, text=True)
+    existing = subprocess.run(
+        ["git", "-C", root, "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}"],
+        capture_output=True,
+        text=True,
+    )
     if existing.returncode == 0:
-        reviewed = ["Cargo.toml", "Cargo.lock", "packages/client/public/version.json", "CHANGELOG.md"]
-        tracked = subprocess.run(["git", "-C", root, "ls-files", "--error-unmatch", "--", *reviewed], capture_output=True)
+        reviewed = [
+            "Cargo.toml",
+            "Cargo.lock",
+            "packages/client/public/version.json",
+            "CHANGELOG.md",
+        ]
+        tracked = subprocess.run(
+            ["git", "-C", root, "ls-files", "--error-unmatch", "--", *reviewed],
+            capture_output=True,
+        )
         if tracked.returncode != 0:
-            raise ValueError("version records and notes must belong to the reviewed release commit")
-        head = subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"], text=True).strip()
-        dirty = subprocess.check_output(["git", "-C", root, "status", "--porcelain", "--untracked-files=no"], text=True)
+            raise ValueError(
+                "version records and notes must belong to the reviewed release commit"
+            )
+        head = subprocess.check_output(
+            ["git", "-C", root, "rev-parse", "HEAD"], text=True
+        ).strip()
+        dirty = subprocess.check_output(
+            ["git", "-C", root, "status", "--porcelain", "--untracked-files=no"],
+            text=True,
+        )
         if existing.stdout.strip() != head or dirty:
-            raise ValueError("existing version tag refers to different content; prepare a patch candidate")
+            raise ValueError(
+                "existing version tag refers to different content; "
+                "prepare a patch candidate"
+            )
     return version
 
 
@@ -92,38 +117,61 @@ def prepare(root, version, notes_path):
     candidate(version)
     current, packages = workspace(root)
     check_lock(root, packages, current)
-    existing = subprocess.run(["git", "-C", root, "show-ref", "--verify", f"refs/tags/v{version}"], capture_output=True)
+    existing = subprocess.run(
+        ["git", "-C", root, "show-ref", "--verify", f"refs/tags/v{version}"],
+        capture_output=True,
+    )
     if existing.returncode == 0:
         raise ValueError("version tag already exists; choose a new patch candidate")
     notes = notes_path.read_text().strip() + "\n"
     notes_valid(notes)
     changelog_path = root / "CHANGELOG.md"
-    changelog = changelog_path.read_text() if changelog_path.exists() else "# Changelog\n"
+    changelog = (
+        changelog_path.read_text() if changelog_path.exists() else "# Changelog\n"
+    )
     if re.search(rf"^## \[{re.escape(version)}\]", changelog, re.M):
-        raise ValueError("version already has reviewed notes; choose a new patch candidate")
+        raise ValueError(
+            "version already has reviewed notes; choose a new patch candidate"
+        )
     manifest_path = root / "Cargo.toml"
     manifest = manifest_path.read_text()
-    manifest = re.sub(r'(\[workspace.package\]\s*\n(?:[^\[]*?))(^version\s*=\s*)"[^"]+"', lambda m: m[1] + m[2] + json.dumps(version), manifest, count=1, flags=re.M)
+    manifest = re.sub(
+        r'(\[workspace.package\]\s*\n(?:[^\[]*?))(^version\s*=\s*)"[^"]+"',
+        lambda m: m[1] + m[2] + json.dumps(version),
+        manifest,
+        count=1,
+        flags=re.M,
+    )
     lock_path = root / "Cargo.lock"
     blocks = lock_path.read_text().split("[[package]]")
     for i, block in enumerate(blocks[1:], 1):
         package = tomllib.loads(block)
         if package["name"] in packages and "source" not in package:
-            blocks[i] = re.sub(r'^version = "[^"]+"', f'version = "{version}"', block, count=1, flags=re.M)
+            blocks[i] = re.sub(
+                r'^version = "[^"]+"',
+                f'version = "{version}"',
+                block,
+                count=1,
+                flags=re.M,
+            )
     manifest_path.write_text(manifest)
     lock_path.write_text("[[package]]".join(blocks))
     browser = root / "packages/client/public/version.json"
     browser.parent.mkdir(parents=True, exist_ok=True)
     browser.write_text(f'{{ "version": "{version}" }}\n')
     header, _, history = changelog.partition("\n")
-    changelog_path.write_text(f"{header}\n\n## [{version}]\n\n{notes}\n{history.lstrip()}")
+    changelog_path.write_text(
+        f"{header}\n\n## [{version}]\n\n{notes}\n{history.lstrip()}"
+    )
     validate(root, f"v{version}")
     return version
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument(
+        "--root", type=Path, default=Path(__file__).resolve().parents[1]
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     prep = commands.add_parser("prepare")
     prep.add_argument("version")
@@ -133,7 +181,11 @@ def main():
     check.add_argument("--browser-build", type=Path)
     args = parser.parse_args()
     try:
-        version = prepare(args.root, args.version, args.notes) if args.command == "prepare" else validate(args.root, args.tag, args.browser_build)
+        version = (
+            prepare(args.root, args.version, args.notes)
+            if args.command == "prepare"
+            else validate(args.root, args.tag, args.browser_build)
+        )
     except (ValueError, OSError, KeyError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"release: {error}\n")
     print(json.dumps({"version": version, "tag": f"v{version}"}))
