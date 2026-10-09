@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Diagnosis, Refusal } from "#/components/refusal";
 import { Skeleton } from "#/components/ui/skeleton";
+import { QueuedSessions } from "#/components/workbench/queue-read";
 import { ago } from "#/operator/format";
 import { workspaceSessionsQuery } from "#/operator/queries";
 import { sessionPhase } from "#/operator/session-state";
@@ -13,22 +14,33 @@ export function SessionsTab({
 	organization: string;
 	workspace: string;
 }) {
+	return (
+		<div className="grid gap-3 p-4 text-sm">
+			<QueuedSessions organization={organization} />
+			<WorkspaceSessions organization={organization} workspace={workspace} />
+		</div>
+	);
+}
+
+function WorkspaceSessions({
+	organization,
+	workspace,
+}: {
+	organization: string;
+	workspace: string;
+}) {
 	const sessions = useQuery(workspaceSessionsQuery(organization, workspace));
 
-	if (sessions.isPending) return <Skeleton className="m-4 h-8" />;
+	if (sessions.isPending) return <Skeleton className="h-8" />;
 	if (sessions.isError) {
-		return (
-			<div className="p-4">
-				<Refusal error={sessions.error} retry={() => void sessions.refetch()} />
-			</div>
-		);
+		return <Refusal error={sessions.error} retry={() => void sessions.refetch()} />;
 	}
 	if (sessions.data.length === 0) {
-		return <p className="p-4 text-muted-foreground text-sm">This Workspace has no Session.</p>;
+		return <p className="text-muted-foreground">This Workspace has no Session.</p>;
 	}
 
 	return (
-		<div className="grid gap-3 p-4 text-sm">
+		<div className="grid gap-3">
 			{sessions.data.toReversed().map((session) => {
 				const outcome = sessionOutcome(session);
 				const options = optionSummary(session);

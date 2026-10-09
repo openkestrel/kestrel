@@ -117,7 +117,16 @@ export function transport(
 			if (after !== undefined) headers.set("Last-Event-ID", after);
 			const response = await answered(path, { method: "GET", headers, signal });
 			if (!response.body) return;
-			yield* parsed(response.body);
+			try {
+				yield* parsed(response.body);
+			} catch (error) {
+				if (signal?.aborted) throw error;
+				throw new Unreachable(
+					origin ?? location.origin,
+					{ operation: `GET ${path}`, read: true },
+					error,
+				);
+			}
 		},
 	};
 }

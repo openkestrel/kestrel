@@ -81,9 +81,12 @@ function StepView({ step, retry, correct }: { step: Step } & Repairs) {
 	switch (step.kind) {
 		case "link":
 			return (
-				<Link to={step.link.to} params={"params" in step.link ? step.link.params : {}}>
-					{step.label}
-				</Link>
+				<>
+					<Link to={step.link.to} params={"params" in step.link ? step.link.params : {}}>
+						{step.label}
+					</Link>
+					{step.command && <Command command={step.command} />}
+				</>
 			);
 		case "reread":
 			return <Reread step={step} retry={retry} />;
@@ -97,10 +100,13 @@ function StepView({ step, retry, correct }: { step: Step } & Repairs) {
 			);
 		case "guidance":
 			return (
-				<p>
-					{step.label}
-					{step.detail && <span className="block">{step.detail}</span>}
-				</p>
+				<>
+					<p>
+						{step.label}
+						{step.detail && <span className="block">{step.detail}</span>}
+					</p>
+					{step.command && <Command command={step.command} />}
+				</>
 			);
 		case "write":
 			return <WriteStep step={step} />;
@@ -109,6 +115,38 @@ function StepView({ step, retry, correct }: { step: Step } & Repairs) {
 			throw new Error(`no such step: ${JSON.stringify(unhandled)}`);
 		}
 	}
+}
+
+function Command({ command }: { command: string }) {
+	const [copied, setCopied] = useState<boolean>();
+
+	async function copy() {
+		try {
+			await navigator.clipboard.writeText(command);
+			setCopied(true);
+		} catch {
+			setCopied(false);
+		}
+	}
+
+	return (
+		<div className="flex flex-wrap items-center gap-2">
+			<code className="break-all bg-muted px-1 py-0.5 font-mono text-foreground">{command}</code>
+			<Button
+				size="xs"
+				type="button"
+				variant="outline"
+				aria-label={`Copy the command ${command}`}
+				onClick={() => void copy()}
+			>
+				Copy
+			</Button>
+			<output>
+				{copied === true && "Copied."}
+				{copied === false && "The browser refused the clipboard; select the command to copy it."}
+			</output>
+		</div>
+	);
 }
 
 function Reread({

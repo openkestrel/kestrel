@@ -687,8 +687,11 @@ test("a failed Session's read shows why it failed and how to repair it, as no re
 	await expect(why.locator('[data-step="sign_in"]')).toHaveText(
 		"Sign in to the claude harness with claude-login",
 	);
-	await expect(why.locator('[data-step="inspect_resource"]')).toHaveText(
-		`Inspect the Session s-1 in ${ORGANIZATION}`,
+	const inspection = why.locator('[data-step="inspect_resource"]');
+	await expect(inspection.getByText(`Inspect the Session s-1 in ${ORGANIZATION}`)).toBeVisible();
+	await expect(inspection.getByRole("code")).toHaveText(
+		/^kestrel session show s-1 --organization acme --control-plane /,
 	);
+	await expect(inspection.getByRole("button", { name: /^Copy the command/ })).toBeVisible();
 	await expect(work.getByRole("alert")).toHaveCount(0);
 });

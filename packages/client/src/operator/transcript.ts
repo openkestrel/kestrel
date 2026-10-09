@@ -17,7 +17,15 @@ export type Delivered = {
 	entry: Entry;
 };
 
+// `retrying` is whether the follow tries again by itself; a refusal waits for the person.
+export type Connection =
+	| { state: "connecting" }
+	| { state: "live" }
+	| { state: "reconnecting"; failure: unknown }
+	| { state: "unavailable"; failure: unknown; retrying: boolean };
+
 export type TranscriptSnapshot = {
+	connection: Connection;
 	entries: Delivered[];
 	activities: Activity[];
 	sessionState: TranscriptSessionState | undefined;
@@ -41,6 +49,8 @@ export class TranscriptMirror {
 	private cursorValue: string | undefined;
 	private presenceValue: Presence | undefined;
 	private sealedValue = false;
+	private connectionValue: Connection = { state: "connecting" };
+	private wasLive = false;
 	private readonly listeners = new Set<() => void>();
 	private cached: TranscriptSnapshot = this.snapshotOf();
 
@@ -88,14 +98,43 @@ export class TranscriptMirror {
 				break;
 			}
 			case "follower":
+				this.connect({ state: "live" });
 				break;
 			case "end": {
 				const end = parsed<{ because?: string }>(event.data);
-				if (end?.because === "sealed") this.sealedValue = true;
-				this.changed();
+				if (end?.because === "sealed") {
+					this.sealedValue = true;
+					this.connect({ state: "live" });
+				} else this.changed();
 				break;
 			}
 		}
+	}
+
+	get live(): boolean {
+		return this.connectionValue.state === "live";
+	}
+
+	// Entries already shown stay through a drop; only the connection changes.
+	dropped(failure: unknown): void {
+		if (this.wasLive) this.connect({ state: "reconnecting", failure });
+		else if (failure !== undefined) this.connect({ state: "unavailable", failure, retrying: true });
+	}
+
+	refused(failure: unknown): void {
+		this.connect({ state: "unavailable", failure, retrying: false });
+	}
+
+	reconnecting(): void {
+		this.connect(
+			this.wasLive ? { state: "reconnecting", failure: undefined } : { state: "connecting" },
+		);
+	}
+
+	private connect(connection: Connection): void {
+		if (connection.state === "live") this.wasLive = true;
+		this.connectionValue = connection;
+		this.changed();
 	}
 
 	private entry(recorded: Recorded, cursor: string | undefined): void {
@@ -150,6 +189,7 @@ export class TranscriptMirror {
 
 	private snapshotOf(): TranscriptSnapshot {
 		return {
+			connection: this.connectionValue,
 			entries: [...this.entries],
 			activities: [...this.activities],
 			sessionState: this.sessionStateValue,
@@ -185,38 +225,71 @@ export class FollowSession {
 	private controller: AbortController | null = null;
 	private renewal: ReturnType<typeof setTimeout> | undefined;
 	private stopped = false;
+	private following = false;
+	private wake: (() => void) | undefined;
 
 	constructor(private readonly options: FollowOptions) {}
 
 	start(): void {
-		void this.loop();
+		this.following = true;
+		void this.loop().finally(() => {
+			this.following = false;
+		});
 	}
 
 	stop(): void {
 		this.stopped = true;
 		this.controller?.abort();
+		this.wake?.();
 		clearTimeout(this.renewal);
 	}
 
+	// Cuts a backoff short, or follows again after a refusal stopped the follow.
+	retry(): void {
+		if (this.stopped) return;
+		this.options.mirror.reconnecting();
+		if (!this.following) this.start();
+		else this.wake?.();
+	}
+
 	private async loop(): Promise<void> {
+		const { mirror } = this.options;
 		let backoff = RETRY;
 		while (!this.stopped) {
 			const controller = new AbortController();
 			this.controller = controller;
+			let failure: unknown;
 			try {
 				// oxlint-disable-next-line no-await-in-loop -- a reconnect waits for this attempt before deciding to make the next.
 				await this.consume(controller.signal);
 			} catch (error) {
 				// oxlint-disable-next-line typescript/no-unnecessary-condition -- stop() can set stopped while consume() awaits; TS narrowed it false for the loop.
 				if (this.stopped) return;
-				if (error instanceof Refused && error.status < 500) return;
+				if (error instanceof Refused && error.status < 500) {
+					mirror.refused(error);
+					return;
+				}
+				failure = error;
 			}
 			// oxlint-disable-next-line typescript/no-unnecessary-condition -- stop() can set stopped while consume() awaits; TS narrowed it false for the loop.
-			if (this.stopped || this.options.mirror.sealed) return;
+			if (this.stopped || mirror.sealed) return;
+			if (mirror.live) backoff = RETRY;
+			mirror.dropped(failure);
 			// oxlint-disable-next-line no-await-in-loop -- the backoff must grow between attempts.
-			await sleep(backoff);
+			await this.sleep(backoff);
 			backoff = Math.min(backoff * 2, RETRY_CAP);
 		}
+	}
+
+	private sleep(milliseconds: number): Promise<void> {
+		return new Promise((resolve) => {
+			const timer = setTimeout(resolve, milliseconds);
+			this.wake = () => {
+				clearTimeout(timer);
+				this.wake = undefined;
+				resolve();
+			};
+		});
 	}
 
 	private async consume(signal: AbortSignal): Promise<void> {
@@ -326,8 +399,4 @@ export function delivered(recorded: Recorded): Delivered {
 		appendedAt: recorded.appended_at,
 		entry: recorded.entry,
 	};
-}
-
-function sleep(milliseconds: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

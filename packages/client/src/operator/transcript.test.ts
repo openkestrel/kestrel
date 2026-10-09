@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { cursorSeq, FollowSession, readRange, TranscriptMirror } from "./transcript";
-import { transport, type StreamEvent } from "./transport";
+import { diagnosisOf, transport, type StreamEvent } from "./transport";
 
 const encoder = new TextEncoder();
 
@@ -298,5 +298,164 @@ describe("a follow", () => {
 		expect(leases[0]).toBe(
 			"/operator/organizations/acme/workspaces/brave-otter/followers/6b1a1f2c-0000-0000-0000-000000000000/lease",
 		);
+	});
+});
+
+const follower = eventOf({
+	event: "follower",
+	id: undefined,
+	data: '{"id":"6b1a1f2c-0000-0000-0000-000000000000","lease_seconds":60}',
+});
+
+function following(operator: ReturnType<typeof transport>, mirror = new TranscriptMirror()) {
+	const session = new FollowSession({
+		operations: operator,
+		organization: "acme",
+		workspace: "brave-otter",
+		participant: "operator",
+		mirror,
+	});
+	const states: string[] = [];
+	mirror.subscribe(() => {
+		const state = mirror.snapshot().connection.state;
+		if (states.at(-1) !== state) states.push(state);
+	});
+	return { session, mirror, states };
+}
+
+// A follow the server keeps open, as it does once caught up.
+function held(...chunks: string[]) {
+	return new ReadableStream<Uint8Array>({
+		start(controller) {
+			for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+		},
+	});
+}
+
+describe("a follow's connection", () => {
+	it("is connecting until the backlog is replayed, and live once the follower registers", () => {
+		const mirror = new TranscriptMirror();
+
+		expect(mirror.snapshot().connection).toEqual({ state: "connecting" });
+
+		mirror.apply({ event: "session_state", id: undefined, data: '{"tools":[]}' });
+		mirror.apply(delivered(1));
+
+		expect(mirror.snapshot().connection).toEqual({ state: "connecting" });
+
+		mirror.apply({ event: "follower", id: undefined, data: '{"id":"x","lease_seconds":60}' });
+
+		expect(mirror.snapshot().connection).toEqual({ state: "live" });
+	});
+
+	it("reads unavailable, not empty, when the stream cannot be reached at all", async () => {
+		const { session, mirror } = following(
+			transport(async () => {
+				throw new TypeError("Failed to fetch");
+			}, "http://localhost"),
+		);
+
+		session.start();
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("unavailable"));
+		session.stop();
+
+		const connection = mirror.snapshot().connection;
+		expect(connection.state === "unavailable" && diagnosisOf(connection.failure).kind).toBe(
+			"connection_failed",
+		);
+		expect(connection.state === "unavailable" && connection.retrying).toBe(true);
+		expect(mirror.snapshot().entries).toEqual([]);
+	});
+
+	it("keeps its entries while reconnecting, and resumes without duplicates", async () => {
+		let transcripts = 0;
+		let cut: ReadableStreamDefaultController<Uint8Array> | undefined;
+		const { session, mirror, states } = following(
+			transport(async () => {
+				transcripts += 1;
+				if (transcripts === 1) {
+					return new Response(
+						new ReadableStream<Uint8Array>({
+							start(controller) {
+								cut = controller;
+								controller.enqueue(encoder.encode(eventOf(delivered(1)) + follower));
+							},
+						}),
+						{ status: 200, headers: { "content-type": "text/event-stream" } },
+					);
+				}
+				if (transcripts === 2) throw new TypeError("Failed to fetch");
+				return new Response(held(eventOf(delivered(1)), eventOf(delivered(2)), follower), {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				});
+			}, "http://localhost"),
+		);
+
+		session.start();
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("live"));
+		cut?.error(new TypeError("network error"));
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("reconnecting"));
+
+		expect(mirror.snapshot().entries.map((entry) => entry.seq)).toEqual([1]);
+
+		await vi.waitFor(() => expect(transcripts).toBe(3));
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("live"));
+		session.stop();
+
+		expect(states).toEqual(["connecting", "live", "reconnecting", "live"]);
+		expect(mirror.snapshot().entries.map((entry) => entry.seq)).toEqual([1, 2]);
+	});
+
+	it("stops at a refusal as unavailable, and follows again when retried", async () => {
+		let transcripts = 0;
+		const { session, mirror } = following(
+			transport(async () => {
+				transcripts += 1;
+				if (transcripts === 1) return json(404, { message: "no Workspace is named brave-otter" });
+				return new Response(held(eventOf(delivered(1)), follower), {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				});
+			}),
+		);
+
+		session.start();
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("unavailable"));
+
+		const refused = mirror.snapshot().connection;
+		expect(refused.state === "unavailable" && refused.retrying).toBe(false);
+		expect(refused.state === "unavailable" && diagnosisOf(refused.failure).message).toBe(
+			"no Workspace is named brave-otter",
+		);
+
+		session.retry();
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("live"));
+		session.stop();
+
+		expect(transcripts).toBe(2);
+	});
+
+	it("reconnects at once when retried during its backoff", async () => {
+		let transcripts = 0;
+		const { session, mirror } = following(
+			transport(async () => {
+				transcripts += 1;
+				if (transcripts < 4) throw new TypeError("Failed to fetch");
+				return new Response(held(eventOf(delivered(1)), follower), {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				});
+			}, "http://localhost"),
+		);
+
+		session.start();
+		await vi.waitFor(() => expect(transcripts).toBe(3), { timeout: 2_000 });
+		const before = Date.now();
+		session.retry();
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("live"));
+		session.stop();
+
+		expect(Date.now() - before).toBeLessThan(500);
 	});
 });

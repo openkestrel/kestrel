@@ -51,4 +51,25 @@ describe("an Organization's change notices", () => {
 			["organizations"],
 		]);
 	});
+
+	it("refetch on a reconnect instead of resuming a notice sequence", async () => {
+		const client = new QueryClient();
+		const seen: RequestInit[] = [];
+		const operations = transport(async (_url, init = {}) => {
+			seen.push(init);
+			return events(
+				"id: 7\nevent: open\ndata: {}\n\n",
+				'id: 8\nevent: change\ndata: {"resource":"queue"}\n\n',
+			);
+		});
+		const controller = new AbortController();
+
+		void followChanges(operations, client, "acme", controller.signal);
+		await vi.waitFor(() => expect(seen.length).toBeGreaterThanOrEqual(2));
+		controller.abort();
+
+		expect(seen.map((init) => new Headers(init.headers).get("last-event-id"))).toEqual(
+			seen.map(() => null),
+		);
+	});
 });

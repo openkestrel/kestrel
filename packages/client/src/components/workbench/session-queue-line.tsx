@@ -1,6 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
-import { queueQuery } from "#/operator/queries";
+import { Button } from "#/components/ui/button";
+import { useQueueRead } from "#/components/workbench/queue-read";
 import { sessionQueueLine } from "#/operator/queue-line";
+import { knownQueue } from "#/operator/queue-read";
+import { diagnosisOf } from "#/operator/transport";
 
 export function SessionQueueLine({
 	organization,
@@ -9,16 +11,32 @@ export function SessionQueueLine({
 	organization: string;
 	workspace: string;
 }) {
-	const queue = useQuery(queueQuery(organization));
-	const line = queue.data ? sessionQueueLine(queue.data, workspace) : undefined;
-	if (!line) return null;
+	const { read, retry } = useQueueRead(organization);
+	const queue = knownQueue(read);
+	const line = queue ? sessionQueueLine(queue, workspace) : undefined;
+	const failure =
+		read.kind === "failed"
+			? `The queue could not be read: ${diagnosisOf(read.error).message}`
+			: undefined;
+	const delayed = read.kind === "reading" && read.delayed;
+	if (!line && !failure && !delayed) return null;
 
 	return (
-		<output
+		<div
 			data-queue-line
-			className="block shrink-0 border-b px-4 py-2 text-muted-foreground text-xs"
+			data-queue-read={read.kind === "failed" ? "failed" : undefined}
+			className="flex shrink-0 flex-wrap items-center gap-x-2 border-b px-4 py-2 text-muted-foreground text-xs"
 		>
-			{line}
-		</output>
+			<output>
+				{delayed && "Still reading the queue; the Operator has not answered yet."}
+				{line}
+				{failure && <span className="block text-destructive">{failure}</span>}
+			</output>
+			{read.kind === "failed" && (
+				<Button size="xs" type="button" variant="outline" disabled={read.retrying} onClick={retry}>
+					{read.retrying ? "Reading the queue again…" : "Read the queue again"}
+				</Button>
+			)}
+		</div>
 	);
 }

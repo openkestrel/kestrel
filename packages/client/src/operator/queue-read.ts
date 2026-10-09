@@ -37,3 +37,8 @@ export function queuedSessions(queue: Queue): QueuedSession[] {
 		reasons: reasonsText(row.reasons),
 	}));
 }
+
+export function knownQueue(read: QueueRead): Queue | undefined {
+	if (read.kind === "read") return read.queue;
+	return read.kind === "failed" ? read.known : undefined;
+}
