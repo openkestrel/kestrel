@@ -177,6 +177,23 @@ fn prepare(alongside: &Path) -> BTreeMap<String, Artifact> {
         serde_json::to_vec(&artifacts).expect("helper metadata should serialize"),
     )
     .unwrap_or_else(|error| panic!("{} could not write: {error}", stamp.display()));
+    for entry in fs::read_dir(alongside)
+        .unwrap_or_else(|error| panic!("{} could not read: {error}", alongside.display()))
+    {
+        let entry = entry.unwrap_or_else(|error| {
+            panic!("{} could not read entry: {error}", alongside.display())
+        });
+        let path = entry.path();
+        let name = entry.file_name();
+        if path != stamp
+            && name.to_str().is_some_and(|name| {
+                name.starts_with(".kestrel-helpers-") && name.ends_with(".stamp")
+            })
+        {
+            fs::remove_file(&path)
+                .unwrap_or_else(|error| panic!("{} could not remove: {error}", path.display()));
+        }
+    }
     artifacts
 }
 
@@ -213,8 +230,7 @@ fn invocation() -> String {
         );
         return format!("nextest:{run}");
     }
-    #[allow(unsafe_code)]
-    let parent = unsafe { libc::getppid() };
+    let parent = std::os::unix::process::parent_id();
     let started = Command::new("ps")
         .args(["-p", &parent.to_string(), "-o", "lstart="])
         .output()

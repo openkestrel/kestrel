@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+shopt -s nullglob
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$root"
@@ -45,6 +46,11 @@ prepared_once() {
   if [[ "$count" != 1 ]]; then
     cat "$output"
     echo "Expected one helper preparation, found $count" >&2
+    return 1
+  fi
+  local stamps=("$directory"/.kestrel-helpers-*.stamp)
+  if [[ "${#stamps[@]}" != 1 ]]; then
+    echo "Expected one helper preparation stamp, found ${#stamps[@]}" >&2
     return 1
   fi
 }
