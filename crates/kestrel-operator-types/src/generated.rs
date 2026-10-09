@@ -1598,7 +1598,10 @@ impl<'de> Deserialize<'de> for QueueReason {
         ) -> bool {
             match (encoded, input) {
                 (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
-                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                    (encoded_keys_may_be_extra
+                        || encoded.iter().all(|(key, value)| {
+                            input.contains_key(key) || (nulls_may_be_absent && value.is_null())
+                        }))
                         && input.iter().all(|(key, value)| match encoded.get(key) {
                             Some(encoded_value) => preserves_complete_json_input(
                                 encoded_value,
@@ -3000,7 +3003,10 @@ impl<'de> Deserialize<'de> for Fired {
         ) -> bool {
             match (encoded, input) {
                 (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
-                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                    (encoded_keys_may_be_extra
+                        || encoded.iter().all(|(key, value)| {
+                            input.contains_key(key) || (nulls_may_be_absent && value.is_null())
+                        }))
                         && input.iter().all(|(key, value)| match encoded.get(key) {
                             Some(encoded_value) => preserves_complete_json_input(
                                 encoded_value,
@@ -7157,7 +7163,10 @@ impl<'de> Deserialize<'de> for DiagnosedRefusal {
         ) -> bool {
             match (encoded, input) {
                 (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
-                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                    (encoded_keys_may_be_extra
+                        || encoded.iter().all(|(key, value)| {
+                            input.contains_key(key) || (nulls_may_be_absent && value.is_null())
+                        }))
                         && input.iter().all(|(key, value)| match encoded.get(key) {
                             Some(encoded_value) => preserves_complete_json_input(
                                 encoded_value,
@@ -7333,7 +7342,10 @@ impl<'de> Deserialize<'de> for Diagnostic {
         ) -> bool {
             match (encoded, input) {
                 (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
-                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                    (encoded_keys_may_be_extra
+                        || encoded.iter().all(|(key, value)| {
+                            input.contains_key(key) || (nulls_may_be_absent && value.is_null())
+                        }))
                         && input.iter().all(|(key, value)| match encoded.get(key) {
                             Some(encoded_value) => preserves_complete_json_input(
                                 encoded_value,
@@ -9063,7 +9075,10 @@ impl<'de> Deserialize<'de> for Change {
         ) -> bool {
             match (encoded, input) {
                 (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
-                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                    (encoded_keys_may_be_extra
+                        || encoded.iter().all(|(key, value)| {
+                            input.contains_key(key) || (nulls_may_be_absent && value.is_null())
+                        }))
                         && input.iter().all(|(key, value)| match encoded.get(key) {
                             Some(encoded_value) => preserves_complete_json_input(
                                 encoded_value,
@@ -9271,7 +9286,10 @@ impl<'de> Deserialize<'de> for BriefSource {
         ) -> bool {
             match (encoded, input) {
                 (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
-                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                    (encoded_keys_may_be_extra
+                        || encoded.iter().all(|(key, value)| {
+                            input.contains_key(key) || (nulls_may_be_absent && value.is_null())
+                        }))
                         && input.iter().all(|(key, value)| match encoded.get(key) {
                             Some(encoded_value) => preserves_complete_json_input(
                                 encoded_value,
@@ -9805,7 +9823,10 @@ impl<'de> Deserialize<'de> for Action {
         ) -> bool {
             match (encoded, input) {
                 (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
-                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                    (encoded_keys_may_be_extra
+                        || encoded.iter().all(|(key, value)| {
+                            input.contains_key(key) || (nulls_may_be_absent && value.is_null())
+                        }))
                         && input.iter().all(|(key, value)| match encoded.get(key) {
                             Some(encoded_value) => preserves_complete_json_input(
                                 encoded_value,
