@@ -438,12 +438,11 @@ async fn living(
         .map(OsString::from)
         .or_else(|| config.environment().get("PATH").map(OsString::from))
         .or_else(|| std::env::var_os("PATH"));
-    let command = match evidence::executable(config.command(), path) {
-        Ok(command) => command,
-        Err(error) => return Ok(Ended::Over(Failure::unspawnable(config.command(), &error))),
-    };
+    if let Err(error) = evidence::executable(config.command(), path) {
+        return Ok(Ended::Over(Failure::unspawnable(config.command(), &error)));
+    }
     let clean = clean
-        .arg(command.to_string_lossy().into_owned())
+        .arg(config.command().to_string_lossy().into_owned())
         .args(config.arguments().iter().cloned())
         .envs(config.environment().clone())
         .envs(provider.clone());
