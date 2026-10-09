@@ -166,7 +166,11 @@ fn prepare(alongside: &Path) -> BTreeMap<String, Artifact> {
     eprint!("{}", String::from_utf8_lossy(&built.stderr));
     let artifacts: BTreeMap<_, _> = HELPERS
         .into_iter()
-        .map(|(_, binary)| (binary.to_owned(), Artifact::at(&alongside.join(binary))))
+        .map(|(_, binary)| {
+            let artifact = alongside.join(binary);
+            detach_from_cargo_cache(&artifact);
+            (binary.to_owned(), Artifact::at(&artifact))
+        })
         .collect();
     fs::write(
         &stamp,
@@ -174,6 +178,31 @@ fn prepare(alongside: &Path) -> BTreeMap<String, Artifact> {
     )
     .unwrap_or_else(|error| panic!("{} could not write: {error}", stamp.display()));
     artifacts
+}
+
+fn detach_from_cargo_cache(artifact: &Path) {
+    let metadata = fs::metadata(artifact).unwrap_or_else(|error| {
+        panic!(
+            "executable helper is missing: {}: {error}",
+            artifact.display()
+        )
+    });
+    if metadata.nlink() <= 1 {
+        return;
+    }
+    let detached = artifact.with_extension("kestrel-helper");
+    fs::copy(artifact, &detached).unwrap_or_else(|error| {
+        panic!(
+            "executable helper {} could not detach from Cargo's cache: {error}",
+            artifact.display()
+        )
+    });
+    fs::rename(&detached, artifact).unwrap_or_else(|error| {
+        panic!(
+            "executable helper {} could not publish: {error}",
+            artifact.display()
+        )
+    });
 }
 
 fn invocation() -> String {
