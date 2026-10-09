@@ -27,6 +27,7 @@ pub mod provider;
 pub mod pull_request;
 pub mod readiness;
 pub mod reference;
+pub mod repository;
 pub mod role;
 pub mod scheduling;
 pub mod shutdown;
