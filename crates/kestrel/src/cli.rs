@@ -98,8 +98,7 @@ pub struct Cli {
         env = "KESTREL_HARNESS_COMMANDS",
         global = true,
         value_name = "NAME=COMMAND",
-        value_delimiter = ',',
-        default_value = "opencode=opencode acp --print-logs,claude=claude-agent-acp,codex=codex-acp"
+        value_delimiter = ','
     )]
     harnesses: Vec<HarnessCommand>,
 
@@ -236,7 +235,17 @@ impl Cli {
                     Driver::LocalExec(LocalExec::running(self.supervisor()?))
                 }
             },
-            harnesses: self.harnesses.clone(),
+            harnesses: if self.harnesses.is_empty() {
+                crate::catalogue::harnesses()
+                    .iter()
+                    .map(|harness| HarnessCommand {
+                        name: harness.name.clone(),
+                        command: harness.command.clone(),
+                    })
+                    .collect()
+            } else {
+                self.harnesses.clone()
+            },
             auth: self.agent_auth.clone(),
             max_active_sessions: self.max_active_sessions,
             serialized: self

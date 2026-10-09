@@ -1,0 +1,79 @@
+[
+  {
+    "name": "opencode",
+    "command": "opencode acp --print-logs",
+    "sign_in_methods": [
+      {
+        "id": "opencode-go-zen",
+        "name": "OpenCode Go or Zen",
+        "kind": "subscription",
+        "ownership": "operator",
+        "fills": { "kind": "variable", "variable": "OPENCODE_API_KEY" },
+        "input": "token",
+        "console_url": "https://opencode.ai/auth"
+      },
+      {
+        "id": "anthropic-api-key",
+        "name": "Anthropic API key",
+        "kind": "key",
+        "ownership": "organization",
+        "fills": { "kind": "variable", "variable": "ANTHROPIC_API_KEY" },
+        "input": "token"
+      },
+      {
+        "id": "openai-api-key",
+        "name": "OpenAI API key",
+        "kind": "key",
+        "ownership": "organization",
+        "fills": { "kind": "variable", "variable": "OPENAI_API_KEY" },
+        "input": "token"
+      }
+    ]
+  },
+  {
+    "name": "claude",
+    "command": "claude-agent-acp",
+    "sign_in_methods": [
+      {
+        "id": "claude-setup-token",
+        "name": "Claude subscription",
+        "kind": "subscription",
+        "ownership": "operator",
+        "fills": { "kind": "variable", "variable": "CLAUDE_CODE_OAUTH_TOKEN" },
+        "input": "token",
+        "relay": "claude-setup-token"
+      },
+      {
+        "id": "anthropic-api-key",
+        "name": "Anthropic API key",
+        "kind": "key",
+        "ownership": "organization",
+        "fills": { "kind": "variable", "variable": "ANTHROPIC_API_KEY" },
+        "input": "token"
+      }
+    ]
+  },
+  {
+    "name": "codex",
+    "command": "codex-acp",
+    "sign_in_methods": [
+      {
+        "id": "codex-device-auth",
+        "name": "Codex subscription",
+        "kind": "subscription",
+        "ownership": "operator",
+        "fills": { "kind": "file", "path": ".codex/auth.json" },
+        "input": "file",
+        "relay": "codex-device-auth"
+      },
+      {
+        "id": "openai-api-key",
+        "name": "OpenAI API key",
+        "kind": "key",
+        "ownership": "organization",
+        "fills": { "kind": "variable", "variable": "OPENAI_API_KEY" },
+        "input": "token"
+      }
+    ]
+  }
+]

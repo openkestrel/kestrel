@@ -1860,6 +1860,7 @@ dependencies = [
  "openapi-to-rust",
  "serde",
  "serde_json",
+ "url",
  "uuid",
 ]
 
@@ -3791,6 +3792,7 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
+ "serde_derive",
 ]
 
 [[package]]

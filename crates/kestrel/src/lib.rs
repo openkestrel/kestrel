@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod catalogue;
 pub mod cli;
 pub mod compute;
 pub mod cron;
