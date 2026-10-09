@@ -41,11 +41,15 @@ async fn an_organization() -> Kestrel {
 
 #[test]
 fn the_catalog_is_printed_without_reaching_a_control_plane() {
-    let finished = ran(&nowhere(), &["exit-codes", "--json", "code,name"]);
+    let finished = ran(&nowhere(), &["exit-codes", "--json"]);
 
     exited(&finished, SUCCESS);
     assert_eq!(
-        finished.records(),
+        finished
+            .records()
+            .iter()
+            .map(|entry| json!({ "code": entry["code"], "name": entry["name"] }))
+            .collect::<Vec<_>>(),
         [
             json!({ "code": 0, "name": "success" }),
             json!({ "code": 1, "name": "failure" }),
@@ -60,7 +64,7 @@ fn the_catalog_is_printed_without_reaching_a_control_plane() {
 
 #[test]
 fn every_entry_says_what_it_means_and_when_to_branch_on_it() {
-    let finished = ran(&nowhere(), &["exit-codes", "--json", "code,meaning,branch"]);
+    let finished = ran(&nowhere(), &["exit-codes", "--json"]);
 
     for entry in finished.records() {
         for field in ["meaning", "branch"] {
@@ -93,7 +97,7 @@ fn an_invalid_invocation_is_usage() {
         &["no-such-command"][..],
         &["organization", "list", "--no-such-flag"],
         &["organization", "list", "--organization", "acme"],
-        &["organization", "list", "--json", " , "],
+        &["organization", "list", "--json", "id,name"],
         &["--control-plane", "not a url", "organization", "list"],
         &["apply", "-f", "no-such-file.yaml"],
     ] {
@@ -222,7 +226,7 @@ async fn a_missing_project_names_the_setup_command_and_keeps_its_category() {
 async fn json_puts_the_typed_diagnostic_on_stderr_and_leaves_stdout_for_success() {
     let kestrel = an_organization().await;
     let mut args = OPEN_ABSENT.to_vec();
-    args.extend(["--json", "id"]);
+    args.push("--json");
 
     let finished = ran_by(&kestrel, &args, Invocation::default()).await;
 
@@ -460,7 +464,7 @@ fn a_control_plane_nothing_answers_for_is_unavailable() {
 #[test]
 fn an_unreachable_control_plane_is_a_typed_diagnostic_under_json() {
     let control_plane = nowhere();
-    let finished = ran(&control_plane, &["organization", "list", "--json", "name"]);
+    let finished = ran(&control_plane, &["organization", "list", "--json"]);
 
     exited(&finished, UNAVAILABLE);
     let diagnostic: Value =

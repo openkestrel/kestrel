@@ -5,10 +5,6 @@ use support::Kestrel;
 use support::client::{Finished, Invocation, ran_by};
 use support::fixture::Fixture;
 
-const RESOLVED: &str = "control_plane,control_plane_source,organization,organization_source,\
-                        projects,agents,triggers,workspaces,integrations,credentials,profiles,next";
-const UNRESOLVED: &str = "control_plane,organization,organization_source,organizations,next";
-
 fn names(records: &[Value]) -> Vec<&str> {
     records
         .iter()
@@ -53,14 +49,7 @@ async fn the_flag_names_the_scope_ahead_of_the_environment_and_a_binding() {
 
     let listed = ran_by(
         &kestrel,
-        &[
-            "project",
-            "list",
-            "--json",
-            "name",
-            "--organization",
-            "acme",
-        ],
+        &["project", "list", "--json", "--organization", "acme"],
         bound_to("globex").env("KESTREL_ORGANIZATION", "globex"),
     )
     .await;
@@ -75,7 +64,7 @@ async fn the_environment_names_the_scope_ahead_of_a_binding() {
 
     let listed = ran_by(
         &kestrel,
-        &["project", "list", "--json", "name"],
+        &["project", "list", "--json"],
         bound_to("acme").env("KESTREL_ORGANIZATION", "globex"),
     )
     .await;
@@ -88,12 +77,7 @@ async fn the_environment_names_the_scope_ahead_of_a_binding() {
 async fn a_committed_binding_names_the_scope_from_the_working_directory() {
     let kestrel = two_organizations().await;
 
-    let listed = ran_by(
-        &kestrel,
-        &["project", "list", "--json", "name"],
-        bound_to("acme"),
-    )
-    .await;
+    let listed = ran_by(&kestrel, &["project", "list", "--json"], bound_to("acme")).await;
 
     assert_eq!(names(&listed.records()), ["for-acme"]);
     kestrel.teardown().await;
@@ -105,7 +89,7 @@ async fn a_committed_binding_names_the_scope_from_anywhere_in_its_repository() {
 
     let listed = ran_by(
         &kestrel,
-        &["project", "list", "--json", "name"],
+        &["project", "list", "--json"],
         bound_to("acme")
             .file(".git/HEAD", "ref: refs/heads/main\n")
             .within("crates/kestrel"),
@@ -148,7 +132,7 @@ async fn the_only_organization_is_the_scope_when_nothing_names_one() {
 
     let listed = ran_by(
         &kestrel,
-        &["project", "list", "--json", "name"],
+        &["project", "list", "--json"],
         Invocation::default(),
     )
     .await;
@@ -252,7 +236,7 @@ async fn status_prints_every_resolved_value_its_source_what_exists_and_what_to_r
 
     let reported = ran_by(
         &kestrel,
-        &["status", "--organization", "acme", "--json", RESOLVED],
+        &["status", "--organization", "acme", "--json"],
         Invocation::default(),
     )
     .await
@@ -282,7 +266,7 @@ async fn status_names_the_environment_and_the_binding_when_each_is_the_source() 
     let kestrel = Kestrel::boot().await;
     kestrel.declare_organization("acme").await;
 
-    let sourced = &["status", "--json", "organization_source"];
+    let sourced = &["status", "--json"];
     let environment = ran_by(
         &kestrel,
         sourced,
@@ -315,13 +299,9 @@ async fn status_names_the_environment_and_the_binding_when_each_is_the_source() 
 async fn status_explains_an_unresolved_scope_instead_of_failing() {
     let kestrel = two_organizations().await;
 
-    let reported = ran_by(
-        &kestrel,
-        &["status", "--json", UNRESOLVED],
-        Invocation::default(),
-    )
-    .await
-    .records();
+    let reported = ran_by(&kestrel, &["status", "--json"], Invocation::default())
+        .await
+        .records();
 
     assert_eq!(reported[0]["control_plane"], kestrel.operator());
     assert_eq!(reported[0]["organization"], Value::Null);
@@ -402,7 +382,7 @@ async fn the_client_keeps_no_current_context_and_switches_none() {
     .await;
     let status = ran_by(
         &kestrel,
-        &["status", "--organization", "acme", "--json", "organization"],
+        &["status", "--organization", "acme", "--json"],
         Invocation::default(),
     )
     .await;

@@ -194,8 +194,8 @@ Workspace read carries `held_messages` — the `held` ones in arrival order, eac
 takes `{ participant }` and answers `204`. Both apply the participant name rule and refuse an id the
 Workspace never held `404`, a name other than the author's `403`, and one a Turn took or its author
 withdrew `409`. Neither writes a Transcript entry. `kestrel workspace show` lists Held Messages, `workspace post` hands back the Session it reached
-(or the held id when it reached none, with `--json` projecting either from its
-`{ session, held_message }` answer), and `workspace message edit` / `workspace message withdraw`
+(or the held id when it reached none; `--json` writes its whole `{ session, held_message }`
+answer), and `workspace message edit` / `workspace message withdraw`
 change one.
 
 ### Change notices
@@ -302,9 +302,16 @@ headings. Each command's `--json` returns the operator response.
   found walking up from the working directory, then the only Organization that exists. Several
   Organizations and no binding is an error that lists them.
 - **Output** (`output.rs`, `view.rs`): most commands declare a `View` of dotted paths into the
-  answer. Live work inspection follows git-style prose even when piped, and its `--json` returns
-  the whole response. For commands with a `View`, a terminal gets aligned columns; a pipe gets
-  delimited rows; `--json a,b` gets exactly those fields in that order.
+  answer. Live work inspection follows git-style prose even when piped. For commands with a
+  `View`, a terminal gets aligned columns and a pipe gets delimited rows. `--json` is a flag on
+  every command: it writes the complete operator response as one JSON document — a collection as
+  one array, `[]` when empty, and a compound answer such as `workspace open`, `workspace post`,
+  `start` or `queue` whole rather than the child a terminal is shown — and a Transcript as one
+  record a line, entries and closed Activities as the stream carries them. Nothing is projected or
+  clipped; scripts select with `jq`. Any word directly after `--json` (the old projection syntax
+  took it as a field list) is refused before anything is sent. The exceptions: `workspace read` writes a binary file's bytes
+  raw, a `204` (`forget`, `withdraw`, `acknowledge-refusal`) has no response to write, `status`
+  writes the record the Client composes from several reads, and `exit-codes` writes the catalog.
 - **Secrets** are read from standard input, never from arguments, with echo off at a terminal.
 - **Diagnostics** (`diagnostic/`): every failure reaches stderr as a typed `Diagnostic`, the
   control plane's or one the Client makes for a connection failure, an unreadable or unrecognised

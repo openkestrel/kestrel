@@ -164,26 +164,15 @@ fn ran(operator: &str, command: &[&str]) -> String {
     ran.out.join("\n")
 }
 
-fn workspace_shown(operator: &str, workspace: &str) -> Vec<Value> {
-    client::ran(
-        operator,
-        &[
-            "workspace",
-            "show",
-            workspace,
-            "--json",
-            "id,name,state,checkout,opened_at",
-        ],
+fn workspace_shown(operator: &str, workspace: &str) -> Value {
+    client::picked(
+        &client::ran(operator, &["workspace", "show", workspace, "--json"]).json(),
+        &["id", "name", "state", "checkout", "opened_at"],
     )
-    .records()
 }
 
 fn transcribed(operator: &str, workspace: &str) -> Vec<Value> {
-    client::ran(
-        operator,
-        &["workspace", "transcript", workspace, "--json", "seq,entry"],
-    )
-    .records()
+    client::ran(operator, &["workspace", "transcript", workspace, "--json"]).records()
 }
 
 fn a_workspace(operator: &str) -> String {
@@ -215,13 +204,12 @@ fn a_workspace(operator: &str) -> String {
             "--agent",
             "builder",
             "--json",
-            "workspace_id",
         ],
     )
     .records()
     .remove(0);
 
-    opened["workspace_id"]
+    opened["workspace"]["id"]
         .as_str()
         .expect("the opened workspace's identifier")
         .to_owned()
