@@ -7,6 +7,7 @@ use kestrel::domain::{Exit, Session, Workspace};
 use kestrel::log::Entry;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+use support::client;
 use support::link_client::Link;
 use support::scripted_agent::{self, Script};
 use support::{HARNESS, Kestrel, OnTheLink};
@@ -91,6 +92,38 @@ async fn an_agent_that_must_be_signed_in_leaves_authentication_evidence_on_its_s
     assert_eq!(diagnostic["next_steps"][1]["action"], "inspect_resource");
     assert_eq!(diagnostic["next_steps"][1]["organization"], "acme");
 
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn showing_a_failed_session_is_a_successful_read_that_says_why() {
+    let (kestrel, session) = ended_spawning(&scripted_agent::playing(Script::Insists)).await;
+
+    let operator = kestrel.operator();
+    let id = session.id.to_string();
+    let shown = tokio::task::spawn_blocking(move || {
+        client::ran_on_a_terminal(&operator, &["session", "show", &id], 200, "")
+    })
+    .await
+    .expect("the client should run");
+
+    assert!(shown.status.success(), "{}", shown.said);
+    assert!(
+        shown
+            .said
+            .contains("the harness asked for authentication (code -32000)"),
+        "{}",
+        shown.said
+    );
+    assert!(
+        shown.said.contains(&format!(
+            "kestrel session show {} --organization acme",
+            session.id
+        )),
+        "{}",
+        shown.said
+    );
+    assert!(!shown.said.contains("run a step?"), "{}", shown.said);
     kestrel.teardown().await;
 }
 
