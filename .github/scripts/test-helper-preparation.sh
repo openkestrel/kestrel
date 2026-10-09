@@ -8,13 +8,22 @@ mkdir -p "$target"
 target=$(cd "$target" && pwd -P)
 profile=${HELPER_TEST_PROFILE:-dev}
 mode=${1:-all}
-case "$mode" in all|cargo|nextest|artifact) ;; *) echo "Unknown check: $mode" >&2; exit 1 ;; esac
+case "$mode" in all|cargo|nextest|artifact|provenance|inplace) ;; *) echo "Unknown check: $mode" >&2; exit 1 ;; esac
 directory=$target/$profile
 if [[ "$profile" == dev ]]; then directory=$target/debug; fi
 output=$(mktemp)
 backup=
+restore_in_place=false
 cleanup() {
-  if [[ -n "$backup" && -f "$backup" ]]; then mv "$backup" "$directory/kestrel-supervisor"; fi
+  if [[ -n "$backup" && -f "$backup" ]]; then
+    if "$restore_in_place"; then
+      cat "$backup" > "$directory/kestrel-supervisor"
+      touch -r "$backup" "$directory/kestrel-supervisor"
+      rm "$backup"
+    else
+      mv "$backup" "$directory/kestrel-supervisor"
+    fi
+  fi
   rm -f "$output"
 }
 trap cleanup EXIT
@@ -57,6 +66,25 @@ if [[ "$mode" == all || "$mode" == cargo ]]; then
   [[ ! -d "$unused" ]]
 fi
 
+if [[ "$mode" == all || "$mode" == inplace ]]; then
+  unset NEXTEST_RUN_ID
+  passing focused
+  prepared_once
+  backup="$directory/.kestrel-supervisor-backup-$$"
+  cp -p "$directory/kestrel-supervisor" "$backup"
+  restore_in_place=true
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$backup" > "$directory/kestrel-supervisor"
+  passing focused
+  prepared_once
+  if ! cmp -s "$backup" "$directory/kestrel-supervisor"; then
+    echo "A new invocation passed against a helper overwritten in place" >&2
+    exit 1
+  fi
+  cleanup
+  backup=
+  restore_in_place=false
+fi
+
 nextest_focused() {
   cargo nextest run -p kestrel --test suite --cargo-profile "$profile" --target-dir "$target" \
     --success-output immediate --test-threads 2 \
@@ -96,6 +124,24 @@ if [[ "$mode" == all || "$mode" == artifact ]]; then
     exit 1
   fi
   grep -F "executable helper is missing: $directory/kestrel-supervisor" "$output"
+  mv "$backup" "$directory/kestrel-supervisor"
+  backup=
+fi
+
+if [[ "$mode" == all || "$mode" == provenance ]]; then
+  unset NEXTEST_RUN_ID
+  passing focused
+  prepared_once
+  backup="$directory/.kestrel-supervisor-backup-$$"
+  mv "$directory/kestrel-supervisor" "$backup"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$backup" > "$directory/kestrel-supervisor"
+  chmod +x "$directory/kestrel-supervisor"
+  passing focused
+  prepared_once
+  if ! cmp -s "$backup" "$directory/kestrel-supervisor"; then
+    echo "A new invocation passed against a hand-placed helper" >&2
+    exit 1
+  fi
   mv "$backup" "$directory/kestrel-supervisor"
   backup=
 fi
