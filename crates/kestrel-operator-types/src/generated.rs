@@ -946,6 +946,101 @@ impl AsRef<str> for TriggerFileTriggersAdditionalPropertyOnMiss {
     }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StreamSubscription {
+    ///The last Transcript cursor the tab saw. Absent means from the beginning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+    pub kind: StreamSubscriptionKind,
+    ///Comma-separated Transcript kinds, as the Transcript read takes them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kinds: Option<String>,
+    pub organization: String,
+    ///The Workspace whose Transcript a `transcript` subscription follows, addressed as the Transcript read addresses it. Required for `transcript`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+}
+impl StreamSubscription {
+    /// Construct this request with every required wire field.
+    pub fn new(kind: StreamSubscriptionKind, organization: String) -> Self {
+        Self {
+            kind,
+            organization,
+            after: None,
+            kinds: None,
+            workspace: None,
+        }
+    }
+    /// Start a dependency-free builder with every required wire field.
+    pub fn builder(
+        kind: StreamSubscriptionKind,
+        organization: String,
+    ) -> StreamSubscriptionBuilder {
+        StreamSubscriptionBuilder::new(kind, organization)
+    }
+}
+/// Dependency-free builder for [`#struct_name`].
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct StreamSubscriptionBuilder {
+    value: StreamSubscription,
+}
+impl StreamSubscriptionBuilder {
+    /// Start a builder with every required wire field.
+    pub fn new(kind: StreamSubscriptionKind, organization: String) -> Self {
+        Self {
+            value: StreamSubscription::new(kind, organization),
+        }
+    }
+    #[doc = concat!("Set the optional `", "after", "` request field.")]
+    #[must_use]
+    pub fn after(mut self, after: String) -> Self {
+        self.value.after = Some(after);
+        self
+    }
+    #[doc = concat!("Set the optional `", "kinds", "` request field.")]
+    #[must_use]
+    pub fn kinds(mut self, kinds: String) -> Self {
+        self.value.kinds = Some(kinds);
+        self
+    }
+    #[doc = concat!("Set the optional `", "workspace", "` request field.")]
+    #[must_use]
+    pub fn workspace(mut self, workspace: String) -> Self {
+        self.value.workspace = Some(workspace);
+        self
+    }
+    /// Finish building the request model.
+    pub fn build(self) -> StreamSubscription {
+        self.value
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum StreamSubscriptionKind {
+    #[default]
+    #[serde(rename = "notices")]
+    Notices,
+    #[serde(rename = "transcript")]
+    Transcript,
+}
+impl StreamSubscriptionKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Notices => "notices",
+            Self::Transcript => "transcript",
+        }
+    }
+}
+impl ::std::fmt::Display for StreamSubscriptionKind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for StreamSubscriptionKind {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Started {
     pub agent: Settled,
     pub organization: Settled,
@@ -10415,6 +10510,20 @@ impl StartGithubAppRequestBuilder {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StartGithubAppResponse201 {
     pub url: String,
+}
+///The event's name and `data` are those of the per-resource stream the subscription follows: an `Event` for a Transcript, a `ChangesEvent` for notices.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StreamEvent {
+    ///The subscription's Transcript cursor after this event, on entry, Activity and cursor events only. It resumes the subscription as `after`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    ///The per-resource stream's payload for this event name.
+    pub data: serde_json::Value,
+    pub subscription: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StreamReservation {
+    pub token: uuid::Uuid,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SubscriptionProfileDeclaration {

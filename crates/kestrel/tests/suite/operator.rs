@@ -6330,6 +6330,10 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::FOLLOWER_LEASE, "post"),
         (operator::TRANSCRIPT_PAYLOAD, "get"),
         (operator::CHANGES, "get"),
+        (operator::STREAMS, "put"),
+        (operator::STREAM, "get"),
+        (operator::STREAM_SUBSCRIPTION, "put"),
+        (operator::STREAM_SUBSCRIPTION, "delete"),
     ];
     assert_eq!(
         described,

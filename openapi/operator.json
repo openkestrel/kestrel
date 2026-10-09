@@ -2431,6 +2431,152 @@
           }
         }
       }
+    },
+    "/operator/streams": {
+      "put": {
+        "operationId": "reserveStream",
+        "summary": "Reserve a browser tab's one event stream.",
+        "description": "Answers a token that opens the stream and addresses its subscriptions. A reservation with no open connection for the follower lease period, 60 seconds unless configured otherwise, is forgotten, and a reservation is forgotten as soon as its connection closes: after any drop the tab reserves again and re-subscribes each subscription from the last cursor it saw. Reservations and subscriptions live only in the serve role's memory, and a control plane holds at most 256 reservations.",
+        "responses": {
+          "201": {
+            "description": "The stream is reserved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamReservation"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/streams/{token}": {
+      "get": {
+        "operationId": "openStream",
+        "summary": "Open a reserved stream.",
+        "description": "Carries the events of every subscription made under the token, before or after it opens, interleaved. Every event names its subscription, and an entry, Activity or cursor event carries its own Transcript's cursor; no event carries an SSE id and `Last-Event-ID` resumes nothing. A subscription whose own stream would end with `end` sends it and is forgotten. One cut off for any other reason, such as a follower lease that passed, closes the whole stream, so the tab resumes every subscription the same way.",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stream is open.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamEvent"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/streams/{token}/subscriptions/{id}": {
+      "put": {
+        "operationId": "subscribeStream",
+        "summary": "Subscribe a reserved stream to an Organization's notices or a Workspace's Transcript.",
+        "description": "Starts the subscription under the id the tab chose, replacing and ending any it already held under that id. A `notices` subscription opens with `open`, as the Organization's change stream does; a `transcript` subscription follows the Workspace's Transcript from `after` exactly as a per-resource follow from that `Last-Event-ID` does, registering an anonymous follower once caught up whose lease the tab renews through the Workspace's follower lease. A reservation holds at most 32 subscriptions.",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The tab's name for the subscription, every event of which carries it.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StreamSubscription"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "The subscription is started."
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "unsubscribeStream",
+        "summary": "End one of a reserved stream's subscriptions.",
+        "description": "Ends the subscription and removes its follower at once. An id the reservation does not hold is already ended.",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The subscription is ended."
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -6703,6 +6849,70 @@
           {
             "$ref": "#/components/schemas/Refetch"
           }
+        ]
+      },
+      "StreamReservation": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "token"
+        ]
+      },
+      "StreamSubscription": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "notices",
+              "transcript"
+            ]
+          },
+          "organization": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string",
+            "description": "The Workspace whose Transcript a `transcript` subscription follows, addressed as the Transcript read addresses it. Required for `transcript`."
+          },
+          "after": {
+            "type": "string",
+            "description": "The last Transcript cursor the tab saw. Absent means from the beginning."
+          },
+          "kinds": {
+            "type": "string",
+            "description": "Comma-separated Transcript kinds, as the Transcript read takes them.",
+            "default": "shared_state"
+          }
+        },
+        "required": [
+          "kind",
+          "organization"
+        ]
+      },
+      "StreamEvent": {
+        "description": "The event's name and `data` are those of the per-resource stream the subscription follows: an `Event` for a Transcript, a `ChangesEvent` for notices.",
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "The subscription's Transcript cursor after this event, on entry, Activity and cursor events only. It resumes the subscription as `after`."
+          },
+          "data": {
+            "description": "The per-resource stream's payload for this event name."
+          }
+        },
+        "required": [
+          "subscription",
+          "data"
         ]
       },
       "EventTriggerCondition": {
