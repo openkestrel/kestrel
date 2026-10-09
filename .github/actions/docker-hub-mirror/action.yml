@@ -2,7 +2,7 @@ name: Docker Hub mirror
 description: >-
   Pulls Docker Hub images through mirror.gcr.io, falling back to Docker Hub itself, so a Docker
   Hub outage or rate limit does not fail the job. Covers the daemon (pulls, `docker build`,
-  compose, the buildx builder's own image) and, with `buildx`, the BuildKit builder it sets up.
+  compose) and, with `buildx`, the BuildKit builder it sets up and that builder's own image.
 
 inputs:
   buildx:
@@ -22,7 +22,18 @@ runs:
         sudo systemctl restart docker
         docker info --format '{{json .RegistryConfig.Mirrors}}'
 
-    - if: inputs.buildx == 'true'
+    # buildx inspects its builder image on Docker Hub directly, bypassing the daemon's mirror.
+    - id: mirrored
+      if: inputs.buildx == 'true'
+      continue-on-error: true
+      uses: docker/setup-buildx-action@v3
+      with:
+        driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
+        buildkitd-config-inline: |
+          [registry."docker.io"]
+            mirrors = ["mirror.gcr.io"]
+
+    - if: inputs.buildx == 'true' && steps.mirrored.outcome == 'failure'
       uses: docker/setup-buildx-action@v3
       with:
         buildkitd-config-inline: |
