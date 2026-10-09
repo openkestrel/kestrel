@@ -122,6 +122,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: ./.github/actions/docker-hub-mirror
+
       - name: Publish the control-plane and Client images
         env:
           REPOSITORY: ghcr.io/${{ github.repository }}
