@@ -328,6 +328,9 @@ jobs:
       - name: Test the Docker driver
         run: cargo test --locked --package kestrel --test docker -- --ignored
 
+      - name: Test the image capability checks
+        run: cargo test --locked --package kestrel --test capability -- --ignored
+
       # One harness, one model stub and one host daemon, so a Session at a time.
       - name: Test the harness the image ships
         run: cargo test --locked --package kestrel --test opencode -- --ignored --test-threads 1

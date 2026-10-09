@@ -122,7 +122,16 @@ async fn guided_methods_name_their_inputs_and_owners_without_setup() {
         "https://opencode.ai/auth"
     );
     for row in rows {
-        assert!(row.get("available").is_none());
+        // Nothing provisions from an image here, so nothing is claimed either way.
+        assert_eq!(
+            row["availability"],
+            serde_json::json!({
+                "state": "unchecked",
+                "image": null,
+                "identity": null,
+                "diagnostic": null,
+            })
+        );
         for method in row["sign_in_methods"].as_array().unwrap() {
             if method["kind"] == "key" || method["id"] == "opencode-go-zen" {
                 assert!(method.get("relay").is_none());

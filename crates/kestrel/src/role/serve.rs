@@ -8,6 +8,7 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::capability::{Capability, Images};
 use crate::cli::Role;
 use crate::integration::webhook;
 use crate::store::Store;
@@ -29,12 +30,19 @@ pub struct Listening {
     store: Store,
     wake: Wake,
     follow_lease: Duration,
+    images: Images,
     pub(crate) live: crate::live::Live,
 }
 
 impl Listening {
     pub fn bound(&self) -> Listen {
         self.bound
+    }
+
+    #[must_use]
+    pub fn inspecting(mut self, images: Images) -> Self {
+        self.images = images;
+        self
     }
 }
 
@@ -64,6 +72,7 @@ pub async fn bind(
         store,
         wake,
         follow_lease,
+        images: Images::default(),
         live: crate::live::Live::default(),
     })
 }
@@ -76,6 +85,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         store,
         wake,
         follow_lease,
+        images,
         live,
     } = listening;
 
@@ -87,6 +97,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         );
     }
 
+    tokio::spawn(said_at_startup(images.clone()));
     let stop_recording = CancellationToken::new();
     let recording = tokio::spawn({
         let unrecorded = live.unrecorded.clone();
@@ -98,7 +109,8 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
     let link_router = link::router(store.clone(), shutdown.clone(), live.clone())
         .merge(webhook::router(store.clone(), wake));
     let streams = crate::stream::Streams::new(follow_lease);
-    let operator_router = operator::router(store, shutdown.clone(), live, followers, streams);
+    let operator_router =
+        operator::router(store, shutdown.clone(), live, followers, streams, images);
 
     let serving_link = axum::serve(link_listener, link_router)
         .with_graceful_shutdown(shutdown.clone().cancelled_owned());
@@ -113,6 +125,24 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
     info!(role = %Role::Serve, "role stopped");
 
     Ok(())
+}
+
+/// Said once, so an image that cannot be inspected is in the log before anyone asks; the control
+/// plane serves either way.
+async fn said_at_startup(images: Images) {
+    match images.read().await {
+        Capability::Unchecked => {}
+        Capability::Inspected {
+            image,
+            identity,
+            harnesses,
+        } => info!(%image, %identity, ?harnesses, "the image declares its harnesses"),
+        Capability::Unavailable { image, cause } => warn!(
+            %image,
+            "{}",
+            crate::capability::unavailable(&image, &cause, None)
+        ),
+    }
 }
 
 pub(crate) const BUSY_RETRY_AFTER_SECONDS: i64 = 1;

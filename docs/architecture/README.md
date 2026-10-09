@@ -138,7 +138,7 @@ The rest of `crates/kestrel/src`, grouped by the page that covers them:
 | Sessions | `work.rs`, `workspace.rs`, `instance.rs`, `scheduling.rs`, `role/work.rs` |
 | Link | `link/`, `provider.rs`, `profile.rs`, `keyring.rs` |
 | Triggers | `trigger.rs`, `trigger/apply.rs`, `filter.rs`, `template.rs`, `cron.rs`, `readiness.rs`, `follow_up.rs`, `pull_request.rs`, `integration/` |
-| Operator | `operator.rs`, `operator_identity.rs`, `declaration.rs`, `start.rs`, `agent.rs`, `reference.rs`, `declined.rs` |
+| Operator | `operator.rs`, `operator_identity.rs`, `declaration.rs`, `start.rs`, `agent.rs`, `reference.rs`, `declined.rs`, `capability.rs` |
 | Shared | `domain.rs` (every record type), `log.rs`, `store/`, `timer.rs`, `cli.rs`, `telemetry.rs`, `shutdown.rs`, `hex.rs`, `participant.rs` (the one rule a declared name obeys) |
 
 ## Trust boundaries
@@ -188,8 +188,8 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   that explains unattended attachment verdicts remains `0.5` work.
 - **Split roles**: `serve` and `work` parse separately but run correctly only in one process.
 - **The first run** ([ADR-0045](../adr/0045-a-browser-tab-holds-one-stream-and-subscribes-over-requests.md)–[ADR-0049](../adr/0049-an-install-has-one-operator-and-by-default-one-organization.md)):
-  the Client is still served over HTTPS with a stream per follow; there is no sign-in catalogue,
-  relay, image label or shared default Organization selection, and `kestrel-env` carries opencode alone.
+  the Client is still served over HTTPS with a stream per follow; there is no sign-in relay or
+  shared default Organization selection.
 - **Policy, Approvals, Questions, Workflows, Campaigns** exist in `GLOSSARY.md` and
   [`ROADMAP.md`](../../ROADMAP.md), not in code. `session_dependency` and the Unreachable state are
   the only Workflow machinery built.
