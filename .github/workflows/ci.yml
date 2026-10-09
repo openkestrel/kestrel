@@ -133,6 +133,9 @@ jobs:
       - name: Test
         run: cargo nextest run --locked --workspace --profile ci
 
+      - name: Check executable helper preparation
+        run: bash .github/scripts/test-helper-preparation.sh
+
   # The e2e suite drives the built Client through the Client image's Caddyfile and a control plane
   # it compiles, so it needs Caddy and Rust too.
   client:

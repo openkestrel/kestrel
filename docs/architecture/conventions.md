@@ -68,6 +68,10 @@ Patterns the code relies on that no single file states. Comment style is in `AGE
   harness compiles once: select with `cargo test -p kestrel --test suite <module>::`.
 - **The real supervisor runs as a local process.** `LocalExec` spawns the `kestrel-supervisor` binary
   against `kestrel-scripted-agent`, so most tests need no Docker.
+- **Cargo prepares executable helpers once per invocation**, including the supervisor, scripted
+  agent and Client, in the test executable's absolute target directory and selected profile.
+  Direct `cargo test` needs no prebuild; nextest processes share preparation by `NEXTEST_RUN_ID`.
+  Replaced or missing artifacts within that invocation fail with the helper's path.
 - **Heavier tests are `#[ignore]`d and CI runs them**, each suite its own file and binary beside
   `suite/`: `docker`, `image`, `opencode`, `development`, `control_plane`, `compose` and `cleanup`,
   each named in `.github/workflows/ci.yml`. `conformance.yml` drives a second ACP agent to prove
