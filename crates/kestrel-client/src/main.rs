@@ -1981,12 +1981,6 @@ async fn started(
     let brief = given(&start.brief)?;
     let mut clone =
         start::LocalClone::of(&std::env::current_dir().context("reading the working directory")?);
-    // Planning matches declared Projects by address, so it compares what a declaration would hold.
-    if !start.repositories.is_empty() {
-        start.repositories = resolved(api, start.repositories).await?;
-    } else if let Some(origin) = clone.origin.take() {
-        clone.origin = resolved(api, vec![origin]).await?.pop();
-    }
     let (named, existing) = match scoping.derive().await? {
         Derived::Scope(scope) => (Some(scope), Vec::new()),
         Derived::Unnamed { existing } => (None, existing),
@@ -2005,6 +1999,18 @@ async fn started(
         (json!([]), json!([]), json!([]))
     };
     let existing = start::Existing::read(declared, &projects, &agents, &credentials);
+    let names_a_project = start.project.as_ref().is_some_and(|name| {
+        existing
+            .projects
+            .iter()
+            .any(|declared| &declared.name == name)
+    });
+    // Planning matches declared Projects by address, so it compares what a declaration would hold.
+    if !start.repositories.is_empty() {
+        start.repositories = resolved(api, start.repositories).await?;
+    } else if !names_a_project && let Some(origin) = clone.origin.take() {
+        clone.origin = resolved(api, vec![origin]).await?.pop();
+    }
 
     let secrets = start::secrets(&start.credentials, |variable| std::env::var(variable).ok());
     let plan = start::plan(

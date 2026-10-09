@@ -1296,12 +1296,8 @@ async fn declare_project(
 ) -> Result<Response, Refused> {
     let Json(declaration) = declaration?;
     named("declare_project", &declaration.name)?;
-    let repositories = repository::addresses(repository::resolved(
-        "declare_project",
-        "repositories",
-        &declaration.repositories,
-        repository::Purpose::Declaration,
-    )?);
+    let repositories =
+        repository::declared("declare_project", "repositories", &declaration.repositories)?;
     if declaration.branch.is_empty() {
         return Err(invalid_field(
             "declare_project",

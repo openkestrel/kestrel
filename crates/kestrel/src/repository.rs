@@ -12,8 +12,8 @@ pub struct Resolved {
     pub directory: String,
 }
 
-/// Which declaration a repository list is resolved for: the public-repository setup path selects
-/// no Integration, so it takes only what an anonymous HTTPS clone can read.
+/// Public-repository setup selects no Integration, so it takes only what an anonymous HTTPS clone
+/// can read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Purpose {
     Declaration,
@@ -82,11 +82,17 @@ pub fn resolved(
     Ok(resolved)
 }
 
-pub fn addresses(resolved: Vec<Resolved>) -> Vec<String> {
-    resolved
-        .into_iter()
-        .map(|resolved| resolved.address)
-        .collect()
+pub fn declared(
+    operation: &'static str,
+    field: &'static str,
+    repositories: &[String],
+) -> Result<Vec<String>> {
+    Ok(
+        resolved(operation, field, repositories, Purpose::Declaration)?
+            .into_iter()
+            .map(|resolved| resolved.address)
+            .collect(),
+    )
 }
 
 fn address(given: &str) -> Result<String, String> {
@@ -144,12 +150,14 @@ fn explicit(given: &str, scheme: &str) -> Result<(), String> {
     if url.path().trim_matches('/').is_empty() {
         return malformed("naming no repository path");
     }
+    if url.query().is_some() || url.fragment().is_some() {
+        return malformed("carrying a query or fragment, which names no repository");
+    }
 
     Ok(())
 }
 
-/// `owner/repo` and `github.com/owner/repo`, with an optional `.git`: the conveniences ADR-0057
-/// expands, never a path Git would read relative to the Instance's working directory.
+/// Never a path Git would read relative to the Instance's working directory (ADR-0057).
 fn github_shorthand(given: &str) -> Option<(&str, &str)> {
     let path = given.strip_prefix("github.com/").unwrap_or(given);
     let (owner, name) = path.split_once('/')?;
@@ -259,6 +267,8 @@ mod tests {
             "https://github.com",
             "ssh://host/",
             " acme/widgets",
+            "https://github.com/acme/widgets?ref=main",
+            "https://github.com/acme/widgets#readme",
         ] {
             let (constraint, _) = refusal(&[given], Purpose::Declaration);
             assert_eq!(constraint, Constraint::GitRepository, "{given:?}");

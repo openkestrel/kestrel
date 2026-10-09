@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::declined::{Constraint, Reason};
 use crate::domain::{Correlation, Declared, Fires, Templates, Trigger};
 use crate::filter::Filter;
-use crate::repository::{self, Purpose};
+use crate::repository;
 use crate::store::Store;
 use crate::template::Template;
 use crate::trigger::allowed;
@@ -292,12 +292,11 @@ fn check_document(document: &Document, mode: &ApplyMode) -> Result<Vec<String>> 
             );
         }
     }
-    let repositories = repository::addresses(repository::resolved(
+    let repositories = repository::declared(
         operation,
         "project.repositories",
         &document.project.repositories,
-        Purpose::Declaration,
-    )?);
+    )?;
     if document.project.branch.is_empty() {
         return invalid(
             "project.branch",

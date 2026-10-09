@@ -5,7 +5,7 @@ use crate::declaration;
 use crate::declined::Declined;
 use crate::domain::{Declared, Session, Workspace};
 use crate::provider;
-use crate::repository::{self, Purpose};
+use crate::repository;
 use crate::store::{Declared as DeclaredRecord, Store};
 use crate::workspace;
 
@@ -164,12 +164,8 @@ fn checked(plan: &Plan) -> Result<Vec<String>> {
     {
         return unacceptable("a start names its organization, project and agent");
     }
-    let repositories = repository::addresses(repository::resolved(
-        "start",
-        "project.repositories",
-        &plan.project.repositories,
-        Purpose::Declaration,
-    )?);
+    let repositories =
+        repository::declared("start", "project.repositories", &plan.project.repositories)?;
     if plan.project.branch.is_empty() {
         return unacceptable("a project names the branch its work happens on");
     }
