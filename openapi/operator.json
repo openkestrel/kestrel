@@ -88,6 +88,73 @@
         ]
       }
     },
+    "/operator/operator": {
+      "get": {
+        "operationId": "showOperator",
+        "responses": {
+          "200": {
+            "description": "Operator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operator"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "put": {
+        "operationId": "nameOperator",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorDeclaration"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Operator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operator"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Operator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operator"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
     "/operator/organizations": {
       "get": {
         "operationId": "listOrganizations",
@@ -4590,6 +4657,59 @@
           "set_at"
         ]
       },
+      "Operator": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "OperatorDeclaration": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "NameOperatorAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "const": "name_operator"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "action",
+          "name",
+          "missing"
+        ]
+      },
       "SubscriptionProfileDeclaration": {
         "type": "object",
         "properties": {
@@ -4604,8 +4724,7 @@
           }
         },
         "required": [
-          "name",
-          "owner"
+          "name"
         ]
       },
       "SubscriptionProfile": {
@@ -4620,12 +4739,17 @@
           },
           "owner": {
             "type": "string"
+          },
+          "owner_operator": {
+            "type": ["string", "null"],
+            "format": "uuid"
           }
         },
         "required": [
           "id",
           "name",
-          "owner"
+          "owner",
+          "owner_operator"
         ]
       },
       "SubscriptionProfileLogin": {
@@ -5966,6 +6090,7 @@
         "type": "object",
         "description": "A typed corrective, inspective or retry step a Diagnostic offers, naming its own inputs rather than a shell command or browser route (ADR-0052). A Client binds it to a form, a flag or an API call.",
         "oneOf": [
+          { "$ref": "#/components/schemas/NameOperatorAction" },
           { "$ref": "#/components/schemas/DeclareOrganizationAction" },
           { "$ref": "#/components/schemas/DeclareProjectAction" },
           { "$ref": "#/components/schemas/DeclareAgentAction" },

@@ -1982,6 +1982,7 @@ pub struct SubscriptionProfileListed {
     pub id: uuid::Uuid,
     pub name: String,
     pub owner: String,
+    pub owner_operator: Option<uuid::Uuid>,
 }
 ///A login as everything but the Session that carries it sees it.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -2023,6 +2024,7 @@ pub struct SubscriptionProfile {
     pub id: uuid::Uuid,
     pub name: String,
     pub owner: String,
+    pub owner_operator: Option<uuid::Uuid>,
 }
 pub type ListSessionsResponse = Vec<Session>;
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -9669,6 +9671,7 @@ impl AsRef<str> for OccupantPhase {
 ///A typed corrective, inspective or retry step a Diagnostic offers, naming its own inputs rather than a shell command or browser route (ADR-0052). A Client binds it to a form, a flag or an API call.
 #[derive(Debug, Clone)]
 pub enum Action {
+    NameOperatorAction(NameOperatorAction),
     DeclareOrganizationAction(DeclareOrganizationAction),
     DeclareProjectAction(DeclareProjectAction),
     DeclareAgentAction(DeclareAgentAction),
@@ -9692,6 +9695,7 @@ impl Serialize for Action {
         S: serde::Serializer,
     {
         match self {
+            Self::NameOperatorAction(value) => serde::Serialize::serialize(value, serializer),
             Self::DeclareOrganizationAction(value) => {
                 serde::Serialize::serialize(value, serializer)
             }
@@ -9788,6 +9792,31 @@ impl<'de> Deserialize<'de> for Action {
         let mut matched = None;
         let mut equivalent = None;
         let mut equivalent_matches = 0usize;
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"name_operator\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<NameOperatorAction>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::NameOperatorAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::NameOperatorAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
         if input.as_object().is_some_and(|object| {
             true && object.get("action").is_some_and(|value| {
                 value.is_null() || matches!(value.to_string().as_str(), "\"declare_organization\"")
@@ -10348,6 +10377,12 @@ impl AsRef<str> for Consequence {
     }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct NameOperatorAction {
+    pub action: serde_json::Value,
+    pub missing: Vec<String>,
+    pub name: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ListResourcesAction {
     pub action: serde_json::Value,
     pub organization: Option<String>,
@@ -10511,6 +10546,16 @@ pub struct FileText {
 pub struct InstanceRelease {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub participant: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Operator {
+    pub id: uuid::Uuid,
+    pub name: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OperatorDeclaration {
+    ///Constraint: minLength=1
+    pub name: String,
 }
 ///One option a person changes on a Session: exactly one of `option` (the id the harness reported) or `category` (model, mode or thought_level), and the value to set.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -10892,7 +10937,42 @@ pub struct SubscriptionProfileDeclaration {
     pub name: String,
     ///The person it belongs to, which never changes.
     ///Constraint: minLength=1
-    pub owner: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+}
+impl SubscriptionProfileDeclaration {
+    /// Construct this request with every required wire field.
+    pub fn new(name: String) -> Self {
+        Self { name, owner: None }
+    }
+    /// Start a dependency-free builder with every required wire field.
+    pub fn builder(name: String) -> SubscriptionProfileDeclarationBuilder {
+        SubscriptionProfileDeclarationBuilder::new(name)
+    }
+}
+/// Dependency-free builder for [`#struct_name`].
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct SubscriptionProfileDeclarationBuilder {
+    value: SubscriptionProfileDeclaration,
+}
+impl SubscriptionProfileDeclarationBuilder {
+    /// Start a builder with every required wire field.
+    pub fn new(name: String) -> Self {
+        Self {
+            value: SubscriptionProfileDeclaration::new(name),
+        }
+    }
+    #[doc = concat!("Set the optional `", "owner", "` request field.")]
+    #[must_use]
+    pub fn owner(mut self, owner: String) -> Self {
+        self.value.owner = Some(owner);
+        self
+    }
+    /// Finish building the request model.
+    pub fn build(self) -> SubscriptionProfileDeclaration {
+        self.value
+    }
 }
 pub type TranscriptPayloadResponse = serde_json::Value;
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -19,6 +19,7 @@ use clap::builder::NonEmptyStringValueParser;
 use clap::error::{ContextKind, ContextValue};
 use clap::parser::ValueSource;
 use clap::{Args, CommandFactory as _, FromArgMatches as _, Parser, Subcommand};
+use kestrel_operator_types as wire;
 use reqwest::Url;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -1115,14 +1116,20 @@ async fn run() -> Result<()> {
         }
         Command::Profile(ProfileCommand::Declare { name, owner }) => {
             let organization = scoping.resolve().await?.organization;
+            let profile: wire::SubscriptionProfile = serde_json::from_value(
+                api.post(
+                    &["organizations", &organization, "profiles"],
+                    &wire::SubscriptionProfileDeclaration {
+                        name,
+                        owner: Some(owner),
+                    },
+                )
+                .await?,
+            )?;
             show(
                 &presentation,
                 &view::DECLARED,
-                &api.post(
-                    &["organizations", &organization, "profiles"],
-                    &json!({ "name": name, "owner": owner }),
-                )
-                .await?,
+                &serde_json::to_value(profile)?,
             )?;
         }
         Command::Profile(ProfileCommand::Set { name, entry }) => {
@@ -1136,11 +1143,14 @@ async fn run() -> Result<()> {
         }
         Command::Profile(ProfileCommand::List) => {
             let organization = scoping.resolve().await?.organization;
+            let profiles: wire::ListSubscriptionProfilesResponse = serde_json::from_value(
+                api.get(&["organizations", &organization, "profiles"])
+                    .await?,
+            )?;
             collection(
                 &presentation,
                 &view::PROFILES,
-                &api.get(&["organizations", &organization, "profiles"])
-                    .await?,
+                &serde_json::to_value(profiles)?,
                 &empty_list(
                     &client.control_plane,
                     "Subscription Profiles",

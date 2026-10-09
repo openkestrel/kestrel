@@ -85,9 +85,9 @@ pub async fn declare(
     store: &Store,
     organization: &str,
     name: &str,
-    owner: &str,
+    owner: Option<&str>,
 ) -> Result<Declared<SubscriptionProfile>> {
-    if owner.trim().is_empty() {
+    if owner.is_some_and(|owner| owner.trim().is_empty()) {
         bail!(Reason::InvalidField {
             field: "owner",
             operation: "declare_subscription_profile",
@@ -99,7 +99,33 @@ pub async fn declare(
 
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
-    let declared = tx.profiles().declare(&organization, name, owner).await?;
+    let operator = match owner {
+        Some(_) => None,
+        None => Some(
+            tx.operators()
+                .current()
+                .await?
+                .ok_or(Reason::MissingOperator {
+                    operation: "declare_subscription_profile",
+                })?,
+        ),
+    };
+    let owner = owner.unwrap_or_else(|| {
+        operator
+            .as_ref()
+            .expect("the current Operator")
+            .name
+            .as_str()
+    });
+    let declared = tx
+        .profiles()
+        .declare(
+            &organization,
+            name,
+            owner,
+            operator.as_ref().map(|operator| operator.id),
+        )
+        .await?;
     tx.commit().await?;
 
     Ok(declared)

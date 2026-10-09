@@ -55,7 +55,7 @@ use crate::{instance, pull_request, start, work, workspace};
 
 pub const HARNESSES: &str = "/operator/harnesses";
 pub const SIGN_IN_METHOD: &str = "/operator/harnesses/{harness}/sign-in-methods/{method}";
-
+pub const OPERATOR: &str = "/operator/operator";
 pub const ORGANIZATIONS: &str = "/operator/organizations";
 pub const STARTS: &str = "/operator/starts";
 pub const PROJECTS: &str = "/operator/organizations/{organization}/projects";
@@ -271,6 +271,7 @@ pub fn router(
     Router::new()
         .route(HARNESSES, get(harnesses))
         .route(SIGN_IN_METHOD, get(sign_in_method))
+        .route(OPERATOR, get(show_operator).put(name_operator))
         .route(ORGANIZATIONS, get(organizations).post(declare_organization))
         .route(STARTS, post(start))
         .route(PROJECTS, get(projects).post(declare_project))
@@ -1441,49 +1442,28 @@ async fn forget_credential(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Deserialize)]
-struct ProfileDeclaration {
-    name: String,
-    owner: String,
-}
-
-#[derive(Serialize)]
-struct ProfileRecord {
-    id: String,
-    name: String,
-    owner: String,
-}
-
-#[derive(Serialize)]
-struct ListedProfile {
-    #[serde(flatten)]
-    profile: ProfileRecord,
-    holds: Vec<LoginRecord>,
-}
-
-#[derive(Serialize)]
-struct LoginRecord {
-    kind: &'static str,
-    name: String,
-    set_at: Timestamp,
-}
-
-impl From<SubscriptionProfile> for ProfileRecord {
+impl From<SubscriptionProfile> for wire::SubscriptionProfile {
     fn from(profile: SubscriptionProfile) -> Self {
         Self {
-            id: profile.id.to_string(),
+            id: profile.id.to_string().parse().expect("a Profile UUID"),
             name: profile.name,
             owner: profile.owner,
+            owner_operator: profile
+                .owner_operator
+                .map(|id| id.to_string().parse().expect("an Operator UUID")),
         }
     }
 }
 
-impl From<profile::Held> for LoginRecord {
+impl From<profile::Held> for wire::SubscriptionProfileLogin {
     fn from(held: profile::Held) -> Self {
         Self {
-            kind: held.entry.kind.as_str(),
+            kind: match held.entry.kind {
+                profile::Kind::Variable => wire::SubscriptionProfileLoginKind::Variable,
+                profile::Kind::File => wire::SubscriptionProfileLoginKind::File,
+            },
             name: held.entry.name,
-            set_at: held.set_at,
+            set_at: held.set_at.to_string(),
         }
     }
 }
@@ -1491,15 +1471,21 @@ impl From<profile::Held> for LoginRecord {
 async fn profiles(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<ListedProfile>>, Refused> {
+) -> Result<Json<wire::ListSubscriptionProfilesResponse>, Refused> {
     let listed = profile::profiles(&control_plane.store, &organization).await?;
 
     Ok(Json(
         listed
             .into_iter()
-            .map(|(profile, held)| ListedProfile {
-                profile: profile.into(),
-                holds: held.into_iter().map(Into::into).collect(),
+            .map(|(profile, held)| {
+                let profile = wire::SubscriptionProfile::from(profile);
+                wire::SubscriptionProfileListed {
+                    id: profile.id,
+                    name: profile.name,
+                    owner: profile.owner,
+                    owner_operator: profile.owner_operator,
+                    holds: held.into_iter().map(Into::into).collect(),
+                }
             })
             .collect(),
     ))
@@ -1508,7 +1494,7 @@ async fn profiles(
 async fn declare_profile(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    declaration: Result<Json<ProfileDeclaration>, JsonRejection>,
+    declaration: Result<Json<wire::SubscriptionProfileDeclaration>, JsonRejection>,
 ) -> Result<Response, Refused> {
     let Json(declaration) = declaration?;
     named("declare_subscription_profile", &declaration.name)?;
@@ -1517,18 +1503,18 @@ async fn declare_profile(
         &control_plane.store,
         &organization,
         &declaration.name,
-        &declaration.owner,
+        declaration.owner.as_deref(),
     )
     .await?;
 
-    Ok(answered::<_, ProfileRecord>(declared))
+    Ok(answered::<_, wire::SubscriptionProfile>(declared))
 }
 
 async fn hold_profile_variable(
     State(control_plane): State<ControlPlane>,
     Path((organization, profile, variable)): Path<(String, String, String)>,
     secret: Result<Json<Secret>, JsonRejection>,
-) -> Result<Json<LoginRecord>, Refused> {
+) -> Result<Json<wire::SubscriptionProfileLogin>, Refused> {
     let entry = Entry::variable(&variable)?;
     held_in_profile(&control_plane, &organization, &profile, &entry, secret).await
 }
@@ -1537,7 +1523,7 @@ async fn hold_profile_file(
     State(control_plane): State<ControlPlane>,
     Path((organization, profile, path)): Path<(String, String, String)>,
     secret: Result<Json<Secret>, JsonRejection>,
-) -> Result<Json<LoginRecord>, Refused> {
+) -> Result<Json<wire::SubscriptionProfileLogin>, Refused> {
     let entry = Entry::file(&path)?;
     held_in_profile(&control_plane, &organization, &profile, &entry, secret).await
 }
@@ -1548,7 +1534,7 @@ async fn held_in_profile(
     profile: &str,
     entry: &Entry,
     secret: Result<Json<Secret>, JsonRejection>,
-) -> Result<Json<LoginRecord>, Refused> {
+) -> Result<Json<wire::SubscriptionProfileLogin>, Refused> {
     let Json(Secret { secret }) = secret?;
     let held = profile::hold(&control_plane.store, organization, profile, entry, &secret).await?;
 
@@ -3813,9 +3799,63 @@ fn diagnostic_message(diagnostic: &wire::Diagnostic) -> &str {
     }
 }
 
+impl From<domain::Operator> for wire::Operator {
+    fn from(operator: domain::Operator) -> Self {
+        Self {
+            id: operator.id.to_string().parse().expect("an Operator UUID"),
+            name: operator.name,
+        }
+    }
+}
+
+async fn show_operator(
+    State(control_plane): State<ControlPlane>,
+) -> Result<Json<wire::Operator>, Refused> {
+    Ok(Json(
+        crate::operator_identity::current(&control_plane.store)
+            .await?
+            .into(),
+    ))
+}
+
+async fn name_operator(
+    State(control_plane): State<ControlPlane>,
+    declaration: Result<Json<wire::OperatorDeclaration>, JsonRejection>,
+) -> Result<Response, Refused> {
+    let Json(declaration) = declaration?;
+    let declared = crate::operator_identity::name(&control_plane.store, &declaration.name).await?;
+    Ok(answered::<_, wire::Operator>(declared))
+}
+
 fn diagnosed(reason: Reason, field: Option<&'static str>) -> Refused {
     let field = field.map(str::to_owned);
     let (status, diagnostic) = match reason {
+        Reason::MissingOperator { operation } => (
+            if operation == "show_operator" {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::CONFLICT
+            },
+            wire::Diagnostic::SetupGapDiagnostic(wire::SetupGapDiagnostic {
+                kind: serde_json::json!("setup_gap"),
+                message: "name the Operator to use their own Profile".to_owned(),
+                field,
+                context: wire::SetupGapContext {
+                    prerequisite: "operator".to_owned(),
+                    resource: None,
+                    reference: None,
+                    organization: None,
+                    harness: None,
+                    method: None,
+                    sign_in: None,
+                },
+                next_steps: vec![wire::Action::NameOperatorAction(wire::NameOperatorAction {
+                    action: serde_json::json!("name_operator"),
+                    name: None,
+                    missing: vec!["name".to_owned()],
+                })],
+            }),
+        ),
         Reason::MissingReference {
             resource,
             reference,
@@ -4189,6 +4229,8 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
     Some(match (method, path) {
         ("GET", HARNESSES) => "list_harnesses",
         ("GET", SIGN_IN_METHOD) => "show_sign_in_method",
+        ("GET", OPERATOR) => "show_operator",
+        ("PUT", OPERATOR) => "name_operator",
         ("GET", ORGANIZATIONS) => "list_organizations",
         ("POST", ORGANIZATIONS) => "declare_organization",
         ("POST", STARTS) => "start",

@@ -1,3 +1,10 @@
+CREATE TABLE operator (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    declared_at TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE organization (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,

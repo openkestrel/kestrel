@@ -3,6 +3,7 @@ CREATE TABLE subscription_profile (
     organization_id TEXT NOT NULL REFERENCES organization (id),
     name TEXT NOT NULL,
     owner TEXT NOT NULL,
+    owner_operator TEXT REFERENCES operator (id),
     declared_at TEXT NOT NULL,
     UNIQUE (organization_id, name)
 ) STRICT;

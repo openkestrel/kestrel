@@ -135,7 +135,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         .await
         .unwrap();
     tx.profiles()
-        .declare(&organization, "jack", "Jack")
+        .declare(&organization, "jack", "Jack", None)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -233,7 +233,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
 
     let mut tx = store.begin().await.unwrap();
     tx.profiles()
-        .declare(&organization, "alex", "Alex")
+        .declare(&organization, "alex", "Alex", None)
         .await
         .unwrap();
     tx.commit().await.unwrap();
