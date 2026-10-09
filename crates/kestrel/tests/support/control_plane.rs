@@ -102,6 +102,8 @@ impl Started {
             &name,
             "--env",
             "RUST_LOG=info",
+            "--env",
+            "KESTREL_COMPUTE=local-exec",
             "--publish",
             "127.0.0.1::7717",
             "--publish",
