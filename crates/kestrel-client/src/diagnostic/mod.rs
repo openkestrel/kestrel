@@ -43,6 +43,7 @@ macro_rules! each_kind {
             D::SetupGapDiagnostic($d) => $body,
             D::UnavailableDiagnostic($d) => $body,
             D::InstanceTimeoutDiagnostic($d) => $body,
+            D::CredentialRejectedDiagnostic($d) => $body,
             D::AuthenticationFailedDiagnostic($d) => $body,
             D::ExecutableMissingDiagnostic($d) => $body,
             D::UnknownFailureDiagnostic($d) => $body,
@@ -70,7 +71,8 @@ pub fn exit_for(diagnostic: &wire::Diagnostic, status: StatusCode) -> Exit {
         | D::ForbiddenActionDiagnostic(_)
         | D::StateConflictDiagnostic(_)
         | D::ExpiredResourceDiagnostic(_)
-        | D::InvalidFieldDiagnostic(_) => Exit::Rejected,
+        | D::InvalidFieldDiagnostic(_)
+        | D::CredentialRejectedDiagnostic(_) => Exit::Rejected,
         D::SetupGapDiagnostic(_) => Exit::NotReady,
         D::UnavailableDiagnostic(_)
         | D::InstanceTimeoutDiagnostic(_)
@@ -453,6 +455,24 @@ pub(crate) mod tests {
                 })),
                 StatusCode::CONFLICT,
                 Exit::NotReady,
+            ),
+            (
+                diagnostic(json!({
+                    "kind": "credential_rejected",
+                    "message": "anthropic refused the key",
+                    "field": null,
+                    "context": {
+                        "organization": "acme",
+                        "harness": "claude-code",
+                        "method": "anthropic-api-key",
+                        "provider": "anthropic",
+                        "status": 401,
+                        "provider_error": "authentication_error",
+                    },
+                    "next_steps": [],
+                })),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Exit::Rejected,
             ),
         ];
 
