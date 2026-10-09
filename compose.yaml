@@ -25,8 +25,11 @@ services:
     networks: [daemon]
     restart: unless-stopped
 
+  # Each product image defaults to what main last published, and keeps its build so
+  # `compose.source.env` can build all three from this checkout under local names instead.
   kestrel:
-    image: ${KESTREL_CONTROL_IMAGE:-kestrel}
+    image: ${KESTREL_CONTROL_IMAGE:-ghcr.io/openkestrel/kestrel:main}
+    pull_policy: ${KESTREL_PULL_POLICY:-missing}
     build:
       context: .
       dockerfile: images/kestrel/Dockerfile
@@ -38,8 +41,9 @@ services:
     environment:
       DOCKER_HOST: tcp://socket-proxy:2375
       KESTREL_NETWORK: ${KESTREL_LINK_NETWORK:-kestrel-link}
-      KESTREL_IMAGE: ${KESTREL_ENV_IMAGE:-kestrel-env}
+      KESTREL_IMAGE: ${KESTREL_ENV_IMAGE:-ghcr.io/openkestrel/kestrel-env:main}
       KESTREL_LINK: http://kestrel:7717
+      KESTREL_CLIENT_URL: ${KESTREL_CLIENT_URL:-http://localhost:${KESTREL_CLIENT_PORT:-7719}}
       RUST_LOG: info
     volumes:
       - kestrel:/var/lib/kestrel
@@ -58,15 +62,16 @@ services:
 
   # The browser Client, on the operator boundary's origin: its assets, and `/operator` forwarded
   # to the control plane, over plain HTTP. It adds no trust, so it is published on the host's
-  # loopback too.
+  # loopback too. It waits on nothing, so a control plane that cannot start still has a page
+  # that says so.
   client:
-    image: ${KESTREL_CLIENT_IMAGE:-kestrel-client}
+    image: ${KESTREL_CLIENT_IMAGE:-ghcr.io/openkestrel/kestrel-client:main}
+    pull_policy: ${KESTREL_PULL_POLICY:-missing}
     build:
       context: .
       dockerfile: images/kestrel-client/Dockerfile
-    depends_on:
-      kestrel:
-        condition: service_healthy
+    environment:
+      KESTREL_COMPOSE: "true"
     networks: [operator]
     ports:
       - 127.0.0.1:${KESTREL_CLIENT_PORT-7719}:8080
@@ -75,7 +80,8 @@ services:
   # Built here and started by nothing: an Instance is a container the control plane
   # provisions for one Workspace, never a service beside it.
   kestrel-env:
-    image: ${KESTREL_ENV_IMAGE:-kestrel-env}
+    image: ${KESTREL_ENV_IMAGE:-ghcr.io/openkestrel/kestrel-env:main}
+    pull_policy: ${KESTREL_PULL_POLICY:-missing}
     build:
       context: .
       dockerfile: images/kestrel-env/Dockerfile

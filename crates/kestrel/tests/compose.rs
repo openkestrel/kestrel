@@ -54,6 +54,28 @@ fn the_client_port_serves_the_client_and_the_operator_interface() {
     assert!(organizations.contains("\"acme\""), "{organizations}");
 }
 
+/// With the control plane stopped the Client still opens a deep link, and its operator path says
+/// in a typed Diagnostic that nothing answered, which is what its outage page reads.
+#[test]
+#[ignore = "builds images and brings a stack up"]
+fn the_client_outlives_its_control_plane() {
+    let stack = Stack::up();
+    stack.stop(CONTROL_PLANE);
+
+    let (opened, shell) = stack.what_the_client_serves("/organizations/acme");
+    assert_eq!(opened, 200, "{shell}");
+    assert!(shell.contains("<title>kestrel</title>"), "{shell}");
+
+    let (status, said) = stack.what_the_client_serves("/operator/organizations");
+    assert_eq!(status, 502, "{said}");
+    let diagnostic: Value = serde_json::from_str(&said).expect("a Diagnostic");
+    assert_eq!(diagnostic["kind"], "connection_failed");
+    assert_eq!(
+        diagnostic["next_steps"][0],
+        serde_json::json!({"action": "check_connection", "service": "control_plane", "compose": true})
+    );
+}
+
 /// The compose file must be the stable operator-facing stack with nothing set: one project,
 /// one volume, one link network and its images, under the names an operator already knows.
 #[test]
@@ -87,16 +109,29 @@ fn the_operator_supplies_nothing() {
         model["services"][CLIENT]
     );
     assert_eq!(model["networks"]["link"]["name"], "kestrel-link");
-    assert_eq!(model["services"]["kestrel"]["image"], "kestrel");
-    assert_eq!(model["services"]["kestrel-env"]["image"], "kestrel-env");
-    assert_eq!(model["services"][CLIENT]["image"], "kestrel-client");
+    assert_eq!(
+        model["services"]["kestrel"]["image"],
+        "ghcr.io/openkestrel/kestrel:main"
+    );
+    assert_eq!(
+        model["services"]["kestrel-env"]["image"],
+        "ghcr.io/openkestrel/kestrel-env:main"
+    );
+    assert_eq!(
+        model["services"][CLIENT]["image"],
+        "ghcr.io/openkestrel/kestrel-client:main"
+    );
     assert_eq!(
         model["services"]["kestrel"]["environment"]["KESTREL_NETWORK"],
         "kestrel-link"
     );
     assert_eq!(
         model["services"]["kestrel"]["environment"]["KESTREL_IMAGE"],
-        "kestrel-env"
+        "ghcr.io/openkestrel/kestrel-env:main"
+    );
+    assert_eq!(
+        model["services"]["kestrel"]["environment"]["KESTREL_CLIENT_URL"],
+        "http://localhost:7719"
     );
     assert_eq!(
         model["services"]["kestrel"]["ports"],
@@ -117,6 +152,61 @@ fn the_operator_supplies_nothing() {
             "published": "7719",
             "protocol": "tcp",
         }])
+    );
+}
+
+/// The control plane names the Client by the port compose publishes it on.
+#[test]
+#[ignore = "renders the compose file with docker"]
+fn the_client_url_the_control_plane_names_is_the_port_the_client_is_published_on() {
+    let model = model(compose::rendered_given(&[("KESTREL_CLIENT_PORT", "8000")]));
+
+    assert_eq!(model["services"][CLIENT]["ports"][0]["published"], "8000");
+    assert_eq!(
+        model["services"]["kestrel"]["environment"]["KESTREL_CLIENT_URL"],
+        "http://localhost:8000"
+    );
+}
+
+/// A control plane that cannot start, or is still starting, leaves the Client up to say so.
+#[test]
+#[ignore = "renders the compose file with docker"]
+fn the_client_starts_whatever_the_control_plane_does() {
+    let model = model(compose::rendered_against_an_empty_environment());
+
+    assert!(
+        model["services"][CLIENT].get("depends_on").is_none(),
+        "{}",
+        model["services"][CLIENT]
+    );
+    assert_eq!(
+        model["services"][CLIENT]["environment"]["KESTREL_COMPOSE"],
+        "true"
+    );
+}
+
+/// The source build names every product image locally, provisions Instances from the
+/// `kestrel-env` it built, and builds rather than pulls.
+#[test]
+#[ignore = "renders the compose file with docker"]
+fn a_source_build_runs_the_images_it_built_and_pulls_none_over_them() {
+    let rendered = compose::rendered_from_source();
+    assert_eq!(rendered.code, 0, "{}", rendered.err);
+    let model = model(rendered);
+    let services = &model["services"];
+
+    for (service, image) in [
+        (CONTROL_PLANE, "kestrel"),
+        (CLIENT, "kestrel-client"),
+        ("kestrel-env", "kestrel-env"),
+    ] {
+        assert_eq!(services[service]["image"], image);
+        assert_eq!(services[service]["pull_policy"], "build", "{service}");
+        assert!(services[service]["build"].is_object(), "{service}");
+    }
+    assert_eq!(
+        services[CONTROL_PLANE]["environment"]["KESTREL_IMAGE"],
+        "kestrel-env"
     );
 }
 

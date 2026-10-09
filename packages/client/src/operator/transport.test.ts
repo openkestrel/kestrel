@@ -185,6 +185,36 @@ describe("a read", () => {
 			],
 		});
 	});
+
+	it("is unreachable when the server in front could not reach it, keeping its compose evidence", async () => {
+		const { operator } = answering(() =>
+			json(502, {
+				kind: "connection_failed",
+				message: "kestrel isn't running",
+				field: null,
+				context: { url: "http://localhost:7719", operation: "GET /operator/organizations" },
+				next_steps: [{ action: "check_connection", service: "control_plane", compose: true }],
+			}),
+		);
+
+		const failed = await unreachableOf(operator.read("/operator/organizations"));
+
+		expect(failed.diagnostic).toEqual({
+			kind: "connection_failed",
+			message: "the control plane could not be reached",
+			field: null,
+			context: { url: ORIGIN, operation: "GET /operator/organizations" },
+			next_steps: [
+				{
+					action: "retry_read",
+					operation: "GET /operator/organizations",
+					resource: null,
+					retry_after_seconds: null,
+				},
+				{ action: "check_connection", service: "control_plane", compose: true },
+			],
+		});
+	});
 });
 
 describe("a write", () => {

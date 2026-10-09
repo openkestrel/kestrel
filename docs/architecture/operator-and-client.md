@@ -20,6 +20,10 @@ routes.
 - Routes live under `/operator/organizations/{organization}/…`, plus a few Organization-free ones
   (`/operator/organizations`, `/operator/starts`, `/operator/events/{record}`). The route table is
   `operator::router`.
+- `GET /` answers `text/plain` for a person who opened the port in a browser: it names the API and
+  the browser Client's URL, `KESTREL_CLIENT_URL` (default `http://localhost:7719`, validated as an
+  `http`/`https` URL). Compose derives it from the Client's published port, so a readiness or
+  status read can hand on the configured URL rather than guessing one from the API's port.
 - Handlers are thin: parse, call the domain module (`workspace`, `work`, `trigger`, `integration`,
   `start`, `declaration`…), and map the result.
 
@@ -329,11 +333,13 @@ does not serve it: a web server in front does, on the operator interface's origi
 ([ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md)). In compose that is
 `images/kestrel-client`, Caddy on the host's loopback at 7719, over plain HTTP with no certificate,
 so each tab holds one event stream and subscribes over requests
-([ADR-0045](../adr/0045-a-browser-tab-holds-one-stream-and-subscribes-over-requests.md)). Its Caddyfile answers:
+([ADR-0045](../adr/0045-a-browser-tab-holds-one-stream-and-subscribes-over-requests.md)). It waits
+on nothing in compose, so a control plane that cannot start, an incompatible store included, still
+leaves a page that says so. Its Caddyfile answers:
 
 | Path | Answer |
 | --- | --- |
-| `/operator` or under it | Forwarded to the control plane with `Host` and `Origin` unchanged |
+| `/operator` or under it | Forwarded to the control plane with `Host` and `Origin` unchanged; a `502` `connection_failed` Diagnostic when nothing answered, whose `check_connection` says `compose` when `KESTREL_COMPOSE` is set |
 | Under `/assets/` | That file, cached for good, or 404 when absent |
 | Anything else | The file if it exists, else `index.html`, uncached, so a deep link survives a refresh |
 
@@ -341,13 +347,19 @@ The Client's types come from
 `openapi/operator.json`; its transport (`src/operator/transport.ts`) turns every failure into a
 typed diagnostic: the control plane's own, or an `unknown_response`, `connection_failed` or
 `client_failure` it makes for a plain `Refusal`, a non-JSON answer, no answer or a fault in the
-page, naming its own origin as the control plane. A read offers reading again after any
+page, naming its own origin as the control plane. The Caddyfile's `connection_failed` becomes the
+same `Unreachable` a failed fetch does, keeping its compose evidence. A read offers reading again after any
 `Retry-After`; a write whose answer was lost or unexplained offers inspection, never a resend.
 `src/operator/diagnostic-view.ts` binds each next step to a route link that keeps the
 Organization, a re-read, a field of the form, a write the person chooses (missing inputs
 collected, a destructive one confirmed beside its consequence), or a sentence where the browser
 has no screen; `src/components/refusal.tsx` renders them, and a failed Session's `diagnostic` in
-the Sessions tab. `src/operator/tab-stream.ts` holds the tab's one
+the Sessions tab. Only an unreachable control plane is an outage
+(`src/operator/outage.ts`): `src/components/outage.tsx` covers the still-mounted page with "kestrel
+isn't running", the compose commands when the evidence says compose, and checks again at growing
+intervals capped at 30 s for 20 attempts, then on request; an answer invalidates every query, so
+reads resume without a reload. A refusal or an unreadable answer came from a running control plane
+and keeps its own Refusal. `src/operator/tab-stream.ts` holds the tab's one
 stream: it reserves lazily, subscribes each live read under its own id, and after any drop reserves
 again and re-subscribes from each subscription's current request. A plain `404` on a subscribe is
 the reservation forgotten; a typed one is the subscription refused, which is not retried.

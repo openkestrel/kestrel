@@ -23,7 +23,7 @@ export class Refused extends Error {
 export class Unreachable extends Error {
 	readonly diagnostic: Diagnostic;
 
-	constructor(url: string, call: Call, cause: unknown) {
+	constructor(url: string, call: Call, cause: unknown, compose = false) {
 		super("the control plane could not be reached", { cause });
 		this.name = "Unreachable";
 		this.diagnostic = {
@@ -31,7 +31,7 @@ export class Unreachable extends Error {
 			message: this.message,
 			field: null,
 			context: { url, operation: call.operation },
-			next_steps: genericSteps(call, undefined),
+			next_steps: genericSteps(call, undefined, undefined, compose),
 		};
 	}
 }
@@ -50,6 +50,10 @@ export function diagnosisOf(error: unknown): Diagnostic {
 			{ action: "inspect_operation", operation: "browser", resource: null, uncertain: false },
 		],
 	};
+}
+
+export function saysCompose(diagnostic: Diagnostic): boolean {
+	return diagnostic.next_steps.some((step) => step.action === "check_connection" && step.compose);
 }
 
 export function operatorPath(...segments: string[]): string {
@@ -71,7 +75,15 @@ export function transport(
 			if (error instanceof DOMException && error.name === "AbortError") throw error;
 			throw new Unreachable(origin ?? location.origin, call, error);
 		}
-		if (!response.ok) throw await refusal(response, call);
+		if (!response.ok) {
+			const refused = await refusal(response, call);
+			const { diagnostic } = refused;
+			// The web server in front answers this when the control plane did not answer at all.
+			if (diagnostic.kind === "connection_failed" && response.status >= 502) {
+				throw new Unreachable(origin ?? location.origin, call, refused, saysCompose(diagnostic));
+			}
+			throw refused;
+		}
 		return response;
 	}
 
@@ -157,8 +169,13 @@ async function refusal(response: Response, call: Call): Promise<Refused> {
 }
 
 // A write whose answer is lost or unexplained may have landed, so it is inspected, never replayed.
-function genericSteps(call: Call, status: number | undefined, retryAfter?: number): Action[] {
-	const check: Action = { action: "check_connection", service: "control_plane", compose: false };
+function genericSteps(
+	call: Call,
+	status: number | undefined,
+	retryAfter?: number,
+	compose = false,
+): Action[] {
+	const check: Action = { action: "check_connection", service: "control_plane", compose };
 	if (call.read) {
 		return [
 			{
