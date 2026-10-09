@@ -219,6 +219,30 @@ function modeOption(warns_cache: boolean) {
 
 type Answer = { status: number; body: unknown };
 
+function conflict(message: string, state: string, field: string | null = null) {
+	return {
+		kind: "state_conflict",
+		message,
+		field,
+		context: {
+			operation: "set_session_option",
+			resource: "session",
+			reference: SESSION_ID,
+			organization: ORGANIZATION,
+			state,
+			holding_session: null,
+		},
+		next_steps: [
+			{
+				action: "inspect_resource",
+				resource: "session",
+				reference: SESSION_ID,
+				organization: ORGANIZATION,
+			},
+		],
+	};
+}
+
 // Held messages, working Turns and harness refusals need a supervisor, so the Session and
 // Workspace reads and writes are scripted while the Transcript, presence and name rule stay real.
 class Scripted {
@@ -474,7 +498,7 @@ test("a working Session labels the post and lets its author amend a Held Message
 	});
 });
 
-test("a stale amendment refusal is shown with its field and phase", async ({ page, request }) => {
+test("a stale amendment refusal is shown with its field and state", async ({ page, request }) => {
 	const workspace = await opened(request);
 	const scripted = new Scripted(workspace);
 	scripted.workspace = workspaceRead(workspace, {
@@ -492,11 +516,7 @@ test("a stale amendment refusal is shown with its field and phase", async ({ pag
 	scripted.session = sessionRead({ state: "working" });
 	scripted.edit = {
 		status: 409,
-		body: {
-			message: "the held message was taken by the Turn",
-			field: "id",
-			phase: "working",
-		},
+		body: conflict("the held message was taken by the Turn", "working", "id"),
 	};
 	await scripted.install(page);
 	await identified(page.context(), "jack");
@@ -524,7 +544,7 @@ test("Send now reports the post that landed and the interrupt that did not", asy
 	scripted.session = sessionRead({ state: "working" });
 	scripted.interrupt = {
 		status: 409,
-		body: { message: "the session is waiting", phase: "waiting" },
+		body: conflict("the session is waiting", "waiting"),
 	};
 	await scripted.install(page);
 	await identified(page.context(), "jack");
@@ -637,7 +657,7 @@ test("an option change warns about the cache before it is confirmed", async ({ p
 	});
 	scripted.option = {
 		status: 409,
-		body: { message: "the session is working", phase: "working" },
+		body: conflict("the session is working", "working"),
 	};
 	await page.reload();
 	await page.locator('[data-option="model"] [data-option-value="scripted-max"]').click();

@@ -69,7 +69,7 @@ export function DiffTab({ organization, workspace }: { organization: string; wor
 					<Skeleton className="h-8 w-full" />
 				)
 			) : changes.isError ? (
-				<Refusal error={changes.error} />
+				<Refusal error={changes.error} retry={() => void changes.refetch()} />
 			) : (
 				changes.data.repositories.map((repository) => (
 					<article
@@ -159,7 +159,7 @@ function TextSection({
 						{read.isPending ? (
 							<Skeleton className="h-6 w-full" />
 						) : read.isError ? (
-							<Refusal error={read.error} />
+							<Refusal error={read.error} retry={() => void read.refetch()} />
 						) : (
 							read.data.repositories.map((repository) => (
 								<div key={repository.repository} className="grid gap-1">

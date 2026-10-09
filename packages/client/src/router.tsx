@@ -9,6 +9,10 @@ export function getRouter() {
 			queries: {
 				retry: (failures, error) =>
 					!(error instanceof Refused && error.status < 500) && failures < 2,
+				retryDelay: (failures, error) =>
+					error instanceof Refused && error.retryAfter !== undefined
+						? error.retryAfter * 1000
+						: Math.min(1000 * 2 ** failures, 30_000),
 			},
 		},
 	});

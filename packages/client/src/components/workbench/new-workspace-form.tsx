@@ -2,7 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
-import { Refusal } from "#/components/refusal";
+import { NextSteps, Refusal } from "#/components/refusal";
 import { Button } from "#/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "#/components/ui/collapsible";
 import { Input } from "#/components/ui/input";
@@ -31,7 +31,7 @@ import {
 import { participant } from "#/operator/participant";
 import { queueQuery } from "#/operator/queries";
 import { openingQueueLine } from "#/operator/queue-line";
-import { Refused } from "#/operator/transport";
+import { diagnosisOf } from "#/operator/transport";
 import { PaneHeading } from "./workbench";
 
 const PLACED_FIELDS = new Set([
@@ -45,6 +45,16 @@ const PLACED_FIELDS = new Set([
 ]);
 
 const OPTION_FIELDS = new Set(["profile", "branch", "model"]);
+
+const FIELD_IDS: Record<string, string> = {
+	project: "new-workspace-project",
+	agent: "new-workspace-agent",
+	profile: "new-workspace-profile",
+	branch: "new-workspace-branch",
+	model: "new-workspace-model",
+	brief: "new-workspace-brief",
+	participant: "new-workspace-name",
+};
 
 export function NewWorkspaceForm({ organization }: { organization: string }) {
 	const navigate = useNavigate();
@@ -86,18 +96,23 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 			});
 		},
 		onError: (error) => {
-			if (error instanceof Refused && OPTION_FIELDS.has(error.field ?? "")) {
-				hold({ options: true });
-			}
+			if (OPTION_FIELDS.has(diagnosisOf(error).field ?? "")) hold({ options: true });
 		},
 	});
 
-	const refused = opening.error instanceof Refused ? opening.error : undefined;
+	const refused = opening.isError ? diagnosisOf(opening.error) : undefined;
 	const placed = (field: string): string | undefined =>
 		refused?.field === field ? refused.message : missing[field];
-	const at_the_top =
-		opening.isError &&
-		!(opening.error instanceof Refused && PLACED_FIELDS.has(opening.error.field ?? ""));
+	const at_the_top = refused !== undefined && !PLACED_FIELDS.has(refused.field ?? "");
+	// The error already stands at its field; the rest are repairs, such as declaring what is missing.
+	const repair = (field: string) =>
+		refused?.field === field ? (
+			<NextSteps
+				steps={refused.next_steps.filter(
+					(step) => !(step.action === "correct_field" && step.field === field),
+				)}
+			/>
+		) : undefined;
 
 	if (draft === undefined || projects.isPending || agents.isPending || profiles.isPending) {
 		return (
@@ -113,7 +128,14 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 			<>
 				<PaneHeading level={1}>New Workspace</PaneHeading>
 				<div className="p-4">
-					<Refusal error={projects.error ?? agents.error ?? profiles.error} />
+					<Refusal
+						error={projects.error ?? agents.error ?? profiles.error}
+						retry={() => {
+							void projects.refetch();
+							void agents.refetch();
+							void profiles.refetch();
+						}}
+					/>
 				</div>
 			</>
 		);
@@ -142,12 +164,13 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 		<>
 			<PaneHeading level={1}>New Workspace</PaneHeading>
 			<form onSubmit={submit} className="grid gap-4 p-4">
-				{at_the_top && <Refusal error={opening.error} />}
+				{at_the_top && <Refusal error={opening.error} correct={correct} />}
 
 				<Field
 					label="Project"
 					htmlFor="new-workspace-project"
 					error={placed("project")}
+					repair={repair("project")}
 					hint="Its repositories and base branch are the work's."
 				>
 					<NativeSelect
@@ -174,6 +197,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 					label="Agent"
 					htmlFor="new-workspace-agent"
 					error={placed("agent")}
+					repair={repair("agent")}
 					hint="Its harness and model are the Session's."
 				>
 					<NativeSelect
@@ -203,6 +227,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 								label="Model"
 								htmlFor="new-workspace-model"
 								error={placed("model")}
+								repair={repair("model")}
 								hint="Without one, the Agent's, then the harness's default."
 							>
 								<Input
@@ -222,6 +247,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 								label="Subscription Profile"
 								htmlFor="new-workspace-profile"
 								error={placed("profile")}
+								repair={repair("profile")}
 								hint="The access the harness runs under."
 							>
 								<NativeSelect
@@ -248,6 +274,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 								label="Branch"
 								htmlFor="new-workspace-branch"
 								error={placed("branch")}
+								repair={repair("branch")}
 								hint="Without one, the Project's base branch."
 							>
 								<Input
@@ -296,6 +323,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 					label="Brief"
 					htmlFor="new-workspace-brief"
 					error={placed("brief")}
+					repair={repair("brief")}
 					hint="Type, paste, or drop a file; it is read here and never uploaded. Empty is fine: the Session then waits for your first message."
 				>
 					<Textarea
@@ -318,6 +346,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 						label="Your name"
 						htmlFor="new-workspace-name"
 						error={placed("participant")}
+						repair={repair("participant")}
 						hint="Remembered in this browser; your Brief is written under it."
 					>
 						<Input
@@ -345,16 +374,22 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 	);
 }
 
+function correct(field: string) {
+	document.getElementById(FIELD_IDS[field] ?? "")?.focus();
+}
+
 function Field({
 	label,
 	htmlFor,
 	error,
+	repair,
 	hint,
 	children,
 }: {
 	label: string;
 	htmlFor: string;
 	error?: string;
+	repair?: ReactNode;
 	hint?: string;
 	children: ReactNode;
 }) {
@@ -372,6 +407,7 @@ function Field({
 					{error}
 				</p>
 			)}
+			{repair}
 		</div>
 	);
 }

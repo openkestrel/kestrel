@@ -327,7 +327,15 @@ the browser speaks HTTP/2 and every tab opens its own event streams
 | Anything else | The file if it exists, else `index.html`, uncached, so a deep link survives a refresh |
 
 The Client's types come from
-`openapi/operator.json`; its transport (`src/operator/transport.ts`) parses a refusal's `message`
-and, when present, `field` and `phase`, and reads SSE with `Last-Event-ID` as the cursor.
+`openapi/operator.json`; its transport (`src/operator/transport.ts`) turns every failure into a
+typed diagnostic: the control plane's own, or an `unknown_response`, `connection_failed` or
+`client_failure` it makes for a plain `Refusal`, a non-JSON answer, no answer or a fault in the
+page, naming its own origin as the control plane. A read offers reading again after any
+`Retry-After`; a write whose answer was lost or unexplained offers inspection, never a resend.
+`src/operator/diagnostic-view.ts` binds each next step to a route link that keeps the
+Organization, a re-read, a field of the form, a write the person chooses (missing inputs
+collected, a destructive one confirmed beside its consequence), or a sentence where the browser
+has no screen; `src/components/refusal.tsx` renders them, and a failed Session's `diagnostic` in
+the Sessions tab. It reads SSE with `Last-Event-ID` as the cursor.
 `src/operator/follow.ts` holds the two live reads: an Organization route's change notices, which
 invalidate TanStack Query keys, and a Workspace route's Transcript follow.
