@@ -9,7 +9,8 @@ use crate::declined::{Next, Reason, Resource};
 use crate::domain::{OperatorId, Organization, SubscriptionProfile, SubscriptionProfileId};
 use crate::keyring::Keyring;
 use crate::profile::{Contents, Entry, Held, Kind};
-use crate::store::Declared;
+use crate::sign_in::{Authentication, Source};
+use crate::store::{Declared, sign_in};
 
 pub struct Profiles<'a> {
     connection: &'a mut SqliteConnection,
@@ -146,19 +147,22 @@ impl<'a> Profiles<'a> {
         profile: &SubscriptionProfile,
         entry: &Entry,
         secret: &str,
+        authentication: &Authentication,
     ) -> Result<Held> {
         let sealed = self.keyring.seal(&bound_to(profile, entry), secret)?;
         let held = Held {
             entry: entry.clone(),
             set_at: Timestamp::now(),
+            revision: sign_in::mint(self.connection, authentication).await?,
         };
 
         sqlx::query(
             "INSERT INTO subscription_profile_entry
-                 (profile_id, organization_id, kind, name, sealed, set_at)
-             VALUES (?, ?, ?, ?, ?, ?)
+                 (profile_id, organization_id, kind, name, sealed, set_at, revision)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (profile_id, kind, name)
-             DO UPDATE SET sealed = excluded.sealed, set_at = excluded.set_at",
+             DO UPDATE SET sealed = excluded.sealed, set_at = excluded.set_at,
+                           revision = excluded.revision",
         )
         .bind(profile.id.to_string())
         .bind(profile.organization.to_string())
@@ -166,6 +170,7 @@ impl<'a> Profiles<'a> {
         .bind(&entry.name)
         .bind(sealed)
         .bind(held.set_at.to_string())
+        .bind(held.revision)
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("holding the {entry} in the profile {}", profile.name))?;
@@ -175,7 +180,7 @@ impl<'a> Profiles<'a> {
 
     pub async fn held(&mut self, profile: &SubscriptionProfile) -> Result<Vec<Held>> {
         sqlx::query(
-            "SELECT kind, name, set_at
+            "SELECT kind, name, set_at, revision
              FROM subscription_profile_entry
              WHERE profile_id = ?
              ORDER BY kind, name",
@@ -191,9 +196,26 @@ impl<'a> Profiles<'a> {
                     name: row.get("name"),
                 },
                 set_at: row.get::<String, _>("set_at").parse()?,
+                revision: row.get("revision"),
             })
         })
         .collect()
+    }
+
+    pub async fn revision_of(
+        &mut self,
+        profile: &SubscriptionProfile,
+        entry: &Entry,
+    ) -> Result<Option<i64>> {
+        Ok(sqlx::query_scalar(
+            "SELECT revision FROM subscription_profile_entry
+             WHERE profile_id = ? AND kind = ? AND name = ?",
+        )
+        .bind(profile.id.to_string())
+        .bind(entry.kind.as_str())
+        .bind(&entry.name)
+        .fetch_optional(&mut *self.connection)
+        .await?)
     }
 
     pub async fn contents(&mut self, profile: &SubscriptionProfile) -> Result<Contents> {
@@ -240,14 +262,20 @@ impl<'a> Profiles<'a> {
                 kind: Kind::File,
                 name: path.clone(),
             };
+            if self.revision_of(profile, &entry).await?.is_none() {
+                continue;
+            }
             let sealed = self.keyring.seal(&bound_to(profile, &entry), contents)?;
+            let revision =
+                sign_in::mint(self.connection, &Authentication::unchecked(Source::Refresh)).await?;
             let updated = sqlx::query(
                 "UPDATE subscription_profile_entry
-                 SET sealed = ?, set_at = ?
+                 SET sealed = ?, set_at = ?, revision = ?
                  WHERE profile_id = ? AND kind = ? AND name = ?",
             )
             .bind(sealed)
             .bind(Timestamp::now().to_string())
+            .bind(revision)
             .bind(profile.id.to_string())
             .bind(entry.kind.as_str())
             .bind(&entry.name)

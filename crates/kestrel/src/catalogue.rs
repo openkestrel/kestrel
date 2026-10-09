@@ -12,6 +12,7 @@ pub fn harnesses() -> &'static [HarnessCatalogueEntry] {
 }
 
 pub fn sign_in_method(
+    operation: &'static str,
     harness: &str,
     method: &str,
 ) -> anyhow::Result<&'static kestrel_operator_types::SignInMethod> {
@@ -22,7 +23,7 @@ pub fn sign_in_method(
         .find(|row| row.name == harness)
         .ok_or_else(|| Reason::InvalidField {
             field: "harness",
-            operation: "show_sign_in_method",
+            operation,
             constraint: Constraint::Offered,
             allowed: Some(harnesses().iter().map(|row| row.name.clone()).collect()),
             message: format!("the harness {harness} has no guided Sign-in Methods"),
@@ -33,7 +34,7 @@ pub fn sign_in_method(
         .find(|offered| offered.id == method)
         .ok_or_else(|| Reason::InvalidField {
             field: "method",
-            operation: "show_sign_in_method",
+            operation,
             constraint: Constraint::Offered,
             allowed: Some(
                 row.sign_in_methods

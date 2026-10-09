@@ -1035,6 +1035,118 @@
         }
       }
     },
+    "/operator/organizations/{organization}/sign-ins": {
+      "get": {
+        "operationId": "listSignIns",
+        "summary": "List the material saved for catalogued Sign-in Methods.",
+        "description": "One item per catalogued method with material saved: subscriptions from the Operator's own Profiles, keys from the Organization's Provider Credentials. A key two harnesses offer appears once for each, sharing its revision and authentication evidence but never its model-use evidence. An empty slot is absent; the harness catalogue describes what could be saved. Nothing read here is the material, a hash of it, a login file or a provider's own words.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every catalogued method with material saved, in catalogue order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SavedSignIn"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}": {
+      "put": {
+        "operationId": "saveSignIn",
+        "summary": "Save material for a catalogued Sign-in Method.",
+        "description": "A subscription is held in the Operator's own Profile, declared after the Operator when they have none; a key is held as the Organization's Provider Credential the method fills. Nobody is asked which. The value is checked for shape before anything is stored, and a key whose provider documents an authenticated model-metadata read is checked that way, bounded to ten seconds; nothing ever spends model usage. A provider refusing the key itself is 422 and keeps what was saved before; a refusal about permission, credit or another matter saves the key unchecked. A provider that cannot be asked, times out or limits the rate saves it unchecked and answers 503 carrying what was saved. Material replaced while this was being checked is 409, and the replacement stands.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "harness",
+            "in": "path",
+            "required": true,
+            "description": "A catalogued harness.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "method",
+            "in": "path",
+            "required": true,
+            "description": "One of that harness's Sign-in Method ids.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInMaterial"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved, with whatever authentication evidence its check established.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedSignIn"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
     "/operator/organizations/{organization}/integrations": {
       "get": {
         "operationId": "listIntegrations",
@@ -2863,6 +2975,230 @@
         "required": [
           "kind",
           "variable"
+        ],
+        "additionalProperties": false
+      },
+      "SignInMaterial": {
+        "type": "object",
+        "description": "Never answered back, logged or kept in a diagnostic.",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "The token or key, or the login file's whole contents, as the method's input says."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "SavedSignIn": {
+        "type": "object",
+        "description": "Material saved for a catalogued Sign-in Method, as everything but the Session it is handed to sees it.",
+        "properties": {
+          "harness": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "subscription",
+              "key"
+            ]
+          },
+          "holding": {
+            "$ref": "#/components/schemas/SignInHolding"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Minted for every accepted write of the material, a generic Profile or Provider Credential write included, and never reused."
+          },
+          "saved_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "authentication": {
+            "$ref": "#/components/schemas/AuthenticationEvidence"
+          },
+          "model_use": {
+            "type": "array",
+            "description": "The latest result per model of this harness using this revision. A result for one model never stands for another.",
+            "items": {
+              "$ref": "#/components/schemas/ModelUseEvidence"
+            }
+          }
+        },
+        "required": [
+          "harness",
+          "method",
+          "kind",
+          "holding",
+          "revision",
+          "saved_at",
+          "authentication",
+          "model_use"
+        ],
+        "additionalProperties": false
+      },
+      "SignInHolding": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "enum": [
+              "subscription_profile",
+              "provider_credential"
+            ]
+          },
+          "reference": {
+            "type": "string",
+            "description": "The Profile's name, or the Provider Credential's variable."
+          },
+          "fills": {
+            "$ref": "#/components/schemas/SignInFill"
+          }
+        },
+        "required": [
+          "resource",
+          "reference",
+          "fills"
+        ],
+        "additionalProperties": false
+      },
+      "AuthenticationEvidence": {
+        "type": "object",
+        "description": "Whether this revision authenticates, which says nothing of whether a harness can use a model with it. `login_completed` is a finished vendor sign-in and `credential_accepted` a provider accepting the one request recorded in `provider_check`; neither is a model call. Expiry and lack of coverage are only ever established by evidence.",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "unchecked",
+              "login_completed",
+              "credential_accepted",
+              "authentication_failed",
+              "expired",
+              "not_covered"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "import",
+              "provider_check",
+              "relay",
+              "generic_write",
+              "refresh",
+              "session"
+            ]
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "provider_check": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProviderCheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "source",
+          "observed_at",
+          "provider_check"
+        ],
+        "additionalProperties": false
+      },
+      "ProviderCheck": {
+        "type": "object",
+        "description": "One authenticated model-metadata read. Only `rejected` says the provider refused the credential; `inconclusive` is a refusal about permission, credit or another matter; `unavailable` includes a timeout and a rate or quota limit.",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "anthropic",
+              "openai"
+            ]
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "rejected",
+              "inconclusive",
+              "unavailable"
+            ]
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "provider_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The provider's error type or code, never its message."
+          }
+        },
+        "required": [
+          "provider",
+          "outcome",
+          "status",
+          "provider_error"
+        ],
+        "additionalProperties": false
+      },
+      "ModelUseEvidence": {
+        "type": "object",
+        "properties": {
+          "harness": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "worked",
+              "authentication_failed",
+              "not_covered"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "model_test",
+              "session"
+            ]
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "harness",
+          "model",
+          "image",
+          "result",
+          "source",
+          "observed_at"
         ],
         "additionalProperties": false
       },
@@ -5695,6 +6031,7 @@
           { "$ref": "#/components/schemas/SetupGapDiagnostic" },
           { "$ref": "#/components/schemas/UnavailableDiagnostic" },
           { "$ref": "#/components/schemas/InstanceTimeoutDiagnostic" },
+          { "$ref": "#/components/schemas/CredentialRejectedDiagnostic" },
           { "$ref": "#/components/schemas/AuthenticationFailedDiagnostic" },
           { "$ref": "#/components/schemas/ExecutableMissingDiagnostic" },
           { "$ref": "#/components/schemas/UnknownFailureDiagnostic" },
@@ -5903,9 +6240,13 @@
           "service": { "type": "string" },
           "resource": { "type": ["string", "null"] },
           "operation": { "type": "string" },
-          "retry_after_seconds": { "type": ["integer", "null"] }
+          "retry_after_seconds": { "type": ["integer", "null"] },
+          "saved": {
+            "description": "What a write saved before the service it then asked could not answer.",
+            "anyOf": [{ "$ref": "#/components/schemas/SavedSignIn" }, { "type": "null" }]
+          }
         },
-        "required": ["service", "resource", "operation", "retry_after_seconds"]
+        "required": ["service", "resource", "operation", "retry_after_seconds", "saved"]
       },
       "UnavailableDiagnostic": {
         "properties": {
@@ -5927,6 +6268,31 @@
           "operation": { "type": "string" }
         },
         "required": ["workspace", "instance", "operation"]
+      },
+      "CredentialRejectedContext": {
+        "properties": {
+          "organization": { "type": "string" },
+          "harness": { "type": "string" },
+          "method": { "type": "string" },
+          "provider": { "type": "string" },
+          "status": { "type": ["integer", "null"] },
+          "provider_error": {
+            "type": ["string", "null"],
+            "description": "The provider's error type or code, never its message."
+          }
+        },
+        "required": ["organization", "harness", "method", "provider", "status", "provider_error"]
+      },
+      "CredentialRejectedDiagnostic": {
+        "description": "A provider refused the credential itself when it was saved, so whatever was saved before is kept.",
+        "properties": {
+          "kind": { "const": "credential_rejected" },
+          "message": { "type": "string" },
+          "field": { "type": ["string", "null"] },
+          "context": { "$ref": "#/components/schemas/CredentialRejectedContext" },
+          "next_steps": { "type": "array", "items": { "$ref": "#/components/schemas/Action" } }
+        },
+        "required": ["kind", "message", "field", "context", "next_steps"]
       },
       "InstanceTimeoutDiagnostic": {
         "properties": {

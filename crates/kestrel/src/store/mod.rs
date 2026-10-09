@@ -8,6 +8,7 @@ pub mod profile;
 pub mod project;
 pub mod pull_request;
 pub mod queue;
+pub mod sign_in;
 pub mod trigger;
 pub mod workspace;
 
@@ -317,6 +318,10 @@ impl Tx<'_> {
 
     pub fn profiles(&mut self) -> Profiles<'_> {
         Profiles::over(&mut self.transaction, self.keyring)
+    }
+
+    pub fn sign_ins(&mut self) -> sign_in::SignIns<'_> {
+        sign_in::SignIns::over(&mut self.transaction)
     }
 
     pub fn projects(&mut self) -> Projects<'_> {

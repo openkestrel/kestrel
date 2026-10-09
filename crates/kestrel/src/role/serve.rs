@@ -11,6 +11,7 @@ use url::Url;
 
 use crate::cli::Role;
 use crate::integration::webhook;
+use crate::sign_in::check::Providers;
 use crate::store::Store;
 use crate::timer::Wake;
 use crate::{link, operator};
@@ -31,12 +32,19 @@ pub struct Listening {
     store: Store,
     wake: Wake,
     follow_lease: Duration,
+    providers: Providers,
     pub(crate) live: crate::live::Live,
 }
 
 impl Listening {
     pub fn bound(&self) -> Listen {
         self.bound
+    }
+
+    #[must_use]
+    pub fn checking_sign_ins_with(mut self, providers: Providers) -> Self {
+        self.providers = providers;
+        self
     }
 }
 
@@ -68,6 +76,7 @@ pub async fn bind(
         store,
         wake,
         follow_lease,
+        providers: Providers::default(),
         live: crate::live::Live::default(),
     })
 }
@@ -81,6 +90,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         store,
         wake,
         follow_lease,
+        providers,
         live,
     } = listening;
 
@@ -103,8 +113,15 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
     let link_router = link::router(store.clone(), shutdown.clone(), live.clone())
         .merge(webhook::router(store.clone(), wake));
     let streams = crate::stream::Streams::new(follow_lease);
-    let operator_router =
-        operator::router(store, shutdown.clone(), live, followers, streams, client);
+    let operator_router = operator::router(
+        store,
+        shutdown.clone(),
+        live,
+        followers,
+        streams,
+        client,
+        providers,
+    );
 
     let serving_link = axum::serve(link_listener, link_router)
         .with_graceful_shutdown(shutdown.clone().cancelled_owned());

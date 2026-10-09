@@ -8,6 +8,7 @@ use jiff::Timestamp;
 use crate::declined::{Constraint, Declined, Reason};
 use crate::domain::SubscriptionProfile;
 use crate::provider;
+use crate::sign_in::{Authentication, Source};
 use crate::store::{Declared, Store, Tx};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -73,6 +74,7 @@ impl fmt::Display for Entry {
 pub struct Held {
     pub entry: Entry,
     pub set_at: Timestamp,
+    pub revision: i64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -150,7 +152,15 @@ pub async fn hold(
 
     let mut tx = store.begin().await?;
     let profile = named(&mut tx, organization, profile).await?;
-    let held = tx.profiles().hold(&profile, entry, secret).await?;
+    let held = tx
+        .profiles()
+        .hold(
+            &profile,
+            entry,
+            secret,
+            &Authentication::unchecked(Source::GenericWrite),
+        )
+        .await?;
     tx.commit().await?;
 
     Ok(held)

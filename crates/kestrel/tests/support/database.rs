@@ -77,6 +77,25 @@ impl<'a> Database<'a> {
         done
     }
 
+    /// Model use evidence has no producer until an optional model test or a Session writes it.
+    pub async fn record_model_use(&self, revision: i64, harness: &str, model: &str, result: &str) {
+        let pool = self.pool().await;
+        sqlx::query(
+            "INSERT INTO model_use_evidence
+                 (revision, harness, model, image, result, source, observed_at)
+             VALUES (?, ?, ?, 'kestrel-env:latest', ?, 'model_test', ?)",
+        )
+        .bind(revision)
+        .bind(harness)
+        .bind(model)
+        .bind(result)
+        .bind(Timestamp::now().to_string())
+        .execute(&pool)
+        .await
+        .expect("the model use should be recorded");
+        pool.close().await;
+    }
+
     pub async fn backdate_transcript(&self, workspace: WorkspaceId, at: Timestamp) {
         self.execute(
             "UPDATE transcript_entry SET appended_at = ? WHERE workspace_id = ?",

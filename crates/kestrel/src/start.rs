@@ -5,6 +5,7 @@ use crate::declaration::{self, sharing_a_directory};
 use crate::declined::Declined;
 use crate::domain::{Declared, Session, Workspace};
 use crate::provider;
+use crate::sign_in::{Authentication, Source};
 use crate::store::{Declared as DeclaredRecord, Store};
 use crate::workspace;
 
@@ -61,6 +62,7 @@ pub async fn start(store: &Store, plan: &Plan) -> Result<Started> {
                 organization.record.id,
                 &credential.variable,
                 &credential.secret,
+                &Authentication::unchecked(Source::GenericWrite),
             )
             .await?;
     }

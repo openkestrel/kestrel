@@ -51,6 +51,28 @@ Metadata needs no credentials or compute inspection and makes no availability cl
 unknown harnesses or methods answer a typed `invalid_field` with supported choices. Custom
 harness commands and generic Profiles remain usable without guided methods (ADR-0046).
 
+### Saved sign-ins
+
+`PUT …/sign-ins/{harness}/{method}` takes `{value}` and holds it where the catalogued method says,
+asking nobody (`sign_in.rs`): a subscription in the Operator's own Profile, declared under their
+name when they have none, and a key as the Organization's Provider Credential. Several
+Operator-owned Profiles with none alone holding the harness's subscription are a 409, never a
+choice. Shape is refused 422 before storage is touched, and a refusal never repeats the value.
+
+Only an Anthropic or OpenAI key is checked, by one authenticated model-list read bounded to ten
+seconds (`sign_in/check.rs`); nothing spends model usage. Only a 401 rejects (422
+`credential_rejected`, keeping what was saved before); a refusal about permission or credit
+saves the key unchecked; a provider that cannot answer or limits the rate (408, 429, 5xx, a
+timeout) saves it unchecked and answers 503 `unavailable` whose `context.saved` is what was saved. The slot's revision is read before the
+check and compared at commit, so material replaced meanwhile is a 409 and stands.
+
+Every write of a Provider Credential or Profile entry, through these routes or the generic ones
+or a Session's refresh, mints a new `revision`; generic writes are never checked and read as
+`unchecked`. `GET …/sign-ins` lists each catalogued method with material, a shared key once per
+harness offering it, with its revision, `authentication` evidence and `model_use` evidence for
+that harness. The ten-second deadline and provider addresses are injected through
+`Listening::checking_sign_ins_with`, which the test support points at a stub.
+
 ### Errors
 
 Domain code refuses with the typed `declined::Reason`, which the boundary maps to a wire
@@ -92,7 +114,7 @@ follower lease's 404 are also plain. Anything else is `Unavailable`.
 | `Reason::Forbidden` | 403 | 4 rejected |
 | `Reason::StateConflict` | 409 | 4 rejected |
 | `Reason::Expired` | 410 | 4 rejected |
-| `Reason::InvalidField` | 422 | 4 rejected |
+| `Reason::InvalidField`, `Reason::CredentialRejected` | 422 | 4 rejected |
 | `Declined::Unacceptable` | 422 | 4 rejected |
 | `Declined::Missing`, `Declined::Ambiguous` | 404 | 3 unresolved |
 | `Declined::Taken` | 409 | 4 rejected |
