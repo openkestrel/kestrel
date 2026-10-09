@@ -1,26 +1,23 @@
-use anyhow::{Context as _, Result, bail};
-use reqwest::{Client, RequestBuilder, Response, StatusCode, Url};
-use serde::{Deserialize, Serialize};
+use anyhow::{Result, anyhow};
+use reqwest::{Client, RequestBuilder, Response, Url};
+use serde::Serialize;
 use serde_json::Value;
 
-use crate::corrective;
+use crate::diagnostic::{self, Request};
 use crate::exit::{Exit, Failed};
-
-#[derive(Deserialize)]
-struct Refusal {
-    message: String,
-}
 
 pub struct ControlPlane {
     client: Client,
     base: Url,
+    operation: String,
 }
 
 impl ControlPlane {
-    pub fn at(base: Url) -> Self {
+    pub fn at(base: Url, operation: &str) -> Self {
         Self {
             client: Client::new(),
             base,
+            operation: operation.to_owned(),
         }
     }
 
@@ -34,7 +31,7 @@ impl ControlPlane {
             url.query_pairs_mut().extend_pairs(query);
         }
 
-        self.answered(self.client.get(url)).await
+        self.answered(self.client.get(url), false).await
     }
 
     pub async fn get_response(&self, path: &[&str], query: &[(&str, &str)]) -> Result<Response> {
@@ -43,75 +40,59 @@ impl ControlPlane {
             url.query_pairs_mut().extend_pairs(query);
         }
 
-        self.sent(self.client.get(url)).await
+        self.sent(self.client.get(url), false).await
     }
 
     pub async fn post(&self, path: &[&str], body: &impl Serialize) -> Result<Value> {
-        self.answered(self.client.post(self.url(path)?).json(body))
+        self.answered(self.client.post(self.url(path)?).json(body), true)
             .await
     }
 
     pub async fn put(&self, path: &[&str], body: &impl Serialize) -> Result<Value> {
-        self.answered(self.client.put(self.url(path)?).json(body))
+        self.answered(self.client.put(self.url(path)?).json(body), true)
             .await
     }
 
     pub async fn delete(&self, path: &[&str], body: &impl Serialize) -> Result<()> {
-        self.sent(self.client.delete(self.url(path)?).json(body))
+        self.sent(self.client.delete(self.url(path)?).json(body), true)
             .await?;
         Ok(())
     }
 
-    async fn answered(&self, request: RequestBuilder) -> Result<Value> {
-        self.sent(request).await?.json().await.context(Failed::new(
-            Exit::Unavailable,
-            "reading the control plane's answer",
-        ))
+    async fn answered(&self, request: RequestBuilder, write: bool) -> Result<Value> {
+        let response = self.sent(request, write).await?;
+        let status = response.status();
+        response
+            .json()
+            .await
+            .map_err(|error| anyhow!(diagnostic::unreadable(status, self.request(write), &error)))
     }
 
-    async fn sent(&self, request: RequestBuilder) -> Result<Response> {
-        let response = request.send().await.with_context(|| {
-            Failed::new(
-                Exit::Unavailable,
-                format!("reaching the control plane at {}", self.base),
-            )
+    fn request(&self, write: bool) -> Request<'_> {
+        Request {
+            operation: &self.operation,
+            write,
+        }
+    }
+
+    async fn sent(&self, request: RequestBuilder, write: bool) -> Result<Response> {
+        if write {
+            diagnostic::writing();
+        }
+        let response = request.send().await.map_err(|error| {
+            anyhow!(diagnostic::unreachable(
+                self.base.as_str(),
+                self.request(write),
+                !error.is_connect(),
+            ))
         })?;
         let status = response.status();
-        let organization = response.url().path_segments().and_then(|segments| {
-            segments
-                .collect::<Vec<_>>()
-                .windows(3)
-                .find(|parts| parts[0] == "operator" && parts[1] == "organizations")
-                .and_then(|parts| {
-                    percent_encoding::percent_decode_str(parts[2])
-                        .decode_utf8()
-                        .ok()
-                })
-                .map(|name| name.into_owned())
-        });
         if status.is_success() {
             return Ok(response);
         }
 
-        let why = response
-            .json::<Refusal>()
-            .await
-            .map_or_else(|_| status.to_string(), |refusal| refusal.message);
-        let next = corrective::command(&why, organization.as_deref())
-            .map(|command| {
-                let effect = if why.contains(" is still in flight ") {
-                    "\nStopping a session mid-turn marks it failed."
-                } else if why.contains("'s instance ") {
-                    "\nReleasing the instance discards unpublished work."
-                } else {
-                    ""
-                };
-                format!("\nTry: {command}{effect}")
-            })
-            .unwrap_or_default();
-        bail!(Failed::new(
-            refused(status),
-            format!("the control plane refused: {why}{next}")
+        Err(anyhow!(
+            diagnostic::refusal(response, self.request(write)).await
         ))
     }
 
@@ -129,14 +110,5 @@ impl ControlPlane {
             .extend(path);
 
         Ok(url)
-    }
-}
-
-/// The operator boundary answers 404 for a reference that resolves to no record or to several.
-pub fn refused(status: StatusCode) -> Exit {
-    match status {
-        StatusCode::NOT_FOUND => Exit::Unresolved,
-        status if status.is_client_error() => Exit::Rejected,
-        _ => Exit::Unavailable,
     }
 }

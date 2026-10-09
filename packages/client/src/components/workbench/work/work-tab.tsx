@@ -31,7 +31,7 @@ export function WorkTab({
 	if (work.isError) {
 		return (
 			<div className="p-4">
-				<Refusal error={work.error} />
+				<Refusal error={work.error} retry={() => void work.refetch()} />
 			</div>
 		);
 	}

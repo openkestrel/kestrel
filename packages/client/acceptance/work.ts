@@ -3,12 +3,11 @@ import { chromium } from "@playwright/test";
 
 const [workspace, shots, directory = "docs", file = "README.md"] = process.argv.slice(2);
 if (!workspace || !shots) throw new Error("workspace and shots directory needed");
-const base = process.env.KESTREL_CLIENT_URL ?? "https://127.0.0.1:7739";
+const base = process.env.KESTREL_CLIENT_URL ?? "http://127.0.0.1:7739";
 const organization = process.env.KESTREL_ORGANIZATION ?? "acme";
 
 const browser = await chromium.launch();
 const context = await browser.newContext({
-	ignoreHTTPSErrors: true,
 	viewport: { width: 1440, height: 1000 },
 });
 const page = await context.newPage();

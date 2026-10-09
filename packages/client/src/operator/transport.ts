@@ -1,4 +1,4 @@
-import type { Refusal } from "./generated";
+import type { Action, Diagnostic, Refusal } from "./generated";
 
 export type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -8,45 +8,70 @@ export type StreamEvent = { event: string; id: string | undefined; data: string 
 
 export class Refused extends Error {
 	readonly status: number;
-	readonly field: string | undefined;
-	readonly phase: string | undefined;
+	readonly diagnostic: Diagnostic;
 	readonly retryAfter: number | undefined;
 
-	constructor(
-		status: number,
-		message: string,
-		{ field, phase, retryAfter }: { field?: string; phase?: string; retryAfter?: number } = {},
-	) {
-		super(message);
+	constructor(status: number, diagnostic: Diagnostic, retryAfter?: number) {
+		super(diagnostic.message);
 		this.name = "Refused";
 		this.status = status;
-		this.field = field;
-		this.phase = phase;
+		this.diagnostic = diagnostic;
 		this.retryAfter = retryAfter;
 	}
 }
 
 export class Unreachable extends Error {
-	constructor(cause: unknown) {
+	readonly diagnostic: Diagnostic;
+
+	constructor(url: string, call: Call, cause: unknown) {
 		super("the control plane could not be reached", { cause });
 		this.name = "Unreachable";
+		this.diagnostic = {
+			kind: "connection_failed",
+			message: this.message,
+			field: null,
+			context: { url, operation: call.operation },
+			next_steps: genericSteps(call, undefined),
+		};
 	}
+}
+
+type Call = { operation: string; read: boolean };
+
+export function diagnosisOf(error: unknown): Diagnostic {
+	if (error instanceof Refused || error instanceof Unreachable) return error.diagnostic;
+	const evidence = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+	return {
+		kind: "client_failure",
+		message: "The browser Client failed",
+		field: null,
+		context: { operation: "browser", evidence: evidence.slice(0, 200) },
+		next_steps: [
+			{ action: "inspect_operation", operation: "browser", resource: null, uncertain: false },
+		],
+	};
 }
 
 export function operatorPath(...segments: string[]): string {
 	return `/operator/${segments.map(encodeURIComponent).join("/")}`;
 }
 
-export function transport(fetch: Fetch = (url, init) => globalThis.fetch(url, init)) {
+// The page's own origin is the control plane's (ADR-0043).
+export function transport(
+	fetch: Fetch = (url, init) => globalThis.fetch(url, init),
+	origin?: string,
+) {
 	async function answered(path: string, init: RequestInit): Promise<Response> {
+		const method = init.method ?? "GET";
+		const call = { operation: `${method} ${path}`, read: method === "GET" };
 		let response: Response;
 		try {
 			response = await fetch(path, init);
 		} catch (error) {
 			if (error instanceof DOMException && error.name === "AbortError") throw error;
-			throw new Unreachable(error);
+			throw new Unreachable(origin ?? location.origin, call, error);
 		}
-		if (!response.ok) throw await refusal(response);
+		if (!response.ok) throw await refusal(response, call);
 		return response;
 	}
 
@@ -86,10 +111,9 @@ export function transport(fetch: Fetch = (url, init) => globalThis.fetch(url, in
 
 		async *stream(
 			path: string,
-			{ after, signal }: { after?: string; signal?: AbortSignal } = {},
+			{ signal }: { signal?: AbortSignal } = {},
 		): AsyncGenerator<StreamEvent> {
 			const headers = new Headers({ accept: "text/event-stream" });
-			if (after !== undefined) headers.set("Last-Event-ID", after);
 			const response = await answered(path, { method: "GET", headers, signal });
 			if (!response.body) return;
 			yield* parsed(response.body);
@@ -105,23 +129,77 @@ async function decoded<T>(response: Response): Promise<T> {
 	return (text ? JSON.parse(text) : undefined) as T;
 }
 
-async function refusal(response: Response): Promise<Refused> {
+async function refusal(response: Response, call: Call): Promise<Refused> {
 	const retry = Number(response.headers.get("retry-after"));
 	const retryAfter = Number.isFinite(retry) && retry > 0 ? retry : undefined;
-	let said: Partial<Refusal & { field: unknown; phase: unknown }> = {};
+	let said: unknown;
 	try {
 		said = await response.json();
 	} catch {}
+	if (isDiagnostic(said)) return new Refused(response.status, said, retryAfter);
+	const plain = isRefusal(said) ? said : undefined;
 	return new Refused(
 		response.status,
-		typeof said.message === "string"
-			? said.message
-			: `the control plane answered ${response.status}`,
 		{
-			field: typeof said.field === "string" ? said.field : undefined,
-			phase: typeof said.phase === "string" ? said.phase : undefined,
-			retryAfter,
+			kind: "unknown_response",
+			message: plain?.message ?? `the control plane answered ${response.status}`,
+			field: typeof plain?.field === "string" ? plain.field : null,
+			context: {
+				service: "control_plane",
+				operation: call.operation,
+				status: response.status,
+				evidence: null,
+			},
+			next_steps: genericSteps(call, response.status, retryAfter),
 		},
+		retryAfter,
+	);
+}
+
+// A write whose answer is lost or unexplained may have landed, so it is inspected, never replayed.
+function genericSteps(call: Call, status: number | undefined, retryAfter?: number): Action[] {
+	const check: Action = { action: "check_connection", service: "control_plane", compose: false };
+	if (call.read) {
+		return [
+			{
+				action: "retry_read",
+				operation: call.operation,
+				resource: null,
+				retry_after_seconds: retryAfter ?? null,
+			},
+			check,
+		];
+	}
+	return [
+		{
+			action: "inspect_operation",
+			operation: call.operation,
+			resource: null,
+			uncertain: status === undefined || status >= 500,
+		},
+		check,
+	];
+}
+
+function isRefusal(said: unknown): said is Refusal {
+	return (
+		typeof said === "object" &&
+		said !== null &&
+		"message" in said &&
+		typeof said.message === "string"
+	);
+}
+
+function isDiagnostic(said: unknown): said is Diagnostic {
+	return (
+		typeof said === "object" &&
+		said !== null &&
+		"kind" in said &&
+		typeof said.kind === "string" &&
+		"message" in said &&
+		typeof said.message === "string" &&
+		"next_steps" in said &&
+		Array.isArray(said.next_steps)
 	);
 }
 

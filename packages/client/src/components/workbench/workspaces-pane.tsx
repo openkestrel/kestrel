@@ -40,7 +40,7 @@ export function WorkspacesPane({
 				{workspaces.isPending ? (
 					<Skeleton className="h-8 w-full" />
 				) : workspaces.isError ? (
-					<Refusal error={workspaces.error} />
+					<Refusal error={workspaces.error} retry={() => void workspaces.refetch()} />
 				) : rows.length === 0 ? (
 					<p className="px-2 text-muted-foreground text-sm">No Workspace is open.</p>
 				) : (

@@ -145,7 +145,7 @@ The rest of `crates/kestrel/src`, grouped by the page that covers them:
 
 | Boundary | Who is on the other side | What protects it |
 | --- | --- | --- |
-| Operator (7718) | A Client | A loopback bind, plus a loopback `Host` and same-origin `Origin` check ([ADR-0036](../adr/0036-the-browser-client-shares-the-loopback-operator-origin.md), [ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md), [ADR-0044](../adr/0044-the-browser-client-is-served-over-https.md)). |
+| Operator (7718) | A Client | A loopback bind, plus a loopback `Host` and same-origin `Origin` check ([ADR-0036](../adr/0036-the-browser-client-shares-the-loopback-operator-origin.md), [ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md), [ADR-0045](../adr/0045-a-browser-tab-holds-one-stream-and-subscribes-over-requests.md)). |
 | Link (7717) | A supervisor | A per-Instance bearer credential, and a live lease for anything about a Session ([Link](link.md#authentication)). |
 | Webhooks (7717) | Any producer | The Integration's HMAC signing secret or shared secret. A refusal becomes no Event; the last one is kept on the Integration. |
 | Docker daemon | The control plane | socket-proxy's allowlist, on an internal network. |
@@ -158,6 +158,14 @@ supervisor ([ADR-0026](../adr/0026-kestrel-carries-named-credentials-never-a-run
 ## Where the code lags the ADRs
 
 An accepted ADR is a decision, not a description. These are decided and not yet built:
+
+- **First run** ([ADR-0046](../adr/0046-kestrel-ships-a-catalogue-of-how-each-harness-signs-in.md),
+  [ADR-0047](../adr/0047-kestrel-relays-a-persons-own-sign-in.md),
+  [ADR-0048](../adr/0048-the-environment-image-carries-every-catalogued-harness.md),
+  [ADR-0049](../adr/0049-an-install-has-one-operator-and-by-default-one-organization.md)):
+  the sign-in catalogue and image capability labels are implemented, but the sign-in relay is not.
+  First-run setup still infers `kestrel start`'s Organization from the repository owner; the browser
+  has no Operator-naming setup and still asks for a browser-local Participant name.
 
 - **Repository declaration validation** ([ADR-0057](../adr/0057-a-repository-declaration-is-not-a-successful-checkout.md)):
   declaration paths still save raw repository strings after list/branch and directory-collision checks.
@@ -175,7 +183,8 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   `latest`; the decided release process reserves it for accepted releases.
 
 - **Typed next steps** ([ADR-0052](../adr/0052-a-refusal-carries-its-next-steps.md)): the CLI
-  and browser still read refusal sentences for corrections; Integration, GitHub App, start and
+  still reads refusal sentences for corrections, and the browser has no sign-in or settings
+  screen to bind those steps to; Integration, GitHub App, start and
   Trigger declaration refusals still answer a plain `Refusal`; readiness does not yet carry the
   shared diagnostic contract, and a Session's failure diagnostic attributes no sign-in.
 
@@ -187,9 +196,6 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   opened, reopened, closed (including merges) and head-moved Events are learned. The Audit Record
   that explains unattended attachment verdicts remains `0.5` work.
 - **Split roles**: `serve` and `work` parse separately but run correctly only in one process.
-- **The first run** ([ADR-0045](../adr/0045-a-browser-tab-holds-one-stream-and-subscribes-over-requests.md)–[ADR-0049](../adr/0049-an-install-has-one-operator-and-by-default-one-organization.md)):
-  the Client is still served over HTTPS with a stream per follow; there is no sign-in relay or
-  shared default Organization selection.
 - **Policy, Approvals, Questions, Workflows, Campaigns** exist in `GLOSSARY.md` and
   [`ROADMAP.md`](../../ROADMAP.md), not in code. `session_dependency` and the Unreachable state are
   the only Workflow machinery built.

@@ -3,7 +3,7 @@ import { AxeBuilder } from "@axe-core/playwright";
 import { chromium, type Locator, type Page } from "@playwright/test";
 
 const workspaces = process.argv.slice(2);
-const base = process.env.KESTREL_CLIENT_URL ?? "https://127.0.0.1:7739";
+const base = process.env.KESTREL_CLIENT_URL ?? "http://127.0.0.1:7739";
 const organization = process.env.KESTREL_ORGANIZATION ?? "acme";
 
 type Finding = {
@@ -52,7 +52,6 @@ async function audit(page: Page, view: string): Promise<void> {
 const browser = await chromium.launch();
 for (const width of [1280, 375]) {
 	const context = await browser.newContext({
-		ignoreHTTPSErrors: true,
 		viewport: { width, height: width === 375 ? 667 : 800 },
 	});
 	const page = await context.newPage();

@@ -955,6 +955,9 @@ pub struct StreamSubscription {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kinds: Option<String>,
     pub organization: String,
+    ///The name a `transcript` subscription's follower joins presence under, refused as the Transcript read's `as` is. Absent means anonymous.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub participant: Option<String>,
     ///The Workspace whose Transcript a `transcript` subscription follows, addressed as the Transcript read addresses it. Required for `transcript`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
@@ -967,6 +970,7 @@ impl StreamSubscription {
             organization,
             after: None,
             kinds: None,
+            participant: None,
             workspace: None,
         }
     }
@@ -1001,6 +1005,12 @@ impl StreamSubscriptionBuilder {
     #[must_use]
     pub fn kinds(mut self, kinds: String) -> Self {
         self.value.kinds = Some(kinds);
+        self
+    }
+    #[doc = concat!("Set the optional `", "participant", "` request field.")]
+    #[must_use]
+    pub fn participant(mut self, participant: String) -> Self {
+        self.value.participant = Some(participant);
         self
     }
     #[doc = concat!("Set the optional `", "workspace", "` request field.")]

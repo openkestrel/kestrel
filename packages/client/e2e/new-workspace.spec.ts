@@ -140,16 +140,156 @@ test("a refusal with no field lands at the top, and keeps every input", async ({
 	await expect(page).toHaveURL(/\/organizations\/acme\/new$/);
 });
 
-test("a transport failure lands at the top, and keeps every input", async ({ page }) => {
+test("a transport failure lands at the top, keeps every input, and is never sent again", async ({
+	page,
+}) => {
 	await draftedByJack(page, "Ship the parser.");
-	await stubOpen(page, (route) => route.abort("failed"));
+	let opens = 0;
+	await stubOpen(page, (route) => {
+		opens += 1;
+		return route.abort("failed");
+	});
 
 	await page.getByRole("button", { name: "Open Workspace" }).click();
 
-	await expect(page.getByRole("alert")).toHaveCount(1);
-	await expect(page.getByRole("alert")).toContainText("the control plane could not be reached");
+	const refusal = page.getByRole("alert");
+	await expect(refusal).toHaveCount(1);
+	await expect(refusal).toContainText("the control plane could not be reached");
+	await expect(refusal).toContainText("It may have taken effect; check before trying it again.");
+	await refusal.getByRole("button", { name: "Read what is there now" }).click();
 	await expect(page.getByLabel("Brief")).toHaveValue("Ship the parser.");
 	await expect(page).toHaveURL(/\/organizations\/acme\/new$/);
+	expect(opens).toBe(1);
+});
+
+test("a missing Project is declared beside its field, collecting what it lacks", async ({
+	page,
+}) => {
+	await draftedByJack(page, "Ship the parser.");
+	await stubOpen(page, (route) =>
+		route.fulfill({
+			status: 404,
+			contentType: "application/json",
+			body: JSON.stringify({
+				kind: "missing_reference",
+				message: "no Project is named kestrel",
+				field: "project",
+				context: { resource: "project", reference: "kestrel", organization: "acme" },
+				next_steps: [
+					{
+						action: "declare_project",
+						organization: "acme",
+						name: "kestrel",
+						repositories: null,
+						branch: null,
+						missing: ["repositories", "branch"],
+					},
+				],
+			}),
+		}),
+	);
+	const declared: unknown[] = [];
+	await page.route(
+		(url) => url.pathname === "/operator/organizations/acme/projects",
+		async (route) => {
+			if (route.request().method() !== "POST") return route.continue();
+			declared.push(route.request().postDataJSON());
+			await route.fulfill({
+				status: 201,
+				contentType: "application/json",
+				body: JSON.stringify({ id: "p-1", name: "kestrel" }),
+			});
+		},
+	);
+
+	await page.getByRole("button", { name: "Open Workspace" }).click();
+
+	await expect(page.locator("#new-workspace-project-error")).toHaveText(
+		"no Project is named kestrel",
+	);
+	await page.getByRole("button", { name: "Declare the Project kestrel in acme" }).click();
+	const declaring = page.getByRole("group", { name: "Declare the Project kestrel in acme" });
+	await declaring.getByLabel("Repositories").fill("https://github.com/openkestrel/kestrel");
+	await declaring.getByLabel("Branch").fill("main");
+	await declaring.getByRole("button", { name: "Declare the Project kestrel in acme" }).click();
+
+	await expect(page.getByText("Declare the Project kestrel in acme: done.")).toBeVisible();
+	expect(declared).toEqual([
+		{ name: "kestrel", repositories: ["https://github.com/openkestrel/kestrel"], branch: "main" },
+	]);
+	await expect(page.getByLabel("Brief")).toHaveValue("Ship the parser.");
+});
+
+test("a destructive repair shows its consequence and waits for an explicit choice", async ({
+	page,
+}) => {
+	await draftedByJack(page, "Ship the parser.");
+	let opens = 0;
+	await stubOpen(page, (route) => {
+		opens += 1;
+		return route.fulfill({
+			status: 409,
+			contentType: "application/json",
+			body: JSON.stringify({
+				kind: "state_conflict",
+				message: "the Workspace it continues is still working",
+				field: null,
+				context: {
+					operation: "open_workspace",
+					resource: "workspace",
+					reference: "brave-otter",
+					organization: "acme",
+					state: "in_flight",
+					holding_session: "calm-river",
+				},
+				next_steps: [
+					{
+						action: "inspect_resource",
+						resource: "workspace",
+						reference: "brave-otter",
+						organization: "acme",
+					},
+					{
+						action: "stop_session",
+						organization: "acme",
+						session: "calm-river",
+						consequence: "Stopping the session now records it failed.",
+						effect: "fails_session",
+						requires_choice: true,
+					},
+				],
+			}),
+		});
+	});
+	const stops: string[] = [];
+	await page.route(
+		(url) => url.pathname === "/operator/organizations/acme/sessions/calm-river/stop",
+		async (route) => {
+			stops.push(route.request().method());
+			await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+		},
+	);
+
+	await page.getByRole("button", { name: "Open Workspace" }).click();
+
+	const refusal = page.getByRole("alert");
+	await expect(
+		refusal.getByRole("link", { name: "Inspect the Workspace brave-otter" }),
+	).toHaveAttribute("href", "/organizations/acme/workspaces/brave-otter");
+	await expect(refusal.locator("[data-step-consequence]")).toHaveCount(0);
+
+	await refusal.getByRole("button", { name: "Stop the Session calm-river…" }).click();
+	await expect(refusal.locator("[data-step-consequence]")).toHaveText(
+		"Stopping the session now records it failed.",
+	);
+	await refusal.getByRole("button", { name: "Cancel" }).click();
+	expect(stops).toEqual([]);
+
+	await refusal.getByRole("button", { name: "Stop the Session calm-river…" }).click();
+	await refusal.getByRole("button", { name: "Stop the Session calm-river", exact: true }).click();
+	await expect(page.getByText("Stop the Session calm-river: done.")).toBeVisible();
+	expect(stops).toEqual(["POST"]);
+	expect(opens).toBe(1);
 });
 
 test("a dropped file is read into the Brief, and nothing is uploaded", async ({ page }) => {

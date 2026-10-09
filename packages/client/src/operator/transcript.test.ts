@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { json, reservingControlPlane } from "./stream-fake";
+import { TabStream } from "./tab-stream";
 import { cursorSeq, FollowSession, readRange, TranscriptMirror } from "./transcript";
 import { transport, type StreamEvent } from "./transport";
 
@@ -30,13 +32,6 @@ function summary(first: number, last: number, overrides: Record<string, unknown>
 
 function delivered(seq: number, cursor = `w:${seq}`): StreamEvent {
 	return { event: "entry", id: cursor, data: recorded(seq) };
-}
-
-function json(status: number, body: unknown) {
-	return new Response(JSON.stringify(body), {
-		status,
-		headers: { "content-type": "application/json" },
-	});
 }
 
 function events(...chunks: string[]) {
@@ -186,117 +181,125 @@ describe("an Activity expansion", () => {
 	});
 });
 
+function following(
+	participant: string | null,
+	answer?: (url: string, init: RequestInit) => Response | undefined,
+) {
+	const server = reservingControlPlane(answer);
+	const stream = new TabStream(server.operations);
+	const mirror = new TranscriptMirror();
+	const session = new FollowSession({
+		stream,
+		operations: server.operations,
+		organization: "acme",
+		workspace: "brave-otter",
+		participant,
+		mirror,
+	});
+	return { server, stream, mirror, session };
+}
+
 describe("a follow", () => {
-	it("resumes from the last cursor after a cut, with no gap or duplicate", async () => {
-		const seen: RequestInit[] = [];
-		let transcripts = 0;
-		const operator = transport(async (_url, init = {}) => {
-			seen.push(init);
-			transcripts += 1;
-			if (transcripts === 1) return events(eventOf(delivered(1)), eventOf(delivered(2)));
-			return events(
-				eventOf(delivered(2)),
-				eventOf(delivered(3)),
-				eventOf({ event: "end", id: undefined, data: '{"because":"caught_up"}' }),
-			);
-		});
-		const mirror = new TranscriptMirror();
-		const session = new FollowSession({
-			operations: operator,
-			organization: "acme",
-			workspace: "brave-otter",
-			participant: "operator",
-			mirror,
-		});
+	it("subscribes under the participant's name, and resumes from its last cursor after a drop", async () => {
+		const { server, stream, mirror, session } = following("operator");
 
 		session.start();
+		await vi.waitFor(() => expect(server.opens).toHaveLength(1));
+		await vi.waitFor(() => expect(server.puts).toHaveLength(1));
+		const id = server.puts[0]?.id ?? "";
+		server.send(id, "entry", JSON.parse(recorded(1)), "w:1");
+		server.send(id, "entry", JSON.parse(recorded(2)), "w:2");
+		await vi.waitFor(() => expect(mirror.cursor).toBe("w:2"));
+		server.drop();
+		await vi.waitFor(() => expect(server.opens).toHaveLength(2));
+		await vi.waitFor(() => expect(server.puts).toHaveLength(2));
+		server.send(id, "entry", JSON.parse(recorded(2)), "w:2");
+		server.send(id, "entry", JSON.parse(recorded(3)), "w:3");
+
 		await vi.waitFor(() => {
 			expect(mirror.snapshot().entries.map((entry) => entry.seq)).toEqual([1, 2, 3]);
 		});
 		session.stop();
+		stream.close();
 
-		expect(transcripts).toBe(2);
-		expect(new Headers(seen[0]?.headers).get("last-event-id")).toBeNull();
-		expect(new Headers(seen[1]?.headers).get("last-event-id")).toBe("w:2");
+		expect(server.puts.map((put) => put.body)).toEqual([
+			{
+				kind: "transcript",
+				organization: "acme",
+				workspace: "brave-otter",
+				participant: "operator",
+			},
+			{
+				kind: "transcript",
+				organization: "acme",
+				workspace: "brave-otter",
+				after: "w:2",
+				participant: "operator",
+			},
+		]);
+	});
+
+	it("ends its subscription when it stops, keeping the tab's connection", async () => {
+		const { server, stream, session } = following(null);
+
+		session.start();
+		await vi.waitFor(() => expect(server.puts).toHaveLength(1));
+		session.stop();
+
+		await vi.waitFor(() => expect(server.deletes).toHaveLength(1));
+		expect(server.puts[0]?.body.participant).toBeUndefined();
+		expect(server.reservations()).toBe(1);
+		stream.close();
 	});
 
 	it("stops at a refusal instead of retrying it", async () => {
-		let requests = 0;
-		const operator = transport(async () => {
-			requests += 1;
-			return json(404, { message: "no Workspace is named brave-otter" });
-		});
-		const session = new FollowSession({
-			operations: operator,
-			organization: "acme",
-			workspace: "brave-otter",
-			participant: "operator",
-			mirror: new TranscriptMirror(),
-		});
+		const { server, stream, mirror, session } = following("operator");
+		server.refusing(() =>
+			json(404, {
+				kind: "missing_reference",
+				message: "no Workspace is named brave-otter",
+				context: {},
+				next_steps: [],
+			}),
+		);
 
 		session.start();
+		await vi.waitFor(() => expect(server.puts).toHaveLength(1));
 		await new Promise((resolve) => setTimeout(resolve, 400));
+		stream.close();
 
-		expect(requests).toBe(1);
+		expect(server.puts).toHaveLength(1);
+		expect(mirror.snapshot().entries).toEqual([]);
 	});
 
-	it("renews its lease, and registers again once the lease has lapsed", async () => {
-		let transcripts = 0;
+	it("renews its lease, and subscribes again once the lease has lapsed", async () => {
 		const leases: string[] = [];
-		let opened: ReadableStreamDefaultController<Uint8Array> | undefined;
-		const operator = transport(async (url, init = {}) => {
-			if (init.method === "POST") {
-				leases.push(url);
-				if (leases.length === 1) return new Response(null, { status: 204 });
-				return json(404, { message: "no such follower, or its lease has passed" });
-			}
-
-			transcripts += 1;
-			const body = new ReadableStream<Uint8Array>({
-				start(controller) {
-					opened = controller;
-					if (transcripts === 1) {
-						controller.enqueue(
-							encoder.encode(
-								eventOf({
-									event: "follower",
-									id: undefined,
-									data: '{"id":"6b1a1f2c-0000-0000-0000-000000000000","lease_seconds":1}',
-								}),
-							),
-						);
-					}
-				},
-			});
-			init.signal?.addEventListener("abort", () => opened?.error(new Error("aborted")));
-			return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
-		});
-		const mirror = new TranscriptMirror();
-		const session = new FollowSession({
-			operations: operator,
-			organization: "acme",
-			workspace: "brave-otter",
-			participant: "operator",
-			mirror,
+		const { server, stream, mirror, session } = following("operator", (url, init) => {
+			if (init.method !== "POST") return undefined;
+			leases.push(url);
+			if (leases.length === 1) return new Response(null, { status: 204 });
+			return json(404, { message: "no such follower, or its lease has passed" });
 		});
 
 		session.start();
-		await vi.waitFor(
-			() => {
-				expect(leases).toHaveLength(1);
-			},
-			{ timeout: 2_000 },
-		);
-		await vi.waitFor(
-			() => {
-				expect(transcripts).toBe(2);
-			},
-			{ timeout: 2_000 },
-		);
+		await vi.waitFor(() => expect(server.opens).toHaveLength(1));
+		await vi.waitFor(() => expect(server.puts).toHaveLength(1));
+		const id = server.puts[0]?.id ?? "";
+		server.send(id, "entry", JSON.parse(recorded(1)), "w:1");
+		server.send(id, "follower", {
+			id: "6b1a1f2c-0000-0000-0000-000000000000",
+			lease_seconds: 1,
+		});
+		await vi.waitFor(() => expect(leases).toHaveLength(2), { timeout: 2_000 });
+		await vi.waitFor(() => expect(server.puts).toHaveLength(2));
 		session.stop();
+		stream.close();
 
 		expect(leases[0]).toBe(
 			"/operator/organizations/acme/workspaces/brave-otter/followers/6b1a1f2c-0000-0000-0000-000000000000/lease",
 		);
+		expect(server.puts[1]).toMatchObject({ id, body: { after: "w:1" } });
+		expect(mirror.cursor).toBe("w:1");
+		expect(server.reservations()).toBe(1);
 	});
 });

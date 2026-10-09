@@ -1,4 +1,5 @@
-import { expect, test, type APIRequestContext, type Page, type Request } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { Streamed } from "./streamed";
 
 test.beforeAll(async ({ request }) => {
 	await request.post("/operator/organizations", { data: { name: "acme" } });
@@ -105,11 +106,10 @@ function tool(workspace: Workspace, seq: number, overrides: Record<string, unkno
 }
 
 class Scripted {
-	readonly requests: Request[] = [];
 	readonly ranges: { first: number; last: number; kinds: string | null }[] = [];
 	readonly payloads: string[] = [];
+	readonly streamed: Streamed;
 
-	private readonly follow: (attempt: number) => string | Promise<string>;
 	private readonly range: (first: number, last: number) => string;
 	private readonly payload: (id: string) => { status: number; body?: string };
 
@@ -118,39 +118,28 @@ class Scripted {
 		range?: (first: number, last: number) => string;
 		payload?: (id: string) => { status: number; body?: string };
 	}) {
-		this.follow = options.follow;
+		this.streamed = new Streamed({ transcript: (_, attempt) => options.follow(attempt) });
 		this.range = options.range ?? (() => "");
 		this.payload = options.payload ?? (() => ({ status: 404 }));
 	}
 
 	async install(page: Page): Promise<void> {
+		await this.streamed.install(page);
 		await page.route(
 			(url) => url.pathname.endsWith("/transcript"),
 			async (route) => {
 				const url = new URL(route.request().url());
-				this.requests.push(route.request());
 				const first = url.searchParams.get("first_seq");
 				const last = url.searchParams.get("last_seq");
-				if (first && last) {
-					this.ranges.push({
-						first: Number(first),
-						last: Number(last),
-						kinds: url.searchParams.get("kinds"),
-					});
-					await route.fulfill({
-						status: 200,
-						contentType: "text/event-stream",
-						body: this.range(Number(first), Number(last)),
-					});
-					return;
-				}
-				const attempts = this.requests.filter((request) =>
-					new URL(request.url()).searchParams.has("follow"),
-				).length;
+				this.ranges.push({
+					first: Number(first),
+					last: Number(last),
+					kinds: url.searchParams.get("kinds"),
+				});
 				await route.fulfill({
 					status: 200,
 					contentType: "text/event-stream",
-					body: await this.follow(attempts),
+					body: this.range(Number(first), Number(last)),
 				});
 			},
 		);
@@ -373,11 +362,13 @@ test("an Activity is replaced as it grows, and a reconnect adds no duplicate ent
 	await expect(page.getByRole("log").getByText("jack: hello")).toHaveCount(1);
 	await expect(page.getByRole("log").getByText("jack: done")).toHaveCount(1);
 
-	const resumed = scripted.requests.filter((candidate) =>
-		new URL(candidate.url()).searchParams.has("follow"),
+	const resumed = scripted.streamed.subscriptions.filter(
+		(subscribed) => subscribed.kind === "transcript",
 	);
 	expect(resumed).toHaveLength(2);
-	expect(resumed[1]?.headers()["last-event-id"]).toBe(`${workspace.id}:3`);
+	expect(resumed[0]?.after).toBeUndefined();
+	expect(resumed[1]?.after).toBe(`${workspace.id}:3`);
+	expect(resumed[1]?.token).not.toBe(resumed[0]?.token);
 });
 
 test("a referenced payload loads on demand, and an expired one reads as expired", async ({

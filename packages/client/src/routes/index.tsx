@@ -27,7 +27,7 @@ function Organizations() {
 			{organizations.isPending ? (
 				<Skeleton className="h-8 w-full" />
 			) : organizations.isError ? (
-				<Refusal error={organizations.error} />
+				<Refusal error={organizations.error} retry={() => void organizations.refetch()} />
 			) : organizations.data.length === 0 ? (
 				<p className="text-muted-foreground text-sm">
 					No Organization exists yet. <code>kestrel start</code> declares one.

@@ -2632,7 +2632,7 @@
       "put": {
         "operationId": "subscribeStream",
         "summary": "Subscribe a reserved stream to an Organization's notices or a Workspace's Transcript.",
-        "description": "Starts the subscription under the id the tab chose, replacing and ending any it already held under that id. A `notices` subscription opens with `open`, as the Organization's change stream does; a `transcript` subscription follows the Workspace's Transcript from `after` exactly as a per-resource follow from that `Last-Event-ID` does, registering an anonymous follower once caught up whose lease the tab renews through the Workspace's follower lease. A reservation holds at most 32 subscriptions.",
+        "description": "Starts the subscription under the id the tab chose, replacing and ending any it already held under that id. A `notices` subscription opens with `open`, as the Organization's change stream does; a `transcript` subscription follows the Workspace's Transcript from `after` exactly as a per-resource follow from that `Last-Event-ID` does, registering a follower, anonymous unless it names a `participant`, once caught up whose lease the tab renews through the Workspace's follower lease. A reservation holds at most 32 subscriptions.",
         "parameters": [
           {
             "name": "token",
@@ -7305,6 +7305,10 @@
             "type": "string",
             "description": "Comma-separated Transcript kinds, as the Transcript read takes them.",
             "default": "shared_state"
+          },
+          "participant": {
+            "type": "string",
+            "description": "The name a `transcript` subscription's follower joins presence under, refused as the Transcript read's `as` is. Absent means anonymous."
           }
         },
         "required": [

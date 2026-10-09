@@ -48,7 +48,7 @@ export function FilesTab({ organization, workspace }: { organization: string; wo
 			{listing.isPending ? (
 				<Skeleton className="h-8 w-full" />
 			) : listing.isError ? (
-				<Refusal error={listing.error} />
+				<Refusal error={listing.error} retry={() => void listing.refetch()} />
 			) : (
 				<section className="grid gap-1">
 					{listing.data.entries.length === 0 ? (
@@ -115,7 +115,7 @@ export function FilesTab({ organization, workspace }: { organization: string; wo
 					{file.isPending ? (
 						<Skeleton className="h-8 w-full" />
 					) : file.isError ? (
-						<Refusal error={file.error} />
+						<Refusal error={file.error} retry={() => void file.refetch()} />
 					) : file.data.kind === "text" ? (
 						<ScrollablePre className="max-h-96 overflow-auto rounded-md border p-2 text-xs">
 							{file.data.text}

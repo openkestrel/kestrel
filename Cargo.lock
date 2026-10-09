@@ -1844,6 +1844,7 @@ dependencies = [
  "clap",
  "jiff",
  "kestrel-operator-types",
+ "libc",
  "percent-encoding",
  "reqwest",
  "serde",
