@@ -1442,20 +1442,6 @@ async fn forget_credential(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Serialize)]
-struct ListedProfile {
-    #[serde(flatten)]
-    profile: wire::SubscriptionProfile,
-    holds: Vec<LoginRecord>,
-}
-
-#[derive(Serialize)]
-struct LoginRecord {
-    kind: &'static str,
-    name: String,
-    set_at: Timestamp,
-}
-
 impl From<SubscriptionProfile> for wire::SubscriptionProfile {
     fn from(profile: SubscriptionProfile) -> Self {
         Self {
@@ -1469,12 +1455,15 @@ impl From<SubscriptionProfile> for wire::SubscriptionProfile {
     }
 }
 
-impl From<profile::Held> for LoginRecord {
+impl From<profile::Held> for wire::SubscriptionProfileLogin {
     fn from(held: profile::Held) -> Self {
         Self {
-            kind: held.entry.kind.as_str(),
+            kind: match held.entry.kind {
+                profile::Kind::Variable => wire::SubscriptionProfileLoginKind::Variable,
+                profile::Kind::File => wire::SubscriptionProfileLoginKind::File,
+            },
             name: held.entry.name,
-            set_at: held.set_at,
+            set_at: held.set_at.to_string(),
         }
     }
 }
@@ -1482,15 +1471,21 @@ impl From<profile::Held> for LoginRecord {
 async fn profiles(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<ListedProfile>>, Refused> {
+) -> Result<Json<wire::ListSubscriptionProfilesResponse>, Refused> {
     let listed = profile::profiles(&control_plane.store, &organization).await?;
 
     Ok(Json(
         listed
             .into_iter()
-            .map(|(profile, held)| ListedProfile {
-                profile: profile.into(),
-                holds: held.into_iter().map(Into::into).collect(),
+            .map(|(profile, held)| {
+                let profile = wire::SubscriptionProfile::from(profile);
+                wire::SubscriptionProfileListed {
+                    id: profile.id,
+                    name: profile.name,
+                    owner: profile.owner,
+                    owner_operator: profile.owner_operator,
+                    holds: held.into_iter().map(Into::into).collect(),
+                }
             })
             .collect(),
     ))
@@ -1519,7 +1514,7 @@ async fn hold_profile_variable(
     State(control_plane): State<ControlPlane>,
     Path((organization, profile, variable)): Path<(String, String, String)>,
     secret: Result<Json<Secret>, JsonRejection>,
-) -> Result<Json<LoginRecord>, Refused> {
+) -> Result<Json<wire::SubscriptionProfileLogin>, Refused> {
     let entry = Entry::variable(&variable)?;
     held_in_profile(&control_plane, &organization, &profile, &entry, secret).await
 }
@@ -1528,7 +1523,7 @@ async fn hold_profile_file(
     State(control_plane): State<ControlPlane>,
     Path((organization, profile, path)): Path<(String, String, String)>,
     secret: Result<Json<Secret>, JsonRejection>,
-) -> Result<Json<LoginRecord>, Refused> {
+) -> Result<Json<wire::SubscriptionProfileLogin>, Refused> {
     let entry = Entry::file(&path)?;
     held_in_profile(&control_plane, &organization, &profile, &entry, secret).await
 }
@@ -1539,7 +1534,7 @@ async fn held_in_profile(
     profile: &str,
     entry: &Entry,
     secret: Result<Json<Secret>, JsonRejection>,
-) -> Result<Json<LoginRecord>, Refused> {
+) -> Result<Json<wire::SubscriptionProfileLogin>, Refused> {
     let Json(Secret { secret }) = secret?;
     let held = profile::hold(&control_plane.store, organization, profile, entry, &secret).await?;
 
