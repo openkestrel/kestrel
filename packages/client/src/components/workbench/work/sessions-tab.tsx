@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Refusal } from "#/components/refusal";
+import { Diagnosis, Refusal } from "#/components/refusal";
 import { Skeleton } from "#/components/ui/skeleton";
 import { ago } from "#/operator/format";
 import { workspaceSessionsQuery } from "#/operator/queries";
@@ -19,7 +19,7 @@ export function SessionsTab({
 	if (sessions.isError) {
 		return (
 			<div className="p-4">
-				<Refusal error={sessions.error} />
+				<Refusal error={sessions.error} retry={() => void sessions.refetch()} />
 			</div>
 		);
 	}
@@ -88,6 +88,7 @@ export function SessionsTab({
 							<dt className="text-muted-foreground">Enqueued</dt>
 							<dd>{ago(session.enqueued_at)}</dd>
 						</dl>
+						{session.diagnostic && <Diagnosis diagnostic={session.diagnostic} />}
 					</article>
 				);
 			})}

@@ -42,7 +42,7 @@ function WorkspaceView() {
 						<Skeleton className="m-4 h-8" />
 					) : shown.isError ? (
 						<div className="p-4">
-							<Refusal error={shown.error} />
+							<Refusal error={shown.error} retry={() => void shown.refetch()} />
 						</div>
 					) : (
 						<>
