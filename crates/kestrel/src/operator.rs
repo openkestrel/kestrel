@@ -235,6 +235,7 @@ struct TranscriptSessionState {
     session_id: Option<domain::SessionId>,
     #[serde(flatten)]
     state: crate::live_work::SessionState,
+    observation: crate::live_work::Observation,
 }
 
 pub fn router(
@@ -729,6 +730,7 @@ struct SessionRecord {
     message_buffering: bool,
     thought_buffering: bool,
     last_activity_at: Option<Timestamp>,
+    observation: crate::live_work::Observation,
 }
 
 #[derive(Serialize)]
@@ -901,7 +903,9 @@ impl WorkspaceRecord {
 }
 
 impl SessionRecord {
-    fn read(session: Session) -> Self {
+    fn read(session: Session, summaries: &crate::live_work::Summaries) -> Self {
+        let (observation, state) = summaries.observed(Some(&session));
+        let trailing = session.state == domain::SessionState::Trailing;
         let harness = session.agent.harness.clone();
         let options = session
             .options
@@ -940,7 +944,8 @@ impl SessionRecord {
             lease_expires_at: session.lease_expires_at,
             connected_at: session.connected.as_ref().map(|connected| connected.at),
             supervisor_version: session.connected.map(|connected| connected.version),
-            usage: session.usage,
+            // The live figure is the Turn in flight; the recorded one is the last Turn answered.
+            usage: state.usage.or(session.usage),
             depends_on: session
                 .depends_on
                 .into_iter()
@@ -949,27 +954,13 @@ impl SessionRecord {
                     name: blocker.name,
                 })
                 .collect(),
-            tools: Vec::new(),
-            units: Vec::new(),
-            message_buffering: false,
-            thought_buffering: false,
-            last_activity_at: None,
+            tools: state.tools,
+            units: state.units,
+            message_buffering: state.message_buffering,
+            thought_buffering: state.thought_buffering,
+            last_activity_at: state.last_activity_at.filter(|_| trailing),
+            observation,
         }
-    }
-
-    fn live(session: Session, summaries: &crate::live_work::Summaries) -> Self {
-        let state = summaries.current_session(&session);
-        let mut record = Self::read(session);
-        // The live figure is the Turn in flight; the recorded one is the last Turn answered.
-        record.usage = state.usage.or(record.usage);
-        record.tools = state.tools;
-        record.units = state.units;
-        record.message_buffering = state.message_buffering;
-        record.thought_buffering = state.thought_buffering;
-        if record.state == domain::SessionState::Trailing.as_str() {
-            record.last_activity_at = state.last_activity_at;
-        }
-        record
     }
 }
 
@@ -1067,7 +1058,7 @@ async fn start(
             project: started.project,
             agent: started.agent,
             workspace: WorkspaceRecord::read(&control_plane.store, started.workspace).await?,
-            session: SessionRecord::read(started.session),
+            session: SessionRecord::read(started.session, &control_plane.live.summaries),
         }),
     ))
 }
@@ -2360,7 +2351,7 @@ async fn workspaces(
         let session = work::sessions(&control_plane.store, id)
             .await?
             .pop()
-            .map(|session| SessionRecord::live(session, &control_plane.live.summaries));
+            .map(|session| SessionRecord::read(session, &control_plane.live.summaries));
         records.push(WorkspaceListedRecord {
             workspace: WorkspaceRecord::read(&control_plane.store, workspace).await?,
             session,
@@ -2398,7 +2389,7 @@ async fn open_workspace(
         StatusCode::CREATED,
         Json(OpenedRecord {
             workspace: WorkspaceRecord::read(&control_plane.store, workspace).await?,
-            session: SessionRecord::read(session),
+            session: SessionRecord::read(session, &control_plane.live.summaries),
         }),
     ))
 }
@@ -2547,7 +2538,9 @@ async fn post_to_workspace(
     .await?;
 
     Ok(Json(PostedRecord {
-        session: posted.session.map(SessionRecord::read),
+        session: posted
+            .session
+            .map(|session| SessionRecord::read(session, &control_plane.live.summaries)),
         held_message: posted.held_message,
     }))
 }
@@ -2713,7 +2706,7 @@ async fn sessions(
     Ok(Json(
         sessions
             .into_iter()
-            .map(|session| SessionRecord::live(session, &control_plane.live.summaries))
+            .map(|session| SessionRecord::read(session, &control_plane.live.summaries))
             .collect(),
     ))
 }
@@ -2754,7 +2747,10 @@ async fn enqueue_session(
     )
     .await?;
 
-    Ok((StatusCode::CREATED, Json(SessionRecord::read(session))))
+    Ok((
+        StatusCode::CREATED,
+        Json(SessionRecord::read(session, &control_plane.live.summaries)),
+    ))
 }
 
 async fn show_session(
@@ -2763,7 +2759,7 @@ async fn show_session(
     headers: HeaderMap,
 ) -> Result<Response, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
-    let record = SessionRecord::live(session, &control_plane.live.summaries);
+    let record = SessionRecord::read(session, &control_plane.live.summaries);
     let body = serde_json::to_string(&record).map_err(anyhow::Error::from)?;
     let tag = strong_etag(&body);
 
@@ -2813,7 +2809,10 @@ async fn interrupt_session(
 
     Ok((
         StatusCode::ACCEPTED,
-        Json(SessionRecord::read(interrupting)),
+        Json(SessionRecord::read(
+            interrupting,
+            &control_plane.live.summaries,
+        )),
     ))
 }
 
@@ -2822,12 +2821,15 @@ async fn stop_session(
     Path((organization, session)): Path<(String, String)>,
 ) -> Result<Json<SessionRecord>, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
-    let running = control_plane.live.summaries.current_session(&session).tools;
+    let running = control_plane.live.summaries.last_held(&session).tools;
     work::stop(&control_plane.store, session.id, &running).await?;
     control_plane.live.summaries.clear_session(&session);
     let session = work::session(&control_plane.store, session.id).await?;
 
-    Ok(Json(SessionRecord::read(session)))
+    Ok(Json(SessionRecord::read(
+        session,
+        &control_plane.live.summaries,
+    )))
 }
 
 async fn set_session_option(
@@ -2868,7 +2870,10 @@ async fn set_session_option(
         } else {
             StatusCode::OK
         },
-        Json(SessionRecord::read(written.session)),
+        Json(SessionRecord::read(
+            written.session,
+            &control_plane.live.summaries,
+        )),
     ))
 }
 
@@ -3167,12 +3172,11 @@ async fn reading(
         .unfinished_session(&workspace)
         .await?
         .map(|holding| holding.session);
+    let (observation, state) = control_plane.live.summaries.observed(session.as_ref());
     let session_state = TranscriptSessionState {
         session_id: session.as_ref().map(|session| session.id),
-        state: session
-            .as_ref()
-            .map(|session| control_plane.live.summaries.current_session(session))
-            .unwrap_or_default(),
+        state,
+        observation,
     };
     Ok(Read {
         page,

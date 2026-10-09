@@ -31,7 +31,11 @@ use crate::store::{self, Store, Tx};
 use crate::work::{self, ReportRefused, Reported};
 use crate::workspace;
 
-pub(crate) const ON_THE_LINK: jiff::SignedDuration = jiff::SignedDuration::from_secs(6);
+const ON_THE_LINK: jiff::SignedDuration = jiff::SignedDuration::from_secs(6);
+
+pub(crate) fn on_the_link(reached_at: Option<jiff::Timestamp>) -> bool {
+    reached_at.is_some_and(|reached| jiff::Timestamp::now().duration_since(reached) < ON_THE_LINK)
+}
 
 pub const ANSWERS: &str = "/link/instances/{instance}/answers/{request}";
 pub const CREDENTIALS: &str = "/link/instances/{instance}/credentials";
@@ -534,8 +538,12 @@ async fn report(
     }
     let connected = matches!(reported.report, work::Report::Connected { .. });
     let finished = matches!(reported.report, work::Report::Finished { .. });
+    let heartbeat = matches!(reported.report, work::Report::Heartbeat);
     let session_id = reported.session;
     work::report(&control_plane.store, &linked.instance, reported).await?;
+    if heartbeat {
+        control_plane.live.summaries.reached(&instance);
+    }
     if finished && let Some(id) = session_id {
         let session = control_plane
             .store

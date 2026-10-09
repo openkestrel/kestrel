@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
-use jiff::Timestamp;
 use tokio::task::{JoinError, JoinSet};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -388,11 +387,7 @@ async fn supervised(
     }
     let recorded = store.read().await?.workspaces().supervisor(&name).await?;
     if let Some(recorded) = recorded {
-        if matches!(held, Held::Nothing)
-            && recorded
-                .reached_at
-                .is_some_and(|reached| Timestamp::now().duration_since(reached) < link::ON_THE_LINK)
-        {
+        if matches!(held, Held::Nothing) && link::on_the_link(recorded.reached_at) {
             return Ok(recorded.name);
         }
         if let Some(supervisor) = &recorded.name {

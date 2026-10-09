@@ -24,6 +24,7 @@ mod instruction;
 mod interrupt;
 mod lease;
 mod link;
+mod observation;
 mod on_open_workspace;
 mod one_supervisor;
 mod operator;

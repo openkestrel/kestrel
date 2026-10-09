@@ -1958,6 +1958,7 @@ pub struct Session {
     pub model: Option<String>,
     ///Constraint: pattern=`^[a-z]+-[a-z]+-[a-z]{8}$`
     pub name: String,
+    pub observation: SessionObservation,
     ///The harness's whole config-option list (ADR-0041).
     pub options: Vec<SessionOption>,
     pub outcome_message: Option<String>,
@@ -1973,8 +1974,9 @@ pub struct Session {
     pub thought_level: Option<String>,
     ///The harness's own name for the conversation, or null until it says one.
     pub title: Option<String>,
+    ///Tool calls open in the current observation; empty whenever observation is unavailable.
     pub tools: Vec<RunningTool>,
-    ///Adapter units still running, such as a Claude background task; they keep a trailing Session trailing.
+    ///Adapter units open in the current observation, such as a Claude background task or subagent; they keep a trailing Session trailing. Empty whenever observation is unavailable.
     pub units: Vec<RunningUnit>,
     ///What the Harness has spent on the Session: the live figure while its agent works, otherwise the latest its Turn answer or the end of its trailing work reported.
     pub usage: Option<Usage>,
@@ -2860,13 +2862,14 @@ pub enum Event {
     FollowerEvent(FollowerEvent),
     Presence(Presence),
 }
-///Transient session_state SSE snapshot on every follow connect, including empty state, then changes. Never has an event id and never enters the Transcript. session_id is null when no unfinished Session exists; usage is the latest the Harness reported, live, or null.
+///Transient session_state SSE snapshot on every follow connect, then changes, including a change of observation availability. Never has an event id and never enters the Transcript. session_id is null when no unfinished Session exists, and observation is then unavailable; usage is the latest the Harness reported, live, or null.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TranscriptSessionState {
     ///When the agent last showed activity, present only while its Session trails its answer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_activity_at: Option<String>,
     pub message_buffering: bool,
+    pub observation: SessionObservation,
     pub session_id: Option<uuid::Uuid>,
     pub thought_buffering: bool,
     pub tools: Vec<RunningTool>,
@@ -2886,6 +2889,204 @@ pub struct Usage {
 pub struct Cost {
     pub amount: f64,
     pub currency: String,
+}
+///Whether the Session's open work is currently observed. current: its supervisor sent a snapshot over its open link and is still reaching it; tools and units list that snapshot, empty when nothing is open. unavailable: nothing current is known, whatever the Session's state or lease; tools and units are empty and never mean nothing is open. Neither availability changes the Session's state or scheduling.
+#[derive(Debug, Clone)]
+pub enum SessionObservation {
+    SessionObservationCurrent(SessionObservationCurrent),
+    SessionObservationUnavailable(SessionObservationUnavailable),
+}
+impl serde::Serialize for SessionObservation {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::SessionObservationCurrent(payload) => {
+                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::ser::Error::custom(concat!(
+                        "discriminated union variant `",
+                        stringify!(SessionObservationCurrent),
+                        "` did not serialize as an object",
+                    ))
+                })?;
+                match object.get("availability") {
+                    Some(serde_json::Value::String(tag)) if matches!(tag.as_str(), "current") => {}
+                    Some(serde_json::Value::String(tag)) => {
+                        return Err(serde::ser::Error::custom(format!(
+                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
+                            "availability",
+                            stringify!(SessionObservationCurrent),
+                        )));
+                    }
+                    Some(_) => {
+                        return Err(serde::ser::Error::custom(concat!(
+                            "discriminator `",
+                            "availability",
+                            "` did not serialize as a string",
+                        )));
+                    }
+                    None => {
+                        object.insert(
+                            "availability".to_string(),
+                            serde_json::Value::String("current".to_string()),
+                        );
+                    }
+                }
+                value.serialize(serializer)
+            }
+            Self::SessionObservationUnavailable(payload) => {
+                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::ser::Error::custom(concat!(
+                        "discriminated union variant `",
+                        stringify!(SessionObservationUnavailable),
+                        "` did not serialize as an object",
+                    ))
+                })?;
+                match object.get("availability") {
+                    Some(serde_json::Value::String(tag))
+                        if matches!(tag.as_str(), "unavailable") => {}
+                    Some(serde_json::Value::String(tag)) => {
+                        return Err(serde::ser::Error::custom(format!(
+                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
+                            "availability",
+                            stringify!(SessionObservationUnavailable),
+                        )));
+                    }
+                    Some(_) => {
+                        return Err(serde::ser::Error::custom(concat!(
+                            "discriminator `",
+                            "availability",
+                            "` did not serialize as a string",
+                        )));
+                    }
+                    None => {
+                        object.insert(
+                            "availability".to_string(),
+                            serde_json::Value::String("unavailable".to_string()),
+                        );
+                    }
+                }
+                value.serialize(serializer)
+            }
+        }
+    }
+}
+impl<'de> serde::Deserialize<'de> for SessionObservation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let discriminator = match value.get("availability") {
+            Some(serde_json::Value::String(discriminator)) => Some(discriminator.as_str()),
+            Some(_) => {
+                return Err(serde::de::Error::custom(concat!(
+                    "non-string discriminator `",
+                    "availability",
+                    "`",
+                )));
+            }
+            None => None,
+        };
+        match discriminator {
+            Some(discriminator) => match discriminator {
+                "current" => {
+                    let primary_error =
+                        match serde_json::from_value::<SessionObservationCurrent>(value.clone()) {
+                            Ok(payload) => {
+                                return Ok(Self::SessionObservationCurrent(payload));
+                            }
+                            Err(error) => error,
+                        };
+                    let mut structural_match: Option<(Self, &'static str)> = None;
+                    if let Ok(payload) =
+                        serde_json::from_value::<SessionObservationUnavailable>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "availability",
+                                "current",
+                                first_name,
+                                stringify!(SessionObservationUnavailable),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::SessionObservationUnavailable(payload),
+                            stringify!(SessionObservationUnavailable),
+                        ));
+                    }
+                    match structural_match {
+                        Some((payload, _)) => Ok(payload),
+                        None => Err(serde::de::Error::custom(primary_error)),
+                    }
+                }
+                "unavailable" => {
+                    let primary_error = match serde_json::from_value::<SessionObservationUnavailable>(
+                        value.clone(),
+                    ) {
+                        Ok(payload) => {
+                            return Ok(Self::SessionObservationUnavailable(payload));
+                        }
+                        Err(error) => error,
+                    };
+                    let mut structural_match: Option<(Self, &'static str)> = None;
+                    if let Ok(payload) =
+                        serde_json::from_value::<SessionObservationCurrent>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "availability",
+                                "unavailable",
+                                first_name,
+                                stringify!(SessionObservationCurrent),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::SessionObservationCurrent(payload),
+                            stringify!(SessionObservationCurrent),
+                        ));
+                    }
+                    match structural_match {
+                        Some((payload, _)) => Ok(payload),
+                        None => Err(serde::de::Error::custom(primary_error)),
+                    }
+                }
+                other => Err(serde::de::Error::custom(format!(
+                    "unknown discriminator value `{other}` for `{}`",
+                    "availability",
+                ))),
+            },
+            None => Err(serde::de::Error::custom(concat!(
+                "missing string discriminator `",
+                "availability",
+                "`",
+            ))),
+        }
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SessionObservationUnavailable {
+    pub availability: serde_json::Value,
+    ///The last snapshot this control plane took for the Session, kept until the Session ends; null when it holds none, as after a restart.
+    pub last: Option<LastObservation>,
+}
+///A historical snapshot of the Session's open work: what was open at observed_at, not proof that it still runs or that the supervisor is reachable.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LastObservation {
+    pub observed_at: String,
+    pub tools: Vec<RunningTool>,
+    pub units: Vec<RunningUnit>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SessionObservationCurrent {
+    pub availability: serde_json::Value,
+    ///When the control plane took the snapshot.
+    pub observed_at: String,
 }
 ///Work an adapter declared it runs apart from any tool call, such as a Claude background task, open until the adapter settles it. A settled unit adds no Transcript entry.
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -4016,14 +4016,55 @@
           "connected_at": { "type": ["string", "null"], "format": "date-time" },
           "supervisor_version": { "type": ["string", "null"] },
           "usage": { "anyOf": [{ "$ref": "#/components/schemas/Usage" }, { "type": "null" }], "description": "What the Harness has spent on the Session: the live figure while its agent works, otherwise the latest its Turn answer or the end of its trailing work reported." },
-          "tools": { "type": "array", "items": { "$ref": "#/components/schemas/RunningTool" } },
-          "units": { "type": "array", "description": "Adapter units still running, such as a Claude background task; they keep a trailing Session trailing.", "items": { "$ref": "#/components/schemas/RunningUnit" } },
+          "tools": { "type": "array", "description": "Tool calls open in the current observation; empty whenever observation is unavailable.", "items": { "$ref": "#/components/schemas/RunningTool" } },
+          "units": { "type": "array", "description": "Adapter units open in the current observation, such as a Claude background task or subagent; they keep a trailing Session trailing. Empty whenever observation is unavailable.", "items": { "$ref": "#/components/schemas/RunningUnit" } },
           "message_buffering": { "type": "boolean" },
           "thought_buffering": { "type": "boolean" },
           "last_activity_at": { "type": ["string", "null"], "format": "date-time", "description": "When the trailing Session's agent last showed activity; null in every other state." },
+          "observation": { "$ref": "#/components/schemas/SessionObservation" },
           "depends_on": { "type": "array", "description": "The Sessions this one was declared to wait on, whether or not they have ended.", "items": { "$ref": "#/components/schemas/SessionReference" } }
         },
-        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "changing_options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "units", "message_buffering", "thought_buffering", "last_activity_at", "depends_on"]
+        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "changing_options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "tools", "units", "message_buffering", "thought_buffering", "last_activity_at", "observation", "depends_on"]
+      },
+      "SessionObservation": {
+        "description": "Whether the Session's open work is currently observed. current: its supervisor sent a snapshot over its open link and is still reaching it; tools and units list that snapshot, empty when nothing is open. unavailable: nothing current is known, whatever the Session's state or lease; tools and units are empty and never mean nothing is open. Neither availability changes the Session's state or scheduling.",
+        "oneOf": [
+          { "$ref": "#/components/schemas/SessionObservationCurrent" },
+          { "$ref": "#/components/schemas/SessionObservationUnavailable" }
+        ],
+        "discriminator": {
+          "propertyName": "availability",
+          "mapping": {
+            "current": "#/components/schemas/SessionObservationCurrent",
+            "unavailable": "#/components/schemas/SessionObservationUnavailable"
+          }
+        }
+      },
+      "SessionObservationCurrent": {
+        "type": "object",
+        "properties": {
+          "availability": { "const": "current" },
+          "observed_at": { "type": "string", "format": "date-time", "description": "When the control plane took the snapshot." }
+        },
+        "required": ["availability", "observed_at"]
+      },
+      "SessionObservationUnavailable": {
+        "type": "object",
+        "properties": {
+          "availability": { "const": "unavailable" },
+          "last": { "anyOf": [{ "$ref": "#/components/schemas/LastObservation" }, { "type": "null" }], "description": "The last snapshot this control plane took for the Session, kept until the Session ends; null when it holds none, as after a restart." }
+        },
+        "required": ["availability", "last"]
+      },
+      "LastObservation": {
+        "description": "A historical snapshot of the Session's open work: what was open at observed_at, not proof that it still runs or that the supervisor is reachable.",
+        "type": "object",
+        "properties": {
+          "observed_at": { "type": "string", "format": "date-time" },
+          "tools": { "type": "array", "items": { "$ref": "#/components/schemas/RunningTool" } },
+          "units": { "type": "array", "items": { "$ref": "#/components/schemas/RunningUnit" } }
+        },
+        "required": ["observed_at", "tools", "units"]
       },
       "SessionReference": {
         "type": "object",
@@ -5790,7 +5831,7 @@
         ]
       },
       "TranscriptSessionState": {
-        "description": "Transient session_state SSE snapshot on every follow connect, including empty state, then changes. Never has an event id and never enters the Transcript. session_id is null when no unfinished Session exists; usage is the latest the Harness reported, live, or null.",
+        "description": "Transient session_state SSE snapshot on every follow connect, then changes, including a change of observation availability. Never has an event id and never enters the Transcript. session_id is null when no unfinished Session exists, and observation is then unavailable; usage is the latest the Harness reported, live, or null.",
         "type": "object",
         "properties": {
           "session_id": {
@@ -5833,6 +5874,9 @@
             "type": "string",
             "format": "date-time",
             "description": "When the agent last showed activity, present only while its Session trails its answer."
+          },
+          "observation": {
+            "$ref": "#/components/schemas/SessionObservation"
           }
         },
         "required": [
@@ -5841,7 +5885,8 @@
           "units",
           "message_buffering",
           "thought_buffering",
-          "usage"
+          "usage",
+          "observation"
         ]
       },
       "Event": {
