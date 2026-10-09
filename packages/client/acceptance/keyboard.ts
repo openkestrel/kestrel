@@ -2,7 +2,7 @@
 import { chromium, type Locator, type Page } from "@playwright/test";
 
 const width = Number(process.argv[2] ?? "1280");
-const base = process.env.KESTREL_CLIENT_URL ?? "https://127.0.0.1:7739";
+const base = process.env.KESTREL_CLIENT_URL ?? "http://127.0.0.1:7739";
 const organization = process.env.KESTREL_ORGANIZATION ?? "acme";
 let presses = 0;
 const steps: string[] = [];
@@ -25,7 +25,6 @@ async function tabTo(page: Page, target: Locator, what: string, tries = 300): Pr
 
 const browser = await chromium.launch();
 const context = await browser.newContext({
-	ignoreHTTPSErrors: true,
 	viewport: { width, height: width < 900 ? 667 : 900 },
 });
 const page = await context.newPage();

@@ -3126,13 +3126,7 @@ async fn transcript(
     headers: HeaderMap,
 ) -> Result<Sse<impl Stream<Item = Result<Event, BoxError>>>, Refused> {
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
-    let name = match following.as_name.as_deref() {
-        Some(name) => {
-            let mut tx = control_plane.store.read().await?;
-            Some(participant::accepted(&mut tx, &workspace.organization, name, "transcript").await?)
-        }
-        None => None,
-    };
+    let name = follower_name(&control_plane, &workspace, following.as_name.as_deref()).await?;
     let range = log::SeqRange {
         first_seq: following.first_seq,
         last_seq: following.last_seq,
@@ -3150,6 +3144,21 @@ async fn transcript(
     let read = transcribing.read(&control_plane).await?;
 
     Ok(per_resource(transcribed(control_plane, transcribing, read)))
+}
+
+async fn follower_name(
+    control_plane: &ControlPlane,
+    workspace: &Workspace,
+    name: Option<&str>,
+) -> Result<Option<String>, Refused> {
+    let Some(name) = name else {
+        return Ok(None);
+    };
+    let mut tx = control_plane.store.read().await?;
+
+    Ok(Some(
+        participant::accepted(&mut tx, &workspace.organization, name, "transcript").await?,
+    ))
 }
 
 struct Transcribing {
@@ -3464,9 +3473,15 @@ async fn subscribe_stream(
                 )
             })?;
             let workspace = resolved(&control_plane, &subscription.organization, workspace).await?;
+            let name = follower_name(
+                &control_plane,
+                &workspace,
+                subscription.participant.as_deref(),
+            )
+            .await?;
             let transcribing = Transcribing {
                 workspace: workspace.id,
-                name: None,
+                name,
                 follow: true,
                 kinds: kinds(subscription.kinds.as_deref())?,
                 summaries: true,

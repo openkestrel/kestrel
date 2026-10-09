@@ -111,10 +111,9 @@ export function transport(
 
 		async *stream(
 			path: string,
-			{ after, signal }: { after?: string; signal?: AbortSignal } = {},
+			{ signal }: { signal?: AbortSignal } = {},
 		): AsyncGenerator<StreamEvent> {
 			const headers = new Headers({ accept: "text/event-stream" });
-			if (after !== undefined) headers.set("Last-Event-ID", after);
 			const response = await answered(path, { method: "GET", headers, signal });
 			if (!response.body) return;
 			yield* parsed(response.body);

@@ -214,16 +214,17 @@ A browser tab follows several resources over one SSE connection
 ([ADR-0045](../adr/0045-a-browser-tab-holds-one-stream-and-subscribes-over-requests.md),
 `stream.rs`). `PUT /operator/streams` answers `201` with a `token`; `GET /operator/streams/{token}`
 opens it once (a second open is `409`); `PUT …/subscriptions/{id}` takes `{ kind, organization,
-workspace?, after?, kinds? }` and starts or replaces the subscription under that id, and `DELETE`
+workspace?, after?, kinds?, participant? }` and starts or replaces the subscription under that id, and `DELETE`
 ends it. An unknown, expired or dropped reservation is `404`, which tells the tab to reserve again.
 
 Each subscription is the per-resource stream it names, built by the same generator: a `notices`
 subscription is the Organization's change notices, and a `transcript` one is a follow from `after`
-with summaries on, refused as that read refuses. Every event keeps its per-resource name and
-carries `{ subscription, cursor?, data }`: `data` is the per-resource payload and `cursor` the
-subscription's own Transcript cursor on entry, Activity and cursor events. No event carries an SSE
-id. A Transcript subscription registers an anonymous follower once caught up and is renewed through
-the follower lease route; replacing, ending or dropping it removes the follower.
+with summaries on, refused as that read refuses; `participant` is that read's `as`. Every event
+keeps its per-resource name and carries `{ subscription, cursor?, data }`: `data` is the
+per-resource payload and `cursor` the subscription's own Transcript cursor on entry, Activity and
+cursor events. No event carries an SSE id. A Transcript subscription registers a follower once
+caught up, anonymous unless it names a `participant`, and is renewed through the follower lease
+route; replacing, ending or dropping it removes the follower.
 
 The reservation is memory only, bounded at 256 reservations and 32 subscriptions each. One never
 opened is forgotten after the follower lease period, and one is forgotten the moment its
@@ -326,9 +327,9 @@ headings. Each command's `--json` returns the operator response.
 `packages/client` ([README](../../packages/client/README.md)) is a static SPA. The control plane
 does not serve it: a web server in front does, on the operator interface's origin
 ([ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md)). In compose that is
-`images/kestrel-client`, Caddy on the host's loopback at 7719, over HTTPS from its own local CA so
-the browser speaks HTTP/2 and every tab opens its own event streams
-([ADR-0044](../adr/0044-the-browser-client-is-served-over-https.md)). Its Caddyfile answers:
+`images/kestrel-client`, Caddy on the host's loopback at 7719, over plain HTTP with no certificate,
+so each tab holds one event stream and subscribes over requests
+([ADR-0045](../adr/0045-a-browser-tab-holds-one-stream-and-subscribes-over-requests.md)). Its Caddyfile answers:
 
 | Path | Answer |
 | --- | --- |
@@ -346,6 +347,12 @@ page, naming its own origin as the control plane. A read offers reading again af
 Organization, a re-read, a field of the form, a write the person chooses (missing inputs
 collected, a destructive one confirmed beside its consequence), or a sentence where the browser
 has no screen; `src/components/refusal.tsx` renders them, and a failed Session's `diagnostic` in
-the Sessions tab. It reads SSE with `Last-Event-ID` as the cursor.
-`src/operator/follow.ts` holds the two live reads: an Organization route's change notices, which
-invalidate TanStack Query keys, and a Workspace route's Transcript follow.
+the Sessions tab. `src/operator/tab-stream.ts` holds the tab's one
+stream: it reserves lazily, subscribes each live read under its own id, and after any drop reserves
+again and re-subscribes from each subscription's current request. A plain `404` on a subscribe is
+the reservation forgotten; a typed one is the subscription refused, which is not retried.
+`src/operator/follow.ts` holds the two live reads over it: an Organization route's change notices,
+whose `open` refetches the Organization and whose changes invalidate TanStack Query keys, and a
+Workspace route's Transcript follow, which resumes from its mirror's cursor and renews its
+follower's lease. About five tabs fit HTTP/1.1's six connections per origin; nothing detects a
+sixth. Browser sign-in progress polls its state read rather than opening a second stream.

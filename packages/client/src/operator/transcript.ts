@@ -4,10 +4,12 @@ import type {
 	FollowerEvent,
 	Presence,
 	Recorded,
+	StreamSubscription,
 	TranscriptKind,
 	TranscriptSessionState,
 } from "./generated";
-import { operatorPath, Refused, type StreamEvent, type Transport } from "./transport";
+import type { Subscribed, Subscriber, TabStream } from "./tab-stream";
+import { operatorPath, type StreamEvent, type Transport } from "./transport";
 
 export type Delivered = {
 	seq: number;
@@ -170,10 +172,8 @@ function parsed<T>(data: string): T | undefined {
 	}
 }
 
-const RETRY = 250;
-const RETRY_CAP = 5_000;
-
 export type FollowOptions = {
+	stream: TabStream;
 	operations: Transport;
 	organization: string;
 	workspace: string;
@@ -181,60 +181,39 @@ export type FollowOptions = {
 	mirror: TranscriptMirror;
 };
 
-export class FollowSession {
-	private controller: AbortController | null = null;
+export class FollowSession implements Subscriber {
+	private subscribed: Subscribed | undefined;
 	private renewal: ReturnType<typeof setTimeout> | undefined;
 	private stopped = false;
 
 	constructor(private readonly options: FollowOptions) {}
 
 	start(): void {
-		void this.loop();
+		this.subscribed = this.options.stream.subscribe(this);
 	}
 
 	stop(): void {
 		this.stopped = true;
-		this.controller?.abort();
 		clearTimeout(this.renewal);
+		this.subscribed?.unsubscribe();
 	}
 
-	private async loop(): Promise<void> {
-		let backoff = RETRY;
-		while (!this.stopped) {
-			const controller = new AbortController();
-			this.controller = controller;
-			try {
-				// oxlint-disable-next-line no-await-in-loop -- a reconnect waits for this attempt before deciding to make the next.
-				await this.consume(controller.signal);
-			} catch (error) {
-				// oxlint-disable-next-line typescript/no-unnecessary-condition -- stop() can set stopped while consume() awaits; TS narrowed it false for the loop.
-				if (this.stopped) return;
-				if (error instanceof Refused && error.status < 500) return;
-			}
-			// oxlint-disable-next-line typescript/no-unnecessary-condition -- stop() can set stopped while consume() awaits; TS narrowed it false for the loop.
-			if (this.stopped || this.options.mirror.sealed) return;
-			// oxlint-disable-next-line no-await-in-loop -- the backoff must grow between attempts.
-			await sleep(backoff);
-			backoff = Math.min(backoff * 2, RETRY_CAP);
-		}
+	subscription(): StreamSubscription {
+		const { organization, workspace, participant, mirror } = this.options;
+		return {
+			kind: "transcript",
+			organization,
+			workspace,
+			...(mirror.cursor === undefined ? {} : { after: mirror.cursor }),
+			...(participant ? { participant } : {}),
+		};
 	}
 
-	private async consume(signal: AbortSignal): Promise<void> {
-		const { operations, organization, workspace, participant, mirror } = this.options;
-		const path = transcriptPath(organization, workspace, {
-			follow: true,
-			as: participant ?? undefined,
-		});
-		for await (const event of operations.stream(path, { after: mirror.cursor, signal })) {
-			if (event.event === "end") {
-				mirror.apply(event);
-				return;
-			}
-			mirror.apply(event);
-			if (event.event === "follower") {
-				const follower = parsed<FollowerEvent>(event.data);
-				if (follower) this.schedule(follower);
-			}
+	deliver(event: StreamEvent): void {
+		this.options.mirror.apply(event);
+		if (event.event === "follower") {
+			const follower = parsed<FollowerEvent>(event.data);
+			if (follower) this.schedule(follower);
 		}
 	}
 
@@ -261,7 +240,7 @@ export class FollowSession {
 		} catch {
 			// A lapsed or unknown follower registers again rather than being revived.
 			// oxlint-disable-next-line typescript/no-unnecessary-condition -- stop() can set stopped while the write awaits; TS narrowed it false at the guard above.
-			if (!this.stopped) this.controller?.abort();
+			if (!this.stopped) this.subscribed?.resubscribe();
 			return;
 		}
 		this.schedule(follower);
@@ -278,12 +257,13 @@ export async function readRange(
 	range: Range,
 	signal?: AbortSignal,
 ): Promise<Delivered[]> {
-	const path = transcriptPath(organization, workspace, {
-		follow: false,
+	const parameters = new URLSearchParams({
+		follow: "false",
 		kinds: "shared_state,narration,detail",
-		first: range.first,
-		last: range.last,
+		first_seq: String(range.first),
+		last_seq: String(range.last),
 	});
+	const path = `${operatorPath("organizations", organization, "workspaces", workspace, "transcript")}?${parameters}`;
 	const entries: Delivered[] = [];
 	for await (const event of operations.stream(path, { signal })) {
 		if (event.event === "entry") {
@@ -295,29 +275,6 @@ export async function readRange(
 	return entries;
 }
 
-export type TranscriptQuery = {
-	follow: boolean;
-	as?: string;
-	kinds?: string;
-	summaries?: boolean;
-	first?: number;
-	last?: number;
-};
-
-export function transcriptPath(
-	organization: string,
-	workspace: string,
-	query: TranscriptQuery,
-): string {
-	const parameters = new URLSearchParams({ follow: String(query.follow) });
-	if (query.as) parameters.set("as", query.as);
-	if (query.kinds) parameters.set("kinds", query.kinds);
-	if (query.summaries !== undefined) parameters.set("summaries", String(query.summaries));
-	if (query.first !== undefined) parameters.set("first_seq", String(query.first));
-	if (query.last !== undefined) parameters.set("last_seq", String(query.last));
-	return `${operatorPath("organizations", organization, "workspaces", workspace, "transcript")}?${parameters}`;
-}
-
 export function delivered(recorded: Recorded): Delivered {
 	return {
 		seq: recorded.seq,
@@ -326,8 +283,4 @@ export function delivered(recorded: Recorded): Delivered {
 		appendedAt: recorded.appended_at,
 		entry: recorded.entry,
 	};
-}
-
-function sleep(milliseconds: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

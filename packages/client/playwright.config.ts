@@ -11,8 +11,7 @@ export default defineConfig({
 	forbidOnly: !!process.env.CI,
 	reporter: process.env.CI ? "github" : "list",
 	use: {
-		baseURL: `https://127.0.0.1:${client}`,
-		ignoreHTTPSErrors: true,
+		baseURL: `http://127.0.0.1:${client}`,
 		trace: "retain-on-failure",
 	},
 	projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
@@ -31,8 +30,7 @@ export default defineConfig({
 		},
 		{
 			command: "caddy run --adapter caddyfile --config ../../images/kestrel-client/Caddyfile",
-			url: `https://127.0.0.1:${client}/`,
-			ignoreHTTPSErrors: true,
+			url: `http://127.0.0.1:${client}/`,
 			reuseExistingServer: false,
 			env: {
 				XDG_DATA_HOME: mkdtempSync(join(tmpdir(), "kestrel-client-e2e-caddy-")),

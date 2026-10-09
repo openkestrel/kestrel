@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { Streamed } from "./streamed";
 
 const ORGANIZATION = "acme";
 
@@ -149,20 +150,9 @@ class Reads {
 				});
 			},
 		);
-		await page.route(
-			(url) => url.pathname === `${base}/transcript`,
-			async (route) => {
-				if (this.transcript === undefined) {
-					await route.continue();
-					return;
-				}
-				await route.fulfill({
-					status: 200,
-					contentType: "text/event-stream",
-					body: this.transcript,
-				});
-			},
-		);
+		if (this.transcript !== undefined) {
+			await new Streamed({ transcript: () => this.transcript ?? "" }).install(page);
+		}
 	}
 }
 
