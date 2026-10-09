@@ -8,6 +8,7 @@ export type StreamEvent = { event: string; id: string | undefined; data: string 
 
 export class Refused extends Error {
 	readonly status: number;
+	readonly kind: string | undefined;
 	readonly field: string | undefined;
 	readonly phase: string | undefined;
 	readonly retryAfter: number | undefined;
@@ -15,11 +16,17 @@ export class Refused extends Error {
 	constructor(
 		status: number,
 		message: string,
-		{ field, phase, retryAfter }: { field?: string; phase?: string; retryAfter?: number } = {},
+		{
+			kind,
+			field,
+			phase,
+			retryAfter,
+		}: { kind?: string; field?: string; phase?: string; retryAfter?: number } = {},
 	) {
 		super(message);
 		this.name = "Refused";
 		this.status = status;
+		this.kind = kind;
 		this.field = field;
 		this.phase = phase;
 		this.retryAfter = retryAfter;
@@ -86,10 +93,9 @@ export function transport(fetch: Fetch = (url, init) => globalThis.fetch(url, in
 
 		async *stream(
 			path: string,
-			{ after, signal }: { after?: string; signal?: AbortSignal } = {},
+			{ signal }: { signal?: AbortSignal } = {},
 		): AsyncGenerator<StreamEvent> {
 			const headers = new Headers({ accept: "text/event-stream" });
-			if (after !== undefined) headers.set("Last-Event-ID", after);
 			const response = await answered(path, { method: "GET", headers, signal });
 			if (!response.body) return;
 			yield* parsed(response.body);
@@ -108,7 +114,7 @@ async function decoded<T>(response: Response): Promise<T> {
 async function refusal(response: Response): Promise<Refused> {
 	const retry = Number(response.headers.get("retry-after"));
 	const retryAfter = Number.isFinite(retry) && retry > 0 ? retry : undefined;
-	let said: Partial<Refusal & { field: unknown; phase: unknown }> = {};
+	let said: Partial<Refusal & { kind: unknown; field: unknown; phase: unknown }> = {};
 	try {
 		said = await response.json();
 	} catch {}
@@ -118,6 +124,7 @@ async function refusal(response: Response): Promise<Refused> {
 			? said.message
 			: `the control plane answered ${response.status}`,
 		{
+			kind: typeof said.kind === "string" ? said.kind : undefined,
 			field: typeof said.field === "string" ? said.field : undefined,
 			phase: typeof said.phase === "string" ? said.phase : undefined,
 			retryAfter,

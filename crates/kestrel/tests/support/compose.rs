@@ -149,7 +149,7 @@ impl Stack {
     }
 
     /// What the browser Client's port answers `path` with, as a browser on this host asks it:
-    /// over HTTP/2, trusting Caddy's local CA as the operator has.
+    /// over plain HTTP/1.1, trusting no certificate.
     pub fn what_the_client_serves(&self, path: &str) -> (u16, String) {
         let address = completed(
             &["port", CLIENT, "8080"],
@@ -158,13 +158,12 @@ impl Stack {
         let asked = Command::new("curl")
             .args([
                 "--silent",
-                "--insecure",
-                "--http2",
+                "--http1.1",
                 "--write-out",
                 "\n%{http_version} %{http_code}",
             ])
-            .args(["--header", &format!("Origin: https://{address}")])
-            .arg(format!("https://{address}{path}"))
+            .args(["--header", &format!("Origin: http://{address}")])
+            .arg(format!("http://{address}{path}"))
             .output()
             .expect("curl should run");
         assert!(asked.status.success(), "curl failed: {asked:?}");
@@ -176,7 +175,7 @@ impl Stack {
         let (version, status) = written
             .split_once(' ')
             .unwrap_or_else(|| panic!("{path} was answered with no status: {written}"));
-        assert_eq!(version, "2", "{path} was answered over HTTP/{version}");
+        assert_eq!(version, "1.1", "{path} was answered over HTTP/{version}");
         let status = status
             .parse()
             .unwrap_or_else(|_| panic!("{path} was answered with no status: {written}"));

@@ -75,6 +75,17 @@ fn the_operator_supplies_nothing() {
     let model = model(rendered);
     assert_eq!(model["name"], "kestrel");
     assert_eq!(model["volumes"]["kestrel"]["name"], "kestrel");
+    assert_eq!(
+        model["volumes"].as_object().map(|volumes| volumes.len()),
+        Some(1),
+        "the Client keeps no certificate authority, so no volume but the database's: {}",
+        model["volumes"]
+    );
+    assert!(
+        model["services"][CLIENT].get("volumes").is_none(),
+        "{}",
+        model["services"][CLIENT]
+    );
     assert_eq!(model["networks"]["link"]["name"], "kestrel-link");
     assert_eq!(model["services"]["kestrel"]["image"], "kestrel");
     assert_eq!(model["services"]["kestrel-env"]["image"], "kestrel-env");

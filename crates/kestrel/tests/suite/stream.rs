@@ -635,6 +635,39 @@ async fn a_transcript_subscription_is_a_follower_until_replaced_unsubscribed_or_
 }
 
 #[tokio::test]
+async fn a_transcript_subscription_follows_under_the_participant_it_names() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = an_open_workspace(&kestrel).await;
+    let token = reserve(&kestrel).await;
+    let mut connection = Connection::open(&kestrel, &token).await;
+
+    let mut named = transcript(&workspace);
+    named["participant"] = json!("jack");
+    assert_eq!(
+        subscribe(&kestrel, &token, "ws", named).await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        connection.until("ws", "presence").await.data,
+        json!({"named": ["jack"], "anonymous": 0})
+    );
+
+    let mut agent = transcript(&workspace);
+    agent["participant"] = json!("builder");
+    let response = reqwest::Client::new()
+        .put(subscription_url(&kestrel, &token, "agent"))
+        .json(&agent)
+        .send()
+        .await
+        .expect("the operator boundary should answer");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let refusal: Value = response.json().await.expect("a refusal as JSON");
+    assert_eq!(refusal["field"], "participant");
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_lapsed_follower_closes_its_connection_and_forgets_the_reservation() {
     let kestrel = Kestrel::boot_with_follow_lease(Duration::from_secs(2)).await;
     let workspace = an_open_workspace(&kestrel).await;

@@ -4,14 +4,14 @@ import { chromium } from "@playwright/test";
 
 const [workspace, participant, out, minutes = "240"] = process.argv.slice(2);
 if (!workspace || !participant || !out) throw new Error("workspace, participant and out needed");
-const base = process.env.KESTREL_CLIENT_URL ?? "https://127.0.0.1:7739";
+const base = process.env.KESTREL_CLIENT_URL ?? "http://127.0.0.1:7739";
 const organization = process.env.KESTREL_ORGANIZATION ?? "acme";
 
 const log = (record: Record<string, unknown>) =>
 	appendFileSync(out, `${JSON.stringify({ at: new Date().toISOString(), ...record })}\n`);
 
 const browser = await chromium.launch();
-const context = await browser.newContext({ ignoreHTTPSErrors: true });
+const context = await browser.newContext();
 await context.exposeFunction("__kestrelStream", (event: string, id: string, data: string) => {
 	let parsed: unknown = data;
 	try {
@@ -32,7 +32,7 @@ await context.addInitScript(
 			) {
 				return response;
 			}
-			if (!url.includes("/transcript")) return response;
+			if (!url.includes("/operator/streams/")) return response;
 			const [mine, theirs] = response.body.tee();
 			void (async () => {
 				const reader = mine.pipeThrough(new TextDecoderStream()).getReader();
@@ -53,8 +53,13 @@ await context.addInitScript(
 							else if (line.startsWith("id:")) id = line.slice(3).trim();
 							else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
 						}
+						const envelope = JSON.parse(data.join("\n") || "{}");
 						// @ts-expect-error exposed by the follower
-						void window.__kestrelStream(event, id, data.join("\n"));
+						void window.__kestrelStream(
+							event,
+							envelope.cursor ?? id,
+							JSON.stringify(envelope.data),
+						);
 						cut = buffer.indexOf("\n\n");
 					}
 				}

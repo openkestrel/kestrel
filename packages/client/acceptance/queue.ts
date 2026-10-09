@@ -4,11 +4,11 @@ import { chromium } from "@playwright/test";
 
 const [binary] = process.argv.slice(2);
 if (!binary) throw new Error("the kestrel binary is needed");
-const base = process.env.KESTREL_CLIENT_URL ?? "https://127.0.0.1:7739";
+const base = process.env.KESTREL_CLIENT_URL ?? "http://127.0.0.1:7739";
 const organization = process.env.KESTREL_ORGANIZATION ?? "acme";
 
 const browser = await chromium.launch();
-const page = await browser.newPage({ ignoreHTTPSErrors: true });
+const page = await browser.newPage();
 await page.goto(`${base}/organizations/${organization}`);
 await page.locator("[data-queue-header]").waitFor();
 await page.waitForTimeout(1_500);
@@ -18,7 +18,7 @@ const lines: Record<string, string | null> = {};
 for (const link of await page.locator('nav[aria-label="Workspaces"] a').all()) {
 	const href = (await link.getAttribute("href")) ?? "";
 	const name = href.split("/").at(-1) ?? href;
-	const workspace = await browser.newPage({ ignoreHTTPSErrors: true });
+	const workspace = await browser.newPage();
 	await workspace.goto(`${base}${href}`);
 	await workspace.waitForTimeout(2_000);
 	const line = workspace.locator("[data-queue-line]");

@@ -62,8 +62,19 @@ describe("a read", () => {
 
 		expect(refused.status).toBe(404);
 		expect(refused.message).toBe("no Workspace is named brave-otter");
+		expect(refused.kind).toBeUndefined();
 		expect(refused.field).toBeUndefined();
 		expect(refused.phase).toBeUndefined();
+	});
+
+	it("carries the kind of a typed Diagnostic", async () => {
+		const { operator } = answering(() =>
+			json(404, { kind: "missing_reference", message: "no Workspace is named brave-otter" }),
+		);
+
+		const refused = await refusalOf(operator.read("/operator/organizations/acme/workspaces/x"));
+
+		expect(refused.kind).toBe("missing_reference");
 	});
 
 	it("carries the field and the phase a refusal names", async () => {
@@ -168,15 +179,13 @@ describe("a stream", () => {
 		expect(delivered).toEqual([{ event: "message", id: undefined, data: "one\ntwo" }]);
 	});
 
-	it("resumes after the cursor it is given", async () => {
+	it("asks for an event stream", async () => {
 		const { operator, seen } = answering(() => events());
 
-		for await (const _ of operator.stream("/s", { after: "41" })) {
+		for await (const _ of operator.stream("/s")) {
 		}
 
-		const headers = new Headers(seen[0].init.headers);
-		expect(headers.get("Last-Event-ID")).toBe("41");
-		expect(headers.get("accept")).toBe("text/event-stream");
+		expect(new Headers(seen[0].init.headers).get("accept")).toBe("text/event-stream");
 	});
 
 	it("is refused before it opens like any other request", async () => {
@@ -184,7 +193,7 @@ describe("a stream", () => {
 
 		const refused = await refusalOf(
 			(async () => {
-				for await (const _ of operator.stream("/s", { after: "nope" })) {
+				for await (const _ of operator.stream("/s")) {
 				}
 			})(),
 		);

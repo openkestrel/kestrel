@@ -3,11 +3,11 @@ import { chromium } from "@playwright/test";
 
 const [workspace, name, action, text = ""] = process.argv.slice(2);
 if (!workspace || !name || !action) throw new Error("workspace, name and action needed");
-const base = process.env.KESTREL_CLIENT_URL ?? "https://127.0.0.1:7739";
+const base = process.env.KESTREL_CLIENT_URL ?? "http://127.0.0.1:7739";
 const organization = process.env.KESTREL_ORGANIZATION ?? "acme";
 
 const browser = await chromium.launch();
-const context = await browser.newContext({ ignoreHTTPSErrors: true });
+const context = await browser.newContext();
 await context.addInitScript((participant) => {
 	localStorage.setItem("kestrel:participant", participant);
 }, name);

@@ -3464,9 +3464,19 @@ async fn subscribe_stream(
                 )
             })?;
             let workspace = resolved(&control_plane, &subscription.organization, workspace).await?;
+            let name = match subscription.participant.as_deref() {
+                Some(name) => {
+                    let mut tx = control_plane.store.read().await?;
+                    Some(
+                        participant::accepted(&mut tx, &workspace.organization, name, "transcript")
+                            .await?,
+                    )
+                }
+                None => None,
+            };
             let transcribing = Transcribing {
                 workspace: workspace.id,
-                name: None,
+                name,
                 follow: true,
                 kinds: kinds(subscription.kinds.as_deref())?,
                 summaries: true,
