@@ -1,32 +1,16 @@
 use crate::support;
 
 use serde_json::{Value, json};
+use support::fixture::Fixture;
 use support::{Kestrel, repository};
 
 async fn workspace(kestrel: &Kestrel) -> kestrel::domain::Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "project",
-            &[
-                repository::url().to_owned(),
-                repository::other_url().to_owned(),
-            ],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", support::HARNESS, None)
-        .await;
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
-        .await;
-    kestrel.open_workspace("acme", "project", "builder").await
+    Fixture::acme()
+        .project("project")
+        .repositories(&[repository::url(), repository::other_url()])
+        .holding_a_provider_key()
+        .open(kestrel)
+        .await
 }
 
 async fn summary(kestrel: &Kestrel, workspace: &kestrel::domain::Workspace) -> Value {
@@ -167,7 +151,8 @@ async fn a_held_instance_reports_all_work_on_each_repository_and_the_cli_reads_i
     assert_eq!(answer["repositories"][1]["committed"]["commits"], 0);
     let before = kestrel.transcript(workspace.id).await.len();
     let under_write_lock = kestrel
-        .while_the_database_is_locked(summary(&kestrel, &workspace))
+        .database()
+        .while_locked(summary(&kestrel, &workspace))
         .await;
     assert_eq!(under_write_lock, answer);
     for command in ["work", "status"] {

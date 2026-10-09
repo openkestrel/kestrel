@@ -8,7 +8,7 @@ use std::time::Duration;
 use jiff::SignedDuration;
 use kestrel::domain::{Direction, Exit, Session, SessionState, Workspace, WorkspaceId};
 use kestrel::work::{Report, Reported};
-use support::HARNESS;
+use support::fixture::Fixture;
 use support::github_stub::{self, GithubStub, RecordedRequest, ScriptedResponse};
 use support::link_client::Link;
 use support::{Kestrel, OnTheLink};
@@ -79,12 +79,9 @@ async fn workspaces(kestrel: &Kestrel, count: usize) -> Vec<Workspace> {
 
 /// A Workspace an Event started through an Integration that carries what it says back out.
 async fn a_workspace_from_the_issue(kestrel: &Kestrel, stub: &GithubStub) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(&organization, "kestrel", &[], "main")
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", HARNESS, None)
+    Fixture::acme()
+        .without_repositories()
+        .declare(kestrel)
         .await;
     kestrel
         .declare_trigger(

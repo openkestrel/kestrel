@@ -12,6 +12,7 @@ use reqwest::StatusCode;
 use serde_json::{Value, json};
 use support::Kestrel;
 use support::OnTheLink;
+use support::fixture::Fixture;
 use support::link_client::Link;
 use support::scripted_agent::{self, Script};
 use support::supervisor;
@@ -145,21 +146,6 @@ fn names_changed(frames: &[Frame], resource: &str, id: Option<&str>) -> bool {
     })
 }
 
-async fn declare_organization(kestrel: &Kestrel, name: &str) {
-    let organization = kestrel.declare_organization(name).await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
-}
-
 async fn post(kestrel: &Kestrel, workspace: kestrel::domain::WorkspaceId, message: &str) -> Value {
     let path = operator::WORKSPACE_MESSAGES
         .replace("{organization}", "acme")
@@ -284,7 +270,7 @@ async fn work_read(kestrel: &Kestrel, workspace: &Workspace) -> Value {
 #[tokio::test]
 async fn a_subscriber_gets_open_on_connect_and_again_on_reconnect() {
     let kestrel = Kestrel::boot().await;
-    declare_organization(&kestrel, "acme").await;
+    Fixture::acme().declare(&kestrel).await;
 
     let mut first = Stream::open(&kestrel, "acme").await;
     let open = first.next(QUIET).await.expect("an open event");
@@ -301,7 +287,7 @@ async fn a_subscriber_gets_open_on_connect_and_again_on_reconnect() {
 #[tokio::test]
 async fn opening_a_workspace_posting_a_message_and_ending_the_session_raise_their_notices() {
     let kestrel = Kestrel::boot().await;
-    declare_organization(&kestrel, "acme").await;
+    Fixture::acme().declare(&kestrel).await;
     let mut changes = Stream::open(&kestrel, "acme").await;
     assert_eq!(
         changes.next(QUIET).await.expect("an open event").name,
@@ -356,7 +342,7 @@ async fn opening_a_workspace_posting_a_message_and_ending_the_session_raise_thei
 #[tokio::test]
 async fn a_notice_never_arrives_before_a_get_shows_its_change() {
     let kestrel = Kestrel::boot().await;
-    declare_organization(&kestrel, "acme").await;
+    Fixture::acme().declare(&kestrel).await;
     let mut changes = Stream::open(&kestrel, "acme").await;
     assert_eq!(
         changes.next(QUIET).await.expect("an open event").name,
@@ -404,7 +390,7 @@ async fn a_notice_never_arrives_before_a_get_shows_its_change() {
 #[tokio::test]
 async fn a_refused_post_raises_nothing() {
     let kestrel = Kestrel::boot().await;
-    declare_organization(&kestrel, "acme").await;
+    Fixture::acme().declare(&kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     kestrel.seal_workspace(workspace.id).await;
     // The open and the seal raised notices of their own; letting the coalescing window pass
@@ -441,8 +427,11 @@ async fn a_refused_post_raises_nothing() {
 #[tokio::test]
 async fn other_organizations_receive_only_anonymous_queue_changes() {
     let kestrel = Kestrel::boot().await;
-    declare_organization(&kestrel, "acme").await;
-    declare_organization(&kestrel, "other").await;
+    Fixture::acme().declare(&kestrel).await;
+    Fixture::acme()
+        .organization("other")
+        .declare(&kestrel)
+        .await;
 
     let mut other = Stream::open(&kestrel, "other").await;
     assert_eq!(other.next(QUIET).await.expect("an open event").name, "open");
@@ -470,8 +459,11 @@ async fn other_organizations_receive_only_anonymous_queue_changes() {
 #[tokio::test]
 async fn held_input_changes_invalidate_foreign_queue_positions() {
     let kestrel = Kestrel::boot().await;
-    declare_organization(&kestrel, "acme").await;
-    declare_organization(&kestrel, "other").await;
+    Fixture::acme().declare(&kestrel).await;
+    Fixture::acme()
+        .organization("other")
+        .declare(&kestrel)
+        .await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let session = kestrel.dispatch_session(workspace.id).await;
     kestrel.waits_after_its_first_turn(&session).await;
@@ -569,7 +561,7 @@ async fn live_usage_raises_no_change_notice() {
         &scripted_agent::playing(Script::BurstsUsage),
     )
     .await;
-    declare_organization(&kestrel, "acme").await;
+    Fixture::acme().declare(&kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
 
     let mut changes = Stream::open(&kestrel, "acme").await;
@@ -607,7 +599,7 @@ async fn live_usage_raises_no_change_notice() {
 #[tokio::test]
 async fn a_running_tool_call_raises_a_session_notice_at_start_and_settle_and_none_on_progress() {
     let kestrel = Kestrel::boot().await;
-    declare_organization(&kestrel, "acme").await;
+    Fixture::acme().declare(&kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
     let link = Link::to(&kestrel.link());
@@ -679,7 +671,7 @@ async fn a_running_tool_call_raises_a_session_notice_at_start_and_settle_and_non
 #[tokio::test]
 async fn an_open_background_unit_raises_a_session_notice_when_it_opens_and_settles() {
     let kestrel = Kestrel::boot().await;
-    declare_organization(&kestrel, "acme").await;
+    Fixture::acme().declare(&kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
     let link = Link::to(&kestrel.link());
@@ -747,7 +739,7 @@ async fn an_open_background_unit_raises_a_session_notice_when_it_opens_and_settl
 #[tokio::test]
 async fn a_checkout_report_that_changes_the_work_summary_raises_a_workspace_notice() {
     let kestrel = Kestrel::boot().await;
-    declare_organization(&kestrel, "acme").await;
+    Fixture::acme().declare(&kestrel).await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let (_session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
     let link = Link::to(&kestrel.link());

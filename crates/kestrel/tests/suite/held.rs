@@ -10,6 +10,7 @@ use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{Exit, Session, SessionState, Workspace, WorkspaceState};
 use support::Kestrel;
 use support::environment::Environment;
+use support::fixture::Fixture;
 use support::repository;
 use support::scripted_agent::{self, Script};
 use support::supervisor;
@@ -19,32 +20,12 @@ const PATIENCE: Duration = Duration::from_secs(30);
 const COMMIT: &str = "git -C kestrel commit --quiet";
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(
-            &organization,
-            "builder",
-            "opencode",
-            Some(kestrel_scripted_agent::OTHER_MODEL),
-        )
-        .await;
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme()
+        .checked_out()
+        .model(kestrel_scripted_agent::OTHER_MODEL)
+        .holding_a_provider_key()
+        .open(kestrel)
+        .await
 }
 
 /// Stands in for the Harness: does something to the checkout, then hands over to the agent.

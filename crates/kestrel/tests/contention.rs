@@ -11,13 +11,13 @@ mod support;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use jiff::Timestamp;
 use kestrel::domain::{Integration, Organization, SessionId, Workspace};
 use kestrel::log::Entry;
 use kestrel::store::WRITE_LOCK;
 use kestrel_scripted_agent::{CHATTERED_MESSAGES, chattered};
+use support::fixture::Fixture;
 use support::scripted_agent::{self, Script};
-use support::{HARNESS, Kestrel, repository, supervisor};
+use support::{Kestrel, repository, supervisor};
 use tokio_util::sync::CancellationToken;
 use tracing::field::{Field, Visit};
 use tracing_subscriber::Layer;
@@ -91,34 +91,17 @@ fn labelled(n: i64) -> serde_json::Value {
     })
 }
 
-/// Written straight to the database, because recording this many through the webhook is a load
-/// scenario of its own.
 async fn history(kestrel: &Kestrel, organization: &Organization, webhook: &Integration) {
-    let pool = support::database(kestrel.data_dir()).await;
-    sqlx::query(
-        "WITH RECURSIVE n (n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM n WHERE n + 1 < ?)
-         INSERT INTO event (record_id, organization_id, integration_id, id, source, specversion,
-                            type, time, data, recorded_at)
-         SELECT printf('history-%d', n), ?, ?, printf('history-%d', n), ?, '1.0',
-                'com.github.issues.labeled', ?, ?, ?
-           FROM n",
-    )
-    .bind(EVENTS_BEFORE)
-    .bind(organization.id.to_string())
-    .bind(webhook.id.to_string())
-    .bind(format!("https://github.com/{REPOSITORY}"))
-    .bind(Timestamp::now().to_string())
-    .bind(labelled(0).to_string())
-    .bind(Timestamp::now().to_string())
-    .execute(&pool)
-    .await
-    .expect("the history should record");
-    // A history accumulated over time was checkpointed as it went, not on the next commit.
-    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-        .execute(&pool)
-        .await
-        .expect("the history should checkpoint");
-    pool.close().await;
+    kestrel
+        .database()
+        .record_events(
+            organization.id,
+            webhook.id,
+            EVENTS_BEFORE,
+            &format!("https://github.com/{REPOSITORY}"),
+            &labelled(0).to_string(),
+        )
+        .await;
 }
 
 async fn record_event(client: &reqwest::Client, url: &str, n: i64) {
@@ -202,24 +185,10 @@ async fn three_chatty_sessions_wait_for_the_write_lock_well_inside_the_busy_time
         SESSIONS,
     )
     .await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", HARNESS, None)
-        .await;
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
+    let organization = Fixture::acme()
+        .checked_out()
+        .holding_a_provider_key()
+        .declare(&kestrel)
         .await;
     let webhook = kestrel.register_webhook("acme", "ci", SECRET).await;
     kestrel

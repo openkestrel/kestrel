@@ -10,6 +10,7 @@ use std::time::Duration;
 use jiff::SignedDuration;
 use kestrel::domain::{Direction, Exit, Session, Workspace};
 use support::Kestrel;
+use support::fixture::Fixture;
 use support::github_stub::{
     self, GithubStub, INSTALLATION_TOKEN, RecordedRequest, ScriptedResponse,
 };
@@ -31,18 +32,7 @@ fn eagerly() -> SignedDuration {
 /// The Trigger comes before the poll: an Event recorded before the Trigger was declared fires
 /// nothing.
 async fn watching(kestrel: &Kestrel, stub: &GithubStub, carries: &[Direction]) {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(kestrel).await;
     kestrel
         .declare_trigger(
             "acme",

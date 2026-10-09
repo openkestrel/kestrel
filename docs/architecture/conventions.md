@@ -60,6 +60,10 @@ Patterns the code relies on that no single file states. Comment style is in `AGE
 - **The primary seam is the whole control plane.** `crates/kestrel/tests/support/` boots it in
   process against a temp SQLite file and drives it through the operator boundary and link. Assert in
   Workspaces, Sessions and Transcripts; reach `Store` and `Log` only through it.
+- **Declare with `Fixture`; reach past the store only through `Database`.** `support::fixture`
+  declares the Organization, Project and Agents a test needs, with knobs for what it varies. A
+  fault the store has no path to, or an observation of what it keeps at rest, is a named method on
+  `support::Database`, the one place a test writes SQL.
 - **Ordinary tests share one binary.** `crates/kestrel/tests/suite/` holds a module per area, so the
   harness compiles once: select with `cargo test -p kestrel --test suite <module>::`.
 - **The real supervisor runs as a local process.** `LocalExec` spawns the `kestrel-supervisor` binary

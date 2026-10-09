@@ -6,21 +6,7 @@ use crate::support;
 use kestrel::domain::{Session, Workspace, WorkspaceState};
 use kestrel::log::{Cursor, Unreadable, Window};
 use support::Kestrel;
-
-async fn declare_fixture(kestrel: &Kestrel) {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", Some("claude-opus-5"))
-        .await;
-}
+use support::fixture::Fixture;
 
 #[tokio::test]
 async fn the_fixture_boots_a_complete_control_plane_against_a_fresh_database_and_tears_it_down() {
@@ -32,9 +18,83 @@ async fn the_fixture_boots_a_complete_control_plane_against_a_fresh_database_and
 }
 
 #[tokio::test]
+async fn a_fixture_declares_and_opens_what_its_knobs_name() {
+    let kestrel = Kestrel::boot().await;
+
+    let workspace = Fixture::acme()
+        .organization("globex")
+        .limited_to(2)
+        .checked_out()
+        .model("claude-opus-5")
+        .agent("reviewer", "codex", None)
+        .holding_a_provider_key()
+        .open(&kestrel)
+        .await;
+
+    assert_eq!(workspace.organization.name, "globex");
+    assert_eq!(
+        workspace.organization.max_live_instances.map(usize::from),
+        Some(2)
+    );
+    assert_eq!(workspace.project.name, support::repository::NAME);
+    assert_eq!(
+        workspace.project.repositories,
+        [support::repository::url().to_owned()]
+    );
+    assert_eq!(workspace.opened_with.name, "builder");
+    assert_eq!(workspace.opened_with.harness, support::HARNESS);
+    assert_eq!(
+        workspace.opened_with.declared.model.as_deref(),
+        Some("claude-opus-5")
+    );
+    let agents = kestrel.agents(&workspace.organization).await;
+    assert!(
+        agents
+            .iter()
+            .any(|agent| agent.name == "reviewer" && agent.harness == "codex")
+    );
+    let held = kestrel
+        .provider_credentials_held(&workspace.organization)
+        .await;
+    assert_eq!(held[0].variable, support::PROVIDER_KEY);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn the_database_seam_names_the_faults_and_observations_it_reaches_past_the_store_for() {
+    let kestrel = Kestrel::boot().await;
+    let workspace = Fixture::acme().open(&kestrel).await;
+    let session = kestrel.enqueue_session(workspace.id).await;
+    let at: jiff::Timestamp = "2026-01-01T00:00:00Z".parse().unwrap();
+
+    kestrel
+        .database()
+        .backdate_transcript(workspace.id, at)
+        .await;
+    kestrel.database().end_without_an_exit(&session).await;
+
+    assert!(
+        kestrel
+            .transcript(workspace.id)
+            .await
+            .iter()
+            .all(|entry| entry.appended_at == at)
+    );
+    assert_eq!(kestrel.session(session.id).await.exit, None);
+    assert!(!kestrel.database().holds_messages(workspace.id).await);
+    assert!(kestrel.database().instructions(&session).await.is_empty());
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_workspace_opens_against_a_project_and_an_agent() {
     let kestrel = Kestrel::boot().await;
-    declare_fixture(&kestrel).await;
+    Fixture::acme()
+        .model("claude-opus-5")
+        .declare(&kestrel)
+        .await;
 
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let shown = kestrel.show_workspace(workspace.id).await;
@@ -51,7 +111,10 @@ async fn a_workspace_opens_against_a_project_and_an_agent() {
 #[tokio::test]
 async fn opening_a_workspace_records_the_agent_joining_it_as_its_first_transcript_entry() {
     let kestrel = Kestrel::boot().await;
-    declare_fixture(&kestrel).await;
+    Fixture::acme()
+        .model("claude-opus-5")
+        .declare(&kestrel)
+        .await;
 
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let transcript = kestrel.transcript(workspace.id).await;
@@ -69,7 +132,10 @@ async fn opening_a_workspace_records_the_agent_joining_it_as_its_first_transcrip
 #[tokio::test]
 async fn every_durable_record_carries_its_organization() {
     let kestrel = Kestrel::boot().await;
-    declare_fixture(&kestrel).await;
+    Fixture::acme()
+        .model("claude-opus-5")
+        .declare(&kestrel)
+        .await;
 
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let shown = kestrel.show_workspace(workspace.id).await;
@@ -83,7 +149,10 @@ async fn every_durable_record_carries_its_organization() {
 #[tokio::test]
 async fn a_project_redeclared_after_a_workspace_opens_moves_none_of_its_checkout() {
     let kestrel = Kestrel::boot().await;
-    declare_fixture(&kestrel).await;
+    Fixture::acme()
+        .model("claude-opus-5")
+        .declare(&kestrel)
+        .await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let organization = kestrel.declare_organization("acme").await;
 
@@ -140,7 +209,10 @@ async fn declaring_a_project_and_an_agent_lists_them_back() {
 #[tokio::test]
 async fn a_workspace_outlives_the_control_plane_being_killed_and_restarted() {
     let kestrel = Kestrel::boot().await;
-    declare_fixture(&kestrel).await;
+    Fixture::acme()
+        .model("claude-opus-5")
+        .declare(&kestrel)
+        .await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
 
     let before = kestrel.show_workspace(workspace.id).await;
@@ -193,7 +265,10 @@ async fn two_kestrels_running_at_once_do_not_share_state() {
 
 /// One entry for the Agent joining, and one for each thing it said.
 async fn a_transcript_of(kestrel: &Kestrel, said: usize) -> (Workspace, Session) {
-    declare_fixture(kestrel).await;
+    Fixture::acme()
+        .model("claude-opus-5")
+        .declare(kestrel)
+        .await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let session = kestrel.dispatch_session(workspace.id).await;
 

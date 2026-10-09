@@ -8,35 +8,19 @@ use kestrel::log::Entry;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use support::environment::Environment;
+use support::fixture::Fixture;
 use support::scripted_agent::{self, Script};
 use support::{Kestrel, client, operator_log, repository, supervisor};
 
 const INLINE: usize = 1024 * 1024;
 
 async fn workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "project",
-            &[
-                repository::url().to_owned(),
-                repository::other_url().to_owned(),
-            ],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", support::HARNESS, None)
-        .await;
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
-        .await;
-    kestrel.open_workspace("acme", "project", "builder").await
+    Fixture::acme()
+        .project("project")
+        .repositories(&[repository::url(), repository::other_url()])
+        .holding_a_provider_key()
+        .open(kestrel)
+        .await
 }
 
 /// A Workspace whose Session has ended, leaving its Instance held and its supervisor on the link.
@@ -369,7 +353,8 @@ async fn reads_leave_no_trace_and_two_identical_ones_at_once_send_one_request_do
     let events = kestrel.events("acme").await.len();
 
     let (one, other) = kestrel
-        .while_the_database_is_locked(async {
+        .database()
+        .while_locked(async {
             tokio::join!(
                 listed(&kestrel, &workspace, "kestrel"),
                 listed(&kestrel, &workspace, "kestrel")

@@ -6,11 +6,12 @@ use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{Exit, SessionId, SessionState, Workspace};
 use kestrel::work::{Report, Reported};
 use reqwest::StatusCode;
+use support::Kestrel;
 use support::environment::Environment;
+use support::fixture::Fixture;
 use support::link_client::Link;
 use support::scripted_agent::Script;
 use support::supervisor::Supervisor;
-use support::{Kestrel, repository};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 
@@ -18,27 +19,11 @@ const PATIENCE: Duration = Duration::from_secs(30);
 const LEASE: Duration = Duration::from_secs(1);
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", support::HARNESS, None)
-        .await;
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme()
+        .checked_out()
+        .holding_a_provider_key()
+        .open(kestrel)
+        .await
 }
 
 async fn until(

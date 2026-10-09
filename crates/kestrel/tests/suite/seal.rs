@@ -6,24 +6,13 @@ use crate::support;
 use kestrel::domain::{SessionState, Workspace, WorkspaceState};
 use kestrel::log::Window;
 use support::Kestrel;
-
-async fn declare_fixture(kestrel: &Kestrel) {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", Some("claude-opus-5"))
-        .await;
-}
+use support::fixture::Fixture;
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
-    declare_fixture(kestrel).await;
+    Fixture::acme()
+        .model("claude-opus-5")
+        .declare(kestrel)
+        .await;
     kestrel.open_workspace("acme", "kestrel", "builder").await
 }
 
@@ -364,17 +353,12 @@ async fn a_sealed_workspace_in_another_organization_is_not_continued() {
     let sealed = a_workspace(&kestrel).await;
     kestrel.seal_workspace(sealed.id).await;
 
-    let globex = kestrel.declare_organization("globex").await;
-    kestrel
-        .declare_project(
-            &globex,
-            "kestrel",
-            &["https://github.com/globex/kestrel".to_owned()],
-            "trunk",
-        )
-        .await;
-    kestrel
-        .declare_agent(&globex, "builder", "opencode", Some("claude-opus-5"))
+    Fixture::acme()
+        .organization("globex")
+        .branch("trunk")
+        .repositories(&["https://github.com/globex/kestrel"])
+        .model("claude-opus-5")
+        .declare(&kestrel)
         .await;
 
     let refusal = kestrel

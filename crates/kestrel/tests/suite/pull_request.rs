@@ -9,6 +9,7 @@ use reqwest::StatusCode;
 use serde_json::{Value, json};
 use sha2::Sha256;
 use support::Consideration;
+use support::fixture::Fixture;
 use support::github_stub::{self, GithubStub, ScriptedResponse};
 use support::{Kestrel, client, templates};
 
@@ -263,20 +264,15 @@ async fn watching_as(
 }
 
 async fn declared(kestrel: &Kestrel, organization: &str, repositories: &[&str]) {
-    let organization = kestrel.declare_organization(organization).await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
+    Fixture::acme()
+        .organization(organization)
+        .repositories(
             &repositories
                 .iter()
                 .map(|repository| url(repository))
                 .collect::<Vec<_>>(),
-            "main",
         )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
+        .declare(kestrel)
         .await;
 }
 

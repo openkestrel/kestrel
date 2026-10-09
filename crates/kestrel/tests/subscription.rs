@@ -14,6 +14,7 @@ use kestrel::domain::{Exit, Session, SessionState, Workspace};
 use kestrel::log;
 use kestrel::profile::{Contents, Entry};
 use support::Kestrel;
+use support::fixture::Fixture;
 use support::image::{self, Container};
 
 const PATIENCE: Duration = Duration::from_secs(300);
@@ -150,17 +151,14 @@ async fn smoke(subject: Subject) {
 }
 
 async fn declared(kestrel: &Kestrel, subject: &Subject) {
-    let organization = kestrel.declare_organization(ORGANIZATION).await;
-    kestrel
-        .declare_project(&organization, PROJECT, &[], "main")
-        .await;
-    kestrel
-        .declare_agent(
-            &organization,
-            AGENT,
-            subject.harness,
-            subject.model.as_deref(),
-        )
+    Fixture::acme()
+        .organization(ORGANIZATION)
+        .project(PROJECT)
+        .without_repositories()
+        .agent_name(AGENT)
+        .harness(subject.harness)
+        .model(subject.model.as_deref())
+        .declare(kestrel)
         .await;
     kestrel
         .declare_profile(ORGANIZATION, PROFILE, "smoke")

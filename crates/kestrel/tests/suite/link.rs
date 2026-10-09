@@ -13,6 +13,7 @@ use kestrel::log::{BriefSource, Entry, Message, ToolStatus};
 use kestrel::work::{Report, Reported};
 use reqwest::{StatusCode, Version, header};
 use serde_json::json;
+use support::fixture::Fixture;
 use support::link_client::{Link, Next};
 use support::supervisor::Supervisor;
 use support::{Kestrel, OnTheLink};
@@ -27,17 +28,9 @@ async fn a_session(kestrel: &Kestrel) -> (Session, OnTheLink) {
 }
 
 async fn declared(kestrel: &Kestrel) {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", Some("claude-opus-5"))
+    Fixture::acme()
+        .model("claude-opus-5")
+        .declare(kestrel)
         .await;
 }
 
@@ -1440,9 +1433,17 @@ async fn activity_metadata_counts_only_omitted_kinds_and_expiry_leaves_only_tomb
     );
     assert!(expanded["entries"][0]["entry"]["payload_fields"].is_null());
     assert_eq!(expanded["entries"][0]["entry"]["title"], "read source");
+    let past_retention = jiff::Timestamp::now() - jiff::SignedDuration::from_hours(31 * 24);
     for seq in 3..=5 {
-        kestrel.expire_payload_entry(session.workspace, seq).await;
+        kestrel
+            .database()
+            .backdate_entry(session.workspace, seq, past_retention)
+            .await;
     }
+    kestrel
+        .retain_transcript()
+        .await
+        .expect("retention should run");
     let expired: serde_json::Value = client
         .get(&base)
         .bearer_auth(on.credential.as_str())

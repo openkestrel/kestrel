@@ -17,6 +17,7 @@ use kestrel::link::Harness;
 use serde_json::json;
 use support::Kestrel;
 use support::diagnostics::Diagnostics;
+use support::fixture::Fixture;
 use support::image;
 use support::model::{MARK, Model};
 
@@ -154,15 +155,11 @@ fn configured_with(model: &Model) -> String {
 }
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(&organization, "kestrel", &[], "main")
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", Some(MODEL))
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme()
+        .without_repositories()
+        .model(MODEL)
+        .open(kestrel)
+        .await
 }
 
 /// Answering a turn never ends a Session, so one that answered is stopped, the way a person would.

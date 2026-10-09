@@ -9,9 +9,10 @@ use kestrel::domain::{Exit, Session, SessionId, Workspace};
 use kestrel_scripted_agent::{OTHER_MODEL, Script};
 use reqwest::StatusCode;
 use support::environment::Environment;
+use support::fixture::Fixture;
 use support::link_client::Link;
 use support::supervisor::{self, Supervisor};
-use support::{A_PROVIDER_KEY, Kestrel, PROVIDER_KEY, repository, scripted_agent};
+use support::{A_PROVIDER_KEY, Kestrel, PROVIDER_KEY, scripted_agent};
 
 const LONG_ENOUGH_TO_BE_SURE: Duration = Duration::from_millis(500);
 
@@ -25,27 +26,16 @@ async fn confiding() -> Kestrel {
 
 /// A Workspace ready to run in an Organization that holds one Provider Credential, or none.
 async fn a_workspace(kestrel: &Kestrel, organization: &str, held: Option<&str>) -> Workspace {
-    let declared = kestrel.declare_organization(organization).await;
-    kestrel
-        .declare_project(
-            &declared,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(&declared, "builder", "opencode", Some(OTHER_MODEL))
-        .await;
-    if let Some(secret) = held {
-        kestrel
-            .hold_provider_credential(&declared, PROVIDER_KEY, secret)
-            .await;
+    let fixture = Fixture::acme()
+        .organization(organization)
+        .checked_out()
+        .model(OTHER_MODEL);
+    match held {
+        Some(secret) => fixture.holding(secret),
+        None => fixture,
     }
-
-    kestrel
-        .open_workspace(organization, repository::NAME, "builder")
-        .await
+    .open(kestrel)
+    .await
 }
 
 /// Answering a turn never ends a Session, so one that answered is stopped, the way a person would.

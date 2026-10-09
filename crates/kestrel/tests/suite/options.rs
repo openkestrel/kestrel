@@ -15,10 +15,11 @@ use kestrel_scripted_agent::{
 };
 use reqwest::StatusCode;
 use serde_json::{Value, json};
+use support::fixture::Fixture;
 use support::link_client::{Link, Next};
 use support::scripted_agent::{self, Script};
 use support::supervisor;
-use support::{HARNESS, Kestrel, OnTheLink, repository};
+use support::{Kestrel, OnTheLink};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 const LONG_ENOUGH_TO_BE_SURE: Duration = Duration::from_millis(500);
@@ -86,27 +87,12 @@ async fn dispatching(script: Script) -> Kestrel {
 }
 
 async fn a_workspace(kestrel: &Kestrel, agent: Declared) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent_declaring(&organization, "builder", HARNESS, agent)
-        .await;
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme()
+        .checked_out()
+        .declaring(agent)
+        .holding_a_provider_key()
+        .open(kestrel)
+        .await
 }
 
 #[tokio::test]
@@ -563,7 +549,7 @@ async fn a_change_during_a_working_turn_is_refused_naming_working() {
     );
     assert!(
         !matches!(
-            kestrel.instruction(&session).await,
+            kestrel.database().latest_instruction(&session).await,
             kestrel::link::Instruction::SetOption { .. }
         ),
         "a refused change reached the harness"

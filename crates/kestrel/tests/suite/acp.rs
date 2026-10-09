@@ -8,43 +8,24 @@ use std::time::Duration;
 use kestrel::domain::{Cost, Exit, Session, SessionId, SessionState, Usage, Workspace};
 use kestrel_scripted_agent::{DEFAULT_MODEL, MUTTERED, OTHER_MODEL, OVERLONG};
 use support::Kestrel;
+use support::fixture::Fixture;
 use support::operator_log;
-use support::repository;
 use support::scripted_agent::{self, Script};
 use support::supervisor::{self, Supervisor};
 
 const PATIENCE: Duration = Duration::from_secs(30);
-/// The Harness the fixture actually drives, so what a Session sees it advertise is recorded
-/// against the name an Agent declared here names.
-use support::HARNESS;
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
     a_workspace_naming(kestrel, Some(OTHER_MODEL)).await
 }
 
 async fn a_workspace_naming(kestrel: &Kestrel, model: Option<&str>) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", HARNESS, model)
-        .await;
-
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme()
+        .checked_out()
+        .model(model)
+        .holding_a_provider_key()
+        .open(kestrel)
+        .await
 }
 
 /// A Session the work role has started a supervisor for, and is therefore past reading its Agent's

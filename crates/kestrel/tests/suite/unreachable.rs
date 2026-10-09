@@ -10,22 +10,10 @@ use std::time::Duration;
 use jiff::Timestamp;
 use kestrel::domain::{Session, SessionState, Workspace};
 use support::Kestrel;
+use support::fixture::Fixture;
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", Some("claude-opus-5"))
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme().model("claude-opus-5").open(kestrel).await
 }
 
 async fn a_dependent_blocked_on_an_active_session(kestrel: &Kestrel) -> (Session, Session) {

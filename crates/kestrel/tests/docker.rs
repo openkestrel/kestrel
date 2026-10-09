@@ -11,6 +11,7 @@ use std::time::Duration;
 use kestrel::compute::{Docker, Driver};
 use kestrel::domain::{Exit, Session, SessionId, Workspace, WorkspaceId};
 use support::Kestrel;
+use support::fixture::Fixture;
 use support::image::{self, Container};
 use support::scripted_agent::{self, Script};
 
@@ -18,7 +19,6 @@ const PATIENCE: Duration = Duration::from_secs(120);
 
 /// A repository the container can reach, which one on this machine is not.
 const REPOSITORY: &str = "https://github.com/jtmthf/kestrel";
-const BRANCH: &str = "main";
 
 async fn working(script: Script) -> Kestrel {
     Kestrel::dispatching_in(
@@ -29,28 +29,12 @@ async fn working(script: Script) -> Kestrel {
 }
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(&organization, "kestrel", &[REPOSITORY.to_owned()], BRANCH)
-        .await;
-    kestrel
-        .declare_agent(
-            &organization,
-            "builder",
-            "opencode",
-            Some(kestrel_scripted_agent::OTHER_MODEL),
-        )
-        .await;
-
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme()
+        .repositories(&[REPOSITORY])
+        .model(kestrel_scripted_agent::OTHER_MODEL)
+        .holding_a_provider_key()
+        .open(kestrel)
+        .await
 }
 
 async fn until(

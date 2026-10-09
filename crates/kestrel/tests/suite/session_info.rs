@@ -12,34 +12,20 @@ use kestrel_scripted_agent::{
 use reqwest::StatusCode;
 use reqwest::header::{ETAG, IF_NONE_MATCH};
 use serde_json::Value;
+use support::Kestrel;
+use support::fixture::Fixture;
 use support::scripted_agent::{self, Script};
 use support::supervisor;
-use support::{HARNESS, Kestrel};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 
 async fn a_workspace(kestrel: &Kestrel, model: Option<&str>) -> kestrel::domain::Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            support::repository::NAME,
-            &[support::repository::url().to_owned()],
-            support::repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", HARNESS, model)
-        .await;
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme()
+        .checked_out()
+        .model(model)
+        .holding_a_provider_key()
+        .open(kestrel)
+        .await
 }
 
 struct Shown {

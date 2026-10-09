@@ -7,6 +7,7 @@ use kestrel::domain::{Exit, Session, SessionState, Workspace};
 use kestrel::instance::{Git, Observed};
 use kestrel::scheduling::Reason;
 use support::Kestrel;
+use support::fixture::Fixture;
 use support::repository;
 use support::supervisor;
 
@@ -38,35 +39,16 @@ fn clean_checkout() -> Vec<Observed> {
 }
 
 async fn workspaces(kestrel: &Kestrel, maximum: usize) -> (Workspace, Workspace, Workspace) {
-    let organization = kestrel.declare_limited_organization("acme", maximum).await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(
-            &organization,
-            "builder",
-            "opencode",
-            Some(kestrel_scripted_agent::OTHER_MODEL),
-        )
-        .await;
-    kestrel
-        .hold_provider_credential(
-            &organization,
-            support::PROVIDER_KEY,
-            support::A_PROVIDER_KEY,
-        )
-        .await;
+    let acme = Fixture::acme()
+        .limited_to(maximum)
+        .checked_out()
+        .model(kestrel_scripted_agent::OTHER_MODEL)
+        .holding_a_provider_key();
 
     (
-        kestrel.open_workspace("acme", "kestrel", "builder").await,
-        kestrel.open_workspace("acme", "kestrel", "builder").await,
-        kestrel.open_workspace("acme", "kestrel", "builder").await,
+        acme.open(kestrel).await,
+        acme.open_another(kestrel).await,
+        acme.open_another(kestrel).await,
     )
 }
 

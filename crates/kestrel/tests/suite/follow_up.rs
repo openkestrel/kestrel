@@ -14,10 +14,11 @@ use kestrel::log::{Entry, Message};
 use kestrel::store::workspace::HeldMessageRefusal;
 use kestrel_scripted_agent::{FIRST_MEMORY, LAST_MEMORY};
 use support::Kestrel;
+use support::fixture::Fixture;
 use support::github_stub::{self, GithubStub};
 use support::scripted_agent::Script;
 use support::supervisor::Supervisor;
-use support::{A_PROVIDER_KEY, APP_ID, INSTALLATION_ID, PRIVATE_KEY, PROVIDER_KEY};
+use support::{APP_ID, INSTALLATION_ID, PRIVATE_KEY};
 
 const REPOSITORY: &str = "jtmthf/kestrel";
 const MAINTAINER: &str = "jack";
@@ -26,25 +27,15 @@ const LISTED: &str = "/app/hook/deliveries?";
 const PATIENCE: Duration = Duration::from_secs(30);
 
 async fn a_workspace(kestrel: &Kestrel) -> kestrel::domain::Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(&organization, "kestrel", &[], "main")
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme().without_repositories().open(kestrel).await
 }
 
 /// The Trigger comes before the poll: an Event recorded before the Trigger was declared fires
 /// nothing.
 async fn watching(kestrel: &Kestrel, stub: &GithubStub) {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(&organization, "kestrel", &[], "main")
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
+    Fixture::acme()
+        .without_repositories()
+        .declare(kestrel)
         .await;
     kestrel
         .declare_trigger(
@@ -126,7 +117,7 @@ async fn requested(stub: &GithubStub, path: &str, after: usize) {
 async fn pending_arrived(kestrel: &Kestrel, workspace: kestrel::domain::WorkspaceId) {
     let deadline = tokio::time::Instant::now() + PATIENCE;
     loop {
-        if kestrel.has_pending_messages(workspace).await {
+        if kestrel.database().holds_messages(workspace).await {
             return;
         }
         assert!(tokio::time::Instant::now() < deadline);
@@ -347,15 +338,10 @@ async fn the_second_session_runs_through_the_supervisor_the_first_left_on_the_in
         &support::scripted_agent::playing(Script::Lingers),
     )
     .await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(&organization, "kestrel", &[], "main")
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
-    kestrel
-        .hold_provider_credential(&organization, PROVIDER_KEY, A_PROVIDER_KEY)
+    Fixture::acme()
+        .without_repositories()
+        .holding_a_provider_key()
+        .declare(&kestrel)
         .await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
 
@@ -595,12 +581,9 @@ async fn a_delivery_backlog_longer_than_a_page_loses_nothing() {
 }
 
 async fn watching_correlated(kestrel: &Kestrel, stub: &GithubStub, correlation: &str) {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(&organization, "kestrel", &[], "main")
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
+    Fixture::acme()
+        .without_repositories()
+        .declare(kestrel)
         .await;
     kestrel
         .declare_trigger_rendering(
@@ -660,12 +643,9 @@ async fn a_comment_on_a_sealed_workspace_feeds_the_open_one_holding_its_correlat
 /// A Trigger that names the one login it obeys, so a Workspace it opened has an author it
 /// authorizes and everyone else is a stranger to it.
 async fn watching_a_named_actor(kestrel: &Kestrel, stub: &GithubStub) {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(&organization, "kestrel", &[], "main")
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
+    Fixture::acme()
+        .without_repositories()
+        .declare(kestrel)
         .await;
     kestrel
         .declare_trigger_rendering(
@@ -698,12 +678,9 @@ async fn watching_a_named_actor(kestrel: &Kestrel, stub: &GithubStub) {
 /// A Trigger that names no author, so a Workspace it opened admits whatever the Event says: the
 /// own-identity guard is the only thing left that can keep kestrel's voice out.
 async fn watching_any_author(kestrel: &Kestrel, stub: &GithubStub) {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(&organization, "kestrel", &[], "main")
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
+    Fixture::acme()
+        .without_repositories()
+        .declare(kestrel)
         .await;
     kestrel
         .declare_trigger_rendering(
@@ -785,7 +762,7 @@ async fn a_remark_from_a_stranger_does_not_feed_an_open_workspace() {
     the_remark_was_recorded(&kestrel, "please also change the parser").await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(
-        !kestrel.has_pending_messages(workspace.id).await,
+        !kestrel.database().holds_messages(workspace.id).await,
         "a stranger's remark was held as input to the session"
     );
 
@@ -859,7 +836,7 @@ async fn a_comment_from_the_integration_s_own_identity_is_never_heard_as_input()
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     assert!(
-        !kestrel.has_pending_messages(workspace.id).await,
+        !kestrel.database().holds_messages(workspace.id).await,
         "kestrel heard its own comment as input"
     );
     assert_eq!(kestrel.sessions(workspace.id).await.len(), 1);
@@ -923,7 +900,8 @@ fn compact() -> SessionCommand {
 async fn prompt(kestrel: &Kestrel, session: &kestrel::domain::Session) -> String {
     kestrel.on_the_link(session).await;
     kestrel.start(session, support::harness()).await;
-    let Instruction::Start { prompt, .. } = kestrel.instruction(session).await else {
+    let Instruction::Start { prompt, .. } = kestrel.database().latest_instruction(session).await
+    else {
         panic!("a Session starts with a start instruction");
     };
 
@@ -957,7 +935,7 @@ async fn a_message_posted_mid_turn_is_listed_with_the_id_the_post_answered_with(
     let listed = kestrel.held_messages(workspace.id).await;
     assert_eq!(listed, vec![held], "the post answers with the id it listed");
     assert!(
-        kestrel.has_pending_messages(workspace.id).await,
+        kestrel.database().holds_messages(workspace.id).await,
         "the message waits for a Turn"
     );
 
@@ -1029,7 +1007,7 @@ async fn an_author_withdraws_a_held_message_and_the_next_turn_never_sees_it() {
         .expect("its author should withdraw it");
     assert!(kestrel.held_messages(workspace.id).await.is_empty());
     assert!(
-        !kestrel.has_pending_messages(workspace.id).await,
+        !kestrel.database().holds_messages(workspace.id).await,
         "a withdrawn message is not waiting input"
     );
     assert_eq!(

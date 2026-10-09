@@ -10,6 +10,7 @@ use kestrel::domain::{Event, Integration};
 use kestrel::integration::webhook::WRAPPED;
 use reqwest::StatusCode;
 use sha2::Sha256;
+use support::fixture::Fixture;
 use support::github_stub::GithubStub;
 use support::{Kestrel, labelled_on};
 
@@ -287,18 +288,7 @@ async fn a_github_integration_without_a_signing_secret_accepts_no_delivery() {
 async fn a_comment_from_the_integration_itself_never_queues_a_session() {
     let kestrel = Kestrel::boot().await;
     let stub = GithubStub::start();
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     kestrel
         .declare_trigger(
             "acme",
@@ -367,7 +357,7 @@ async fn a_comment_from_the_integration_itself_never_queues_a_session() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     assert!(
-        !kestrel.has_pending_messages(workspace.id).await,
+        !kestrel.database().holds_messages(workspace.id).await,
         "the integration's own comment was held as input"
     );
     assert!(
@@ -393,18 +383,7 @@ async fn a_comment_from_the_integration_itself_never_queues_a_session() {
 async fn a_command_from_the_integration_itself_fires_no_trigger() {
     let kestrel = Kestrel::boot().await;
     let stub = GithubStub::start();
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     kestrel
         .declare_trigger(
             "acme",
@@ -482,18 +461,7 @@ async fn a_command_from_the_integration_itself_fires_no_trigger() {
 async fn a_delivered_label_opens_a_workspace_after_checking_the_issue() {
     let kestrel = Kestrel::boot().await;
     let stub = GithubStub::start();
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
     kestrel
         .declare_trigger(
             "acme",

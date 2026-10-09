@@ -12,10 +12,11 @@ use kestrel::log::{BriefSource, Entry, Message};
 use kestrel::trigger::Rendered;
 use kestrel::trigger::apply::Action;
 use kestrel_scripted_agent::{STARTING_MODE, SWITCHED_MODE};
+use support::fixture::Fixture;
 use support::github_stub::{self, GithubStub};
 use support::scripted_agent::{self, Script};
 use support::supervisor::{self, Supervisor};
-use support::{A_PROVIDER_KEY, HARNESS, Kestrel, PROVIDER_KEY, labelled_on, repository, templates};
+use support::{Kestrel, labelled_on, repository, templates};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 const REPOSITORY: &str = "jtmthf/kestrel";
@@ -31,19 +32,7 @@ fn eagerly() -> SignedDuration {
 /// An organization with somewhere for work to happen and someone to do it. The Trigger is the
 /// one thing each test declares for itself.
 async fn an_organization(kestrel: &Kestrel, name: &str) -> kestrel::domain::Organization {
-    let organization = kestrel.declare_organization(name).await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
-    organization
+    Fixture::acme().organization(name).declare(kestrel).await
 }
 
 /// The poll that records what happens on the repository, started after the Trigger the test
@@ -218,15 +207,10 @@ const SKILLED: &str = "/implement https://github.com/jtmthf/kestrel/issues/43\n\
 /// Opened by a firing whose brief leads with a harness's skill invocation, in a project a
 /// supervisor can check out without reaching GitHub.
 async fn briefed(kestrel: &Kestrel, stub: &GithubStub) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(&organization, "kestrel", &[], "main")
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
-    kestrel
-        .hold_provider_credential(&organization, PROVIDER_KEY, A_PROVIDER_KEY)
+    Fixture::acme()
+        .without_repositories()
+        .holding_a_provider_key()
+        .declare(kestrel)
         .await;
     ready_rendering(
         kestrel,
@@ -1694,28 +1678,14 @@ async fn a_triggers_declared_mode_overrides_its_agents_for_the_session_it_starts
         &scripted_agent::playing(Script::Speaks),
     )
     .await;
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent_declaring(
-            &organization,
-            "builder",
-            HARNESS,
-            Declared {
-                mode: Some(STARTING_MODE.to_owned()),
-                ..Declared::default()
-            },
-        )
-        .await;
-    kestrel
-        .hold_provider_credential(&organization, PROVIDER_KEY, A_PROVIDER_KEY)
+    Fixture::acme()
+        .checked_out()
+        .declaring(Declared {
+            mode: Some(STARTING_MODE.to_owned()),
+            ..Declared::default()
+        })
+        .holding_a_provider_key()
+        .declare(&kestrel)
         .await;
     kestrel
         .declare_trigger_declaring(

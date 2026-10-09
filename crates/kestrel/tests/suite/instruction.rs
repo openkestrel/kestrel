@@ -5,22 +5,17 @@
 use crate::support;
 
 use kestrel::log::Entry;
+use support::Kestrel;
+use support::fixture::Fixture;
 use support::scripted_agent::Script;
 use support::supervisor::Supervisor;
-use support::{A_PROVIDER_KEY, Kestrel, PROVIDER_KEY};
 
 async fn a_workspace(kestrel: &Kestrel) -> kestrel::domain::Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(&organization, "kestrel", &[], "main")
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
-    kestrel
-        .hold_provider_credential(&organization, PROVIDER_KEY, A_PROVIDER_KEY)
-        .await;
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme()
+        .without_repositories()
+        .holding_a_provider_key()
+        .open(kestrel)
+        .await
 }
 
 /// What the agent was prompted with, which the echoing agent says back.

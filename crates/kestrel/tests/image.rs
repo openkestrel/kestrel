@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use kestrel::domain::{Exit, Session, SessionId, SessionState, Workspace};
+use support::fixture::Fixture;
 use support::image::{self, Environment};
 use support::{Kestrel, OnTheLink};
 
@@ -227,20 +228,7 @@ async fn a_session(kestrel: &Kestrel) -> (Session, OnTheLink) {
 }
 
 async fn a_workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", Some("claude-opus-5"))
-        .await;
-
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme().model("claude-opus-5").open(kestrel).await
 }
 
 async fn until(

@@ -3,6 +3,7 @@ use crate::support;
 use serde_json::Value;
 use support::Kestrel;
 use support::client::{Finished, Invocation, ran_by};
+use support::fixture::Fixture;
 
 const RESOLVED: &str = "control_plane,control_plane_source,organization,organization_source,\
                         projects,agents,triggers,workspaces,integrations,credentials,profiles,next";
@@ -247,18 +248,7 @@ async fn an_empty_name_is_refused_rather_than_falling_through_to_another_scope()
 #[tokio::test]
 async fn status_prints_every_resolved_value_its_source_what_exists_and_what_to_run_next() {
     let kestrel = Kestrel::boot().await;
-    let acme = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &acme,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&acme, "builder", "opencode", None)
-        .await;
+    Fixture::acme().declare(&kestrel).await;
 
     let reported = ran_by(
         &kestrel,

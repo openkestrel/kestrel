@@ -7,6 +7,7 @@ use kestrel::operator;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use support::Kestrel;
+use support::fixture::Fixture;
 
 /// Short enough for a test to watch pass, long enough that scheduling cannot race it.
 const LEASE: Duration = Duration::from_secs(5);
@@ -220,19 +221,7 @@ fn transcript(organization: &str, workspace: &Workspace) -> String {
 }
 
 async fn an_open_workspace(kestrel: &Kestrel) -> Workspace {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            "kestrel",
-            &["https://github.com/jtmthf/kestrel".to_owned()],
-            "main",
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", "opencode", None)
-        .await;
-    kestrel.open_workspace("acme", "kestrel", "builder").await
+    Fixture::acme().open(kestrel).await
 }
 
 #[tokio::test]

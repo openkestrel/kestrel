@@ -7,6 +7,7 @@ use kestrel::domain::{Exit, Session, SessionState, Workspace};
 use kestrel::profile::Entry;
 use kestrel_scripted_agent::{LOGIN, REFRESHED, Script};
 use reqwest::StatusCode;
+use support::fixture::Fixture;
 use support::link_client::Link;
 use support::supervisor;
 use support::{A_PROVIDER_KEY, Kestrel, PROVIDER_KEY, SERIALIZED, repository, scripted_agent};
@@ -24,17 +25,10 @@ async fn playing(script: Script) -> Kestrel {
 /// An Organization holding no Provider Credential, so a model is reached through a profile or
 /// not at all.
 async fn declared(kestrel: &Kestrel, harness: &str) {
-    let organization = kestrel.declare_organization("acme").await;
-    kestrel
-        .declare_project(
-            &organization,
-            repository::NAME,
-            &[repository::url().to_owned()],
-            repository::BRANCH,
-        )
-        .await;
-    kestrel
-        .declare_agent(&organization, "builder", harness, None)
+    Fixture::acme()
+        .checked_out()
+        .harness(harness)
+        .declare(kestrel)
         .await;
 }
 

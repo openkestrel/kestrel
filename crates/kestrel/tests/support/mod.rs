@@ -11,9 +11,11 @@ pub mod built;
 pub mod client;
 pub mod compose;
 pub mod control_plane;
+pub mod database;
 pub mod diagnostics;
 pub mod docker;
 pub mod environment;
+pub mod fixture;
 pub mod git;
 pub mod github_stub;
 pub mod image;
@@ -26,6 +28,8 @@ pub mod repository;
 pub mod scripted_agent;
 pub mod supervisor;
 
+pub use database::Database;
+
 /// The crate's checkout root, resolved at run time so that a binary compiled in one
 /// worktree still finds the right files when `cargo test` runs it from another.
 pub fn crate_root() -> std::path::PathBuf {
@@ -35,7 +39,6 @@ pub fn crate_root() -> std::path::PathBuf {
     )
 }
 
-use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -507,25 +510,8 @@ impl Kestrel {
         !self.roles.is_finished()
     }
 
-    /// Takes SQLite's write lock the way another process on the same file would.
-    pub async fn while_the_database_is_locked<T>(&self, meanwhile: impl Future<Output = T>) -> T {
-        let pool = database(self.data_dir()).await;
-        let mut holder = pool.acquire().await.expect("a connection");
-        sqlx::query("BEGIN IMMEDIATE")
-            .execute(&mut *holder)
-            .await
-            .expect("the write lock should be free to take");
-
-        let done = meanwhile.await;
-
-        sqlx::query("ROLLBACK")
-            .execute(&mut *holder)
-            .await
-            .expect("the write lock should release");
-        drop(holder);
-        pool.close().await;
-
-        done
+    pub fn database(&self) -> Database<'_> {
+        Database::at(self.data_dir())
     }
 
     pub fn link(&self) -> String {
@@ -1456,55 +1442,8 @@ impl Kestrel {
             .expect("the message should reach the transcript");
     }
 
-    pub async fn backdate_transcript(&self, workspace: WorkspaceId, at: Timestamp) {
-        let pool = database(self.data_dir()).await;
-        sqlx::query("UPDATE transcript_entry SET appended_at = ? WHERE workspace_id = ?")
-            .bind(at.to_string())
-            .bind(workspace.to_string())
-            .execute(&pool)
-            .await
-            .unwrap();
-        pool.close().await;
-    }
-
     pub async fn retain_transcript(&self) -> anyhow::Result<usize> {
         kestrel::timer::expire_transcript(&self.store).await
-    }
-
-    pub async fn refuse_retention_updates(&self, refusing: bool) {
-        let pool = database(self.data_dir()).await;
-        let statement = if refusing {
-            "CREATE TRIGGER refuse_retention BEFORE UPDATE ON transcript_entry WHEN OLD.kind = 'narration' AND json_extract(NEW.body, '$.type') = 'expired' BEGIN SELECT RAISE(ABORT, 'retention write failed'); END"
-        } else {
-            "DROP TRIGGER refuse_retention"
-        };
-        sqlx::query(statement).execute(&pool).await.unwrap();
-        pool.close().await;
-    }
-
-    pub async fn expire_payload_entry(&self, workspace: WorkspaceId, seq: i64) {
-        let at = Timestamp::now();
-        let pool = database(self.data_dir()).await;
-        sqlx::query(
-            "UPDATE transcript_entry SET appended_at = ? WHERE workspace_id = ? AND seq = ?",
-        )
-        .bind((at - SignedDuration::from_hours(31 * 24)).to_string())
-        .bind(workspace.to_string())
-        .bind(seq)
-        .execute(&pool)
-        .await
-        .expect("the targeted entry backdated");
-        pool.close().await;
-        let mut tx = self.store.begin().await.expect("an expiry transaction");
-        tx.log().expire(at).await.expect("production expiry");
-        tx.commit().await.expect("expiry should commit");
-    }
-
-    pub async fn refuse_payload_writes(&self) {
-        let pool = database(self.data_dir()).await;
-        sqlx::query("CREATE TRIGGER refuse_payload BEFORE INSERT ON transcript_payload BEGIN SELECT RAISE(ABORT, 'payload write failed'); END")
-            .execute(&pool).await.expect("a payload write fault");
-        pool.close().await;
     }
 
     pub async fn try_said(&self, session: &Session, message: &str) -> anyhow::Result<()> {
@@ -1613,50 +1552,6 @@ impl Kestrel {
             .await
             .expect("the session should be held");
         tx.commit().await.expect("the session should commit");
-    }
-
-    /// Waits for one: a Session's instruction can be written after the state the caller was waiting
-    /// on.
-    pub async fn instruction(&self, session: &Session) -> Instruction {
-        let pool = database(self.data_dir()).await;
-        let deadline = tokio::time::Instant::now() + PATIENCE;
-
-        let body = loop {
-            let body: Option<String> = sqlx::query_scalar(
-                "SELECT body FROM link_instruction WHERE session_id = ? ORDER BY seq DESC LIMIT 1",
-            )
-            .bind(session.id.to_string())
-            .fetch_optional(&pool)
-            .await
-            .expect("instructions should read");
-
-            if let Some(body) = body {
-                break body;
-            }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "the session {} was never sent an instruction",
-                session.id
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        };
-        pool.close().await;
-
-        serde_json::from_str(&body).expect("an instruction body")
-    }
-
-    pub async fn has_pending_messages(&self, id: WorkspaceId) -> bool {
-        let pool = database(self.data_dir()).await;
-        let pending = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM pending_message WHERE workspace_id = ? AND state = 'held')",
-        )
-        .bind(id.to_string())
-        .fetch_one(&pool)
-        .await
-        .expect("pending messages should read");
-
-        pool.close().await;
-        pending
     }
 
     pub async fn enqueue_session(&self, workspace: WorkspaceId) -> Session {
@@ -2055,22 +1950,6 @@ impl Kestrel {
             .expect("the session should end");
     }
 
-    /// The `ended`/NULL row migration 0003 leaves behind for every Session predating kestrel
-    /// scheduling. `end_session` always records an exit, so nothing reachable through the store
-    /// produces one.
-    pub async fn end_session_without_an_exit(&self, session: &Session) {
-        let pool = database(self.data_dir()).await;
-
-        sqlx::query("UPDATE session SET state = 'ended', ended_at = ?, exit = NULL WHERE id = ?")
-            .bind(jiff::Timestamp::now().to_string())
-            .bind(session.id.to_string())
-            .execute(&pool)
-            .await
-            .expect("the session should end without an exit");
-
-        pool.close().await;
-    }
-
     pub async fn executes_on(&self, session: &Session, instance: &str) {
         work::executes_on(&self.store, session, instance)
             .await
@@ -2181,23 +2060,6 @@ impl Kestrel {
         participant: &str,
     ) -> anyhow::Result<Session> {
         work::interrupt(&self.store, session, participant).await
-    }
-
-    pub async fn instructions(&self, session: &Session) -> Vec<Instruction> {
-        let pool = database(self.data_dir()).await;
-        let bodies: Vec<String> = sqlx::query_scalar(
-            "SELECT body FROM link_instruction WHERE session_id = ? ORDER BY seq",
-        )
-        .bind(session.id.to_string())
-        .fetch_all(&pool)
-        .await
-        .expect("the session's instructions");
-        pool.close().await;
-
-        bodies
-            .into_iter()
-            .map(|body| serde_json::from_str(&body).expect("an instruction body"))
-            .collect()
     }
 
     pub async fn report_interrupted(&self, session: &Session, trailing: bool) {
@@ -2317,39 +2179,23 @@ impl Kestrel {
     }
 }
 
-pub async fn database(data_dir: &Path) -> sqlx::SqlitePool {
-    let database = data_dir.join("kestrel.db");
-    sqlx::SqlitePool::connect(&format!("sqlite://{}", database.display()))
-        .await
-        .expect("the database should open")
-}
-
 /// An Instance outlives every Session on it and nothing here seals a Workspace into releasing one,
 /// so a test's Instances go with the test.
 pub(crate) async fn destroy_instances(data_dir: &Path, driver: Option<&Driver>) {
     let Some(driver) = driver else {
         return;
     };
-    let pool = database(data_dir).await;
-    let mut instances: BTreeSet<String> =
-        sqlx::query_scalar("SELECT DISTINCT instance FROM session WHERE instance IS NOT NULL")
-            .fetch_all(&pool)
-            .await
-            .expect("the instances should read")
-            .into_iter()
-            .collect();
+    let database = Database::at(data_dir);
+    let mut instances = database.instances().await;
     if matches!(driver, Driver::LocalExec(_)) {
-        let sessions: Vec<String> = sqlx::query_scalar("SELECT id FROM session")
-            .fetch_all(&pool)
-            .await
-            .expect("the sessions should read");
         instances.extend(
-            sessions
+            database
+                .sessions()
+                .await
                 .into_iter()
                 .map(|session| format!("local-exec/kestrel-{session}")),
         );
     }
-    pool.close().await;
 
     for instance in instances {
         if let Err(error) = driver.destroy_named(&instance) {
@@ -2374,6 +2220,10 @@ pub(crate) fn destroy_instances_on_drop(data_dir: std::path::PathBuf, driver: Op
 }
 
 impl Stopped {
+    pub fn database(&self) -> Database<'_> {
+        Database::at(self.data_dir.path())
+    }
+
     pub async fn restart(mut self) -> Kestrel {
         self.cleanup.armed = false;
         Kestrel::boot_against(
@@ -2420,14 +2270,6 @@ impl Stopped {
         work::session(&store, id)
             .await
             .expect("the session should show")
-    }
-
-    pub async fn last_lease_sweep(&self, at: Timestamp) {
-        let pool = database(self.data_dir.path()).await;
-        sqlx::query("INSERT INTO lease_sweep (id, last_pass_at) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET last_pass_at = excluded.last_pass_at")
-            .bind(format!("{at:.9}"))
-            .execute(&pool).await.unwrap();
-        pool.close().await;
     }
 
     /// A due time set while nothing is keeping time, so what fires it afterwards is a control
