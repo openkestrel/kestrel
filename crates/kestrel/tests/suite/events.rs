@@ -580,12 +580,15 @@ async fn an_installation_token_nearing_expiry_is_replaced_before_it_is_used_agai
             repository_id: github_stub::REPOSITORY_ID,
         }),
         carries: BOTH.to_vec(),
+        state: kestrel::domain::IntegrationState::Enabled,
+        revision: 1,
+        disabled_at: None,
         poll_due_at: None,
         deliveries_read_from: None,
         last_polled_at: None,
         last_event_refusal: None,
     };
-    let github = Github::dialling_out().expect("the GitHub client");
+    let github = Github::unfenced().expect("the GitHub client");
 
     for _ in 0..2 {
         github

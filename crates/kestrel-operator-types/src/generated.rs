@@ -2480,12 +2480,30 @@ pub struct WebhookRegistration {
     ///Constraint: minLength=1
     pub secret: String,
 }
+///What maintenance may change; an omitted field keeps its value.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct IntegrationChange {
+    ///Every direction it carries afterwards; a generic webhook carries inbound only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub carries: Option<Vec<Direction>>,
+    ///How often a GitHub Integration's poll reads its App's Delivery log, as a positive duration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    ///The revision this change was decided against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+}
 ///A registered Integration. What it presents to the external system is never part of it.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Integration {
     ///The App's own bot account, `<slug>[bot]`, learned from GitHub when a GitHub Integration was registered.
     pub bot_login: Option<String>,
     pub carries: Vec<Direction>,
+    ///Why its use is paused now, with the steps that resume it; null while nothing is.
+    pub diagnostic: Option<Diagnostic>,
+    pub disabled_at: Option<String>,
     pub id: uuid::Uuid,
     pub kind: IntegrationKind,
     pub last_event_refusal: Option<EventRefusal>,
@@ -2494,8 +2512,38 @@ pub struct Integration {
     pub polled_every: Option<String>,
     ///The repository a GitHub Integration watches.
     pub repository: Option<String>,
+    ///Bumped by every change, so a Client can say which one it decided against.
+    pub revision: i64,
+    pub state: IntegrationState,
     ///Where on the link GitHub, or a generic producer, can deliver to it. An inbound GitHub Integration is also polled.
     pub webhook_path: Option<String>,
+}
+///Disabled pauses every use of an Integration and keeps everything it resumes with.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum IntegrationState {
+    #[default]
+    #[serde(rename = "enabled")]
+    Enabled,
+    #[serde(rename = "disabled")]
+    Disabled,
+}
+impl IntegrationState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+impl ::std::fmt::Display for IntegrationState {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for IntegrationState {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
 pub enum IntegrationKind {
@@ -9681,6 +9729,7 @@ pub enum Action {
     ListResourcesAction(ListResourcesAction),
     StopSessionAction(StopSessionAction),
     EnqueueSessionAction(EnqueueSessionAction),
+    EnableIntegrationAction(EnableIntegrationAction),
     ReleaseInstanceAction(ReleaseInstanceAction),
     CorrectFieldAction(CorrectFieldAction),
     SignInAction(SignInAction),
@@ -9711,6 +9760,7 @@ impl Serialize for Action {
             Self::ListResourcesAction(value) => serde::Serialize::serialize(value, serializer),
             Self::StopSessionAction(value) => serde::Serialize::serialize(value, serializer),
             Self::EnqueueSessionAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::EnableIntegrationAction(value) => serde::Serialize::serialize(value, serializer),
             Self::ReleaseInstanceAction(value) => serde::Serialize::serialize(value, serializer),
             Self::CorrectFieldAction(value) => serde::Serialize::serialize(value, serializer),
             Self::SignInAction(value) => serde::Serialize::serialize(value, serializer),
@@ -10099,6 +10149,32 @@ impl<'de> Deserialize<'de> for Action {
         }
         if input.as_object().is_some_and(|object| {
             true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"enable_integration\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<EnableIntegrationAction>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::EnableIntegrationAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::EnableIntegrationAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
                 value.is_null() || matches!(value.to_string().as_str(), "\"release_instance\"")
             }) && object.get("effect").is_some_and(|value| {
                 value.is_null()
@@ -10416,6 +10492,12 @@ pub struct EnqueueSessionAction {
     pub missing: Vec<String>,
     pub organization: String,
     pub workspace: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EnableIntegrationAction {
+    pub action: serde_json::Value,
+    pub integration: String,
+    pub organization: String,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DeclareSubscriptionProfileAction {

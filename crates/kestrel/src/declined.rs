@@ -95,6 +95,8 @@ pub enum Constraint {
     OmittedWhenContinuing,
     RequiresBrief,
     Offered,
+    Positive,
+    Immutable,
 }
 
 impl Constraint {
@@ -112,6 +114,8 @@ impl Constraint {
             Constraint::OmittedWhenContinuing => "omitted_when_continuing",
             Constraint::RequiresBrief => "requires_brief",
             Constraint::Offered => "offered",
+            Constraint::Positive => "positive",
+            Constraint::Immutable => "immutable",
         }
     }
 }
@@ -136,6 +140,9 @@ pub enum Step {
     ReleaseInstance {
         workspace: String,
         instance: String,
+    },
+    EnableIntegration {
+        integration: String,
     },
 }
 

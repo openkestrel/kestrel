@@ -14,6 +14,7 @@ use crate::declined::Declined;
 use crate::domain::{GithubConnection, Integration, IntegrationId, Occurrence};
 use crate::integration::credential::App;
 use crate::readiness::{Delegation, Readiness, WorkState};
+use crate::store::Store;
 
 pub const API: &str = "https://api.github.com";
 
@@ -92,7 +93,9 @@ pub struct Github {
     client: reqwest::Client,
     /// Installation tokens this process has minted, by Integration: GitHub charges nothing
     /// extra for reusing one, and letting each expire unused would mint one per request.
-    tokens: Mutex<HashMap<IntegrationId, Minted>>,
+    /// Keyed by revision too: a token minted before a change is never handed out after it.
+    tokens: Mutex<HashMap<(IntegrationId, i64), Minted>>,
+    fence: Option<Store>,
 }
 
 impl Github {
@@ -164,7 +167,16 @@ impl Github {
         Ok(installation.id)
     }
 
-    pub fn dialling_out() -> Result<Self> {
+    /// Refuses a token to work begun before its Integration was disabled or changed.
+    pub fn dialling_out(store: &Store) -> Result<Self> {
+        Ok(Self {
+            fence: Some(store.clone()),
+            ..Self::unfenced()?
+        })
+    }
+
+    /// For calls made with a credential rather than a saved Integration, such as registration.
+    pub fn unfenced() -> Result<Self> {
         Ok(Self {
             client: reqwest::Client::builder()
                 .timeout(REQUEST)
@@ -172,7 +184,31 @@ impl Github {
                 .build()
                 .context("building the client kestrel polls github with")?,
             tokens: Mutex::new(HashMap::new()),
+            fence: None,
         })
+    }
+
+    async fn still_current(&self, integration: &Integration) -> Result<(), Refused> {
+        let Some(store) = &self.fence else {
+            return Ok(());
+        };
+        let unchanged = async {
+            store
+                .read()
+                .await?
+                .integrations()
+                .unchanged(integration)
+                .await
+        }
+        .await
+        .map_err(Refused::Failed)?;
+        if !unchanged {
+            return Err(Refused::Failed(anyhow!(
+                "the integration {} was disabled or changed while this was under way",
+                integration.name
+            )));
+        }
+        Ok(())
     }
 
     /// The installation token this Integration currently presents: the one already cached,
@@ -182,23 +218,25 @@ impl Github {
         integration: &Integration,
         github: &GithubConnection,
     ) -> Result<String, Refused> {
+        self.still_current(integration).await?;
         let fresh_enough = Timestamp::now() + SignedDuration::from_secs(EXPIRY_MARGIN);
         if let Some(minted) = self
             .tokens
             .lock()
             .expect("the token cache is not poisoned")
-            .get(&integration.id)
+            .get(&(integration.id, integration.revision))
             && minted.expires_at > fresh_enough
         {
             return Ok(minted.token.clone());
         }
 
         let minted = self.mint(&github.api, &github.credential).await?;
+        self.still_current(integration).await?;
         let token = minted.token.clone();
         self.tokens
             .lock()
             .expect("the token cache is not poisoned")
-            .insert(integration.id, minted);
+            .insert((integration.id, integration.revision), minted);
 
         Ok(token)
     }
@@ -1176,6 +1214,9 @@ mod tests {
             name: "github".to_owned(),
             connection: crate::domain::Connection::Github(watched),
             carries: vec![crate::domain::Direction::Inbound],
+            state: crate::domain::IntegrationState::Enabled,
+            revision: 1,
+            disabled_at: None,
             poll_due_at: None,
             deliveries_read_from: None,
             last_polled_at: None,

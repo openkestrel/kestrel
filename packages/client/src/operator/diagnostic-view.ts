@@ -284,6 +284,24 @@ export function stepOf(action: Action, origin: string): Step {
 					),
 				}),
 			};
+		case "enable_integration":
+			return {
+				kind: "write",
+				label: `Enable the Integration ${action.integration}`,
+				destructive: false,
+				inputs: [],
+				request: () => ({
+					method: "POST",
+					path: operatorPath(
+						"organizations",
+						action.organization,
+						"integrations",
+						action.integration,
+						"enable",
+					),
+					body: {},
+				}),
+			};
 		case "sign_in":
 			return {
 				kind: "guidance",

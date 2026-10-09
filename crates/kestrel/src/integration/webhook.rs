@@ -58,7 +58,7 @@ async fn deliver(
             Ok(id) => tx.integrations().find(id).await?,
             Err(_) => None,
         })
-        .filter(|integration| integration.carries(Direction::Inbound)) else {
+        .filter(|integration| integration.in_use(Direction::Inbound)) else {
             return Err(Refused::Unauthenticated);
         };
         let verifier = tx
@@ -105,6 +105,14 @@ async fn deliver(
     };
 
     let mut tx = ingest.store.begin().await?;
+    // A GitHub delivery refused here stays in the App's log for the poll that resumes.
+    if !tx
+        .integrations()
+        .current(&integration, Direction::Inbound)
+        .await?
+    {
+        return Err(Refused::Unauthenticated);
+    }
     let recorded = tx
         .integrations()
         .record_event(&integration, &occurrence)
@@ -361,6 +369,9 @@ mod tests {
             name: "ci".to_owned(),
             connection: Connection::Webhook,
             carries: vec![Direction::Inbound],
+            state: crate::domain::IntegrationState::Enabled,
+            revision: 1,
+            disabled_at: None,
             poll_due_at: None,
             deliveries_read_from: None,
             last_polled_at: None,

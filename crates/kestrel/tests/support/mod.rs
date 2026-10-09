@@ -681,7 +681,7 @@ impl Kestrel {
     ) -> anyhow::Result<Integration> {
         integration::register(
             &self.store,
-            &Github::dialling_out()?,
+            &Github::dialling_out(&self.store)?,
             Registration {
                 organization,
                 name,
@@ -710,7 +710,7 @@ impl Kestrel {
     ) -> Integration {
         integration::register(
             &self.store,
-            &Github::dialling_out().expect("a github client"),
+            &Github::dialling_out(&self.store).expect("a github client"),
             Registration {
                 organization,
                 name,
@@ -738,7 +738,7 @@ impl Kestrel {
     ) -> Integration {
         integration::register(
             &self.store,
-            &Github::dialling_out().expect("a github client"),
+            &Github::dialling_out(&self.store).expect("a github client"),
             Registration {
                 organization,
                 name,
@@ -748,6 +748,44 @@ impl Kestrel {
         )
         .await
         .expect("the webhook should register")
+    }
+
+    pub async fn integration(&self, organization: &str, name: &str) -> Integration {
+        integration::integration(&self.store, organization, name)
+            .await
+            .expect("the integration should read")
+    }
+
+    pub async fn change_integration(
+        &self,
+        organization: &str,
+        name: &str,
+        change: integration::Change<'_>,
+    ) -> anyhow::Result<Integration> {
+        integration::change(&self.store, organization, name, change).await
+    }
+
+    pub async fn disable_integration(&self, organization: &str, name: &str) -> Integration {
+        integration::disable(&self.store, organization, name)
+            .await
+            .expect("the integration should disable")
+    }
+
+    pub async fn enable_integration(&self, organization: &str, name: &str) -> Integration {
+        integration::enable(&self.store, organization, name)
+            .await
+            .expect("the integration should enable")
+    }
+
+    /// Polls with what was read of the Integration, however long ago that was.
+    pub async fn poll_as(&self, integration: &Integration) -> integration::Polled {
+        integration::poll(
+            &self.store,
+            &Github::dialling_out(&self.store).expect("a github client"),
+            integration,
+        )
+        .await
+        .expect("the poll should finish")
     }
 
     pub async fn integrations(&self, organization: &str) -> Vec<Integration> {
@@ -1064,7 +1102,7 @@ impl Kestrel {
     ) -> anyhow::Result<trigger::Fired> {
         trigger::dispatch(
             &self.store,
-            &kestrel::integration::github::Github::dialling_out()?,
+            &kestrel::integration::github::Github::dialling_out(&self.store)?,
             trigger::Dispatch {
                 organization,
                 trigger: name,
@@ -1088,7 +1126,7 @@ impl Kestrel {
             organization,
             name,
             Against::Issue {
-                github: &kestrel::integration::github::Github::dialling_out()?,
+                github: &kestrel::integration::github::Github::dialling_out(&self.store)?,
                 integration: "github",
                 issue,
             },

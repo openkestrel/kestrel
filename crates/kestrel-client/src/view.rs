@@ -31,9 +31,26 @@ pub const INTEGRATIONS: View = View::Rows(&[
     "kind",
     "repository",
     "carries",
+    "state",
+    "revision",
     "polled_every",
     "webhook_path",
     "last_event_refusal.reason",
+]);
+pub const INTEGRATION: View = View::Detail(&[
+    "id",
+    "name",
+    "kind",
+    "repository",
+    "bot_login",
+    "carries",
+    "state",
+    "revision",
+    "disabled_at",
+    "diagnostic",
+    "polled_every",
+    "webhook_path",
+    "last_event_refusal",
 ]);
 pub const EVENTS: View = View::Rows(&[
     "record",

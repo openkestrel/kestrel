@@ -8,9 +8,10 @@ use anyhow::{Context as _, Result, bail};
 use jiff::{SignedDuration, Timestamp};
 use tracing::warn;
 
-use crate::declined::Declined;
+use crate::declined::{Constraint, Declined, Next, Reason, Resource, Step};
 use crate::domain::{
-    Connection, Direction, Event, EventRecordId, GithubConnection, Integration, Occurrence,
+    Connection, Direction, Event, EventRecordId, GithubConnection, Integration, IntegrationKind,
+    IntegrationState, Occurrence,
 };
 use crate::integration::credential::App;
 use crate::integration::github::{Github, Refused};
@@ -127,6 +128,207 @@ pub async fn register(
     Ok(integration)
 }
 
+/// Identity — kind, API origin, repository, App and installation — has no field here because it
+/// cannot change in place (ADR-0056).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Change<'a> {
+    pub name: Option<&'a str>,
+    pub carries: Option<&'a [Direction]>,
+    pub interval: Option<SignedDuration>,
+    pub revision: Option<i64>,
+}
+
+pub async fn integration(store: &Store, organization: &str, name: &str) -> Result<Integration> {
+    let mut tx = store.read().await?;
+    let organization = tx.organizations().named(organization).await?;
+
+    tx.integrations().named(&organization, name).await
+}
+
+pub async fn change(
+    store: &Store,
+    organization: &str,
+    name: &str,
+    change: Change<'_>,
+) -> Result<Integration> {
+    maintained(
+        store,
+        organization,
+        name,
+        "change_integration",
+        change.revision,
+        |read| {
+            let mut maintained = read.clone();
+            let now = Timestamp::now();
+            if let Some(name) = change.name {
+                maintained.name = name.to_owned();
+            }
+            if let Some(carries) = change.carries {
+                carried(read, carries)?;
+                maintained.carries = [Direction::Inbound, Direction::Outbound]
+                    .into_iter()
+                    .filter(|direction| carries.contains(direction))
+                    .collect();
+            }
+            if let Some(interval) = change.interval {
+                let Connection::Github(github) = &mut maintained.connection else {
+                    bail!(invalid(
+                        "interval",
+                        Constraint::Positive,
+                        "a generic webhook is never polled, so it has no interval"
+                    ));
+                };
+                if interval <= SignedDuration::ZERO {
+                    bail!(invalid(
+                        "interval",
+                        Constraint::Positive,
+                        "a poll interval is how long kestrel waits, and cannot be zero or negative"
+                    ));
+                }
+                github.interval = interval;
+                maintained.poll_due_at = maintained.poll_due_at.map(|due| due.min(now + interval));
+            }
+            let interval =
+                |integration: &Integration| integration.github().ok().map(|github| github.interval);
+            if maintained.name == read.name
+                && maintained.carries == read.carries
+                && interval(&maintained) == interval(read)
+            {
+                return Ok(None);
+            }
+            if maintained.polled() && !read.polled() {
+                maintained.poll_due_at = Some(now);
+                maintained.deliveries_read_from = Some(read.deliveries_read_from.unwrap_or(now));
+                maintained.last_polled_at = Some(read.last_polled_at.unwrap_or(now));
+            }
+            Ok(Some(maintained))
+        },
+    )
+    .await
+}
+
+pub async fn disable(store: &Store, organization: &str, name: &str) -> Result<Integration> {
+    switched(store, organization, name, IntegrationState::Disabled).await
+}
+
+pub async fn enable(store: &Store, organization: &str, name: &str) -> Result<Integration> {
+    switched(store, organization, name, IntegrationState::Enabled).await
+}
+
+async fn switched(
+    store: &Store,
+    organization: &str,
+    name: &str,
+    to: IntegrationState,
+) -> Result<Integration> {
+    let operation = match to {
+        IntegrationState::Enabled => "enable_integration",
+        IntegrationState::Disabled => "disable_integration",
+    };
+    maintained(store, organization, name, operation, None, |read| {
+        if read.state == to {
+            return Ok(None);
+        }
+        let mut maintained = read.clone();
+        maintained.state = to;
+        maintained.disabled_at = maintained.disabled().then(Timestamp::now);
+        if !maintained.disabled() && maintained.polled() {
+            maintained.poll_due_at = Some(Timestamp::now());
+        }
+        Ok(Some(maintained))
+    })
+    .await
+}
+
+async fn maintained(
+    store: &Store,
+    organization: &str,
+    name: &str,
+    operation: &'static str,
+    against: Option<i64>,
+    maintain: impl FnOnce(&Integration) -> Result<Option<Integration>>,
+) -> Result<Integration> {
+    let mut tx = store.begin().await?;
+    let organization = tx.organizations().named(organization).await?;
+    let read = tx.integrations().named(&organization, name).await?;
+    if let Some(against) = against.filter(|against| *against != read.revision) {
+        bail!(Reason::StateConflict {
+            operation,
+            resource: Resource::Integration,
+            reference: read.name.clone(),
+            organization: Some(organization.name.clone()),
+            state: "revised",
+            holding_session: None,
+            next: Next::inspect(Resource::Integration, read.name.clone()),
+            message: format!(
+                "the integration {} has changed since revision {against}; read it again and \
+                 decide on what it is now",
+                read.name
+            ),
+        });
+    }
+    let Some(maintained) = maintain(&read)? else {
+        return Ok(read);
+    };
+    tx.integrations().maintain(&read, &maintained).await?;
+    let maintained = tx
+        .integrations()
+        .named(&organization, &maintained.name)
+        .await?;
+    tx.commit().await?;
+
+    Ok(maintained)
+}
+
+fn carried(integration: &Integration, carries: &[Direction]) -> Result<()> {
+    if carries.is_empty() {
+        bail!(invalid(
+            "carries",
+            Constraint::Offered,
+            "an integration carries something: name a direction it carries"
+        ));
+    }
+    if integration.kind() == IntegrationKind::Webhook && carries.contains(&Direction::Outbound) {
+        bail!(invalid(
+            "carries",
+            Constraint::Offered,
+            "a generic webhook carries events inbound only"
+        ));
+    }
+    Ok(())
+}
+
+fn invalid(field: &'static str, constraint: Constraint, message: &str) -> Reason {
+    Reason::InvalidField {
+        field,
+        operation: "change_integration",
+        allowed: matches!(constraint, Constraint::Offered)
+            .then(|| vec!["inbound".to_owned(), "outbound".to_owned()]),
+        constraint,
+        message: message.to_owned(),
+    }
+}
+
+pub fn paused(integration: &Integration, organization: &str, operation: &'static str) -> Reason {
+    Reason::StateConflict {
+        operation,
+        resource: Resource::Integration,
+        reference: integration.name.clone(),
+        organization: Some(organization.to_owned()),
+        state: integration.state.as_str(),
+        holding_session: None,
+        next: Next::inspect(Resource::Integration, integration.name.clone()).then(
+            Step::EnableIntegration {
+                integration: integration.name.clone(),
+            },
+        ),
+        message: format!(
+            "the integration {} is disabled; enable it to resume what waits on it",
+            integration.name
+        ),
+    }
+}
+
 pub async fn integrations(store: &Store, organization: &str) -> Result<Vec<Integration>> {
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
@@ -174,6 +376,13 @@ pub async fn poll(store: &Store, github: &Github, integration: &Integration) -> 
     let started = Timestamp::now();
     let read = read(store, github, integration, from).await;
     let mut tx = store.begin().await?;
+    if !tx
+        .integrations()
+        .current(integration, Direction::Inbound)
+        .await?
+    {
+        return Ok(Polled::default());
+    }
 
     let read = match read {
         Ok(read) => read,

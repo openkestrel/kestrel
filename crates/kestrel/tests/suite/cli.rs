@@ -1138,8 +1138,8 @@ fn secrets_set_through_the_client_appear_in_no_log_line() {
     );
     let registering = [
         "integration",
-        "register",
         "github",
+        "register",
         "hub",
         "--repository",
         "jtmthf/kestrel",
@@ -1180,8 +1180,8 @@ fn watching(kestrel: &Booted, stub: &GithubStub, interval: &str) {
     kestrel.run(&["organization", "declare", "acme"]);
     kestrel.run(&[
         "integration",
-        "register",
         "github",
+        "register",
         "hub",
         "--repository",
         "jtmthf/kestrel",
@@ -1196,6 +1196,57 @@ fn watching(kestrel: &Booted, stub: &GithubStub, interval: &str) {
         "--interval",
         interval,
     ]);
+}
+
+#[test]
+fn the_client_disables_changes_and_enables_an_integration() {
+    let kestrel = Kestrel::new();
+    let stub = GithubStub::start();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "info");
+    watching(&booted, &stub, "1h");
+
+    let disabled = booted.run(&["integration", "disable", "hub"]);
+    assert!(disabled.contains("disabled"), "{disabled}");
+    assert!(
+        disabled.contains("kestrel integration enable hub --organization acme"),
+        "the disable named no way to resume:\n{disabled}"
+    );
+
+    let changed = booted.record(&[
+        "integration",
+        "change",
+        "hub",
+        "--rename",
+        "github",
+        "--carries",
+        "outbound",
+        "--json",
+        "name,carries,state,repository",
+    ]);
+    assert_eq!(changed["name"], "github");
+    assert_eq!(changed["carries"], serde_json::json!(["outbound"]));
+    assert_eq!(changed["state"], "disabled");
+    assert_eq!(changed["repository"], "jtmthf/kestrel");
+    let fixed = booted.refused(&[
+        "integration",
+        "change",
+        "github",
+        "--repository",
+        "jtmthf/other",
+    ]);
+    assert!(fixed.contains("--repository"), "{fixed}");
+
+    let enabled = booted.record(&[
+        "integration",
+        "enable",
+        "github",
+        "--json",
+        "state,diagnostic",
+    ]);
+    booted.killed();
+
+    assert_eq!(enabled["state"], "enabled");
+    assert_eq!(enabled["diagnostic"], Value::Null);
 }
 
 /// The one command that has a credential in it, and the whole of what kestrel says while it
@@ -1250,8 +1301,8 @@ fn a_dispatch_starts_a_triggers_work_on_the_issue_it_names() {
     declared(&booted);
     booted.run(&[
         "integration",
-        "register",
         "github",
+        "register",
         "hub",
         "--repository",
         "jtmthf/kestrel",
@@ -1817,7 +1868,7 @@ fn empty_cli_lists_guide_a_terminal_and_leave_pipes_empty() {
         (
             "integration",
             "Integrations",
-            "integration register github --help",
+            "integration github register --help",
         ),
         ("event", "Events", "integration list"),
         ("trigger", "Triggers", "trigger declare --help"),

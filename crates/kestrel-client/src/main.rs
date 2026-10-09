@@ -292,6 +292,9 @@ enum IntegrationCommand {
         #[arg(long, env = "KESTREL_GITHUB_API", hide = true)]
         api: Option<String>,
     },
+    /// GitHub Integrations
+    #[command(subcommand)]
+    Github(GithubCommand),
     /// Register an Integration
     #[command(subcommand)]
     Register(RegisterCommand),
@@ -300,14 +303,36 @@ enum IntegrationCommand {
         after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
     )]
     List,
+    /// Show an Integration: its state, revision, directions and why its use is paused
+    Show { name: String },
+    /// Change an Integration's name, directions or poll interval; what it connects to is fixed
+    Change {
+        name: String,
+        /// The name it is referred to by from now on
+        #[arg(long, value_name = "NAME")]
+        rename: Option<String>,
+        /// A direction it carries — inbound, outbound; repeat for both. Replaces what it carried
+        #[arg(long = "carries", value_name = "DIRECTION", value_parser = direction)]
+        carries: Vec<wire::Direction>,
+        /// How often the poll reads the App's Delivery log
+        #[arg(long, value_name = "DURATION")]
+        interval: Option<String>,
+        /// Refuse the change if the Integration is no longer at this revision
+        #[arg(long, value_name = "REVISION")]
+        revision: Option<i64>,
+    },
+    /// Pause every use of an Integration, keeping its credentials, cursor and pending posts
+    Disable { name: String },
+    /// Resume a disabled Integration; its poll catches up on what GitHub still keeps
+    Enable { name: String },
     /// Acknowledge the latest oversized Event refused by an Integration
     AcknowledgeRefusal { name: String },
 }
 
 #[derive(Debug, Subcommand)]
-enum RegisterCommand {
-    /// A connection to GitHub, watching one repository
-    Github {
+enum GithubCommand {
+    /// Register a connection to GitHub, watching one repository
+    Register {
         /// The name it is referred to by
         name: String,
         /// The repository it watches, as owner/name
@@ -350,6 +375,10 @@ enum RegisterCommand {
         #[arg(long, env = "KESTREL_GITHUB_API", hide = true)]
         api: Option<String>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum RegisterCommand {
     /// A generic endpoint any producer can POST CloudEvents to
     Webhook {
         /// The name it is referred to by
@@ -1202,41 +1231,120 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                 .await?;
             show(&presentation, &view::View::Value("url"), &result)?;
         }
-        Command::Integration(IntegrationCommand::Register(register)) => {
+        Command::Integration(IntegrationCommand::Github(GithubCommand::Register {
+            name,
+            repository,
+            app_id,
+            installation,
+            private_key,
+            carries,
+            interval,
+            webhook_secret,
+            api: github_api,
+        })) => {
             let organization = scoping.resolve().await?.organization;
-            let registration = match register {
-                RegisterCommand::Github {
-                    name,
-                    repository,
-                    app_id,
-                    installation,
-                    private_key,
-                    carries,
-                    interval,
-                    webhook_secret,
-                    api,
-                } => json!({
-                    "kind": "github",
-                    "name": name,
-                    "repository": repository,
-                    "app_id": app_id,
-                    "installation": installation,
-                    "private_key": given(&private_key)?,
-                    "carries": carries,
-                    "interval": interval,
-                    "webhook_secret": webhook_secret,
-                    "api": api,
-                }),
-                RegisterCommand::Webhook { name, secret } => {
-                    json!({ "kind": "webhook", "name": name, "secret": secret })
-                }
-            };
+            let registration = json!({
+                "kind": "github",
+                "name": name,
+                "repository": repository,
+                "app_id": app_id,
+                "installation": installation,
+                "private_key": given(&private_key)?,
+                "carries": carries,
+                "interval": interval,
+                "webhook_secret": webhook_secret,
+                "api": github_api,
+            });
             show(
                 &presentation,
                 &view::DECLARED,
                 &api.post(
                     &["organizations", &organization, "integrations"],
                     &registration,
+                )
+                .await?,
+            )?;
+        }
+        Command::Integration(IntegrationCommand::Register(RegisterCommand::Webhook {
+            name,
+            secret,
+        })) => {
+            let organization = scoping.resolve().await?.organization;
+            show(
+                &presentation,
+                &view::DECLARED,
+                &api.post(
+                    &["organizations", &organization, "integrations"],
+                    &json!({ "kind": "webhook", "name": name, "secret": secret }),
+                )
+                .await?,
+            )?;
+        }
+        Command::Integration(IntegrationCommand::Show { name }) => {
+            let organization = scoping.resolve().await?.organization;
+            shown_integration(
+                &presentation,
+                invocation,
+                api.get(&["organizations", &organization, "integrations", &name])
+                    .await?,
+            )?;
+        }
+        Command::Integration(IntegrationCommand::Change {
+            name,
+            rename,
+            carries,
+            interval,
+            revision,
+        }) => {
+            let organization = scoping.resolve().await?.organization;
+            let change = wire::IntegrationChange {
+                name: rename,
+                carries: (!carries.is_empty()).then_some(carries),
+                interval,
+                revision,
+            };
+            shown_integration(
+                &presentation,
+                invocation,
+                api.patch(
+                    &["organizations", &organization, "integrations", &name],
+                    &change,
+                )
+                .await?,
+            )?;
+        }
+        Command::Integration(IntegrationCommand::Disable { name }) => {
+            let organization = scoping.resolve().await?.organization;
+            shown_integration(
+                &presentation,
+                invocation,
+                api.post(
+                    &[
+                        "organizations",
+                        &organization,
+                        "integrations",
+                        &name,
+                        "disable",
+                    ],
+                    &json!({}),
+                )
+                .await?,
+            )?;
+        }
+        Command::Integration(IntegrationCommand::Enable { name }) => {
+            let organization = scoping.resolve().await?.organization;
+            shown_integration(
+                &presentation,
+                invocation,
+                api.post(
+                    &[
+                        "organizations",
+                        &organization,
+                        "integrations",
+                        &name,
+                        "enable",
+                    ],
+                    &json!({}),
                 )
                 .await?,
             )?;
@@ -1252,7 +1360,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                     &client.control_plane,
                     "Integrations",
                     Some(&organization),
-                    "integration register github --help",
+                    "integration github register --help",
                 ),
             )?;
         }
@@ -2092,6 +2200,30 @@ fn empty_list(
         "No {absent}{scope}.\nInspect the next step with:\n  kestrel{flag} {action} --control-plane {}",
         shell::quoted(control_plane)
     )
+}
+
+fn shown_integration(
+    presentation: &Presentation,
+    invocation: &Invocation,
+    answered: Value,
+) -> Result<()> {
+    let integration: wire::Integration = serde_json::from_value(answered)?;
+    let mut record = serde_json::to_value(&integration)?;
+    if !matches!(presentation, Presentation::Json(_)) {
+        record["diagnostic"] = integration
+            .diagnostic
+            .as_ref()
+            .map_or(Value::Null, |diagnostic| {
+                Value::from(diagnostic::inline(diagnostic, invocation))
+            });
+    }
+
+    show(presentation, &view::INTEGRATION, &record)
+}
+
+fn direction(given: &str) -> Result<wire::Direction, String> {
+    serde_json::from_value(Value::from(given))
+        .map_err(|_| format!("{given} is not a direction: inbound or outbound"))
 }
 
 /// A failed Session is still a successful read: its diagnostic is shown, never raised.

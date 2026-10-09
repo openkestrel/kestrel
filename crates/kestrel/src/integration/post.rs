@@ -8,7 +8,8 @@ use jiff::Timestamp;
 use tracing::warn;
 
 use crate::domain::{
-    Direction, Event, Exit, Integration, Post, Session, SessionId, StartedBy, Workspace,
+    Direction, Event, Exit, Integration, IntegrationKind, Post, Session, SessionId, StartedBy,
+    Workspace,
 };
 use crate::integration::back_off;
 use crate::integration::github::{Github, MARKER, Refused};
@@ -35,10 +36,13 @@ async fn surface(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Option<(Integ
     };
     let integration = tx.integrations().with_id(integration).await?;
     if !integration.carries(Direction::Outbound) {
+        return Ok(None);
+    }
+    if integration.kind() != IntegrationKind::Github {
         warn!(
             integration = integration.name,
-            "a workspace came in through an integration that carries nothing outbound, so what it \
-             says reaches nobody"
+            "a workspace came in through an integration that can carry nothing outbound, so what \
+             it says reaches nobody"
         );
         return Ok(None);
     }
@@ -107,6 +111,9 @@ pub async fn post(store: &Store, github: &Github, post: &Post) -> Result<Option<
         let mut tx = store.begin().await?;
         tx.integrations().with_id(post.integration).await?
     };
+    if !integration.in_use(Direction::Outbound) {
+        return Ok(None);
+    }
     let marker = marker(post.session, post.turn);
 
     // An earlier attempt went out and never came back, so a comment may already be there.
@@ -122,6 +129,13 @@ pub async fn post(store: &Store, github: &Github, post: &Post) -> Result<Option<
     }
 
     let mut tx = store.begin().await?;
+    if !tx
+        .integrations()
+        .current(&integration, Direction::Outbound)
+        .await?
+    {
+        return Ok(None);
+    }
     tx.integrations()
         .attempting_post(post, Timestamp::now())
         .await?;
@@ -156,6 +170,13 @@ async fn deferred(
     );
 
     let mut tx = store.begin().await?;
+    if !tx
+        .integrations()
+        .current(integration, Direction::Outbound)
+        .await?
+    {
+        return Ok(None);
+    }
     tx.integrations()
         .post_deferred(post, back_off(integration.github()?.interval, refused))
         .await?;
