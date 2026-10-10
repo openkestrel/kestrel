@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use anyhow::{Context as _, Result, bail};
 use jiff::Timestamp;
 use sqlx::sqlite::SqliteRow;
@@ -9,7 +7,7 @@ use crate::declined::{Next, Reason, Resource};
 use crate::domain::{OperatorId, Organization, SubscriptionProfile, SubscriptionProfileId};
 use crate::keyring::Keyring;
 use crate::profile::{Contents, Entry, Held, Kind};
-use crate::sign_in::{Authentication, Source};
+use crate::sign_in::Authentication;
 use crate::store::{Declared, sign_in};
 
 pub struct Profiles<'a> {
@@ -248,47 +246,37 @@ impl<'a> Profiles<'a> {
         Ok(contents)
     }
 
-    /// Only files the profile already holds, so what a Session hands back can refresh a login and
-    /// never add one.
-    pub async fn refresh_files(
+    /// Compare-and-set on the revision the refreshing harness began from: `None` when anything
+    /// has replaced it since.
+    pub async fn refresh_file(
         &mut self,
         profile: &SubscriptionProfile,
-        files: &BTreeMap<String, String>,
-    ) -> Result<Vec<String>> {
-        let mut refreshed = Vec::new();
-
-        for (path, contents) in files {
-            let entry = Entry {
-                kind: Kind::File,
-                name: path.clone(),
-            };
-            if self.revision_of(profile, &entry).await?.is_none() {
-                continue;
-            }
-            let sealed = self.keyring.seal(&bound_to(profile, &entry), contents)?;
-            let revision =
-                sign_in::mint(self.connection, &Authentication::unchecked(Source::Refresh)).await?;
-            let updated = sqlx::query(
-                "UPDATE subscription_profile_entry
-                 SET sealed = ?, set_at = ?, revision = ?
-                 WHERE profile_id = ? AND kind = ? AND name = ?",
-            )
-            .bind(sealed)
-            .bind(Timestamp::now().to_string())
-            .bind(revision)
-            .bind(profile.id.to_string())
-            .bind(entry.kind.as_str())
-            .bind(&entry.name)
-            .execute(&mut *self.connection)
-            .await
-            .with_context(|| format!("refreshing the {entry} in the profile {}", profile.name))?;
-
-            if updated.rows_affected() > 0 {
-                refreshed.push(path.clone());
-            }
+        entry: &Entry,
+        from: i64,
+        contents: &str,
+    ) -> Result<Option<i64>> {
+        if self.revision_of(profile, entry).await? != Some(from) {
+            return Ok(None);
         }
+        let sealed = self.keyring.seal(&bound_to(profile, entry), contents)?;
+        let revision = sign_in::mint_refreshed(self.connection, from).await?;
+        sqlx::query(
+            "UPDATE subscription_profile_entry
+             SET sealed = ?, set_at = ?, revision = ?
+             WHERE profile_id = ? AND kind = ? AND name = ? AND revision = ?",
+        )
+        .bind(sealed)
+        .bind(Timestamp::now().to_string())
+        .bind(revision)
+        .bind(profile.id.to_string())
+        .bind(entry.kind.as_str())
+        .bind(&entry.name)
+        .bind(from)
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("refreshing the {entry} in the profile {}", profile.name))?;
 
-        Ok(refreshed)
+        Ok(Some(revision))
     }
 
     pub async fn forget(&mut self, profile: &SubscriptionProfile, entry: &Entry) -> Result<bool> {

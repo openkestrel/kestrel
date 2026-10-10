@@ -143,6 +143,13 @@ first Turn's prompt is the Brief alone, verbatim; held messages follow it as the
 slot frees. The first Turn competes by when the Brief was written against held input and queued
 Sessions, and the serialized-Profile rule applies to it then, not at dispatch.
 
+A Profile's login can also be lent to something that is not a Session
+(`sign_in/credential_use.rs`, for the optional model test). `acquire` refuses with a 409
+`credential_in_use` while a Session occupies that Profile on a serialized harness or another
+holder has it, and never queues; a Session on that Profile and harness is passed over until
+`release`, which the holder calls only after handing back whatever its harness refreshed.
+Holds on different Profiles are independent, and every hold is released when the roles start.
+
 ## Execution
 
 `role/work.rs::dispatching` loops every 100 ms:

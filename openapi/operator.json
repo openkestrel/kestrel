@@ -3311,6 +3311,11 @@
             "format": "int64",
             "description": "Minted for every accepted write of the material, a generic Profile or Provider Credential write included, and never reused."
           },
+          "refreshed_from": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "The revision a harness's own refresh advanced to make this one, or null when it was saved, imported or written."
+          },
           "saved_at": {
             "type": "string",
             "format": "date-time"
@@ -3332,6 +3337,7 @@
           "kind",
           "holding",
           "revision",
+          "refreshed_from",
           "saved_at",
           "authentication",
           "model_use"
@@ -3464,7 +3470,8 @@
             "type": "string"
           },
           "image": {
-            "type": "string"
+            "type": ["string", "null"],
+            "description": "The image a model test ran in; null for a Session, which records none."
           },
           "result": {
             "type": "string",
@@ -4897,6 +4904,7 @@
           "project": { "type": "string", "minLength": 1 },
           "agent": { "type": "string", "minLength": 1 },
           "profile": { "type": ["string", "null"] },
+          "sign_in_method": { "type": ["string", "null"], "description": "The catalogued Sign-in Method the first Session's harness is handed, by id: one its harness offers, saved in the Organization or in the Profile named here. Selecting one withholds the harness's other catalogued sign-ins, so a refusal never falls back to another. Omitted, everything the Organization and the Profile hold is handed over." },
           "branch": {
             "type": ["string", "null"],
             "description": "Omitted, a branch of the Workspace's own. A continuation runs on the branch of the Workspace it continues."
@@ -5120,6 +5128,7 @@
         "type": "object",
         "properties": {
           "agent": { "type": ["string", "null"], "description": "Omitted, the Agent of the Workspace's latest Session." },
+          "sign_in_method": { "type": ["string", "null"], "description": "The catalogued Sign-in Method this Session's harness is handed, checked as on opening a Workspace. Omitted, the latest Session's while the harness is the same; only naming one switches credentials." },
           "model": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." },
           "mode": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." },
           "thought_level": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." },
@@ -5152,6 +5161,8 @@
           "mode": { "type": ["string", "null"], "description": "What the Session names for its Harness's mode, or null for its Harness's default." },
           "thought_level": { "type": ["string", "null"], "description": "What the Session names for its Harness's thought level, or null for its Harness's default." },
           "worked_model": { "type": ["string", "null"], "description": "The Model-category option's current value, kept current by the supervisor (ADR-0041)." },
+          "sign_in_method": { "type": ["string", "null"], "description": "The catalogued Sign-in Method selected for this Session, or null when none was." },
+          "supplied": { "type": "array", "description": "What the harness was last spawned with, by revision and never by value; empty until its supervisor takes its credentials.", "items": { "$ref": "#/components/schemas/SuppliedMaterial" } },
           "title": { "type": ["string", "null"], "description": "The harness's own name for the conversation, or null until it says one." },
           "options": { "type": "array", "description": "The harness's whole config-option list (ADR-0041).", "items": { "$ref": "#/components/schemas/SessionOption" } },
           "changing_options": { "type": "array", "description": "Option changes a person asked for while the Session is live, held until the harness answers each (ADR-0041).", "items": { "$ref": "#/components/schemas/ChangingOption" } },
@@ -5173,7 +5184,7 @@
           "observation": { "$ref": "#/components/schemas/SessionObservation" },
           "depends_on": { "type": "array", "description": "The Sessions this one was declared to wait on, whether or not they have ended.", "items": { "$ref": "#/components/schemas/SessionReference" } }
         },
-        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "title", "options", "changing_options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "diagnostic", "tools", "units", "message_buffering", "thought_buffering", "last_activity_at", "observation", "depends_on"]
+        "required": ["id", "name", "workspace", "state", "preparing", "exit", "outcome_message", "instance", "supervisor", "agent", "harness", "model", "mode", "thought_level", "worked_model", "sign_in_method", "supplied", "title", "options", "changing_options", "commands", "interrupting", "enqueued_at", "started_at", "ended_at", "lease_expires_at", "connected_at", "supervisor_version", "usage", "diagnostic", "tools", "units", "message_buffering", "thought_buffering", "last_activity_at", "observation", "depends_on"]
       },
       "SessionObservation": {
         "description": "Whether the Session's open work is currently observed. current: its supervisor sent a snapshot over its open link and is still reaching it; tools and units list that snapshot, empty when nothing is open. unavailable: nothing current is known, whatever the Session's state or lease; tools and units are empty and never mean nothing is open. Neither availability changes the Session's state or scheduling.",
@@ -5214,6 +5225,22 @@
           "units": { "type": "array", "items": { "$ref": "#/components/schemas/RunningUnit" } }
         },
         "required": ["observed_at", "tools", "units"]
+      },
+      "SuppliedMaterial": {
+        "type": "object",
+        "description": "One variable or file handed to a Session's harness. It keeps the revision handed over after that material is replaced or forgotten.",
+        "properties": {
+          "resource": { "type": "string", "enum": ["subscription_profile", "provider_credential"] },
+          "reference": { "type": "string", "description": "The Profile's name, or the Provider Credential's variable." },
+          "kind": { "type": "string", "enum": ["variable", "file"] },
+          "name": { "type": "string", "description": "The variable, or the file's path beneath the agent's home." },
+          "method": { "type": ["string", "null"], "description": "The catalogued Sign-in Method of the Session's harness this fills, or null for anything else a Profile or Organization holds." },
+          "revision": { "type": "integer", "format": "int64" },
+          "current": { "type": "boolean", "description": "Whether that revision is still what is held." },
+          "handed_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["resource", "reference", "kind", "name", "method", "revision", "current", "handed_at"],
+        "additionalProperties": false
       },
       "SessionReference": {
         "type": "object",
@@ -6757,14 +6784,23 @@
           "harness": { "type": "string" },
           "image": { "type": ["string", "null"] },
           "evidence": { "$ref": "#/components/schemas/AuthenticationRequiredEvidence" },
-          "sign_in": { "type": ["string", "null"] },
+          "sign_in": { "type": ["string", "null"], "description": "The catalogued Sign-in Method the failure is about, when one is established." },
+          "attribution": {
+            "type": "string",
+            "enum": ["established", "uncertain", "unattributed"],
+            "description": "established: the method selected, or the only catalogued sign-in the harness was handed. uncertain: it was handed several and nothing says which it refused, so none is blamed. unattributed: it was handed none kestrel catalogues."
+          },
+          "candidates": { "type": "array", "items": { "type": "string" }, "description": "The methods an uncertain failure could be about; empty otherwise." },
+          "holding": { "anyOf": [{ "$ref": "#/components/schemas/SignInHolding" }, { "type": "null" }], "description": "Where the established sign-in is held." },
+          "revision": { "type": ["integer", "null"], "format": "int64", "description": "The revision of the established sign-in the harness was handed." },
+          "current": { "type": ["boolean", "null"], "description": "Whether that revision is still what is held. Only a current revision is marked as needing attention; a replaced one keeps this diagnosis." },
           "expired": {
             "type": ["boolean", "null"],
             "description": "Established only from evidence; never inferred from arbitrary harness output."
           },
           "covered": { "type": ["boolean", "null"] }
         },
-        "required": ["session", "harness", "image", "evidence", "sign_in", "expired", "covered"]
+        "required": ["session", "harness", "image", "evidence", "sign_in", "attribution", "candidates", "holding", "revision", "current", "expired", "covered"]
       },
       "AuthenticationFailedDiagnostic": {
         "properties": {

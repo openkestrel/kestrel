@@ -771,6 +771,8 @@ pub struct Session {
     pub exit: Option<Exit>,
     pub outcome_message: Option<String>,
     pub evidence: Option<Evidence>,
+    pub sign_in_method: Option<String>,
+    pub supplied: Vec<Supplied>,
     pub instance: Option<String>,
     pub supervisor: Option<String>,
     /// What the Harness reported it worked on.
@@ -1069,6 +1071,20 @@ impl fmt::Display for Exit {
             Exit::Failed { because } => write!(f, "failed: {because}"),
         }
     }
+}
+
+/// One variable or file a Session's harness was last spawned with, by the revision handed over
+/// and never by value.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Supplied {
+    /// The Subscription Profile it came from, or none for the Organization's Provider Credential.
+    pub profile: Option<String>,
+    pub kind: crate::profile::Kind,
+    pub name: String,
+    pub revision: i64,
+    /// Whether that revision is still what is held.
+    pub current: bool,
+    pub handed_at: Timestamp,
 }
 
 /// Facts about a failure, never a harness's prose: an unknown summary cannot establish that a

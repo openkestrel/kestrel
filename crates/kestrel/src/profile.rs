@@ -11,7 +11,8 @@ use crate::provider;
 use crate::sign_in::{Authentication, Source};
 use crate::store::{Declared, Store, Tx};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Kind {
     Variable,
     File,
@@ -209,18 +210,6 @@ pub async fn holds_anything(store: &Store, profile: &SubscriptionProfile) -> Res
 
 pub async fn contents(store: &Store, profile: &SubscriptionProfile) -> Result<Contents> {
     store.begin().await?.profiles().contents(profile).await
-}
-
-pub async fn refresh(
-    store: &Store,
-    profile: &SubscriptionProfile,
-    files: &BTreeMap<String, String>,
-) -> Result<Vec<String>> {
-    let mut tx = store.begin().await?;
-    let refreshed = tx.profiles().refresh_files(profile, files).await?;
-    tx.commit().await?;
-
-    Ok(refreshed)
 }
 
 pub(crate) async fn named(

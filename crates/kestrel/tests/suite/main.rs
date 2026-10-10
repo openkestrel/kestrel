@@ -19,6 +19,7 @@ mod follow_up;
 mod forgery;
 mod github_manifest;
 mod give_up;
+mod handoff;
 mod harness_catalogue;
 mod held;
 mod idle;

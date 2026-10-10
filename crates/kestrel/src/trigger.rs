@@ -926,7 +926,7 @@ async fn firing(
 
     let session = tx
         .workspaces()
-        .enqueue_session(&workspace, Some(agent), trigger.declared.clone())
+        .enqueue_session(&workspace, Some(agent), trigger.declared.clone(), None)
         .await?;
     tx.triggers()
         .record_opened_firing(trigger, event, &workspace, worked_ahead.as_deref())

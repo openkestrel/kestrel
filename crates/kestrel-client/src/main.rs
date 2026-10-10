@@ -634,6 +634,9 @@ enum WorkspaceCommand {
         /// The Subscription Profile its Sessions use
         #[arg(long)]
         profile: Option<String>,
+        /// The Sign-in Method its first Session is handed, without its harness's others
+        #[arg(long = "sign-in", value_name = "METHOD")]
+        sign_in: Option<String>,
         /// The branch its work happens on
         #[arg(long)]
         branch: Option<String>,
@@ -842,6 +845,9 @@ enum SessionCommand {
         /// The Agent it runs, or the one the Workspace's latest Session ran
         #[arg(long)]
         agent: Option<String>,
+        /// The Sign-in Method it is handed, or the one the Workspace's latest Session was
+        #[arg(long = "sign-in", value_name = "METHOD")]
+        sign_in: Option<String>,
         /// The model it works with, or none for its Agent's or Harness's default
         #[arg(long)]
         model: Option<String>,
@@ -1617,6 +1623,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
             project,
             agent,
             profile,
+            sign_in,
             branch,
             continues,
             brief,
@@ -1635,6 +1642,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                         "project": project,
                         "agent": agent,
                         "profile": profile,
+                        "sign_in_method": sign_in,
                         "branch": branch,
                         "continues": continues,
                         "model": model,
@@ -1928,6 +1936,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
         Command::Session(SessionCommand::Enqueue {
             workspace,
             agent,
+            sign_in,
             model,
             mode,
             thought_level,
@@ -1947,6 +1956,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                     ],
                     &json!({
                         "agent": agent,
+                        "sign_in_method": sign_in,
                         "model": model,
                         "mode": mode,
                         "thought_level": thought_level,

@@ -2,7 +2,9 @@
 -- after a delete still reads as new material.
 CREATE TABLE material_revision (
     revision INTEGER PRIMARY KEY AUTOINCREMENT,
-    written_at TEXT NOT NULL
+    written_at TEXT NOT NULL,
+    -- The revision a harness's own refresh advanced, so it is not read as a replacement.
+    refreshed_from INTEGER REFERENCES material_revision (revision)
 ) STRICT;
 
 CREATE TABLE provider_credential (
