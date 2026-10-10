@@ -1124,7 +1124,6 @@ fn the_client_disables_changes_and_enables_an_integration() {
         "--carries",
         "outbound",
         "--json",
-        "name,carries,state,repository",
     ]);
     assert_eq!(changed["name"], "github");
     assert_eq!(changed["carries"], serde_json::json!(["outbound"]));
@@ -1139,13 +1138,7 @@ fn the_client_disables_changes_and_enables_an_integration() {
     ]);
     assert!(fixed.contains("--repository"), "{fixed}");
 
-    let enabled = booted.record(&[
-        "integration",
-        "enable",
-        "github",
-        "--json",
-        "state,diagnostic",
-    ]);
+    let enabled = booted.record(&["integration", "enable", "github", "--json"]);
     booted.killed();
 
     assert_eq!(enabled["state"], "enabled");
