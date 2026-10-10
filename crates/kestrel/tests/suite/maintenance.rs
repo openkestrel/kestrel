@@ -303,8 +303,7 @@ async fn a_signed_webhook_to_a_disabled_integration_is_refused_and_the_poll_catc
     let delivery = github_stub::labelled(43, "ready-for-agent");
     let guid = stub.deliver(delivery.clone());
     let body = delivery.payload.to_string().into_bytes();
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(webhook_secret.as_bytes()).expect("an HMAC key");
+    let mut mac = Hmac::<Sha256>::new_from_slice(webhook_secret.as_bytes()).expect("an HMAC key");
     mac.update(&body);
     let signature: String = mac
         .finalize()

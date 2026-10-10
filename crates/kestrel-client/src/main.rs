@@ -2236,7 +2236,7 @@ fn shown_integration(
 ) -> Result<()> {
     let integration: wire::Integration = serde_json::from_value(answered)?;
     let mut record = serde_json::to_value(&integration)?;
-    if !matches!(presentation, Presentation::Json(_)) {
+    if !matches!(presentation, Presentation::Json) {
         record["diagnostic"] = integration
             .diagnostic
             .as_ref()
