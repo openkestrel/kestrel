@@ -1746,6 +1746,9 @@
           "404": {
             "$ref": "#/components/responses/Refused"
           },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
           "503": {
             "$ref": "#/components/responses/Refused"
           }
@@ -1789,6 +1792,70 @@
             }
           },
           "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/integrations/{integration}/retire": {
+      "post": {
+        "operationId": "retireIntegration",
+        "summary": "Retire an Integration, permanently.",
+        "description": "Erases the credentials kestrel holds for it and every token minted from them, cancels its pending posts with a reason, and cancels the Firings held on it. The Integration and every Project, Trigger, Event and Workspace that refers to it stay readable; it is never used, changed or enabled again, and no other Integration takes its place. Nothing is done on the external system: the GitHub App, its installation and its keys are untouched, and a request already sent or a credential already issued is not recalled. Retiring a retired Integration changes nothing.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationRetirement"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The retired Integration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
             "$ref": "#/components/responses/Refused"
           },
           "503": {
@@ -5668,10 +5735,51 @@
         ]
       },
       "IntegrationState": {
-        "description": "Disabled pauses every use of an Integration and keeps everything it resumes with.",
+        "description": "Disabled pauses every use of an Integration and keeps everything it resumes with. Retired ends every use for good and keeps only what its history refers to.",
         "enum": [
           "enabled",
-          "disabled"
+          "disabled",
+          "retired"
+        ]
+      },
+      "IntegrationRetirement": {
+        "description": "The explicit choice to retire an Integration.",
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "description": "The revision the retirement was decided against."
+          }
+        }
+      },
+      "CanceledPost": {
+        "description": "Something a Session said that will not be posted where its work came from.",
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "turn": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The Turn whose response it was; null for the Session's own Outcome."
+          },
+          "canceled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "turn",
+          "canceled_at",
+          "reason"
         ]
       },
       "IntegrationChange": {
@@ -5749,6 +5857,20 @@
             ],
             "format": "date-time"
           },
+          "retired_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "canceled_posts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CanceledPost"
+            },
+            "description": "What retiring it left unsaid, each with why."
+          },
           "polled_every": {
             "type": [
               "string",
@@ -5774,7 +5896,7 @@
             ]
           },
           "diagnostic": {
-            "description": "Why its use is paused now, with the steps that resume it; null while nothing is.",
+            "description": "Why it is out of use now, with the steps that resume it when any do; null while it is in use.",
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Diagnostic"
@@ -5795,6 +5917,8 @@
           "state",
           "revision",
           "disabled_at",
+          "retired_at",
+          "canceled_posts",
           "polled_every",
           "webhook_path",
           "last_event_refusal",

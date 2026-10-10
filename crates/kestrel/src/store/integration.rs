@@ -5,9 +5,9 @@ use sqlx::{Row, SqliteConnection};
 
 use crate::declined::Declined;
 use crate::domain::{
-    Connection, Direction, Event, EventRecordId, EventRefusal, GithubConnection, Integration,
-    IntegrationId, IntegrationKind, IntegrationState, Occurrence, Organization, OrganizationId,
-    Post, Session, SessionId, Workspace,
+    CanceledPost, Connection, Direction, Event, EventRecordId, EventRefusal, GithubConnection,
+    Integration, IntegrationId, IntegrationKind, IntegrationState, Occurrence, Organization,
+    OrganizationId, Post, Session, SessionId, Workspace,
 };
 use crate::integration::credential::App;
 use crate::integration::webhook::Verifier;
@@ -31,9 +31,18 @@ macro_rules! integrations_where {
             "SELECT id, organization_id, name, kind, repository, repository_id, api, app_id,
                     installation_id,
                     private_key_sealed, bot_login, inbound, outbound, state, revision,
-                    disabled_at, interval_ms, poll_due_at, deliveries_read_from, last_polled_at,
+                    disabled_at, retired_at, interval_ms, poll_due_at, deliveries_read_from,
+                    last_polled_at,
                     last_event_refusal_source, last_event_refusal_id, last_event_refusal_bytes,
-                    last_event_refusal_reason, last_event_refusal_at
+                    last_event_refusal_reason, last_event_refusal_at,
+                    (SELECT json_group_array(json_object(
+                                'session', session_id, 'turn', turn,
+                                'canceled_at', canceled_at, 'because', canceled_because))
+                     FROM (SELECT * FROM post
+                           WHERE post.integration_id = integration.id
+                             AND post.canceled_at IS NOT NULL
+                           ORDER BY post.recorded_at, post.session_id, post.turn))
+                        AS canceled_posts
              FROM integration
              WHERE ",
             $tail
@@ -98,6 +107,8 @@ impl<'a> Integrations<'a> {
             state: IntegrationState::Enabled,
             revision: 1,
             disabled_at: None,
+            retired_at: None,
+            canceled_posts: Vec::new(),
             // Due the moment it is registered, so an operator who registers one sees what is
             // on the repository rather than waiting an interval to find out.
             poll_due_at: polled.then_some(registered_at),
@@ -117,8 +128,13 @@ impl<'a> Integrations<'a> {
         };
         let private_key_sealed = github
             .map(|github| {
-                self.keyring
-                    .seal(&bound_to(integration.id), github.credential.private_key())
+                self.keyring.seal(
+                    &bound_to(integration.id),
+                    github
+                        .credential
+                        .private_key()
+                        .context("a github integration is registered with its app's private key")?,
+                )
             })
             .transpose()?;
 
@@ -333,6 +349,47 @@ impl<'a> Integrations<'a> {
             "the integration {} changed while it was being maintained",
             read.name
         );
+
+        Ok(())
+    }
+
+    /// Every secret column is erased here, so material a later operation parks on the row has
+    /// one place to be added to.
+    pub async fn retire(&mut self, read: &Integration, at: Timestamp, because: &str) -> Result<()> {
+        let retired = sqlx::query(
+            "UPDATE integration
+             SET state = 'retired', retired_at = ?, disabled_at = NULL,
+                 private_key_sealed = NULL, signing_secret = NULL, shared_secret_digest = NULL,
+                 poll_due_at = NULL, revision = revision + 1, maintained_at = ?
+             WHERE id = ? AND revision = ? AND state <> 'retired'",
+        )
+        .bind(at.to_string())
+        .bind(at.to_string())
+        .bind(read.id.to_string())
+        .bind(read.revision)
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("retiring the integration {}", read.name))?;
+        ensure!(
+            retired.rows_affected() > 0,
+            "the integration {} changed while it was being retired",
+            read.name
+        );
+        sqlx::query(
+            "UPDATE post SET due_at = NULL, canceled_at = ?, canceled_because = ?
+             WHERE integration_id = ? AND posted_at IS NULL AND canceled_at IS NULL",
+        )
+        .bind(at.to_string())
+        .bind(because)
+        .bind(read.id.to_string())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| {
+            format!(
+                "canceling what the integration {} had left to post",
+                read.name
+            )
+        })?;
 
         Ok(())
     }
@@ -830,18 +887,24 @@ fn integration(row: &SqliteRow, keyring: &Keyring) -> Result<Integration> {
     let id: IntegrationId = row.get::<String, _>("id").parse()?;
     let connection = match row.get::<String, _>("kind").parse()? {
         IntegrationKind::Github => {
-            let private_key = keyring
-                .unseal(&bound_to(id), row.get("private_key_sealed"))
-                .with_context(|| {
-                    format!(
-                        "opening the private key of integration {}",
-                        row.get::<String, _>("name")
-                    )
-                })?;
+            let (app, installation) = (row.get("app_id"), row.get("installation_id"));
+            let credential = match row.get::<Option<String>, _>("private_key_sealed") {
+                Some(sealed) => App::held(
+                    app,
+                    installation,
+                    &keyring.unseal(&bound_to(id), &sealed).with_context(|| {
+                        format!(
+                            "opening the private key of integration {}",
+                            row.get::<String, _>("name")
+                        )
+                    })?,
+                ),
+                None => App::erased(app, installation),
+            };
             Connection::Github(GithubConnection {
                 repository: row.get("repository"),
                 api: row.get("api"),
-                credential: App::held(row.get("app_id"), row.get("installation_id"), &private_key),
+                credential,
                 bot_login: row.get("bot_login"),
                 interval: SignedDuration::from_millis(row.get("interval_ms")),
                 repository_id: row.get("repository_id"),
@@ -859,11 +922,32 @@ fn integration(row: &SqliteRow, keyring: &Keyring) -> Result<Integration> {
         state: row.get::<String, _>("state").parse()?,
         revision: row.get("revision"),
         disabled_at: timestamp(row, "disabled_at")?,
+        retired_at: timestamp(row, "retired_at")?,
+        canceled_posts: canceled_posts(row)?,
         poll_due_at: timestamp(row, "poll_due_at")?,
         deliveries_read_from: timestamp(row, "deliveries_read_from")?,
         last_polled_at: timestamp(row, "last_polled_at")?,
         last_event_refusal: event_refusal(row)?,
     })
+}
+
+fn canceled_posts(row: &SqliteRow) -> Result<Vec<CanceledPost>> {
+    serde_json::from_str::<Vec<serde_json::Value>>(row.get("canceled_posts"))?
+        .iter()
+        .map(|post| {
+            let text = |field: &str| {
+                post[field]
+                    .as_str()
+                    .with_context(|| format!("a canceled post has no {field}"))
+            };
+            Ok(CanceledPost {
+                session: text("session")?.parse()?,
+                turn: post["turn"].as_i64().filter(|turn| *turn != 0),
+                canceled_at: text("canceled_at")?.parse()?,
+                because: text("because")?.to_owned(),
+            })
+        })
+        .collect()
 }
 
 fn event_refusal(row: &SqliteRow) -> Result<Option<EventRefusal>> {

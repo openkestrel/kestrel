@@ -48,6 +48,19 @@ the poll's and the webhook's write transactions, and a post's attempt and deferr
 cached or newly minted installation token to a request. A request already sent is not recalled;
 a post that may have landed is reconciled by its marker as before.
 
+Retiring is the one change nothing undoes. `store/integration.rs::retire` nulls every secret
+column on the row (the sealed private key, the signing secret, the shared-secret digest) and its
+poll due time, and a `CHECK` keeps a retired row that way; a later operation that parks secret
+material on the row erases it there. In the same transaction every post not yet posted is canceled
+with its reason (`post.canceled_at`, `canceled_because`), which the Integration's record lists.
+The row, its Events and everything referring to them stay. Afterwards every fence above refuses,
+because a retired Integration is not enabled: a poll or Delivery read begun earlier asks GitHub
+nothing more and commits nothing, a cached installation token is dropped the first time it is
+asked for, a Session that ends records no post, and a Firing held on it, or matched from an Event
+it recorded earlier, is `canceled` rather than held. Maintenance and enable are refused with a
+`state_conflict` that names no repair. Nothing is asked of GitHub: the App, its installation and
+its keys are the operator's to remove, and the CLI says how.
+
 ## Firing
 
 `timer::firing` calls `trigger::fire` on each tick or wake. It takes up to 32 unfired matches and

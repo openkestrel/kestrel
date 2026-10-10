@@ -173,9 +173,10 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   Integration-backed HTTPS resolution remain to build.
 
 - **Integration maintenance** ([ADR-0056](../adr/0056-an-integration-keeps-its-identity-through-maintenance.md)):
-  name, directions and interval change, and disable/enable pause and resume use under revision
-  fences. Retirement, private-key replacement and webhook-secret rotation are not built. Projects do
-  not select an Integration explicitly and Workspaces do not fix that authority at open.
+  name, directions and interval change, disable/enable pause and resume use, and retirement ends it
+  for good, all under revision fences. Private-key replacement and webhook-secret rotation are not
+  built. Projects do not select an Integration explicitly and Workspaces do not fix that authority
+  at open, so no queued Session yet waits on an Integration that retirement could block.
 
 - **Release preparation and acceptance** ([ADR-0053](../adr/0053-a-tag-prepares-a-release-acceptance-publishes-it.md)):
   tag publishing still races Conformance, covers only two images on amd64, and has no draft-release

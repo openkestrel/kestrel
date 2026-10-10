@@ -215,6 +215,32 @@ pub async fn enable(store: &Store, organization: &str, name: &str) -> Result<Int
     switched(store, organization, name, IntegrationState::Enabled).await
 }
 
+pub const RETIRED: &str = "its integration was retired, so nothing more is said through it";
+
+/// Erases what it authenticates with on this side only: the App, its installation and its
+/// GitHub keys are not kestrel's to remove (ADR-0056).
+pub async fn retire(
+    store: &Store,
+    organization: &str,
+    name: &str,
+    revision: Option<i64>,
+) -> Result<Integration> {
+    let mut tx = store.begin().await?;
+    let organization = tx.organizations().named(organization).await?;
+    let read = tx.integrations().named(&organization, name).await?;
+    revised(&read, &organization.name, "retire_integration", revision)?;
+    if read.retired() {
+        return Ok(read);
+    }
+    tx.integrations()
+        .retire(&read, Timestamp::now(), RETIRED)
+        .await?;
+    let retired = tx.integrations().named(&organization, name).await?;
+    tx.commit().await?;
+
+    Ok(retired)
+}
+
 async fn switched(
     store: &Store,
     organization: &str,
@@ -223,7 +249,7 @@ async fn switched(
 ) -> Result<Integration> {
     let operation = match to {
         IntegrationState::Enabled => "enable_integration",
-        IntegrationState::Disabled => "disable_integration",
+        IntegrationState::Disabled | IntegrationState::Retired => "disable_integration",
     };
     maintained(store, organization, name, operation, None, |read| {
         if read.state == to {
@@ -232,7 +258,7 @@ async fn switched(
         let mut maintained = read.clone();
         maintained.state = to;
         maintained.disabled_at = maintained.disabled().then(Timestamp::now);
-        if !maintained.disabled() && maintained.polled() {
+        if maintained.enabled() && maintained.polled() {
             maintained.poll_due_at = Some(Timestamp::now());
         }
         Ok(Some(maintained))
@@ -251,21 +277,9 @@ async fn maintained(
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
     let read = tx.integrations().named(&organization, name).await?;
-    if let Some(against) = against.filter(|against| *against != read.revision) {
-        bail!(Reason::StateConflict {
-            operation,
-            resource: Resource::Integration,
-            reference: read.name.clone(),
-            organization: Some(organization.name.clone()),
-            state: "revised",
-            holding_session: None,
-            next: Next::inspect(Resource::Integration, read.name.clone()),
-            message: format!(
-                "the integration {} has changed since revision {against}; read it again and \
-                 decide on what it is now",
-                read.name
-            ),
-        });
+    revised(&read, &organization.name, operation, against)?;
+    if read.retired() {
+        bail!(out_of_use(&read, &organization.name, operation));
     }
     let Some(maintained) = maintain(&read)? else {
         return Ok(read);
@@ -278,6 +292,31 @@ async fn maintained(
     tx.commit().await?;
 
     Ok(maintained)
+}
+
+fn revised(
+    read: &Integration,
+    organization: &str,
+    operation: &'static str,
+    against: Option<i64>,
+) -> Result<()> {
+    let Some(against) = against.filter(|against| *against != read.revision) else {
+        return Ok(());
+    };
+    bail!(Reason::StateConflict {
+        operation,
+        resource: Resource::Integration,
+        reference: read.name.clone(),
+        organization: Some(organization.to_owned()),
+        state: "revised",
+        holding_session: None,
+        next: Next::inspect(Resource::Integration, read.name.clone()),
+        message: format!(
+            "the integration {} has changed since revision {against}; read it again and \
+             decide on what it is now",
+            read.name
+        ),
+    })
 }
 
 fn carried(integration: &Integration, carries: &[Direction]) -> Result<()> {
@@ -309,7 +348,34 @@ fn invalid(field: &'static str, constraint: Constraint, message: &str) -> Reason
     }
 }
 
-pub fn paused(integration: &Integration, organization: &str, operation: &'static str) -> Reason {
+/// Why an Integration that is not enabled refuses `operation`. A retired one names no repair:
+/// nothing resumes it, and no other Integration is chosen in its place.
+pub fn out_of_use(
+    integration: &Integration,
+    organization: &str,
+    operation: &'static str,
+) -> Reason {
+    let inspect = Next::inspect(Resource::Integration, integration.name.clone());
+    let (next, message) = if integration.retired() {
+        (
+            inspect,
+            format!(
+                "the integration {} is retired: its credentials were erased, and it cannot be \
+                 used, changed or enabled again",
+                integration.name
+            ),
+        )
+    } else {
+        (
+            inspect.then(Step::EnableIntegration {
+                integration: integration.name.clone(),
+            }),
+            format!(
+                "the integration {} is disabled; enable it to resume what waits on it",
+                integration.name
+            ),
+        )
+    };
     Reason::StateConflict {
         operation,
         resource: Resource::Integration,
@@ -317,15 +383,8 @@ pub fn paused(integration: &Integration, organization: &str, operation: &'static
         organization: Some(organization.to_owned()),
         state: integration.state.as_str(),
         holding_session: None,
-        next: Next::inspect(Resource::Integration, integration.name.clone()).then(
-            Step::EnableIntegration {
-                integration: integration.name.clone(),
-            },
-        ),
-        message: format!(
-            "the integration {} is disabled; enable it to resume what waits on it",
-            integration.name
-        ),
+        next,
+        message,
     }
 }
 

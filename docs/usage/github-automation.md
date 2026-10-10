@@ -16,6 +16,8 @@ Kestrel learns the App's own login (`<slug>[bot]`) when the Integration is regis
 
 `kestrel integration disable origin` pauses polling, webhook deliveries, comments and the work its events would start, keeping everything it resumes with; `kestrel integration enable origin` resumes and catches up on what GitHub still keeps. `kestrel integration change origin` renames it or changes its directions or interval. Its repository and App cannot change: register a new Integration for those.
 
+`kestrel integration retire origin` ends a connection for good. It asks you to type the Integration's name, or takes `--yes` where nothing can be asked. kestrel erases the App private key and webhook secret it holds, cancels comments it had not yet posted and the work still waiting on the Integration, and refuses to use, change or enable it again; no other Integration takes over. The Integration and the Projects, Triggers, Events and Workspaces that refer to it stay readable, and `kestrel integration show origin` lists what was left unsaid. Retiring changes nothing on GitHub: the App stays installed and its keys keep working until you remove them in the App's settings, and a request already sent or a token already issued is not recalled.
+
 `kestrel event list` shows recorded events, and `kestrel event show <record>` includes an event's payload and trigger firings. Register the integration before applying a trigger so you can inspect the event shape and test the rule against a real example.
 
 ## Declare a trigger

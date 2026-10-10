@@ -199,6 +199,7 @@ impl fmt::Display for IntegrationKind {
 pub enum IntegrationState {
     Enabled,
     Disabled,
+    Retired,
 }
 
 impl IntegrationState {
@@ -206,6 +207,7 @@ impl IntegrationState {
         match self {
             IntegrationState::Enabled => "enabled",
             IntegrationState::Disabled => "disabled",
+            IntegrationState::Retired => "retired",
         }
     }
 }
@@ -217,6 +219,7 @@ impl FromStr for IntegrationState {
         match state {
             "enabled" => Ok(IntegrationState::Enabled),
             "disabled" => Ok(IntegrationState::Disabled),
+            "retired" => Ok(IntegrationState::Retired),
             other => bail!("{other} is not a state an integration is in"),
         }
     }
@@ -238,6 +241,8 @@ pub struct Integration {
     pub state: IntegrationState,
     pub revision: i64,
     pub disabled_at: Option<Timestamp>,
+    pub retired_at: Option<Timestamp>,
+    pub canceled_posts: Vec<CanceledPost>,
     pub poll_due_at: Option<Timestamp>,
     /// By GitHub's clock: every Delivery made earlier has been read.
     pub deliveries_read_from: Option<Timestamp>,
@@ -252,7 +257,15 @@ impl Integration {
     }
 
     pub fn in_use(&self, direction: Direction) -> bool {
-        !self.disabled() && self.carries(direction)
+        self.enabled() && self.carries(direction)
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.state == IntegrationState::Enabled
+    }
+
+    pub fn retired(&self) -> bool {
+        self.state == IntegrationState::Retired
     }
 
     pub fn disabled(&self) -> bool {
@@ -346,6 +359,14 @@ pub struct Post {
     /// Set before a request goes out and left set: a Post that has been attempted may
     /// already have a comment on the issue, and is read back rather than posted twice.
     pub attempted_at: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanceledPost {
+    pub session: SessionId,
+    pub turn: Option<i64>,
+    pub canceled_at: Timestamp,
+    pub because: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

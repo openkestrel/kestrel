@@ -86,6 +86,8 @@ pub const INTEGRATION_DISABLE: &str =
     "/operator/organizations/{organization}/integrations/{integration}/disable";
 pub const INTEGRATION_ENABLE: &str =
     "/operator/organizations/{organization}/integrations/{integration}/enable";
+pub const INTEGRATION_RETIRE: &str =
+    "/operator/organizations/{organization}/integrations/{integration}/retire";
 pub const EVENT_REFUSAL: &str =
     "/operator/organizations/{organization}/integrations/{integration}/event-refusal";
 pub const EVENTS: &str = "/operator/organizations/{organization}/events";
@@ -369,6 +371,7 @@ pub fn router(
         .route(INTEGRATION, get(show_integration).patch(change_integration))
         .route(INTEGRATION_DISABLE, post(disable_integration))
         .route(INTEGRATION_ENABLE, post(enable_integration))
+        .route(INTEGRATION_RETIRE, post(retire_integration))
         .route(GITHUB_APP, post(start_github_app))
         .route(integration::manifest::PAGE, get(github_app_page))
         .route(integration::manifest::CALLBACK, get(github_app_callback))
@@ -1930,9 +1933,9 @@ enum ConnectionRegistration {
 /// Never the private key or a webhook secret: what an Integration presents stays behind the
 /// boundary. The bot login is not a secret — it is the name GitHub already shows in public.
 fn integration_record(integration: Integration, organization: &str) -> wire::Integration {
-    let diagnostic = integration.disabled().then(|| {
+    let diagnostic = (!integration.enabled()).then(|| {
         diagnosis(
-            integration::paused(&integration, organization, "use_integration"),
+            integration::out_of_use(&integration, organization, "use_integration"),
             None,
         )
         .1
@@ -1942,8 +1945,9 @@ fn integration_record(integration: Integration, organization: &str) -> wire::Int
         IntegrationKind::Github => wire::IntegrationKind::Github,
         IntegrationKind::Webhook => wire::IntegrationKind::Webhook,
     };
+    let received = integration.carries(Direction::Inbound) && !integration.retired();
     let (repository, bot_login, polled_every, webhook_path) = match integration.connection {
-        Connection::Github(github) if !integration.carries.contains(&Direction::Inbound) => {
+        Connection::Github(github) if !received => {
             (Some(github.repository), Some(github.bot_login), None, None)
         }
         Connection::Github(github) => (
@@ -1952,7 +1956,7 @@ fn integration_record(integration: Integration, organization: &str) -> wire::Int
             Some(format!("{:#}", github.interval)),
             Some(webhook_path),
         ),
-        Connection::Webhook => (None, None, None, Some(webhook_path)),
+        Connection::Webhook => (None, None, None, received.then_some(webhook_path)),
     };
 
     wire::Integration {
@@ -1973,9 +1977,21 @@ fn integration_record(integration: Integration, organization: &str) -> wire::Int
         state: match integration.state {
             IntegrationState::Enabled => wire::IntegrationState::Enabled,
             IntegrationState::Disabled => wire::IntegrationState::Disabled,
+            IntegrationState::Retired => wire::IntegrationState::Retired,
         },
         revision: integration.revision,
         disabled_at: integration.disabled_at.map(|at| at.to_string()),
+        retired_at: integration.retired_at.map(|at| at.to_string()),
+        canceled_posts: integration
+            .canceled_posts
+            .into_iter()
+            .map(|post| wire::CanceledPost {
+                session: post.session.to_string().parse().expect("a Session UUID"),
+                turn: post.turn,
+                canceled_at: post.canceled_at.to_string(),
+                reason: post.because,
+            })
+            .collect(),
         polled_every,
         webhook_path,
         last_event_refusal: integration
@@ -2115,6 +2131,23 @@ async fn enable_integration(
     let enabled = integration::enable(&control_plane.store, &organization, &name).await?;
 
     Ok(Json(integration_record(enabled, &organization)))
+}
+
+async fn retire_integration(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, name)): Path<(String, String)>,
+    retirement: Result<Json<wire::IntegrationRetirement>, JsonRejection>,
+) -> Result<Json<wire::Integration>, Refused> {
+    let Json(retirement) = retirement?;
+    let retired = integration::retire(
+        &control_plane.store,
+        &organization,
+        &name,
+        retirement.revision,
+    )
+    .await?;
+
+    Ok(Json(integration_record(retired, &organization)))
 }
 
 async fn register_integration(
@@ -4780,6 +4813,7 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("PATCH", INTEGRATION) => "change_integration",
         ("POST", INTEGRATION_DISABLE) => "disable_integration",
         ("POST", INTEGRATION_ENABLE) => "enable_integration",
+        ("POST", INTEGRATION_RETIRE) => "retire_integration",
         ("POST", GITHUB_APP) => "start_github_app",
         ("GET", integration::manifest::PAGE) => "github_app_setup",
         ("GET", integration::manifest::CALLBACK) => "github_app_callback",

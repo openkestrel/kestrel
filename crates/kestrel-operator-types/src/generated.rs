@@ -2625,8 +2625,10 @@ pub struct IntegrationChange {
 pub struct Integration {
     ///The App's own bot account, `<slug>[bot]`, learned from GitHub when a GitHub Integration was registered.
     pub bot_login: Option<String>,
+    ///What retiring it left unsaid, each with why.
+    pub canceled_posts: Vec<CanceledPost>,
     pub carries: Vec<Direction>,
-    ///Why its use is paused now, with the steps that resume it; null while nothing is.
+    ///Why it is out of use now, with the steps that resume it when any do; null while it is in use.
     pub diagnostic: Option<Diagnostic>,
     pub disabled_at: Option<String>,
     pub id: uuid::Uuid,
@@ -2637,13 +2639,14 @@ pub struct Integration {
     pub polled_every: Option<String>,
     ///The repository a GitHub Integration watches.
     pub repository: Option<String>,
+    pub retired_at: Option<String>,
     ///Bumped by every change, so a Client can say which one it decided against.
     pub revision: i64,
     pub state: IntegrationState,
     ///Where on the link GitHub, or a generic producer, can deliver to it. An inbound GitHub Integration is also polled.
     pub webhook_path: Option<String>,
 }
-///Disabled pauses every use of an Integration and keeps everything it resumes with.
+///Disabled pauses every use of an Integration and keeps everything it resumes with. Retired ends every use for good and keeps only what its history refers to.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
 pub enum IntegrationState {
     #[default]
@@ -2651,12 +2654,15 @@ pub enum IntegrationState {
     Enabled,
     #[serde(rename = "disabled")]
     Disabled,
+    #[serde(rename = "retired")]
+    Retired,
 }
 impl IntegrationState {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Enabled => "enabled",
             Self::Disabled => "disabled",
+            Self::Retired => "retired",
         }
     }
 }
@@ -2706,6 +2712,15 @@ pub struct EventRefusal {
     pub observed_at: String,
     pub reason: String,
     pub source: String,
+}
+///Something a Session said that will not be posted where its work came from.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CanceledPost {
+    pub canceled_at: String,
+    pub reason: String,
+    pub session: uuid::Uuid,
+    ///The Turn whose response it was; null for the Session's own Outcome.
+    pub turn: Option<i64>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HarnessCatalogueEntry {
@@ -11156,6 +11171,13 @@ pub struct FileText {
 pub struct InstanceRelease {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub participant: Option<String>,
+}
+///The explicit choice to retire an Integration.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct IntegrationRetirement {
+    ///The revision the retirement was decided against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Operator {

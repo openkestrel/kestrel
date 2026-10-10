@@ -9,7 +9,7 @@ use std::fmt;
 pub struct App {
     pub id: i64,
     pub installation: i64,
-    key: String,
+    key: Option<String>,
 }
 
 impl App {
@@ -17,12 +17,21 @@ impl App {
         Self {
             id,
             installation,
-            key: private_key.to_owned(),
+            key: Some(private_key.to_owned()),
         }
     }
 
-    pub fn private_key(&self) -> &str {
-        &self.key
+    /// What a retired Integration keeps: which App it was, and nothing to sign as it with.
+    pub fn erased(id: i64, installation: i64) -> Self {
+        Self {
+            id,
+            installation,
+            key: None,
+        }
+    }
+
+    pub fn private_key(&self) -> Option<&str> {
+        self.key.as_deref()
     }
 }
 

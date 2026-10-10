@@ -12,10 +12,11 @@ CREATE TABLE integration (
     bot_login TEXT,
     inbound INTEGER NOT NULL,
     outbound INTEGER NOT NULL,
-    state TEXT NOT NULL DEFAULT 'enabled' CHECK (state IN ('enabled', 'disabled')),
+    state TEXT NOT NULL DEFAULT 'enabled' CHECK (state IN ('enabled', 'disabled', 'retired')),
     -- Bumped by every maintenance change, so work begun under an older one commits nothing.
     revision INTEGER NOT NULL DEFAULT 1,
     disabled_at TEXT,
+    retired_at TEXT,
     interval_ms INTEGER,
     signing_secret TEXT,
     shared_secret_digest TEXT,
@@ -34,11 +35,18 @@ CREATE TABLE integration (
     CHECK ((kind = 'github') = (repository IS NOT NULL AND repository_id IS NOT NULL
                                 AND api IS NOT NULL
                                 AND app_id IS NOT NULL AND installation_id IS NOT NULL
-                                AND private_key_sealed IS NOT NULL AND bot_login IS NOT NULL
-                                AND interval_ms IS NOT NULL)),
-    CHECK (kind = 'github' OR signing_secret IS NULL),
-    CHECK ((kind = 'webhook') = (shared_secret_digest IS NOT NULL)),
-    CHECK ((state = 'disabled') = (disabled_at IS NOT NULL))
+                                AND bot_login IS NOT NULL AND interval_ms IS NOT NULL)),
+    CHECK (kind = 'github' OR (private_key_sealed IS NULL AND signing_secret IS NULL)),
+    CHECK (kind = 'webhook' OR shared_secret_digest IS NULL),
+    -- Retirement erases everything it could authenticate with, in either direction.
+    CHECK (CASE state
+               WHEN 'retired' THEN private_key_sealed IS NULL AND signing_secret IS NULL
+                                   AND shared_secret_digest IS NULL AND poll_due_at IS NULL
+               ELSE (kind = 'github') = (private_key_sealed IS NOT NULL)
+                    AND (kind = 'webhook') = (shared_secret_digest IS NOT NULL)
+           END),
+    CHECK ((state = 'disabled') = (disabled_at IS NOT NULL)),
+    CHECK ((state = 'retired') = (retired_at IS NOT NULL))
 ) STRICT;
 
 CREATE INDEX integration_poll_due ON integration (poll_due_at) WHERE poll_due_at IS NOT NULL;
