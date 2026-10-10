@@ -477,7 +477,6 @@ async fn a_session_provisions_an_instance_and_releasing_it_destroys_it_through_t
         "operator",
         "go",
         "--json",
-        "session.id",
     ]);
     let posted: Value = serde_json::from_str(&posted)
         .unwrap_or_else(|error| panic!("{posted} is no record: {error}"));
@@ -529,17 +528,26 @@ async fn a_session_provisions_an_instance_and_releasing_it_destroys_it_through_t
 fn the_stack_comes_back_up_with_every_workspace_it_had() {
     let stack = Stack::up();
     let workspace = a_workspace(&stack);
-    let shown = stack.ran(&["workspace", "show", &workspace, "--json", WORKSPACE]);
-    let transcript = stack.ran(&["workspace", "transcript", &workspace, "--json", "seq,entry"]);
+    let before = shown(&stack, &workspace);
+    let transcript = stack.ran(&["workspace", "transcript", &workspace, "--json"]);
 
     stack.comes_back();
 
+    let after = shown(&stack, &workspace);
+    for field in [
+        "id",
+        "name",
+        "organization",
+        "project",
+        "opened_with",
+        "checkout",
+        "state",
+        "opened_at",
+    ] {
+        assert_eq!(after[field], before[field], "{field}");
+    }
     assert_eq!(
-        stack.ran(&["workspace", "show", &workspace, "--json", WORKSPACE]),
-        shown
-    );
-    assert_eq!(
-        stack.ran(&["workspace", "transcript", &workspace, "--json", "seq,entry"]),
+        stack.ran(&["workspace", "transcript", &workspace, "--json"]),
         transcript
     );
     assert!(
@@ -593,10 +601,8 @@ fn the_commands_usage_documents_are_the_commands_that_work() {
     );
 }
 
-const WORKSPACE: &str = "id,name,organization,project,opened_with,checkout,state,opened_at";
-
 fn shown(stack: &Stack, workspace: &str) -> Value {
-    let shown = stack.ran(&["workspace", "show", workspace, "--json", WORKSPACE]);
+    let shown = stack.ran(&["workspace", "show", workspace, "--json"]);
 
     serde_json::from_str(&shown).unwrap_or_else(|error| panic!("{shown} is no record: {error}"))
 }
@@ -634,12 +640,11 @@ fn a_workspace(stack: &Stack) -> String {
         "--agent",
         "builder",
         "--json",
-        "workspace_id",
     ]);
     let opened: Value = serde_json::from_str(&opened)
         .unwrap_or_else(|error| panic!("{opened} is no record: {error}"));
 
-    opened["workspace_id"]
+    opened["workspace"]["id"]
         .as_str()
         .expect("the opened workspace's identifier")
         .to_owned()
@@ -651,7 +656,7 @@ struct Listed {
 }
 
 fn listed(stack: &Stack, session: &str) -> Listed {
-    let shown = stack.ran(&["session", "show", session, "--json", "instance,exit"]);
+    let shown = stack.ran(&["session", "show", session, "--json"]);
     let shown: Value = serde_json::from_str(&shown)
         .unwrap_or_else(|error| panic!("{shown} is no session: {error}"));
 

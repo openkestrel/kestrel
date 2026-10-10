@@ -342,7 +342,6 @@ async fn an_opened_pull_request_on_the_declared_branch_becomes_workspace_state_o
             "show",
             &workspace.name,
             "--json",
-            "pull_requests",
         ],
         client::Invocation::default(),
     )
@@ -671,7 +670,6 @@ async fn a_pull_requests_lifecycle_appends_each_observation_and_reads_the_latest
             "show",
             &workspace.name,
             "--json",
-            "pull_requests",
         ],
         client::Invocation::default(),
     )
@@ -689,7 +687,6 @@ async fn a_pull_requests_lifecycle_appends_each_observation_and_reads_the_latest
             "transcript",
             &workspace.name,
             "--json",
-            "seq,entry",
         ],
         client::Invocation::default(),
     )

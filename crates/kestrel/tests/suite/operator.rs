@@ -52,9 +52,13 @@ fn seqs(lines: &[String]) -> Vec<i64> {
 fn records(lines: &[String]) -> Vec<Value> {
     lines
         .iter()
-        .map(|line| {
-            serde_json::from_str(line)
+        .flat_map(|line| {
+            match serde_json::from_str(line)
                 .unwrap_or_else(|error| panic!("{line} is not a record: {error}"))
+            {
+                Value::Array(records) => records,
+                record => vec![record],
+            }
         })
         .collect()
 }
@@ -130,20 +134,6 @@ fn succeeded(finished: &client::Finished) -> &[String] {
 fn recorded(finished: &client::Finished) -> Vec<Value> {
     records(succeeded(finished))
 }
-
-/// What each test reads, named the way a script names it: a field the boundary gains later
-/// reaches none of these assertions.
-const ORGANIZATION: &str = "id,name,max_live_instances";
-const PROJECT: &str = "id,name,repositories,branch";
-const AGENT: &str = "id,name,harness,model";
-const CREDENTIAL: &str = "variable";
-const INTEGRATION: &str = "id,kind,repository,carries,polled_every,webhook_path,last_event_refusal";
-const EVENT: &str = "record,integration,event";
-const TRIGGER: &str = "id,name,state,brief";
-const WORKSPACE: &str = "id,name,state,continues";
-const OPENED: &str = "workspace,workspace_id,session,session_id";
-const SESSION: &str = "id,name,workspace,state,model";
-const ENTRY: &str = "seq,entry";
 
 /// Every answer is checked against what the published document says the operation answers.
 async fn requested(
@@ -358,14 +348,12 @@ async fn a_client_declares_and_lists_organizations_without_opening_a_database() 
                 "--max-live-instances",
                 "3",
                 "--json",
-                ORGANIZATION,
             ],
         )
         .await,
     );
     succeeded(&client(&kestrel, &["organization", "declare", "globex"]).await);
-    let listed =
-        recorded(&client(&kestrel, &["organization", "list", "--json", ORGANIZATION]).await);
+    let listed = recorded(&client(&kestrel, &["organization", "list", "--json"]).await);
 
     assert_eq!(declared.len(), 1);
     assert_eq!(declared[0]["name"], "acme");
@@ -407,7 +395,6 @@ async fn a_client_declares_and_lists_projects_and_agents() {
                 "--branch",
                 "main",
                 "--json",
-                PROJECT,
             ],
         )
         .await,
@@ -424,7 +411,6 @@ async fn a_client_declares_and_lists_projects_and_agents() {
                 "--model",
                 "claude-opus-5",
                 "--json",
-                AGENT,
             ],
         )
         .await,
@@ -432,21 +418,14 @@ async fn a_client_declares_and_lists_projects_and_agents() {
     let projects = recorded(
         &client(
             &kestrel,
-            &[
-                "project",
-                "list",
-                "--organization",
-                "acme",
-                "--json",
-                PROJECT,
-            ],
+            &["project", "list", "--organization", "acme", "--json"],
         )
         .await,
     );
     let agents = recorded(
         &client(
             &kestrel,
-            &["agent", "list", "--organization", "acme", "--json", AGENT],
+            &["agent", "list", "--organization", "acme", "--json"],
         )
         .await,
     );
@@ -500,35 +479,21 @@ async fn a_client_applies_one_project_agent_and_trigger_declaration() {
     let project = recorded(
         &client(
             &kestrel,
-            &[
-                "project",
-                "list",
-                "--organization",
-                "acme",
-                "--json",
-                PROJECT,
-            ],
+            &["project", "list", "--organization", "acme", "--json"],
         )
         .await,
     );
     let agent = recorded(
         &client(
             &kestrel,
-            &["agent", "list", "--organization", "acme", "--json", AGENT],
+            &["agent", "list", "--organization", "acme", "--json"],
         )
         .await,
     );
     let trigger = recorded(
         &client(
             &kestrel,
-            &[
-                "trigger",
-                "list",
-                "--organization",
-                "acme",
-                "--json",
-                TRIGGER,
-            ],
+            &["trigger", "list", "--organization", "acme", "--json"],
         )
         .await,
     );
@@ -548,14 +513,7 @@ async fn a_client_applies_one_project_agent_and_trigger_declaration() {
         recorded(
             &client(
                 &kestrel,
-                &[
-                    "project",
-                    "list",
-                    "--organization",
-                    "acme",
-                    "--json",
-                    PROJECT,
-                ],
+                &["project", "list", "--organization", "acme", "--json",],
             )
             .await,
         ),
@@ -565,7 +523,7 @@ async fn a_client_applies_one_project_agent_and_trigger_declaration() {
         recorded(
             &client(
                 &kestrel,
-                &["agent", "list", "--organization", "acme", "--json", AGENT,],
+                &["agent", "list", "--organization", "acme", "--json",],
             )
             .await,
         ),
@@ -575,14 +533,7 @@ async fn a_client_applies_one_project_agent_and_trigger_declaration() {
         recorded(
             &client(
                 &kestrel,
-                &[
-                    "trigger",
-                    "list",
-                    "--organization",
-                    "acme",
-                    "--json",
-                    TRIGGER,
-                ],
+                &["trigger", "list", "--organization", "acme", "--json",],
             )
             .await,
         ),
@@ -679,14 +630,7 @@ async fn a_declaration_preview_changes_nothing() {
         recorded(
             &client(
                 &kestrel,
-                &[
-                    "project",
-                    "list",
-                    "--organization",
-                    "acme",
-                    "--json",
-                    PROJECT,
-                ],
+                &["project", "list", "--organization", "acme", "--json",],
             )
             .await,
         )
@@ -697,6 +641,80 @@ async fn a_declaration_preview_changes_nothing() {
 
     assert_eq!(status, StatusCode::OK, "{applied}");
     assert_eq!(applied["declarations"][0]["action"], "add");
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn apply_under_json_answers_what_it_applied_whole() {
+    let kestrel = Kestrel::boot().await;
+    succeeded(&client(&kestrel, &["organization", "declare", "acme"]).await);
+
+    let applied = client::ran_by(
+        &kestrel,
+        &[
+            "apply",
+            "--organization",
+            "acme",
+            "-f",
+            "kestrel.yaml",
+            "--json",
+        ],
+        client::Invocation::default().file("kestrel.yaml", DECLARATION),
+    )
+    .await;
+    let triggers = client::ran_by(
+        &kestrel,
+        &[
+            "trigger",
+            "apply",
+            "--organization",
+            "acme",
+            "-f",
+            "triggers.yaml",
+            "--dry-run",
+            "--json",
+        ],
+        client::Invocation::default().file(
+            "triggers.yaml",
+            "triggers:\n  nightly:\n    filter: {exact: {type: com.example.tidy}}\n    brief: Tidy up\n    project: kestrel\n    agent: builder\n",
+        ),
+    )
+    .await;
+
+    assert!(
+        applied
+            .err
+            .contains("the trigger ready fires for events from people outside"),
+        "{}",
+        applied.err
+    );
+    let applied = applied.json();
+    assert_eq!(
+        applied["declarations"].as_array().map(Vec::len),
+        Some(3),
+        "{applied}"
+    );
+    assert!(
+        applied["declarations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .all(|declared| declared["action"] == "add"),
+        "{applied}"
+    );
+    assert_eq!(
+        applied["admitting_outsiders"],
+        json!(["ready"]),
+        "{applied}"
+    );
+    let triggers = triggers.json();
+    assert_eq!(triggers["changes"][0]["name"], "nightly", "{triggers}");
+    assert_eq!(triggers["changes"][0]["action"], "add", "{triggers}");
+    assert!(
+        triggers["changes"][0]["differences"].is_array(),
+        "{triggers}"
+    );
 
     kestrel.teardown().await;
 }
@@ -739,7 +757,7 @@ async fn a_trigger_applied_after_an_event_never_fires_for_that_event() {
         events = recorded(
             &client(
                 &kestrel,
-                &["event", "list", "--organization", "acme", "--json", EVENT],
+                &["event", "list", "--organization", "acme", "--json"],
             )
             .await,
         );
@@ -767,14 +785,7 @@ async fn a_trigger_applied_after_an_event_never_fires_for_that_event() {
         recorded(
             &client(
                 &kestrel,
-                &[
-                    "workspace",
-                    "list",
-                    "--organization",
-                    "acme",
-                    "--json",
-                    WORKSPACE,
-                ],
+                &["workspace", "list", "--organization", "acme", "--json",],
             )
             .await,
         )
@@ -811,14 +822,7 @@ async fn an_inconsistent_declaration_changes_nothing() {
         recorded(
             &client(
                 &kestrel,
-                &[
-                    "project",
-                    "list",
-                    "--organization",
-                    "acme",
-                    "--json",
-                    PROJECT,
-                ],
+                &["project", "list", "--organization", "acme", "--json",],
             )
             .await,
         )
@@ -828,7 +832,7 @@ async fn an_inconsistent_declaration_changes_nothing() {
         recorded(
             &client(
                 &kestrel,
-                &["agent", "list", "--organization", "acme", "--json", AGENT,],
+                &["agent", "list", "--organization", "acme", "--json",],
             )
             .await,
         )
@@ -838,14 +842,7 @@ async fn an_inconsistent_declaration_changes_nothing() {
         recorded(
             &client(
                 &kestrel,
-                &[
-                    "trigger",
-                    "list",
-                    "--organization",
-                    "acme",
-                    "--json",
-                    TRIGGER,
-                ],
+                &["trigger", "list", "--organization", "acme", "--json",],
             )
             .await,
         )
@@ -897,20 +894,19 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
                 "--agent",
                 "builder",
                 "--json",
-                OPENED,
             ],
         )
         .await,
     );
-    let workspace = opened[0]["workspace_id"]
+    let workspace = opened[0]["workspace"]["id"]
         .as_str()
         .expect("a workspace id")
         .to_owned();
-    let workspace_name = opened[0]["workspace"]
+    let workspace_name = opened[0]["workspace"]["name"]
         .as_str()
         .expect("a workspace name")
         .to_owned();
-    let session = opened[0]["session_id"]
+    let session = opened[0]["session"]["id"]
         .as_str()
         .expect("a session id")
         .to_owned();
@@ -918,14 +914,7 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
     let listed = recorded(
         &client(
             &kestrel,
-            &[
-                "workspace",
-                "list",
-                "--organization",
-                "acme",
-                "--json",
-                WORKSPACE,
-            ],
+            &["workspace", "list", "--organization", "acme", "--json"],
         )
         .await,
     );
@@ -933,14 +922,12 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
     assert_eq!(listed[0]["id"], workspace);
     assert_eq!(listed[0]["name"], workspace_name);
     generated_name(&listed[0]);
-    let shown = recorded(
-        &client(
-            &kestrel,
-            &["workspace", "show", &workspace, "--json", WORKSPACE],
-        )
-        .await,
+    let shown = recorded(&client(&kestrel, &["workspace", "show", &workspace, "--json"]).await);
+    let fields = ["id", "name", "state", "continues"];
+    assert_eq!(
+        client::picked(&shown[0], &fields),
+        client::picked(&listed[0], &fields)
     );
-    assert_eq!(shown, listed);
 
     let queued = recorded(
         &client(
@@ -952,7 +939,6 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
                 "--organization",
                 "acme",
                 "--json",
-                SESSION,
             ],
         )
         .await,
@@ -962,14 +948,7 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
     let first_session_name = generated_name(&queued[0]).to_owned();
     let refused = client(
         &kestrel,
-        &[
-            "session",
-            "enqueue",
-            "--workspace",
-            &workspace,
-            "--json",
-            SESSION,
-        ],
+        &["session", "enqueue", "--workspace", &workspace, "--json"],
     )
     .await;
     assert!(
@@ -1002,13 +981,7 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
         .expect("the queued session should wait for the worker");
     assert_eq!(completed.id.to_string(), session);
     kestrel.complete_session(&completed).await;
-    let sealed = recorded(
-        &client(
-            &kestrel,
-            &["workspace", "seal", &workspace, "--json", WORKSPACE],
-        )
-        .await,
-    );
+    let sealed = recorded(&client(&kestrel, &["workspace", "seal", &workspace, "--json"]).await);
     assert_eq!(sealed[0]["state"], "sealed");
 
     let continued = recorded(
@@ -1026,26 +999,20 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
                 "--continues",
                 &workspace,
                 "--json",
-                OPENED,
             ],
         )
         .await,
     );
-    let continuing = continued[0]["workspace_id"]
+    let continuing = continued[0]["workspace"]["id"]
         .as_str()
         .expect("a continuing workspace")
         .to_owned();
-    assert_ne!(continued[0]["workspace"], workspace_name);
-    let continuing_shown = recorded(
-        &client(
-            &kestrel,
-            &["workspace", "show", &continuing, "--json", WORKSPACE],
-        )
-        .await,
-    );
+    assert_ne!(continued[0]["workspace"]["name"], workspace_name);
+    let continuing_shown =
+        recorded(&client(&kestrel, &["workspace", "show", &continuing, "--json"]).await);
     assert_eq!(continuing_shown[0]["continues"], workspace);
 
-    let continuing_session = continued[0]["session_id"]
+    let continuing_session = continued[0]["session"]["id"]
         .as_str()
         .expect("a session id")
         .to_owned();
@@ -1067,7 +1034,6 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
                 "--model",
                 "claude-opus-5",
                 "--json",
-                SESSION,
             ],
         )
         .await,
@@ -1078,14 +1044,7 @@ async fn a_client_operates_workspaces_and_sessions_without_opening_a_database() 
     let listed_sessions = recorded(
         &client(
             &kestrel,
-            &[
-                "session",
-                "list",
-                "--workspace",
-                &continuing,
-                "--json",
-                SESSION,
-            ],
+            &["session", "list", "--workspace", &continuing, "--json"],
         )
         .await,
     );
@@ -1121,30 +1080,20 @@ async fn a_client_enqueues_a_session_naming_its_agent_and_shows_what_it_runs_on(
                 "--agent",
                 "builder",
                 "--json",
-                OPENED,
             ],
         )
         .await,
     );
-    let workspace = opened[0]["workspace_id"]
+    let workspace = opened[0]["workspace"]["id"]
         .as_str()
         .expect("a workspace id")
         .to_owned();
-    const RUNS_ON: &str = "id,agent,harness,model";
 
-    let first = opened[0]["session_id"].as_str().expect("a session id");
+    let first = opened[0]["session"]["id"].as_str().expect("a session id");
     let built = recorded(
         &client(
             &kestrel,
-            &[
-                "session",
-                "show",
-                first,
-                "--organization",
-                "acme",
-                "--json",
-                RUNS_ON,
-            ],
+            &["session", "show", first, "--organization", "acme", "--json"],
         )
         .await,
     );
@@ -1162,7 +1111,6 @@ async fn a_client_enqueues_a_session_naming_its_agent_and_shows_what_it_runs_on(
                 "--agent",
                 "reviewer",
                 "--json",
-                RUNS_ON,
             ],
         )
         .await,
@@ -1178,7 +1126,6 @@ async fn a_client_enqueues_a_session_naming_its_agent_and_shows_what_it_runs_on(
                 "--organization",
                 "acme",
                 "--json",
-                RUNS_ON,
             ],
         )
         .await,
@@ -1212,12 +1159,11 @@ async fn a_client_naming_an_agent_the_organization_never_declared_enqueues_nothi
                 "--agent",
                 "builder",
                 "--json",
-                OPENED,
             ],
         )
         .await,
     );
-    let workspace: WorkspaceId = opened[0]["workspace_id"]
+    let workspace: WorkspaceId = opened[0]["workspace"]["id"]
         .as_str()
         .expect("a workspace id")
         .parse()
@@ -1226,7 +1172,7 @@ async fn a_client_naming_an_agent_the_organization_never_declared_enqueues_nothi
         .complete_session(
             &kestrel
                 .session(
-                    opened[0]["session_id"]
+                    opened[0]["session"]["id"]
                         .as_str()
                         .expect("a session id")
                         .parse()
@@ -1269,22 +1215,10 @@ async fn a_client_names_a_workspace_by_name_identifier_prefix_and_latest() {
     let second = kestrel.open_workspace("acme", "kestrel", "builder").await;
     let (first_id, second_id) = (first.id.to_string(), second.id.to_string());
 
-    let by_name = recorded(
-        &client(
-            &kestrel,
-            &["workspace", "show", &second.name, "--json", WORKSPACE],
-        )
-        .await,
-    );
+    let by_name = recorded(&client(&kestrel, &["workspace", "show", &second.name, "--json"]).await);
     assert_eq!(by_name[0]["id"], second_id);
 
-    let by_id = recorded(
-        &client(
-            &kestrel,
-            &["workspace", "show", &first_id, "--json", WORKSPACE],
-        )
-        .await,
-    );
+    let by_id = recorded(&client(&kestrel, &["workspace", "show", &first_id, "--json"]).await);
     assert_eq!(by_id[0]["name"], first.name);
 
     let prefix = shortest_prefix_of(&first_id, &[&second_id]);
@@ -1292,22 +1226,10 @@ async fn a_client_names_a_workspace_by_name_identifier_prefix_and_latest() {
         prefix.len() < first_id.len(),
         "two workspaces opened into the one identifier"
     );
-    let by_prefix = recorded(
-        &client(
-            &kestrel,
-            &["workspace", "show", &prefix, "--json", WORKSPACE],
-        )
-        .await,
-    );
+    let by_prefix = recorded(&client(&kestrel, &["workspace", "show", &prefix, "--json"]).await);
     assert_eq!(by_prefix[0]["id"], first_id);
 
-    let latest = recorded(
-        &client(
-            &kestrel,
-            &["workspace", "show", "latest", "--json", WORKSPACE],
-        )
-        .await,
-    );
+    let latest = recorded(&client(&kestrel, &["workspace", "show", "latest", "--json"]).await);
     assert_eq!(latest[0]["id"], second_id);
 
     kestrel.teardown().await;
@@ -1321,7 +1243,7 @@ async fn a_workspace_reference_matching_several_is_refused_naming_them() {
         kestrel.open_workspace("acme", "kestrel", "builder").await;
     }
 
-    let listed = recorded(&client(&kestrel, &["workspace", "list", "--json", "id,name"]).await);
+    let listed = recorded(&client(&kestrel, &["workspace", "list", "--json"]).await);
     let mut by_leading: HashMap<char, Vec<(String, String)>> = HashMap::new();
     for record in &listed {
         let id = record["id"].as_str().expect("an identifier").to_owned();
@@ -1392,7 +1314,6 @@ async fn a_workspace_reference_never_reaches_across_the_organizations_in_scope()
                 "--organization",
                 "globex",
                 "--json",
-                WORKSPACE,
             ],
         )
         .await,
@@ -1430,26 +1351,17 @@ async fn a_client_names_a_session_by_name_identifier_prefix_and_latest() {
     let second = kestrel.enqueue_session(workspace.id).await;
     let (first_id, second_id) = (first.id.to_string(), second.id.to_string());
 
-    let by_name = recorded(
-        &client(
-            &kestrel,
-            &["session", "show", &second.name, "--json", SESSION],
-        )
-        .await,
-    );
+    let by_name = recorded(&client(&kestrel, &["session", "show", &second.name, "--json"]).await);
     assert_eq!(by_name[0]["id"], second_id);
 
-    let by_id =
-        recorded(&client(&kestrel, &["session", "show", &first_id, "--json", SESSION]).await);
+    let by_id = recorded(&client(&kestrel, &["session", "show", &first_id, "--json"]).await);
     assert_eq!(by_id[0]["name"], first.name);
 
     let prefix = shortest_prefix_of(&first_id, &[&second_id]);
-    let by_prefix =
-        recorded(&client(&kestrel, &["session", "show", &prefix, "--json", SESSION]).await);
+    let by_prefix = recorded(&client(&kestrel, &["session", "show", &prefix, "--json"]).await);
     assert_eq!(by_prefix[0]["id"], first_id);
 
-    let latest =
-        recorded(&client(&kestrel, &["session", "show", "latest", "--json", SESSION]).await);
+    let latest = recorded(&client(&kestrel, &["session", "show", "latest", "--json"]).await);
     assert_eq!(latest[0]["id"], second_id);
 
     kestrel.teardown().await;
@@ -1539,7 +1451,6 @@ async fn a_client_manages_triggers_without_opening_a_database() {
         "--agent",
         "builder",
         "--json",
-        TRIGGER,
     ];
     let declared = recorded(&client(&kestrel, &declaration).await);
     let trigger = declared[0]["id"].as_str().expect("a trigger id").to_owned();
@@ -1549,14 +1460,7 @@ async fn a_client_manages_triggers_without_opening_a_database() {
     let listed = recorded(
         &client(
             &kestrel,
-            &[
-                "trigger",
-                "list",
-                "--organization",
-                "acme",
-                "--json",
-                TRIGGER,
-            ],
+            &["trigger", "list", "--organization", "acme", "--json"],
         )
         .await,
     );
@@ -1571,8 +1475,7 @@ async fn a_client_manages_triggers_without_opening_a_database() {
                     "ready",
                     "--organization",
                     "acme",
-                    "--json",
-                    TRIGGER
+                    "--json"
                 ]
             )
             .await
@@ -1602,7 +1505,6 @@ async fn a_client_manages_triggers_without_opening_a_database() {
                 "--agent",
                 "builder",
                 "--json",
-                TRIGGER,
             ],
         )
         .await,
@@ -1621,7 +1523,6 @@ async fn a_client_manages_triggers_without_opening_a_database() {
         "--event",
         &retained,
         "--json",
-        "matches",
     ];
     let tested = recorded(&client(&kestrel, &test).await);
     assert_eq!(tested[0]["matches"], true);
@@ -1636,7 +1537,6 @@ async fn a_client_manages_triggers_without_opening_a_database() {
                 "--organization",
                 "acme",
                 "--json",
-                "state",
             ],
         )
         .await,
@@ -1652,7 +1552,6 @@ async fn a_client_manages_triggers_without_opening_a_database() {
                 "--organization",
                 "acme",
                 "--json",
-                "state",
             ],
         )
         .await,
@@ -1721,7 +1620,7 @@ async fn the_operator_documents_trigger_answers_and_refusals() {
 async fn a_trigger_declared_on_a_cron_prints_its_expression_and_zone() {
     let kestrel = Kestrel::boot().await;
     Fixture::acme().declare(&kestrel).await;
-    let fields = "name,every,cron,zone,filter";
+    let fields = ["name", "every", "cron", "zone", "filter"];
     let declare = |extra: &'static [&'static str]| {
         let mut args = vec![
             "trigger",
@@ -1736,7 +1635,6 @@ async fn a_trigger_declared_on_a_cron_prints_its_expression_and_zone() {
             "--agent",
             "builder",
             "--json",
-            fields,
         ];
         args.extend_from_slice(extra);
         args
@@ -1749,6 +1647,10 @@ async fn a_trigger_declared_on_a_cron_prints_its_expression_and_zone() {
         )
         .await,
     );
+    let triage: Vec<Value> = triage
+        .iter()
+        .map(|one| client::picked(one, &fields))
+        .collect();
     assert_eq!(
         triage,
         [json!({
@@ -1762,17 +1664,14 @@ async fn a_trigger_declared_on_a_cron_prints_its_expression_and_zone() {
     let listed = recorded(
         &client(
             &kestrel,
-            &[
-                "trigger",
-                "list",
-                "--organization",
-                "acme",
-                "--json",
-                fields,
-            ],
+            &["trigger", "list", "--organization", "acme", "--json"],
         )
         .await,
     );
+    let listed: Vec<Value> = listed
+        .iter()
+        .map(|one| client::picked(one, &fields))
+        .collect();
     assert_eq!(listed, triage);
     let shown = recorded(
         &client(
@@ -1784,12 +1683,11 @@ async fn a_trigger_declared_on_a_cron_prints_its_expression_and_zone() {
                 "--organization",
                 "acme",
                 "--json",
-                fields,
             ],
         )
         .await,
     );
-    assert_eq!(shown, triage);
+    assert_eq!(client::picked(&shown[0], &fields), triage[0]);
 
     for refused in [
         declare(&["--cron", "0 9 * * *", "--zone", "UTC", "--every", "1h"]),
@@ -2512,23 +2410,16 @@ async fn a_client_opens_a_workspace_with_a_brief_a_model_and_a_participant() {
                 "--as-participant",
                 "alice",
                 "--json",
-                OPENED,
             ],
             client::Invocation::default().file("notes.md", "Fix the flaky test"),
         )
         .await,
     );
-    let workspace = workspace_of(&json!({ "id": opened[0]["workspace_id"] }));
+    let workspace = workspace_of(&json!({ "id": opened[0]["workspace"]["id"] }));
     let shown = recorded(
         &client(
             &kestrel,
-            &[
-                "workspace",
-                "show",
-                &workspace.to_string(),
-                "--json",
-                "id,started_by",
-            ],
+            &["workspace", "show", &workspace.to_string(), "--json"],
         )
         .await,
     );
@@ -2559,13 +2450,12 @@ async fn a_client_opens_a_workspace_with_a_brief_a_model_and_a_participant() {
                 "--brief",
                 "-",
                 "--json",
-                OPENED,
             ],
             Some("From standard input"),
         )
         .await,
     );
-    let piped = workspace_of(&json!({ "id": piped[0]["workspace_id"] }));
+    let piped = workspace_of(&json!({ "id": piped[0]["workspace"]["id"] }));
     assert_eq!(
         kestrel.transcript(piped).await[1].entry,
         Entry::Brief {
@@ -2634,12 +2524,14 @@ async fn an_unbriefed_session_shows_its_state_and_preparing_step_everywhere() {
                 "--organization",
                 "acme",
                 "--json",
-                "state,preparing",
             ],
         )
         .await,
     );
-    assert_eq!(queued[0], json!({ "state": "queued", "preparing": null }));
+    assert_eq!(
+        client::picked(&queued[0], &["state", "preparing"]),
+        json!({ "state": "queued", "preparing": null })
+    );
 
     let claimed = kestrel
         .claim_session()
@@ -2658,13 +2550,12 @@ async fn an_unbriefed_session_shows_its_state_and_preparing_step_everywhere() {
                 "--organization",
                 "acme",
                 "--json",
-                "state,preparing",
             ],
         )
         .await,
     );
     assert_eq!(
-        provisioning[0],
+        client::picked(&provisioning[0], &["state", "preparing"]),
         json!({ "state": "unbriefed", "preparing": "provisioning" })
     );
 
@@ -2679,48 +2570,29 @@ async fn an_unbriefed_session_shows_its_state_and_preparing_step_everywhere() {
                 "--organization",
                 "acme",
                 "--json",
-                "state,preparing",
             ],
         )
         .await,
     );
     assert_eq!(
-        ready[0],
+        client::picked(&ready[0], &["state", "preparing"]),
         json!({ "state": "unbriefed", "preparing": "harness_ready" })
     );
 
     let listed = recorded(
         &client(
             &kestrel,
-            &[
-                "session",
-                "list",
-                "--workspace",
-                &workspace,
-                "--json",
-                "state,preparing",
-            ],
+            &["session", "list", "--workspace", &workspace, "--json"],
         )
         .await,
     );
+    assert_eq!(listed.len(), 1, "{listed:?}");
     assert_eq!(
-        listed,
-        vec![json!({ "state": "unbriefed", "preparing": "harness_ready" })]
+        client::picked(&listed[0], &["state", "preparing"]),
+        json!({ "state": "unbriefed", "preparing": "harness_ready" })
     );
 
-    let shown = recorded(
-        &client(
-            &kestrel,
-            &[
-                "workspace",
-                "show",
-                &workspace,
-                "--json",
-                "unfinished_session",
-            ],
-        )
-        .await,
-    );
+    let shown = recorded(&client(&kestrel, &["workspace", "show", &workspace, "--json"]).await);
     assert_eq!(shown[0]["unfinished_session"]["state"], "unbriefed");
     assert_eq!(shown[0]["unfinished_session"]["preparing"], "harness_ready");
 
@@ -3648,7 +3520,6 @@ async fn a_client_sets_lists_and_forgets_provider_credentials_without_saying_the
             "--organization",
             "acme",
             "--json",
-            CREDENTIAL,
         ],
         Some(&format!("{secret}\n")),
     )
@@ -3656,14 +3527,7 @@ async fn a_client_sets_lists_and_forgets_provider_credentials_without_saying_the
     let held = recorded(&set);
     let listed = client(
         &kestrel,
-        &[
-            "credential",
-            "list",
-            "--organization",
-            "acme",
-            "--json",
-            CREDENTIAL,
-        ],
+        &["credential", "list", "--organization", "acme", "--json"],
     )
     .await;
 
@@ -3844,7 +3708,6 @@ async fn a_client_registers_and_lists_integrations_without_saying_their_secrets(
             "--interval",
             "5m",
             "--json",
-            INTEGRATION,
         ],
     )
     .await;
@@ -3860,20 +3723,12 @@ async fn a_client_registers_and_lists_integrations_without_saying_their_secrets(
             "--secret",
             "a-shared-secret",
             "--json",
-            INTEGRATION,
         ],
     )
     .await;
     let listed = client(
         &kestrel,
-        &[
-            "integration",
-            "list",
-            "--organization",
-            "acme",
-            "--json",
-            INTEGRATION,
-        ],
+        &["integration", "list", "--organization", "acme", "--json"],
     )
     .await;
 
@@ -4066,14 +3921,7 @@ async fn a_client_acknowledges_the_event_an_integration_refused() {
     let refused = recorded(
         &client(
             &kestrel,
-            &[
-                "integration",
-                "list",
-                "--organization",
-                "acme",
-                "--json",
-                "last_event_refusal",
-            ],
+            &["integration", "list", "--organization", "acme", "--json"],
         )
         .await,
     );
@@ -4152,7 +4000,7 @@ async fn a_client_lists_an_organizations_events_and_shows_one_whole() {
     let events = recorded(
         &client(
             &kestrel,
-            &["event", "list", "--organization", "acme", "--json", EVENT],
+            &["event", "list", "--organization", "acme", "--json"],
         )
         .await,
     );
@@ -4167,13 +4015,12 @@ async fn a_client_lists_an_organizations_events_and_shows_one_whole() {
                 "--limit",
                 "1",
                 "--json",
-                EVENT,
             ],
         )
         .await,
     );
     let record = events[0]["record"].as_str().expect("a record id");
-    let shown = recorded(&client(&kestrel, &["event", "show", record, "--json", EVENT]).await);
+    let shown = recorded(&client(&kestrel, &["event", "show", record, "--json"]).await);
 
     assert_eq!(events.len(), 2);
     assert_eq!(limited, events[..1]);
@@ -4227,10 +4074,7 @@ async fn a_client_in_its_own_process_reads_a_transcript_over_the_operator_bounda
     let (operator, reading) = (kestrel.operator(), workspace.clone());
 
     let read = tokio::task::spawn_blocking(move || {
-        client::ran(
-            &operator,
-            &["workspace", "transcript", &reading, "--json", ENTRY],
-        )
+        client::ran(&operator, &["workspace", "transcript", &reading, "--json"])
     })
     .await
     .expect("the client should run");
@@ -4304,14 +4148,7 @@ async fn a_following_client_resumes_across_a_restart_without_repeating_an_entry(
 
     let mut client = Client::spawn(
         &kestrel.operator(),
-        &[
-            "workspace",
-            "transcript",
-            &workspace,
-            "--follow",
-            "--json",
-            ENTRY,
-        ],
+        &["workspace", "transcript", &workspace, "--follow", "--json"],
     );
     let mut read = Vec::new();
     for _ in 0..before {
@@ -4858,12 +4695,13 @@ async fn a_client_opens_and_enqueues_sessions_that_depend_on_others() {
                 "--depends-on",
                 &other.name,
                 "--json",
-                OPENED,
             ],
         )
         .await,
     );
-    let dependent = opened[0]["session"].as_str().expect("a generated name");
+    let dependent = opened[0]["session"]["name"]
+        .as_str()
+        .expect("a generated name");
     let shown = recorded(
         &client(
             &kestrel,
@@ -4874,7 +4712,6 @@ async fn a_client_opens_and_enqueues_sessions_that_depend_on_others() {
                 "--organization",
                 "acme",
                 "--json",
-                "depends_on",
             ],
         )
         .await,
@@ -4906,7 +4743,6 @@ async fn a_client_opens_and_enqueues_sessions_that_depend_on_others() {
                 "--depends-on",
                 &blocker.name,
                 "--json",
-                "name,depends_on",
             ],
         )
         .await,
@@ -5079,12 +4915,8 @@ async fn a_queue_without_a_recorded_dispatch_leaves_positions_unknown() {
     kestrel.teardown().await;
 }
 
-const QUEUE_ROW: &str = "position,name,agent,reasons";
-const QUEUE_LIMITS: &str =
-    "active_work.limit,active_work.occupied,active_work.elsewhere,instances.limit,instances.count";
-
 #[tokio::test]
-async fn a_client_reads_the_queue_with_kestrel_queue_and_whatever_fields_it_names() {
+async fn a_client_reads_the_whole_queue_with_kestrel_queue_json() {
     let kestrel = Kestrel::boot().await;
     kestrel.record_dispatch(8, "local-exec").await;
     Fixture::acme().declare(&kestrel).await;
@@ -5097,13 +4929,10 @@ async fn a_client_reads_the_queue_with_kestrel_queue_and_whatever_fields_it_name
     let blocked = kestrel.enqueue_session(third).await;
     kestrel.block_session(&blocked, &blocker).await;
 
-    let rows = recorded(
-        &client(
-            &kestrel,
-            &["queue", "--organization", "acme", "--json", QUEUE_ROW],
-        )
-        .await,
-    );
+    let queue = client(&kestrel, &["queue", "--organization", "acme", "--json"])
+        .await
+        .json();
+    let rows = queue["queued"].as_array().expect("the queued Sessions");
     assert_eq!(rows.len(), 3);
     assert_eq!(rows[0]["position"].as_u64(), Some(1));
     assert_eq!(rows[0]["name"], blocker.name);
@@ -5116,21 +4945,11 @@ async fn a_client_reads_the_queue_with_kestrel_queue_and_whatever_fields_it_name
         json!([{ "kind": "dependencies", "sessions": [blocker.name] }])
     );
 
-    let limits = recorded(
-        &client(
-            &kestrel,
-            &["queue", "--organization", "acme", "--json", QUEUE_LIMITS],
-        )
-        .await,
-    );
-    assert_eq!(limits.len(), 3, "one record a queued Session");
-    assert_eq!(
-        limits[0],
-        json!({
-            "active_work": { "limit": 8, "occupied": 0, "elsewhere": 0 },
-            "instances": { "limit": Value::Null, "count": 0 },
-        })
-    );
+    assert_eq!(queue["active_work"]["limit"], 8);
+    assert_eq!(queue["active_work"]["occupied"], 0);
+    assert_eq!(queue["active_work"]["elsewhere"], 0);
+    assert_eq!(queue["instances"]["limit"], Value::Null);
+    assert_eq!(queue["instances"]["count"], 0);
 
     kestrel.teardown().await;
 }
@@ -5494,18 +5313,20 @@ async fn kestrel_queue_says_each_occupants_phase_on_its_row() {
         assert!(!row.contains("waiting"), "{row}");
     }
 
-    let rows = recorded(
-        &client(
-            &kestrel,
-            &["queue", "--organization", "acme", "--json", "name,state"],
-        )
-        .await,
-    );
+    let queue = client(&kestrel, &["queue", "--organization", "acme", "--json"])
+        .await
+        .json();
+    let occupants: Vec<Value> = queue["active_work"]["occupants"]
+        .as_array()
+        .expect("the occupants")
+        .iter()
+        .map(|occupant| json!({ "name": occupant["name"], "phase": occupant["phase"] }))
+        .collect();
     assert_eq!(
-        rows,
+        occupants,
         [
-            json!({ "name": trailing.name, "state": "trailing" }),
-            json!({ "name": working.name, "state": "working" }),
+            json!({ "name": trailing.name, "phase": "trailing" }),
+            json!({ "name": working.name, "phase": "working" }),
         ]
     );
 
@@ -6210,65 +6031,11 @@ async fn kestrel_queue_json_agrees_with_the_operator_read() {
     a_queue_of_every_kind(&kestrel).await;
 
     let queue = queue_read(&kestrel).await;
-    let rows = recorded(
-        &client(
-            &kestrel,
-            &[
-                "queue",
-                "--organization",
-                "acme",
-                "--json",
-                "name,state,position,reasons,pending_since,preparing",
-            ],
-        )
-        .await,
-    );
+    let shown = client(&kestrel, &["queue", "--organization", "acme", "--json"])
+        .await
+        .json();
 
-    let mut read = Vec::new();
-    for (name, phase) in occupants(&queue) {
-        read.push(json!({
-            "name": name,
-            "state": phase,
-            "position": null,
-            "reasons": [],
-            "pending_since": null,
-            "preparing": null,
-        }));
-    }
-    for row in numbered(&queue) {
-        read.push(json!({
-            "name": row["name"],
-            "state": "queued",
-            "position": row["position"],
-            "reasons": row["reasons"],
-            "pending_since": null,
-            "preparing": null,
-        }));
-    }
-    for row in queue["waiting"].as_array().expect("the waiting Sessions") {
-        read.push(json!({
-            "name": row["name"],
-            "state": "waiting",
-            "position": row["position"],
-            "reasons": row["reasons"],
-            "pending_since": row["pending_since"],
-            "preparing": null,
-        }));
-    }
-    for row in queue["unbriefed"]
-        .as_array()
-        .expect("the unbriefed Sessions")
-    {
-        read.push(json!({
-            "name": row["name"],
-            "state": "unbriefed",
-            "position": row["position"],
-            "reasons": row["reasons"],
-            "pending_since": row["pending_since"],
-            "preparing": row["preparing"],
-        }));
-    }
-    assert_eq!(rows, read);
+    assert_eq!(shown, queue);
 
     kestrel.teardown().await;
 }

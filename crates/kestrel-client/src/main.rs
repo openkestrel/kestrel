@@ -71,10 +71,11 @@ struct Client {
     )]
     organization: Option<String>,
 
-    /// Emit these fields and no others, as JSON, one record a line; without it a terminal
-    /// gets the presentation chosen for the command and anything else gets it tab-delimited
-    #[arg(long, global = true, value_name = "FIELDS", num_args = 0..=1, default_missing_value = "")]
-    json: Option<String>,
+    /// Emit the complete response as one JSON document, or a Transcript as one JSON record a
+    /// line; without it a terminal gets the presentation chosen for the command and anything
+    /// else gets it tab-delimited
+    #[arg(long, global = true)]
+    json: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -234,7 +235,7 @@ enum ProfileCommand {
         #[command(flatten)]
         entry: ProfileEntry,
     },
-    /// List every profile in the Organization with what each holds, one JSON record a line
+    /// List every profile in the Organization with what each holds
     #[command(
         after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
     )]
@@ -295,7 +296,7 @@ enum IntegrationCommand {
     /// Register an Integration
     #[command(subcommand)]
     Register(RegisterCommand),
-    /// List every Integration in the Organization, one JSON record a line
+    /// List every Integration in the Organization
     #[command(
         after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
     )]
@@ -367,7 +368,7 @@ enum RegisterCommand {
 
 #[derive(Debug, Subcommand)]
 enum EventCommand {
-    /// List the Events recorded for the Organization, most recent first, one JSON record a line
+    /// List the Events recorded for the Organization, most recent first
     #[command(
         after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
     )]
@@ -446,7 +447,7 @@ enum TriggerCommand {
         #[arg(long)]
         profile: Option<String>,
     },
-    /// List every Trigger in the Organization, one JSON record a line
+    /// List every Trigger in the Organization
     #[command(
         after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
     )]
@@ -516,7 +517,7 @@ enum OrganizationCommand {
         #[arg(long)]
         max_live_instances: Option<std::num::NonZeroUsize>,
     },
-    /// List every Organization, one JSON record a line
+    /// List every Organization
     #[command(
         after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
     )]
@@ -536,7 +537,7 @@ enum ProjectCommand {
         #[arg(long)]
         branch: String,
     },
-    /// List every Project in the Organization, one JSON record a line
+    /// List every Project in the Organization
     #[command(
         after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
     )]
@@ -566,7 +567,7 @@ enum AgentCommand {
         #[arg(long)]
         model: Option<String>,
     },
-    /// List every Agent in the Organization, one JSON record a line
+    /// List every Agent in the Organization
     #[command(
         after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
     )]
@@ -751,7 +752,7 @@ Examples:
         /// `latest`
         workspace: String,
     },
-    /// Read a Workspace's Transcript, one JSON entry a line, and the cursor a later read
+    /// Read a Workspace's Transcript, one entry a line, and the cursor a later read
     /// resumes from
     Transcript {
         /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
@@ -883,6 +884,29 @@ enum SessionOptionCommand {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some((value, corrected)) = json_value(&args) {
+        let invocation = Invocation {
+            elsewhere: false,
+            control_plane: String::new(),
+            operation: Client::command()
+                .try_get_matches_from(std::iter::once("kestrel".to_owned()).chain(corrected))
+                .map(|matches| operation(&matches))
+                .unwrap_or_default(),
+            args: args.clone(),
+            json: true,
+        };
+        let refused = Failed::new(
+            Exit::Usage,
+            format!(
+                "--json takes no value, and was given `{value}`; it emits the complete \
+                 response, so select from it with jq, as in \
+                 `kestrel agent list --json | jq '.[] | {{id, name}}'`, and pass arguments \
+                 before --json"
+            ),
+        );
+        return ExitCode::from(diagnostic::report(&refused.into(), &invocation).code());
+    }
     let matches = Client::command()
         .try_get_matches()
         .unwrap_or_else(|error| exit_after(&error));
@@ -891,8 +915,8 @@ async fn main() -> ExitCode {
         elsewhere: matches.value_source("control_plane") != Some(ValueSource::DefaultValue),
         control_plane: client.control_plane.clone(),
         operation: operation(&matches),
-        args: std::env::args().skip(1).collect(),
-        json: client.json.is_some(),
+        args,
+        json: client.json,
     };
     let exit = match run(client, &matches, &invocation).await {
         Ok(()) => Exit::Success,
@@ -913,23 +937,7 @@ fn operation(matches: &clap::ArgMatches) -> String {
 }
 
 async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation) -> Result<()> {
-    let presentation = Presentation::chosen(
-        if matches!(
-            &client.command,
-            Command::Workspace(
-                WorkspaceCommand::Work { .. }
-                    | WorkspaceCommand::Files { .. }
-                    | WorkspaceCommand::Read { .. }
-                    | WorkspaceCommand::Changes { .. }
-                    | WorkspaceCommand::Commits { .. }
-                    | WorkspaceCommand::Stashes { .. }
-            )
-        ) {
-            None
-        } else {
-            client.json.as_deref()
-        },
-    )?;
+    let presentation = Presentation::chosen(client.json);
 
     let named = client.organization.map(|organization| Scope {
         organization,
@@ -978,18 +986,28 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
         Command::Apply(Apply { file }) => {
             let declaration = declaration(&file)?;
             let organization = scoping.resolve().await?.organization;
-            let preview = api
-                .post(
-                    &["organizations", &organization, "declaration", "preview"],
+            if client.json {
+                let applied = api
+                    .post(
+                        &["organizations", &organization, "declaration"],
+                        &declaration,
+                    )
+                    .await?;
+                show_applied_whole(&presentation, &applied)?;
+            } else {
+                let preview = api
+                    .post(
+                        &["organizations", &organization, "declaration", "preview"],
+                        &declaration,
+                    )
+                    .await?;
+                show_declaration(&preview)?;
+                api.post(
+                    &["organizations", &organization, "declaration"],
                     &declaration,
                 )
                 .await?;
-            show_declaration(&preview)?;
-            api.post(
-                &["organizations", &organization, "declaration"],
-                &declaration,
-            )
-            .await?;
+            }
         }
         Command::Organization(OrganizationCommand::Declare {
             name,
@@ -1367,7 +1385,12 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
             if dry_run {
                 path.push("preview");
             }
-            show_applied_triggers(&api.post(&path, &declarations).await?)?;
+            let applied = api.post(&path, &declarations).await?;
+            if client.json {
+                show_applied_whole(&presentation, &applied)?;
+            } else {
+                show_applied_triggers(&applied)?;
+            }
         }
         Command::Trigger(TriggerCommand::Dispatch {
             name,
@@ -1515,16 +1538,17 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                     }),
                 )
                 .await?;
-            show(
-                &presentation,
-                &view::OPENED,
-                &json!({
+            let shown = if client.json {
+                opened
+            } else {
+                json!({
                     "workspace": opened["workspace"]["name"],
                     "workspace_id": opened["workspace"]["id"],
                     "session": opened["session"]["name"],
                     "session_id": opened["session"]["id"],
-                }),
-            )?;
+                })
+            };
+            show(&presentation, &view::OPENED, &shown)?;
         }
         Command::Workspace(WorkspaceCommand::List) => {
             let organization = scoping.resolve().await?.organization;
@@ -1552,7 +1576,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                     "work",
                 ])
                 .await?;
-            work::show(answer, client.json.is_some())?;
+            work::show(answer, client.json)?;
         }
         Command::Workspace(WorkspaceCommand::Changes {
             workspace,
@@ -1587,7 +1611,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                 .await?;
             changes::show(
                 answer,
-                client.json.is_some(),
+                client.json,
                 &empty_list(
                     &client.control_plane,
                     "changes in this comparison",
@@ -1616,7 +1640,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                 .await?;
             changes::show(
                 answer,
-                client.json.is_some(),
+                client.json,
                 &empty_list(
                     &client.control_plane,
                     read,
@@ -1642,7 +1666,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                 .await?;
             files::list(
                 answer,
-                client.json.is_some(),
+                client.json,
                 &empty_list(
                     &client.control_plane,
                     "directory entries",
@@ -1665,7 +1689,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                     &[("path", &path)],
                 )
                 .await?;
-            files::read(response, client.json.is_some()).await?;
+            files::read(response, client.json).await?;
         }
         Command::Workspace(WorkspaceCommand::Show { workspace }) => {
             let organization = scoping.resolve().await?.organization;
@@ -1696,7 +1720,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                 .await?;
             let session = &answer["session"];
             let held = &answer["held_message"];
-            if client.json.is_some() {
+            if client.json {
                 show(&presentation, &view::DECLARED, &answer)?;
             } else if !session.is_null() {
                 show(&presentation, &view::DECLARED, session)?;
@@ -2061,6 +2085,9 @@ async fn started(
             eprintln!("declared the {kind} {}", rendered(&settled["name"]));
         }
     }
+    if matches!(presentation, Presentation::Json) {
+        return show(presentation, &view::STARTED, &started);
+    }
     show(
         presentation,
         &view::STARTED,
@@ -2101,7 +2128,7 @@ fn shown_session(
     session: &Value,
 ) -> Result<()> {
     let mut record = session.clone();
-    if !matches!(presentation, Presentation::Json(_)) {
+    if !matches!(presentation, Presentation::Json) {
         record["diagnostic"] =
             serde_json::from_value::<wire::Diagnostic>(record["diagnostic"].clone())
                 .map_or(Value::Null, |diagnostic| {
@@ -2194,10 +2221,13 @@ fn session_commands(commands: &Value) -> String {
 }
 
 fn shown_queue(presentation: &Presentation, snapshot: &Value) -> Result<()> {
+    if matches!(presentation, Presentation::Json) {
+        return show(presentation, &view::QUEUE, snapshot);
+    }
     let slots = &snapshot["active_work"];
     let instances = &snapshot["instances"];
 
-    if !matches!(presentation, Presentation::Json(_)) {
+    {
         let mut out = std::io::stdout().lock();
         let said = [
             (
@@ -2436,6 +2466,36 @@ fn incomplete(missing: &[start::Missing]) -> anyhow::Error {
     .into()
 }
 
+/// The retired `--json FIELDS` took the next word as its value, so any word there is refused
+/// rather than read as an argument, which could post a field name as a message.
+fn json_value(args: &[String]) -> Option<(&str, Vec<String>)> {
+    let end = args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(args.len());
+    let at = args[..end]
+        .iter()
+        .position(|arg| arg.starts_with("--json="))
+        .or_else(|| {
+            args[..end]
+                .windows(2)
+                .position(|pair| pair[0] == "--json" && !pair[1].starts_with('-'))
+                .map(|at| at + 1)
+        })?;
+    let mut corrected = args.to_vec();
+    let value = match args[at].strip_prefix("--json=") {
+        Some(value) => {
+            corrected[at] = "--json".to_owned();
+            value
+        }
+        None => {
+            corrected.remove(at);
+            &args[at]
+        }
+    };
+    Some((value, corrected))
+}
+
 /// Clap's own exit codes would do, but the catalog is what a script was promised.
 fn exit_after(error: &clap::Error) -> ! {
     let _ = error.print();
@@ -2510,6 +2570,34 @@ mod parser_tests {
             explanation.contains("Accepted session verbs:"),
             "{explanation}"
         );
+    }
+
+    fn args(given: &[&str]) -> Vec<String> {
+        given.iter().map(|&arg| arg.to_owned()).collect()
+    }
+
+    #[test]
+    fn any_value_given_to_json_is_refused_and_dropped_from_the_retry() {
+        let given = args(&["workspace", "post", "w", "--json", "fix a, then b"]);
+        assert_eq!(
+            json_value(&given),
+            Some(("fix a, then b", args(&["workspace", "post", "w", "--json"])))
+        );
+        assert_eq!(
+            json_value(&args(&["agent", "list", "--json=id"])),
+            Some(("id", args(&["agent", "list", "--json"])))
+        );
+        assert_eq!(
+            json_value(&args(&["agent", "list", "--json", "--organization", "a"])),
+            None
+        );
+        assert_eq!(
+            json_value(&args(&["workspace", "changes", "w", "--", "--json", "a"])),
+            None
+        );
+        let parsed = Client::try_parse_from(["kestrel", "agent", "list", "--json"])
+            .expect("--json alone is a flag");
+        assert!(parsed.json);
     }
 
     #[test]
@@ -2678,6 +2766,18 @@ fn show_declaration(value: &Value) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn show_applied_whole(presentation: &Presentation, applied: &Value) -> Result<()> {
+    for name in applied["admitting_outsiders"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        warn_of_outsiders(name);
+    }
+    show(presentation, &view::DECLARED, applied)
 }
 
 fn warn_of_outsiders(name: &str) {

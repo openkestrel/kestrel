@@ -8,7 +8,6 @@ use support::scripted_agent::{self, Script};
 use support::{A_PROVIDER_KEY, Kestrel, PROVIDER_KEY, repository, supervisor};
 
 const BRIEF: &str = "Make the README say what kestrel is";
-const STARTED: &str = "organization,project,agent,workspace,workspace_id,session,session_id";
 const QUESTION: &str = "apply this plan?";
 
 fn in_a_fresh_clone() -> Invocation {
@@ -101,21 +100,28 @@ async fn one_command_takes_a_fresh_clone_and_an_empty_control_plane_to_a_session
             "--credential",
             PROVIDER_KEY,
             "--json",
-            STARTED,
         ],
         in_a_fresh_clone().env(PROVIDER_KEY, A_PROVIDER_KEY),
     )
     .await;
 
-    let started = started.records().remove(0);
-    assert_eq!(started["organization"], "default");
-    assert_eq!(started["project"], repository::NAME);
-    assert_eq!(started["agent"], "opencode");
-    let workspace: WorkspaceId = started["workspace_id"]
+    assert!(
+        !started.out.join("\n").contains(A_PROVIDER_KEY) && !started.err.contains(A_PROVIDER_KEY),
+        "the provider key was written back"
+    );
+    assert_eq!(
+        started.jq("[.organization.name, .workspace.id == .session.workspace]"),
+        r#"["default",true]"#
+    );
+    let started = started.json();
+    assert_eq!(started["organization"]["name"], "default");
+    assert_eq!(started["project"]["name"], repository::NAME);
+    assert_eq!(started["agent"]["name"], "opencode");
+    let workspace: WorkspaceId = started["workspace"]["id"]
         .as_str()
         .and_then(|id| id.parse().ok())
         .expect("a workspace identifier");
-    let session: SessionId = started["session_id"]
+    let session: SessionId = started["session"]["id"]
         .as_str()
         .and_then(|id| id.parse().ok())
         .expect("a session identifier");
@@ -214,16 +220,15 @@ async fn flags_say_every_value_nothing_needs_inferring() {
             "--harness",
             "opencode",
             "--json",
-            STARTED,
         ],
         Invocation::default(),
     )
     .await;
 
-    let started = started.records().remove(0);
-    assert_eq!(started["organization"], "acme");
-    assert_eq!(started["project"], "widgets");
-    assert_eq!(started["agent"], "builder");
+    let started = started.json();
+    assert_eq!(started["organization"]["name"], "acme");
+    assert_eq!(started["project"]["name"], "widgets");
+    assert_eq!(started["agent"]["name"], "builder");
     let acme = &kestrel.organizations().await[0];
     assert_eq!(
         kestrel.projects(acme).await[0].branch,
@@ -341,7 +346,6 @@ async fn on_a_terminal_confirming_once_applies_the_plan_the_noninteractive_start
         "--credential",
         PROVIDER_KEY,
         "--json",
-        STARTED,
     ];
     let invocation = in_a_fresh_clone().env(PROVIDER_KEY, A_PROVIDER_KEY);
     let (interactive, noninteractive) = (Kestrel::boot().await, Kestrel::boot().await);
@@ -362,9 +366,9 @@ async fn on_a_terminal_confirming_once_applies_the_plan_the_noninteractive_start
         applied.err
     );
     assert_eq!(resolved(&confirmed.said), resolved(&applied.err));
-    let (confirmed, applied) = (reached(&confirmed), applied.records().remove(0));
+    let (confirmed, applied) = (reached(&confirmed), applied.json());
     for field in ["organization", "project", "agent"] {
-        assert_eq!(confirmed[field], applied[field], "{field}");
+        assert_eq!(confirmed[field]["name"], applied[field]["name"], "{field}");
     }
     assert_eq!(
         declared(&interactive).await,
