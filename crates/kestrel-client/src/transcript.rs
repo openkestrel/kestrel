@@ -170,7 +170,7 @@ async fn streamed(
                 if !selection.follow
                     && let Some(open) = activities.open.take()
                 {
-                    let line = activity_line(&open, presentation).map_err(Cut::Failed)?;
+                    let line = activity_line(&open, presentation);
                     writeln!(stdout, "{line}")
                         .and_then(|()| stdout.flush())
                         .map_err(|error| Cut::Failed(error.into()))?;
@@ -231,7 +231,7 @@ fn presented(data: &str, presentation: &Presentation) -> Result<String> {
     let entry: Value = serde_json::from_str(data)
         .context(Failed::new(Exit::Unavailable, "reading a transcript entry"))?;
 
-    crate::output::line(presentation, &view::ENTRIES, &entry)
+    Ok(crate::output::line(presentation, &view::ENTRIES, &entry))
 }
 
 fn transcript(
@@ -303,7 +303,7 @@ impl Activities {
         if activity["closed"] == true {
             self.open = None;
             if self.printed.insert(first) {
-                return activity_line(&activity, presentation).map(Some);
+                return Ok(Some(activity_line(&activity, presentation)));
             }
         } else if !self.printed.contains(&first) {
             self.open = Some(activity);
@@ -311,12 +311,12 @@ impl Activities {
         Ok(None)
     }
 }
-fn activity_line(activity: &Value, presentation: &Presentation) -> Result<String> {
-    if matches!(presentation, Presentation::Json(_)) {
+fn activity_line(activity: &Value, presentation: &Presentation) -> String {
+    if matches!(presentation, Presentation::Json) {
         return crate::output::line(presentation, &view::ENTRIES, activity);
     }
     let counts = &activity["counts"];
-    Ok(format!(
+    format!(
         "activity  {}..{}  {} tools, {} failed, {} thoughts, {} plans, {} tombstones{}",
         activity["first_seq"],
         activity["last_seq"],
@@ -330,5 +330,5 @@ fn activity_line(activity: &Value, presentation: &Presentation) -> Result<String
         } else {
             ""
         }
-    ))
+    )
 }

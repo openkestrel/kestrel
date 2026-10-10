@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::capability::Images;
 use crate::declaration::{self, sharing_a_directory};
 use crate::declined::Declined;
 use crate::domain::{Declared, Session, Workspace};
@@ -43,8 +44,11 @@ pub struct Settled {
 
 /// A start only adds declarations and refuses one that would change, because the operator asked
 /// for work rather than a redeclaration.
-pub async fn start(store: &Store, plan: &Plan) -> Result<Started> {
+pub async fn start(store: &Store, images: &Images, plan: &Plan) -> Result<Started> {
     checked(plan)?;
+    images
+        .admit(&plan.agent.harness, "start", "agent.harness")
+        .await?;
     let declared = plan.agent.declared();
 
     let mut tx = store.begin().await?;

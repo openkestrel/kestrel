@@ -39,6 +39,7 @@ fn main() -> Result<()> {
         ..Default::default()
     });
     let source = generator.generate(&mut analysis)?;
+    let source = allow_omitted_nullable_fields(&source)?;
     let (sse, browser_sse) = sse_mappings(&document)?;
     write_output(
         &root.join("src/generated.rs"),
@@ -52,6 +53,18 @@ fn main() -> Result<()> {
         check,
     )?;
     Ok(())
+}
+
+fn allow_omitted_nullable_fields(source: &str) -> Result<String> {
+    let generated = "encoded.keys().all(|key| input.contains_key(key))";
+    let compatible = "encoded.iter().all(|(key, value)| input.contains_key(key) || (nulls_may_be_absent && value.is_null()))";
+    if !source.contains(generated) {
+        return Err(anyhow!(
+            "generated oneOf matcher changed; update nullable-field compatibility"
+        ));
+    }
+
+    Ok(source.replace(generated, compatible))
 }
 
 fn format_rust(source: &str) -> Result<Vec<u8>> {

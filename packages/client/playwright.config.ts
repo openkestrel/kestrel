@@ -23,6 +23,7 @@ export default defineConfig({
 			timeout: 600_000,
 			reuseExistingServer: false,
 			env: {
+				KESTREL_COMPUTE: "local-exec",
 				KESTREL_DATA_DIR: mkdtempSync(join(tmpdir(), "kestrel-client-e2e-")),
 				KESTREL_LISTEN: "127.0.0.1:17717",
 				KESTREL_OPERATOR_LISTEN: `127.0.0.1:${operator}`,

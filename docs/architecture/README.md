@@ -138,7 +138,7 @@ The rest of `crates/kestrel/src`, grouped by the page that covers them:
 | Sessions | `work.rs`, `workspace.rs`, `instance.rs`, `scheduling.rs`, `role/work.rs` |
 | Link | `link/`, `provider.rs`, `profile.rs`, `keyring.rs` |
 | Triggers | `trigger.rs`, `trigger/apply.rs`, `filter.rs`, `template.rs`, `cron.rs`, `readiness.rs`, `follow_up.rs`, `pull_request.rs`, `integration/` |
-| Operator | `operator.rs`, `operator_identity.rs`, `declaration.rs`, `start.rs`, `agent.rs`, `reference.rs`, `declined.rs` |
+| Operator | `operator.rs`, `operator_identity.rs`, `declaration.rs`, `start.rs`, `agent.rs`, `reference.rs`, `declined.rs`, `capability.rs` |
 | Shared | `domain.rs` (every record type), `log.rs`, `store/`, `timer.rs`, `cli.rs`, `telemetry.rs`, `shutdown.rs`, `hex.rs`, `participant.rs` (the one rule a declared name obeys) |
 
 ## Trust boundaries
@@ -158,6 +158,14 @@ supervisor ([ADR-0026](../adr/0026-kestrel-carries-named-credentials-never-a-run
 ## Where the code lags the ADRs
 
 An accepted ADR is a decision, not a description. These are decided and not yet built:
+
+- **First run** ([ADR-0046](../adr/0046-kestrel-ships-a-catalogue-of-how-each-harness-signs-in.md),
+  [ADR-0047](../adr/0047-kestrel-relays-a-persons-own-sign-in.md),
+  [ADR-0048](../adr/0048-the-environment-image-carries-every-catalogued-harness.md),
+  [ADR-0049](../adr/0049-an-install-has-one-operator-and-by-default-one-organization.md)):
+  the sign-in catalogue and image capability labels are implemented, but the sign-in relay is not.
+  First-run setup still infers `kestrel start`'s Organization from the repository owner; the browser
+  has no Operator-naming setup and still asks for a browser-local Participant name.
 
 - **Repository declaration validation** ([ADR-0057](../adr/0057-a-repository-declaration-is-not-a-successful-checkout.md)):
   declaration paths still save raw repository strings after list/branch and directory-collision checks.
@@ -190,8 +198,6 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   opened, reopened, closed (including merges) and head-moved Events are learned. The Audit Record
   that explains unattended attachment verdicts remains `0.5` work.
 - **Split roles**: `serve` and `work` parse separately but run correctly only in one process.
-- **The first run** ([ADR-0046](../adr/0046-kestrel-ships-a-catalogue-of-how-each-harness-signs-in.md)–[ADR-0049](../adr/0049-an-install-has-one-operator-and-by-default-one-organization.md)):
-  there is no sign-in catalogue, relay, image label or shared default Organization selection, and `kestrel-env` carries opencode alone.
 - **Policy, Approvals, Questions, Workflows, Campaigns** exist in `GLOSSARY.md` and
   [`ROADMAP.md`](../../ROADMAP.md), not in code. `session_dependency` and the Unreachable state are
   the only Workflow machinery built.

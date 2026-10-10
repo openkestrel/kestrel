@@ -111,7 +111,7 @@ describe("the line a Workspace shows for its queued Session", () => {
 				},
 			],
 		});
-		expect(sessionQueueLine(queue, workspace)).toBe("Waiting: at the live Instance limit of 1.");
+		expect(sessionQueueLine(queue, workspace)).toBe("At the live Instance limit of 1.");
 	});
 
 	test("shows a waiting Turn's global position and foreign predecessors", () => {
@@ -129,7 +129,7 @@ describe("the line a Workspace shows for its queued Session", () => {
 			],
 		});
 		expect(sessionQueueLine(queue, workspace)).toBe(
-			"Next Turn at position 3. Waiting: behind local and 1 Session in other Organizations.",
+			"Next Turn at position 3. Behind local and 1 Session in other Organizations.",
 		);
 	});
 
@@ -168,6 +168,28 @@ describe("the line a Workspace shows for its queued Session", () => {
 		});
 		expect(sessionQueueLine(queue, workspace)).toBe(
 			"Queue order is unknown: no dispatch configuration is recorded.",
+		);
+	});
+
+	test("names each blocking Session once, with no repeated Waiting", () => {
+		const queue = a_queue({
+			queued: [
+				{
+					position: null,
+					name: "lively-yarrow",
+					workspace,
+					agent: "builder",
+					reasons: [
+						{ kind: "dependencies", sessions: ["quick-thistle", "quick-thistle", "calm-heron"] },
+						{ kind: "subscription_profile", profile: "jack", session: "quick-thistle" },
+						{ kind: "ahead", sessions: ["calm-heron", "agile-robin"], elsewhere: 0 },
+					],
+					enqueued_at: "2026-09-30T10:00:00Z",
+				},
+			],
+		});
+		expect(sessionQueueLine(queue, workspace)).toBe(
+			"Waiting on quick-thistle and calm-heron; quick-thistle holds the jack profile; behind agile-robin.",
 		);
 	});
 

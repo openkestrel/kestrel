@@ -1,5 +1,5 @@
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Change } from "./generated";
 import { useParticipant } from "./participant";
 import { operator, refetchNoticed, refetchOrganization } from "./queries";
@@ -36,8 +36,12 @@ export function followChanges(
 	});
 }
 
-export function useTranscript(organization: string, workspace: string): TranscriptSnapshot {
+export function useTranscript(
+	organization: string,
+	workspace: string,
+): { transcript: TranscriptSnapshot; reconnect: () => void } {
 	const participant = useParticipant();
+	const follow = useRef<FollowSession | undefined>(undefined);
 	const followed = `${organization}/${workspace}`;
 	const [held, hold] = useState(() => ({ followed, mirror: new TranscriptMirror() }));
 	let mirror = held.mirror;
@@ -47,7 +51,7 @@ export function useTranscript(organization: string, workspace: string): Transcri
 	}
 	// A follower registers its name when it subscribes, so a new name subscribes again.
 	useEffect(() => {
-		const follow = new FollowSession({
+		const session = new FollowSession({
 			stream: tab,
 			operations: operator,
 			organization,
@@ -55,10 +59,13 @@ export function useTranscript(organization: string, workspace: string): Transcri
 			participant,
 			mirror,
 		});
-		follow.start();
-		return () => follow.stop();
+		follow.current = session;
+		session.start();
+		return () => session.stop();
 	}, [mirror, organization, workspace, participant]);
-	return useSyncExternalStore(mirror.subscribe, mirror.snapshot, mirror.snapshot);
+	const transcript = useSyncExternalStore(mirror.subscribe, mirror.snapshot, mirror.snapshot);
+	const reconnect = useCallback(() => follow.current?.retry(), []);
+	return { transcript, reconnect };
 }
 
 function changeOf(data: string): Change | undefined {

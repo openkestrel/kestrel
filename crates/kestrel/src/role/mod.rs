@@ -4,6 +4,7 @@ pub mod work;
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 
+use crate::capability::Images;
 use crate::sign_in::check::Providers;
 use crate::store::Store;
 use crate::timer::Wake;
@@ -49,8 +50,12 @@ impl AllInOne {
         shutdown: CancellationToken,
     ) -> Result<()> {
         let summaries = self.listening.live.summaries.clone();
+        let listening = match &dispatch {
+            Some(dispatch) => self.listening.inspecting(Images::of(&dispatch.driver)),
+            None => self.listening,
+        };
         let serve = tokio::spawn(stopping_the_others(shutdown.clone(), |shutdown| {
-            serve::run(self.listening, shutdown)
+            serve::run(listening, shutdown)
         }));
         let work = tokio::spawn(stopping_the_others(shutdown.clone(), |shutdown| {
             work::run(self.store, dispatch, self.wake, summaries, shutdown)

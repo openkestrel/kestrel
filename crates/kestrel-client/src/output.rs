@@ -1,9 +1,8 @@
 use std::io::{IsTerminal as _, Write};
 
-use anyhow::{Context as _, Result, bail};
-use serde_json::{Map, Value};
+use anyhow::{Context as _, Result};
+use serde_json::Value;
 
-use crate::exit::{Exit, Failed};
 use crate::view::View;
 
 static ABSENT: Value = Value::Null;
@@ -12,33 +11,18 @@ const GAP: &str = "  ";
 pub enum Presentation {
     Human(usize),
     Delimited,
-    Json(Vec<String>),
+    Json,
 }
 
 impl Presentation {
-    pub fn chosen(json: Option<&str>) -> Result<Self> {
-        let Some(json) = json else {
-            return Ok(if std::io::stdout().is_terminal() {
-                Presentation::Human(columns())
-            } else {
-                Presentation::Delimited
-            });
-        };
-
-        let fields: Vec<String> = json
-            .split(',')
-            .map(str::trim)
-            .filter(|field| !field.is_empty())
-            .map(str::to_owned)
-            .collect();
-        if fields.is_empty() {
-            bail!(Failed::new(
-                Exit::Usage,
-                "--json names the fields to emit, comma-separated: --json id,name"
-            ));
+    pub fn chosen(json: bool) -> Self {
+        if json {
+            Presentation::Json
+        } else if std::io::stdout().is_terminal() {
+            Presentation::Human(columns())
+        } else {
+            Presentation::Delimited
         }
-
-        Ok(Presentation::Json(fields))
     }
 }
 
@@ -58,30 +42,42 @@ pub fn collection(
 }
 
 pub fn show(presentation: &Presentation, view: &View, answer: &Value) -> Result<()> {
+    let mut out = std::io::stdout().lock();
+    written(&mut out, presentation, view, answer)?;
+    out.flush().context("writing to standard output")
+}
+
+fn written(
+    out: &mut impl Write,
+    presentation: &Presentation,
+    view: &View,
+    answer: &Value,
+) -> Result<()> {
+    if let Presentation::Json = presentation {
+        writeln!(out, "{answer}")?;
+        return Ok(());
+    }
     let records: Vec<&Value> = match answer {
         Value::Null => Vec::new(),
         Value::Array(records) => records.iter().collect(),
         record => vec![record],
     };
-    let mut out = std::io::stdout().lock();
-
     match presentation {
-        Presentation::Human(width) => human(&mut out, view, &records, *width)?,
+        Presentation::Human(width) => human(out, view, &records, *width),
         presentation => {
             for record in records {
-                writeln!(out, "{}", line(presentation, view, record)?)?;
+                writeln!(out, "{}", line(presentation, view, record))?;
             }
+            Ok(())
         }
     }
-
-    out.flush().context("writing to standard output")
 }
 
 /// One record as it arrives, which is every alignment a stream can offer. What a person is
 /// shown is neither clipped nor folded onto one line, because a streamed entry is prose.
-pub fn line(presentation: &Presentation, view: &View, record: &Value) -> Result<String> {
-    Ok(match presentation {
-        Presentation::Json(fields) => projected(record, fields)?.to_string(),
+pub fn line(presentation: &Presentation, view: &View, record: &Value) -> String {
+    match presentation {
+        Presentation::Json => record.to_string(),
         Presentation::Delimited => delimited(record, view),
         Presentation::Human(_) => view
             .fields()
@@ -89,7 +85,7 @@ pub fn line(presentation: &Presentation, view: &View, record: &Value) -> Result<
             .map(|field| rendered(at(record, field)))
             .collect::<Vec<_>>()
             .join(GAP),
-    })
+    }
 }
 
 fn delimited(record: &Value, view: &View) -> String {
@@ -152,55 +148,6 @@ fn human(out: &mut impl Write, view: &View, records: &[&Value], width: usize) ->
     }
 
     Ok(())
-}
-
-fn projected(record: &Value, fields: &[String]) -> Result<Value> {
-    let mut projection = Map::new();
-
-    for field in fields {
-        let value = at(record, field)
-            .ok_or_else(|| {
-                Failed::new(
-                    Exit::Usage,
-                    format!(
-                        "the control plane answered no {field}; it answered {}",
-                        held(record)
-                    ),
-                )
-            })?
-            .clone();
-        let mut here = &mut projection;
-        let mut segments = field.split('.').peekable();
-        while let Some(segment) = segments.next() {
-            if segments.peek().is_none() {
-                here.insert(segment.to_owned(), value);
-                break;
-            }
-            here = here
-                .entry(segment)
-                .or_insert_with(|| Value::Object(Map::new()))
-                .as_object_mut()
-                .ok_or_else(|| {
-                    Failed::new(
-                        Exit::Usage,
-                        format!("--json names {field} and the field it reaches through"),
-                    )
-                })?;
-        }
-    }
-
-    Ok(Value::Object(projection))
-}
-
-fn held(record: &Value) -> String {
-    match record.as_object() {
-        Some(record) if !record.is_empty() => record
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .join(", "),
-        _ => "no fields at all".to_owned(),
-    }
 }
 
 /// A path that reaches through a null holds no value, which is not the same as naming a field
@@ -340,14 +287,14 @@ mod tests {
             .as_array()
             .expect("an array of records")
             .iter()
-            .map(|record| line(presentation, view, record).expect("a line"))
+            .map(|record| line(presentation, view, record))
             .collect()
     }
 
     #[test]
     fn session_show_lists_running_tools_with_status_and_start_time() {
         let record = json!({"tools":[{"call_id":"one","title":"read README.md","status":"in_progress","started_at":"2026-09-30T12:00:00Z"}]});
-        let shown = line(&Presentation::Delimited, &crate::view::SESSION, &record).unwrap();
+        let shown = line(&Presentation::Delimited, &crate::view::SESSION, &record);
         assert!(shown.contains("read README.md"));
         assert!(shown.contains("in_progress"));
         assert!(shown.contains("2026-09-30T12:00:00Z"));
@@ -378,7 +325,7 @@ mod tests {
         let shown = String::from_utf8(shown).unwrap();
         assert!(shown.contains("trailing"), "{shown}");
         assert!(shown.contains("2026-10-02T12:00:00Z"), "{shown}");
-        let listed = line(&Presentation::Delimited, &crate::view::SESSIONS, &record).unwrap();
+        let listed = line(&Presentation::Delimited, &crate::view::SESSIONS, &record);
         assert!(listed.contains("trailing"), "{listed}");
     }
 
@@ -402,46 +349,55 @@ mod tests {
         );
     }
 
-    /// In the order they were named, so a script reading the line rather than parsing it is
-    /// reading the order it asked for.
+    fn written_as_json(answer: &Value) -> String {
+        let mut out = Vec::new();
+        written(&mut out, &Presentation::Json, &AGENTS, answer).expect("written");
+        String::from_utf8(out).expect("utf-8")
+    }
+
     #[test]
-    fn json_emits_the_named_fields_and_nothing_else() {
-        let record = json!({ "id": "01", "name": "builder", "harness": "opencode" });
-        let presentation = Presentation::chosen(Some("name,id")).expect("a field list");
+    fn json_emits_the_whole_record_and_not_the_commands_fields() {
+        let record = json!({ "id": "01", "name": "builder", "harness": "opencode", "extra": { "deep": [1, 2] } });
+
+        let written = written_as_json(&record);
 
         assert_eq!(
-            line(&presentation, &AGENTS, &record).expect("a line"),
-            r#"{"name":"builder","id":"01"}"#
+            serde_json::from_str::<Value>(&written).expect("json"),
+            record
         );
     }
 
+    /// One document, so `jq` reads the collection rather than a stream of its members.
     #[test]
-    fn json_names_a_field_inside_another_by_its_path() {
-        let record = json!({ "record": "r1", "event": { "source": "github", "id": "e1" } });
-        let presentation = Presentation::chosen(Some("record,event.source")).expect("a field list");
+    fn json_emits_a_collection_as_one_array_and_nothing_as_an_empty_one() {
+        let agents = json!([{ "name": "builder" }, { "name": "reviewer" }]);
 
+        assert_eq!(written_as_json(&agents).lines().count(), 1);
         assert_eq!(
-            line(&presentation, &AGENTS, &record).expect("a line"),
-            r#"{"record":"r1","event":{"source":"github"}}"#
+            serde_json::from_str::<Value>(&written_as_json(&agents)).expect("json"),
+            agents
         );
+        assert_eq!(written_as_json(&json!([])), "[]\n");
     }
 
     #[test]
-    fn a_field_the_answer_does_not_hold_is_refused_with_what_it_does() {
-        let record = json!({ "id": "01", "name": "builder" });
-        let presentation = Presentation::chosen(Some("nmae")).expect("a field list");
+    fn a_streamed_record_is_one_whole_json_line_however_much_it_spans() {
+        let entry = json!({ "seq": 3, "entry": { "text": "one\ntwo\tthree" } });
 
-        let refused = line(&presentation, &AGENTS, &record).expect_err("no such field");
+        let shown = line(&Presentation::Json, &crate::view::ENTRIES, &entry);
 
-        assert!(
-            refused.to_string().contains("no nmae") && refused.to_string().contains("id, name"),
-            "{refused}"
-        );
+        assert!(!shown.contains('\n'), "{shown}");
+        assert_eq!(serde_json::from_str::<Value>(&shown).expect("json"), entry);
     }
 
     #[test]
-    fn an_empty_field_list_is_no_field_list() {
-        assert!(Presentation::chosen(Some(" , ")).is_err());
+    fn json_is_never_clipped_to_a_terminal() {
+        let long = "x".repeat(500);
+
+        let written = written_as_json(&json!([{ "name": long }]));
+
+        assert!(written.contains(&long));
+        assert!(!written.contains('…'));
     }
 
     #[test]

@@ -11,7 +11,8 @@ services:
       - -allowfrom=0.0.0.0/0
       - -allowbindmountfrom=/nowhere
       - -allowHEAD=^/_ping$$
-      - -allowGET=^/_ping$$|^(/v[0-9.]+)?/containers/[^/]+/json$$|^(/v[0-9.]+)?/exec/[^/]+/json$$
+      # An image reference may carry a registry, path, tag or digest, but no `.` or `..` segment.
+      - -allowGET=^/_ping$$|^(/v[0-9.]+)?/containers/[^/]+/json$$|^(/v[0-9.]+)?/exec/[^/]+/json$$|^(/v[0-9.]+)?/images/[a-zA-Z0-9_-][a-zA-Z0-9_.:@-]*(/[a-zA-Z0-9_-][a-zA-Z0-9_.:@-]*)*/json$$
       - -allowPOST=^(/v[0-9.]+)?/containers/create$$|^(/v[0-9.]+)?/containers/[^/]+/(start|exec)$$|^(/v[0-9.]+)?/exec/[^/]+/start$$
       - -allowDELETE=^(/v[0-9.]+)?/containers/[^/]+$$
     # The socket belongs to a group whose id differs on every host, and an operator supplies

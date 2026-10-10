@@ -25,6 +25,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::agent;
+use crate::capability::{self, Capability, Images};
 use crate::cron::Cron;
 use crate::declaration;
 use crate::declined::{
@@ -149,6 +150,7 @@ struct ControlPlane {
     followers: crate::presence::Followers,
     streams: stream::Streams,
     providers: sign_in::check::Providers,
+    images: Images,
 }
 
 #[derive(Deserialize)]
@@ -253,8 +255,57 @@ struct TranscriptSessionState {
     observation: crate::live_work::Observation,
 }
 
-async fn harnesses() -> Json<Vec<wire::HarnessCatalogueEntry>> {
-    Json(crate::catalogue::harnesses().to_vec())
+async fn harnesses(
+    State(control_plane): State<ControlPlane>,
+) -> Json<Vec<wire::HarnessCatalogueEntry>> {
+    let capability = control_plane.images.read().await;
+    Json(
+        crate::catalogue::harnesses()
+            .iter()
+            .map(|row| wire::HarnessCatalogueEntry {
+                availability: Some(availability(&capability, &row.name)),
+                ..row.clone()
+            })
+            .collect(),
+    )
+}
+
+fn availability(capability: &Capability, harness: &str) -> wire::HarnessAvailability {
+    let (state, image, identity, diagnostic) = match capability {
+        Capability::Unchecked => (wire::HarnessAvailabilityState::Unchecked, None, None, None),
+        Capability::Inspected {
+            image,
+            identity,
+            harnesses,
+        } => (
+            if harnesses.contains(harness) {
+                wire::HarnessAvailabilityState::Available
+            } else {
+                wire::HarnessAvailabilityState::NotCarried
+            },
+            Some(image.clone()),
+            Some(identity.clone()),
+            None,
+        ),
+        Capability::Unavailable { image, cause } => (
+            wire::HarnessAvailabilityState::Unavailable,
+            Some(image.clone()),
+            None,
+            Some(wire::Diagnostic::UnavailableDiagnostic(image_unavailable(
+                "list_harnesses",
+                Some(harness.to_owned()),
+                image.clone(),
+                capability::unavailable(image, cause, Some(harness)),
+                None,
+            ))),
+        ),
+    };
+    wire::HarnessAvailability {
+        state,
+        image,
+        identity,
+        diagnostic,
+    }
 }
 
 async fn sign_in_method(
@@ -266,12 +317,14 @@ async fn sign_in_method(
         .map_err(Into::into)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn router(
     store: Store,
     shutdown: CancellationToken,
     live: crate::live::Live,
     followers: crate::presence::Followers,
     streams: stream::Streams,
+    images: Images,
     client: url::Url,
     providers: sign_in::check::Providers,
 ) -> Router {
@@ -358,6 +411,7 @@ pub fn router(
             followers,
             streams,
             providers,
+            images,
         })
         .layer(middleware::from_fn(diagnosing))
         .layer(middleware::from_fn(addressed_here))
@@ -1207,7 +1261,7 @@ async fn start(
     plan: Result<Json<start::Plan>, JsonRejection>,
 ) -> Result<(StatusCode, Json<StartedRecord>), Refused> {
     let Json(plan) = plan?;
-    let started = start::start(&control_plane.store, &plan).await?;
+    let started = start::start(&control_plane.store, &control_plane.images, &plan).await?;
 
     Ok((
         StatusCode::CREATED,
@@ -1352,6 +1406,10 @@ async fn declare_agent(
             "an agent names the harness that drives it",
         ));
     }
+    control_plane
+        .images
+        .admit(&declaration.harness, "declare_agent", "harness")
+        .await?;
 
     let declared = agent::declare(
         &control_plane.store,
@@ -1400,9 +1458,15 @@ async fn declared_declaration(
     mode: declaration::ApplyMode,
 ) -> Result<Json<declaration::Applied>, Refused> {
     let Json(declaration) = declaration?;
-    let applied = declaration::apply(&control_plane.store, &organization, &declaration, mode)
-        .await
-        .map_err(named_refusal)?;
+    let applied = declaration::apply(
+        &control_plane.store,
+        &control_plane.images,
+        &organization,
+        &declaration,
+        mode,
+    )
+    .await
+    .map_err(named_refusal)?;
 
     Ok(Json(applied))
 }
@@ -4044,6 +4108,7 @@ fn diagnosed(reason: Reason, field: Option<&'static str>) -> Refused {
                     harness: None,
                     method: None,
                     sign_in: None,
+                    image: None,
                 },
                 next_steps: vec![wire::Action::NameOperatorAction(wire::NameOperatorAction {
                     action: serde_json::json!("name_operator"),
@@ -4231,10 +4296,92 @@ fn diagnosed(reason: Reason, field: Option<&'static str>) -> Refused {
                 },
             }),
         ),
+        Reason::HarnessNotCarried {
+            operation,
+            harness,
+            image,
+            carried,
+            message,
+        } => (
+            StatusCode::CONFLICT,
+            wire::Diagnostic::SetupGapDiagnostic(wire::SetupGapDiagnostic {
+                kind: serde_json::json!("setup_gap"),
+                message,
+                next_steps: vec![
+                    inspect_harness_image(Some(harness.clone()), image.clone()),
+                    wire::Action::CorrectFieldAction(wire::CorrectFieldAction {
+                        action: serde_json::json!("correct_field"),
+                        operation: operation.to_owned(),
+                        resource: None,
+                        field: field.clone().unwrap_or_else(|| "harness".to_owned()),
+                        constraint: "carried_by_image".to_owned(),
+                        allowed_values: Some(carried),
+                    }),
+                ],
+                field,
+                context: wire::SetupGapContext {
+                    prerequisite: "harness_in_image".to_owned(),
+                    resource: None,
+                    reference: None,
+                    organization: None,
+                    harness: Some(harness),
+                    method: None,
+                    sign_in: None,
+                    image: Some(image),
+                },
+            }),
+        ),
+        Reason::ImageUnavailable {
+            operation,
+            harness,
+            image,
+            message,
+        } => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            wire::Diagnostic::UnavailableDiagnostic(image_unavailable(
+                operation, harness, image, message, field,
+            )),
+        ),
     };
     Refused::Diagnosed {
         status,
         diagnostic: Box::new(diagnostic),
+    }
+}
+
+fn inspect_harness_image(harness: Option<String>, image: String) -> wire::Action {
+    wire::Action::InspectHarnessImageAction(wire::InspectHarnessImageAction {
+        action: serde_json::json!("inspect_harness_image"),
+        harness,
+        image: Some(image),
+        command: None,
+    })
+}
+
+/// Nothing was written, so the step after inspecting the image is to read its capabilities
+/// again, never to replay a write blind.
+fn image_unavailable(
+    operation: &str,
+    harness: Option<String>,
+    image: String,
+    message: String,
+    field: Option<String>,
+) -> wire::UnavailableDiagnostic {
+    wire::UnavailableDiagnostic {
+        kind: serde_json::json!("unavailable"),
+        message,
+        field,
+        context: wire::UnavailableContext {
+            service: "image_inspection".to_owned(),
+            resource: Some(image.clone()),
+            operation: operation.to_owned(),
+            retry_after_seconds: None,
+            saved: None,
+        },
+        next_steps: vec![
+            inspect_harness_image(harness, image),
+            retry_read("list_harnesses", None, None),
+        ],
     }
 }
 

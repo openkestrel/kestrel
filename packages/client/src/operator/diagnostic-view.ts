@@ -16,10 +16,10 @@ export type Step =
 			inputs: Input[];
 			request: (values: Collected) => WriteRequest;
 	  }
-	| { kind: "link"; label: string; link: Link }
+	| { kind: "link"; label: string; link: Link; command?: string }
 	| { kind: "reread"; label: string; detail?: string; waitSeconds?: number; retry: boolean }
 	| { kind: "field"; label: string; field: string }
-	| { kind: "guidance"; label: string; detail?: string };
+	| { kind: "guidance"; label: string; detail?: string; command?: string };
 
 export type Link =
 	| { to: "/" }
@@ -93,16 +93,63 @@ function declaration(
 	};
 }
 
+const LISTED: Record<Resource, string> = {
+	organization: "organization",
+	project: "project",
+	agent: "agent",
+	subscription_profile: "profile",
+	provider_credential: "credential",
+	integration: "integration",
+	trigger: "trigger",
+	event: "event",
+	instance: "instance",
+	workspace: "workspace",
+	session: "workspace",
+	held_message: "workspace",
+	transcript_payload: "workspace",
+};
+
+const SHOWN = new Set<Resource>(["workspace", "session", "trigger", "event"]);
+
+function quoted(word: string): string {
+	return /^[A-Za-z0-9_\-./:]+$/.test(word) ? word : `'${word.replaceAll("'", `'"'"'`)}'`;
+}
+
+// The browser cannot know the CLI's default control plane, so it always names its own.
+function command(words: string[], organization: string | null, origin: string): string {
+	const scope = organization === null ? [] : ["--organization", organization];
+	return ["kestrel", ...words, ...scope, "--control-plane", origin].map(quoted).join(" ");
+}
+
+function listing(resource: Resource, organization: string | null, origin: string): string {
+	if (resource === "organization") return command(["organization", "list"], null, origin);
+	return command([LISTED[resource], "list"], organization, origin);
+}
+
+function inspection(
+	resource: Resource,
+	reference: string | null,
+	organization: string | null,
+	origin: string,
+): string {
+	if (reference === null) return listing(resource, organization, origin);
+	if (resource === "organization") return command(["status"], reference, origin);
+	if (!SHOWN.has(resource)) return listing(resource, organization, origin);
+	return command([resource, "show", reference], resource === "event" ? null : organization, origin);
+}
+
 export function stepOf(action: Action, origin: string): Step {
 	switch (action.action) {
 		case "inspect_resource": {
 			const label =
 				`Inspect the ${resourceName(action.resource)} ${action.reference ?? ""}`.trimEnd();
+			const shown = inspection(action.resource, action.reference, action.organization, origin);
 			if (action.resource === "organization" && action.reference !== null) {
 				return {
 					kind: "link",
 					label,
 					link: { to: "/organizations/$organization", params: { organization: action.reference } },
+					command: shown,
 				};
 			}
 			if (
@@ -117,13 +164,17 @@ export function stepOf(action: Action, origin: string): Step {
 						to: "/organizations/$organization/workspaces/$workspace",
 						params: { organization: action.organization, workspace: action.reference },
 					},
+					command: shown,
 				};
 			}
-			return { kind: "guidance", label: `${label}${within(action.organization)}` };
+			return { kind: "guidance", label: `${label}${within(action.organization)}`, command: shown };
 		}
 		case "list_resources": {
 			const label = `List the ${RESOURCES[action.resource][1]}${within(action.organization)}`;
-			if (action.resource === "organization") return { kind: "link", label, link: { to: "/" } };
+			const listed = listing(action.resource, action.organization, origin);
+			if (action.resource === "organization") {
+				return { kind: "link", label, link: { to: "/" }, command: listed };
+			}
 			if (action.resource === "workspace" && action.organization !== null) {
 				return {
 					kind: "link",
@@ -132,9 +183,10 @@ export function stepOf(action: Action, origin: string): Step {
 						to: "/organizations/$organization",
 						params: { organization: action.organization },
 					},
+					command: listed,
 				};
 			}
-			return { kind: "guidance", label };
+			return { kind: "guidance", label, command: listed };
 		}
 		case "retry_read":
 			return {

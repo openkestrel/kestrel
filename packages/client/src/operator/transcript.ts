@@ -19,7 +19,14 @@ export type Delivered = {
 	entry: Entry;
 };
 
+export type Connection =
+	| { state: "connecting" }
+	| { state: "live" }
+	| { state: "reconnecting"; failure: unknown }
+	| { state: "unavailable"; failure: unknown; retriesItself: boolean };
+
 export type TranscriptSnapshot = {
+	connection: Connection;
 	entries: Delivered[];
 	activities: Activity[];
 	sessionState: TranscriptSessionState | undefined;
@@ -43,6 +50,8 @@ export class TranscriptMirror {
 	private cursorValue: string | undefined;
 	private presenceValue: Presence | undefined;
 	private sealedValue = false;
+	private connectionValue: Connection = { state: "connecting" };
+	private wasLive = false;
 	private readonly listeners = new Set<() => void>();
 	private cached: TranscriptSnapshot = this.snapshotOf();
 
@@ -90,14 +99,41 @@ export class TranscriptMirror {
 				break;
 			}
 			case "follower":
+				this.connect({ state: "live" });
 				break;
 			case "end": {
 				const end = parsed<{ because?: string }>(event.data);
-				if (end?.because === "sealed") this.sealedValue = true;
-				this.changed();
+				if (end?.because === "sealed") {
+					this.sealedValue = true;
+					this.connect({ state: "live" });
+				} else this.changed();
 				break;
 			}
 		}
+	}
+
+	// Entries already shown stay through a drop; only the connection changes.
+	dropped(failure: unknown): void {
+		if (this.wasLive) this.connect({ state: "reconnecting", failure });
+		else if (failure !== undefined) {
+			this.connect({ state: "unavailable", failure, retriesItself: true });
+		}
+	}
+
+	refused(failure: unknown): void {
+		this.connect({ state: "unavailable", failure, retriesItself: false });
+	}
+
+	reconnecting(): void {
+		this.connect(
+			this.wasLive ? { state: "reconnecting", failure: undefined } : { state: "connecting" },
+		);
+	}
+
+	private connect(connection: Connection): void {
+		if (connection.state === "live") this.wasLive = true;
+		this.connectionValue = connection;
+		this.changed();
 	}
 
 	private entry(recorded: Recorded, cursor: string | undefined): void {
@@ -152,6 +188,7 @@ export class TranscriptMirror {
 
 	private snapshotOf(): TranscriptSnapshot {
 		return {
+			connection: this.connectionValue,
 			entries: [...this.entries],
 			activities: [...this.activities],
 			sessionState: this.sessionStateValue,
@@ -207,6 +244,20 @@ export class FollowSession implements Subscriber {
 			...(mirror.cursor === undefined ? {} : { after: mirror.cursor }),
 			...(participant ? { participant } : {}),
 		};
+	}
+
+	retry(): void {
+		if (this.stopped) return;
+		this.options.mirror.reconnecting();
+		this.subscribed?.retry();
+	}
+
+	dropped(failure: unknown): void {
+		this.options.mirror.dropped(failure);
+	}
+
+	refused(error: unknown): void {
+		this.options.mirror.refused(error);
 	}
 
 	deliver(event: StreamEvent): void {

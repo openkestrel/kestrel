@@ -62,6 +62,33 @@ export function reasonText(reason: QueueReason): string {
 	}
 }
 
+// A Session already named as blocking is not named again as ahead.
+export function reasonsText(reasons: QueueReason[]): string {
+	const named = new Set<string>();
+	const unnamed = (sessions: string[]) =>
+		[...new Set(sessions)].filter((session) => !named.has(session));
+	return reasons
+		.flatMap((reason): QueueReason[] => {
+			switch (reason.kind) {
+				case "dependencies": {
+					const sessions = unnamed(reason.sessions);
+					for (const session of sessions) named.add(session);
+					return sessions.length > 0 ? [{ ...reason, sessions }] : [];
+				}
+				case "ahead": {
+					const sessions = unnamed(reason.sessions);
+					return sessions.length > 0 || (reason.elsewhere ?? 0) > 0
+						? [{ ...reason, sessions }]
+						: [];
+				}
+				default:
+					return [reason];
+			}
+		})
+		.map(reasonText)
+		.join("; ");
+}
+
 function list(names: string[]): string {
 	if (names.length === 0) return "nothing";
 	if (names.length === 1) return names[0] ?? "nothing";

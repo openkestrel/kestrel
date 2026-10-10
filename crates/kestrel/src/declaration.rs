@@ -1,6 +1,7 @@
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::capability::Images;
 use crate::declined::{Constraint, Reason};
 use crate::domain::{Correlation, Declared, Fires, Templates, Trigger};
 use crate::filter::Filter;
@@ -116,6 +117,15 @@ pub enum ApplyMode {
     Preview,
 }
 
+impl ApplyMode {
+    const fn operation(&self) -> &'static str {
+        match self {
+            ApplyMode::Apply => "apply_declaration",
+            ApplyMode::Preview => "preview_declaration",
+        }
+    }
+}
+
 struct ParsedTrigger {
     filter: Filter,
     templates: Templates,
@@ -128,12 +138,17 @@ struct Compared {
 
 pub async fn apply(
     store: &Store,
+    images: &Images,
     organization: &str,
     document: &Document,
     mode: ApplyMode,
 ) -> Result<Applied> {
-    check_document(document, &mode)?;
+    let operation = mode.operation();
+    check_document(document, operation)?;
     let parsed = parse_trigger(&document.trigger)?;
+    images
+        .admit(&document.agent.harness, operation, "agent.harness")
+        .await?;
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
 
@@ -261,11 +276,7 @@ pub async fn apply(
     })
 }
 
-fn check_document(document: &Document, mode: &ApplyMode) -> Result<()> {
-    let operation = match mode {
-        ApplyMode::Apply => "apply_declaration",
-        ApplyMode::Preview => "preview_declaration",
-    };
+fn check_document(document: &Document, operation: &'static str) -> Result<()> {
     let invalid = |field: &'static str, constraint: Constraint, message: String| {
         Err(Reason::InvalidField {
             field,

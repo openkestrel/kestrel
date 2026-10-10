@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use url::Url;
 
+use crate::capability::{Capability, Images};
 use crate::cli::Role;
 use crate::integration::webhook;
 use crate::sign_in::check::Providers;
@@ -33,6 +34,7 @@ pub struct Listening {
     wake: Wake,
     follow_lease: Duration,
     providers: Providers,
+    images: Images,
     pub(crate) live: crate::live::Live,
 }
 
@@ -44,6 +46,12 @@ impl Listening {
     #[must_use]
     pub fn checking_sign_ins_with(mut self, providers: Providers) -> Self {
         self.providers = providers;
+        self
+    }
+
+    #[must_use]
+    pub fn inspecting(mut self, images: Images) -> Self {
+        self.images = images;
         self
     }
 }
@@ -77,6 +85,7 @@ pub async fn bind(
         wake,
         follow_lease,
         providers: Providers::default(),
+        images: Images::default(),
         live: crate::live::Live::default(),
     })
 }
@@ -91,6 +100,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         wake,
         follow_lease,
         providers,
+        images,
         live,
     } = listening;
 
@@ -102,6 +112,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         );
     }
 
+    tokio::spawn(said_at_startup(images.clone()));
     let stop_recording = CancellationToken::new();
     let recording = tokio::spawn({
         let unrecorded = live.unrecorded.clone();
@@ -119,6 +130,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         live,
         followers,
         streams,
+        images,
         client,
         providers,
     );
@@ -136,6 +148,24 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
     info!(role = %Role::Serve, "role stopped");
 
     Ok(())
+}
+
+/// Said once, so an image that cannot be inspected is in the log before anyone asks; the control
+/// plane serves either way.
+async fn said_at_startup(images: Images) {
+    match images.read().await {
+        Capability::Unchecked => {}
+        Capability::Inspected {
+            image,
+            identity,
+            harnesses,
+        } => info!(%image, %identity, ?harnesses, "the image declares its harnesses"),
+        Capability::Unavailable { image, cause } => warn!(
+            %image,
+            "{}",
+            crate::capability::unavailable(&image, &cause, None)
+        ),
+    }
 }
 
 pub(crate) const BUSY_RETRY_AFTER_SECONDS: i64 = 1;

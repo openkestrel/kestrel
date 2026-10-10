@@ -46,7 +46,11 @@ The data in `crates/kestrel/src/catalogue/harnesses.json` supplies both the oper
 unconfigured dispatch commands; explicit harness-command configuration remains authoritative.
 Subscriptions name Operator ownership and keys Organization ownership. Each method names its
 accepted token/file input, a typed variable/file fill target, and any relay or console link.
-Metadata needs no credentials or compute inspection and makes no availability claim.
+Metadata needs no credentials. Each row's `availability` comes from inspecting the configured
+image's `dev.kestrel.harnesses` label at that read (ADR-0048): `available` or `not_carried` after a
+successful inspection, `unavailable` with an `unavailable` diagnostic when the image is missing or
+the daemon fails, and `unchecked` when the compute driver runs no image. Label names outside the
+catalogue add no rows.
 `GET /operator/harnesses/{harness}/sign-in-methods/{method}` reads one supported combination;
 unknown harnesses or methods answer a typed `invalid_field` with supported choices. Custom
 harness commands and generic Profiles remain usable without guided methods (ADR-0046).
@@ -72,6 +76,20 @@ or a Session's refresh, mints a new `revision`; generic writes are never checked
 harness offering it, with its revision, `authentication` evidence and `model_use` evidence for
 that harness. The ten-second deadline and provider addresses are injected through
 `Listening::checking_sign_ins_with`, which the test support points at a stub.
+
+### Image capabilities
+
+`capability.rs` resolves the configured image reference again on every read, through
+`docker image inspect` and never a pull, and caches only parsed labels, keyed by the image ID the
+reference resolved to. A failed inspection is `Unavailable`; it never falls back to an earlier
+positive result. `Images::admit` gates declaring an Agent, previewing or applying a declaration,
+and a start. It runs before any transaction opens, so a refusal writes nothing. A harness the
+inspected image does not declare is a 409 `setup_gap` (`harness_in_image`) naming the image and
+harness. An uninspectable image is a 503 `unavailable` (`image_inspection`) whose steps inspect
+the image and then retry the capability read. Label membership admits a harness and leaves its
+configured command alone; a command still missing at spawn fails the Session with
+`executable_missing` evidence. The serve role logs one inspection at startup and serves either
+way. `Images::read` is the one capability read for any later consumer.
 
 ### Errors
 
@@ -220,8 +238,8 @@ Workspace read carries `held_messages` — the `held` ones in arrival order, eac
 takes `{ participant }` and answers `204`. Both apply the participant name rule and refuse an id the
 Workspace never held `404`, a name other than the author's `403`, and one a Turn took or its author
 withdrew `409`. Neither writes a Transcript entry. `kestrel workspace show` lists Held Messages, `workspace post` hands back the Session it reached
-(or the held id when it reached none, with `--json` projecting either from its
-`{ session, held_message }` answer), and `workspace message edit` / `workspace message withdraw`
+(or the held id when it reached none; `--json` writes its whole `{ session, held_message }`
+answer), and `workspace message edit` / `workspace message withdraw`
 change one.
 
 ### Change notices
@@ -329,9 +347,16 @@ headings. Each command's `--json` returns the operator response.
   found walking up from the working directory, then the only Organization that exists. Several
   Organizations and no binding is an error that lists them.
 - **Output** (`output.rs`, `view.rs`): most commands declare a `View` of dotted paths into the
-  answer. Live work inspection follows git-style prose even when piped, and its `--json` returns
-  the whole response. For commands with a `View`, a terminal gets aligned columns; a pipe gets
-  delimited rows; `--json a,b` gets exactly those fields in that order.
+  answer. Live work inspection follows git-style prose even when piped. For commands with a
+  `View`, a terminal gets aligned columns and a pipe gets delimited rows. `--json` is a flag on
+  every command: it writes the complete operator response as one JSON document — a collection as
+  one array, `[]` when empty, and a compound answer such as `workspace open`, `workspace post`,
+  `start` or `queue` whole rather than the child a terminal is shown — and a Transcript as one
+  record a line, entries and closed Activities as the stream carries them. Nothing is projected or
+  clipped; scripts select with `jq`. Any word directly after `--json` (the old projection syntax
+  took it as a field list) is refused before anything is sent. The exceptions: `workspace read` writes a binary file's bytes
+  raw, a `204` (`forget`, `withdraw`, `acknowledge-refusal`) has no response to write, `status`
+  writes the record the Client composes from several reads, and `exit-codes` writes the catalog.
 - **Secrets** are read from standard input, never from arguments, with echo off at a terminal.
 - **Diagnostics** (`diagnostic/`): every failure reaches stderr as a typed `Diagnostic`, the
   control plane's or one the Client makes for a connection failure, an unreadable or unrecognised
@@ -375,7 +400,8 @@ same `Unreachable` a failed fetch does, keeping its compose evidence. A read off
 `src/operator/diagnostic-view.ts` binds each next step to a route link that keeps the
 Organization, a re-read, a field of the form, a write the person chooses (missing inputs
 collected, a destructive one confirmed beside its consequence), or a sentence where the browser
-has no screen; `src/components/refusal.tsx` renders them, and a failed Session's `diagnostic` in
+has no screen; an inspection or listing also carries the copyable `kestrel` command that does the
+same, as the CLI words it. `src/components/refusal.tsx` renders them, and a failed Session's `diagnostic` in
 the Sessions tab. Only an unreachable control plane is an outage
 (`src/operator/outage.ts`): `src/components/outage.tsx` covers the still-mounted page with "kestrel
 isn't running", the compose commands when the evidence says compose, and checks again at growing
@@ -384,9 +410,14 @@ reads resume without a reload. A refusal or an unreadable answer came from a run
 and keeps its own Refusal. `src/operator/tab-stream.ts` holds the tab's one
 stream: it reserves lazily, subscribes each live read under its own id, and after any drop reserves
 again and re-subscribes from each subscription's current request. A plain `404` on a subscribe is
-the reservation forgotten; a typed one is the subscription refused, which is not retried.
+the reservation forgotten; a typed one is the subscription refused, which waits for the person to
+retry it.
 `src/operator/follow.ts` holds the two live reads over it: an Organization route's change notices,
 whose `open` refetches the Organization and whose changes invalidate TanStack Query keys, and a
 Workspace route's Transcript follow, which resumes from its mirror's cursor and renews its
-follower's lease. About five tabs fit HTTP/1.1's six connections per origin; nothing detects a
+follower's lease. The follow is connecting until its `follower` event says the backlog is replayed,
+reconnecting after a drop with what it showed kept, and unavailable when refused or before it was
+ever live, so an unreachable stream never reads as an empty Transcript. Every queue reader shares
+one read (`src/components/workbench/queue-read.tsx`) that says when it is slow, and on failure
+names the error, offers a retry and keeps the last known queue. About five tabs fit HTTP/1.1's six connections per origin; nothing detects a
 sixth. Browser sign-in progress polls its state read rather than opening a second stream.

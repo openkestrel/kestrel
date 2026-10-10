@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { json, reservingControlPlane } from "./stream-fake";
 import { TabStream } from "./tab-stream";
 import { cursorSeq, FollowSession, readRange, TranscriptMirror } from "./transcript";
-import { transport, type StreamEvent } from "./transport";
+import { diagnosisOf, transport, type StreamEvent } from "./transport";
 
 const encoder = new TextEncoder();
 
@@ -301,5 +301,121 @@ describe("a follow", () => {
 		expect(server.puts[1]).toMatchObject({ id, body: { after: "w:1" } });
 		expect(mirror.cursor).toBe("w:1");
 		expect(server.reservations()).toBe(1);
+	});
+});
+
+const FOLLOWER = { id: "6b1a1f2c-0000-0000-0000-000000000000", lease_seconds: 60 };
+
+function states(mirror: TranscriptMirror): string[] {
+	const seen: string[] = [mirror.snapshot().connection.state];
+	mirror.subscribe(() => {
+		const state = mirror.snapshot().connection.state;
+		if (seen.at(-1) !== state) seen.push(state);
+	});
+	return seen;
+}
+
+describe("a follow's connection", () => {
+	it("is connecting until the backlog is replayed, and live once the follower registers", () => {
+		const mirror = new TranscriptMirror();
+
+		mirror.apply({ event: "session_state", id: undefined, data: '{"tools":[]}' });
+		mirror.apply(delivered(1));
+
+		expect(mirror.snapshot().connection).toEqual({ state: "connecting" });
+
+		mirror.apply({ event: "follower", id: undefined, data: JSON.stringify(FOLLOWER) });
+
+		expect(mirror.snapshot().connection).toEqual({ state: "live" });
+	});
+
+	it("reads unavailable, not empty, when the control plane cannot be reached at all", async () => {
+		const { server, stream, mirror, session } = following("operator");
+		server.unreachable(Number.POSITIVE_INFINITY);
+
+		session.start();
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("unavailable"));
+		session.stop();
+		stream.close();
+
+		const connection = mirror.snapshot().connection;
+		expect(connection.state === "unavailable" && diagnosisOf(connection.failure).kind).toBe(
+			"connection_failed",
+		);
+		expect(connection.state === "unavailable" && connection.retriesItself).toBe(true);
+		expect(mirror.snapshot().entries).toEqual([]);
+	});
+
+	it("keeps its entries while reconnecting, and resumes without duplicates", async () => {
+		const { server, stream, mirror, session } = following("operator");
+		const seen = states(mirror);
+
+		session.start();
+		await vi.waitFor(() => expect(server.puts).toHaveLength(1));
+		const id = server.puts[0]?.id ?? "";
+		server.send(id, "entry", JSON.parse(recorded(1)), "w:1");
+		server.send(id, "follower", FOLLOWER);
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("live"));
+		server.drop();
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("reconnecting"));
+
+		expect(mirror.snapshot().entries.map((entry) => entry.seq)).toEqual([1]);
+
+		await vi.waitFor(() => expect(server.puts).toHaveLength(2));
+		server.send(id, "entry", JSON.parse(recorded(1)), "w:1");
+		server.send(id, "entry", JSON.parse(recorded(2)), "w:2");
+		server.send(id, "follower", FOLLOWER);
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("live"));
+		session.stop();
+		stream.close();
+
+		expect(seen).toEqual(["connecting", "live", "reconnecting", "live"]);
+		expect(mirror.snapshot().entries.map((entry) => entry.seq)).toEqual([1, 2]);
+	});
+
+	it("reads unavailable at a refusal, and subscribes again when retried", async () => {
+		const { server, stream, mirror, session } = following("operator");
+		server.refusing((put) =>
+			server.puts.length === 1
+				? json(404, {
+						kind: "missing_reference",
+						message: `no Workspace is named ${put.body.workspace}`,
+						context: {},
+						next_steps: [],
+					})
+				: undefined,
+		);
+
+		session.start();
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("unavailable"));
+
+		const refused = mirror.snapshot().connection;
+		expect(refused.state === "unavailable" && refused.retriesItself).toBe(false);
+		expect(refused.state === "unavailable" && diagnosisOf(refused.failure).message).toBe(
+			"no Workspace is named brave-otter",
+		);
+
+		session.retry();
+		await vi.waitFor(() => expect(server.puts).toHaveLength(2));
+		server.send(server.puts[1]?.id ?? "", "follower", FOLLOWER);
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("live"));
+		session.stop();
+		stream.close();
+	});
+
+	it("reconnects at once when retried during its backoff", async () => {
+		const { server, stream, mirror, session } = following("operator");
+		server.unreachable(3);
+
+		session.start();
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("unavailable"));
+		await new Promise((resolve) => setTimeout(resolve, 800));
+		const before = Date.now();
+		session.retry();
+		await vi.waitFor(() => expect(server.puts).toHaveLength(1));
+		stream.close();
+		session.stop();
+
+		expect(Date.now() - before).toBeLessThan(500);
 	});
 });

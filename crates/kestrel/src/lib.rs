@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod capability;
 pub mod catalogue;
 pub mod cli;
 pub mod compute;
@@ -69,7 +70,8 @@ pub async fn run(cli: &Cli, shutdown: CancellationToken) -> anyhow::Result<()> {
                 timer::Wake::default(),
                 cli.follow_lease(),
             )
-            .await?;
+            .await?
+            .inspecting(cli.images());
             role::serve::run(listening, shutdown).await
         }
         Some(Command::Work) => {
