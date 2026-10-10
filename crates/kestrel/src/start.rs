@@ -2,10 +2,11 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::capability::Images;
-use crate::declaration::{self, sharing_a_directory};
+use crate::declaration;
 use crate::declined::Declined;
 use crate::domain::{Declared, Session, Workspace};
 use crate::provider;
+use crate::repository;
 use crate::sign_in::{Authentication, Source};
 use crate::store::{Declared as DeclaredRecord, Store};
 use crate::workspace;
@@ -45,7 +46,7 @@ pub struct Settled {
 /// A start only adds declarations and refuses one that would change, because the operator asked
 /// for work rather than a redeclaration.
 pub async fn start(store: &Store, images: &Images, plan: &Plan) -> Result<Started> {
-    checked(plan)?;
+    let repositories = checked(plan)?;
     images
         .admit(&plan.agent.harness, "start", "agent.harness")
         .await?;
@@ -75,9 +76,9 @@ pub async fn start(store: &Store, images: &Images, plan: &Plan) -> Result<Starte
         .projects()
         .find(&organization.record, &plan.project.name)
         .await?;
-    if let Some(found) = found.filter(|found| {
-        found.repositories != plan.project.repositories || found.branch != plan.project.branch
-    }) {
+    if let Some(found) = found
+        .filter(|found| found.repositories != repositories || found.branch != plan.project.branch)
+    {
         return Err(Declined::Taken(format!(
             "the project {} is declared against {} on {}, and a start changes no declaration",
             found.name,
@@ -91,7 +92,7 @@ pub async fn start(store: &Store, images: &Images, plan: &Plan) -> Result<Starte
         .declare(
             &organization.record,
             &plan.project.name,
-            &plan.project.repositories,
+            &repositories,
             &plan.project.branch,
         )
         .await?;
@@ -158,7 +159,7 @@ pub async fn start(store: &Store, images: &Images, plan: &Plan) -> Result<Starte
     })
 }
 
-fn checked(plan: &Plan) -> Result<()> {
+fn checked(plan: &Plan) -> Result<Vec<String>> {
     for credential in &plan.credentials {
         provider::holdable("start", &credential.variable, &credential.secret)?;
     }
@@ -169,12 +170,8 @@ fn checked(plan: &Plan) -> Result<()> {
     {
         return unacceptable("a start names its organization, project and agent");
     }
-    if plan.project.repositories.is_empty() {
-        return unacceptable("a project names at least one repository");
-    }
-    if let Some(clash) = sharing_a_directory(&plan.project.repositories) {
-        return Err(Declined::Unacceptable(clash).into());
-    }
+    let repositories =
+        repository::declared("start", "project.repositories", &plan.project.repositories)?;
     if plan.project.branch.is_empty() {
         return unacceptable("a project names the branch its work happens on");
     }
@@ -185,5 +182,5 @@ fn checked(plan: &Plan) -> Result<()> {
         return unacceptable("a start carries a brief");
     }
 
-    Ok(())
+    Ok(repositories)
 }

@@ -276,6 +276,41 @@
         }
       }
     },
+    "/operator/repository-resolutions": {
+      "post": {
+        "operationId": "resolveRepositories",
+        "summary": "Resolve repositories the way a declaration would, saving nothing.",
+        "description": "Checks each repository's syntax, expands `owner/repo` and `github.com/owner/repo` to their HTTPS `.git` address, and finds the directory each is checked out into, refusing a list two of which would share one. It contacts no source: a resolved repository is not one the Instance can reach or check out, and a local path names the Instance's filesystem.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepositoryResolutionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Each repository as a declaration would hold it, in order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryResolution"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
     "/operator/organizations/{organization}/projects": {
       "get": {
         "operationId": "listProjects",
@@ -3795,6 +3830,95 @@
           "max_live_instances"
         ]
       },
+      "RepositoryResolutionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/RepositoryPurpose"
+          }
+        },
+        "required": [
+          "repositories"
+        ]
+      },
+      "RepositoryPurpose": {
+        "type": "string",
+        "enum": [
+          "declaration",
+          "public_setup"
+        ],
+        "description": "`declaration`, the default, takes every transport a Project does. `public_setup` takes only an HTTPS address or GitHub shorthand, since public-repository setup selects no Integration."
+      },
+      "RepositoryResolution": {
+        "type": "object",
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResolvedRepository"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepositoryWarning"
+            }
+          }
+        },
+        "required": [
+          "repositories",
+          "warnings"
+        ]
+      },
+      "ResolvedRepository": {
+        "type": "object",
+        "properties": {
+          "given": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string",
+            "description": "What a declaration holds and a checkout clones."
+          },
+          "checkout_directory": {
+            "type": "string",
+            "description": "The directory under the Workspace the repository is checked out into."
+          }
+        },
+        "required": [
+          "given",
+          "address",
+          "checkout_directory"
+        ]
+      },
+      "RepositoryWarning": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/RepositoryWarningCode"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "RepositoryWarningCode": {
+        "type": "string",
+        "enum": [
+          "no_app_push_authority"
+        ]
+      },
       "ProjectDeclaration": {
         "type": "object",
         "properties": {
@@ -3808,7 +3932,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The repositories the work happens against, in order."
+            "description": "The repositories the work happens against, in order: an http(s)://, ssh://, git:// or file:// URL, an scp-style `user@host:path`, a local path on the Instance beginning `/`, `./` or `../`, or `owner/repo` or `github.com/owner/repo`, which is held as its HTTPS `.git` address."
           },
           "branch": {
             "type": "string",

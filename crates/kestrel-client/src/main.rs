@@ -2000,10 +2000,10 @@ async fn started(
     api: &ControlPlane,
     presentation: &Presentation,
     scoping: Scoping<'_>,
-    start: Start,
+    mut start: Start,
 ) -> Result<()> {
     let brief = given(&start.brief)?;
-    let clone =
+    let mut clone =
         start::LocalClone::of(&std::env::current_dir().context("reading the working directory")?);
     let (named, existing) = match scoping.derive().await? {
         Derived::Scope(scope) => (Some(scope), Vec::new()),
@@ -2023,6 +2023,18 @@ async fn started(
         (json!([]), json!([]), json!([]))
     };
     let existing = start::Existing::read(declared, &projects, &agents, &credentials);
+    let names_a_project = start.project.as_ref().is_some_and(|name| {
+        existing
+            .projects
+            .iter()
+            .any(|declared| &declared.name == name)
+    });
+    // Planning matches declared Projects by address, so it compares what a declaration would hold.
+    if !start.repositories.is_empty() {
+        start.repositories = resolved(api, start.repositories).await?;
+    } else if !names_a_project && let Some(origin) = clone.origin.take() {
+        clone.origin = resolved(api, vec![origin]).await?.pop();
+    }
 
     let secrets = start::secrets(&start.credentials, |variable| std::env::var(variable).ok());
     let plan = start::plan(
@@ -2101,6 +2113,22 @@ async fn started(
             "session_id": started["session"]["id"],
         }),
     )
+}
+
+async fn resolved(api: &ControlPlane, repositories: Vec<String>) -> Result<Vec<String>> {
+    let resolution: wire::RepositoryResolution = serde_json::from_value(
+        api.post(
+            &["repository-resolutions"],
+            &wire::RepositoryResolutionRequest::new(repositories),
+        )
+        .await?,
+    )?;
+
+    Ok(resolution
+        .repositories
+        .into_iter()
+        .map(|repository| repository.address)
+        .collect())
 }
 
 fn empty_list(

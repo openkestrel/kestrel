@@ -1140,6 +1140,117 @@ pub struct StartPlanCredentialsItem {
     pub variable: String,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RepositoryResolutionRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<RepositoryPurpose>,
+    pub repositories: Vec<String>,
+}
+impl RepositoryResolutionRequest {
+    /// Construct this request with every required wire field.
+    pub fn new(repositories: Vec<String>) -> Self {
+        Self {
+            repositories,
+            purpose: None,
+        }
+    }
+    /// Start a dependency-free builder with every required wire field.
+    pub fn builder(repositories: Vec<String>) -> RepositoryResolutionRequestBuilder {
+        RepositoryResolutionRequestBuilder::new(repositories)
+    }
+}
+/// Dependency-free builder for [`#struct_name`].
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct RepositoryResolutionRequestBuilder {
+    value: RepositoryResolutionRequest,
+}
+impl RepositoryResolutionRequestBuilder {
+    /// Start a builder with every required wire field.
+    pub fn new(repositories: Vec<String>) -> Self {
+        Self {
+            value: RepositoryResolutionRequest::new(repositories),
+        }
+    }
+    #[doc = concat!("Set the optional `", "purpose", "` request field.")]
+    #[must_use]
+    pub fn purpose(mut self, purpose: RepositoryPurpose) -> Self {
+        self.value.purpose = Some(purpose);
+        self
+    }
+    /// Finish building the request model.
+    pub fn build(self) -> RepositoryResolutionRequest {
+        self.value
+    }
+}
+///`declaration`, the default, takes every transport a Project does. `public_setup` takes only an HTTPS address or GitHub shorthand, since public-repository setup selects no Integration.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum RepositoryPurpose {
+    #[default]
+    #[serde(rename = "declaration")]
+    Declaration,
+    #[serde(rename = "public_setup")]
+    PublicSetup,
+}
+impl RepositoryPurpose {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Declaration => "declaration",
+            Self::PublicSetup => "public_setup",
+        }
+    }
+}
+impl ::std::fmt::Display for RepositoryPurpose {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for RepositoryPurpose {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RepositoryResolution {
+    pub repositories: Vec<ResolvedRepository>,
+    pub warnings: Vec<RepositoryWarning>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ResolvedRepository {
+    ///What a declaration holds and a checkout clones.
+    pub address: String,
+    ///The directory under the Workspace the repository is checked out into.
+    pub checkout_directory: String,
+    pub given: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RepositoryWarning {
+    pub code: RepositoryWarningCode,
+    pub message: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum RepositoryWarningCode {
+    #[default]
+    #[serde(rename = "no_app_push_authority")]
+    NoAppPushAuthority,
+}
+impl RepositoryWarningCode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NoAppPushAuthority => "no_app_push_authority",
+        }
+    }
+}
+impl ::std::fmt::Display for RepositoryWarningCode {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for RepositoryWarningCode {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RepositoryDiff {
     pub diff: String,
     pub files: Vec<FileStat>,
@@ -8459,7 +8570,7 @@ pub struct ProjectDeclaration {
     pub branch: String,
     ///Constraint: minLength=1
     pub name: String,
-    ///The repositories the work happens against, in order.
+    ///The repositories the work happens against, in order: an http(s)://, ssh://, git:// or file:// URL, an scp-style `user@host:path`, a local path on the Instance beginning `/`, `./` or `../`, or `owner/repo` or `github.com/owner/repo`, which is held as its HTTPS `.git` address.
     ///Constraint: minItems=1
     pub repositories: Vec<String>,
 }
