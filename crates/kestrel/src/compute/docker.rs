@@ -28,6 +28,10 @@ impl Docker {
         }
     }
 
+    pub fn image(&self) -> &str {
+        &self.image
+    }
+
     /// What a control plane in a container beside the Instance is reached over, where the
     /// host's gateway reaches nothing.
     pub fn on_network(mut self, network: impl Into<String>) -> Self {

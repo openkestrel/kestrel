@@ -185,6 +185,36 @@ describe("a read", () => {
 			],
 		});
 	});
+
+	it("is unreachable when the server in front could not reach it, keeping its compose evidence", async () => {
+		const { operator } = answering(() =>
+			json(502, {
+				kind: "connection_failed",
+				message: "kestrel isn't running",
+				field: null,
+				context: { url: "http://localhost:7719", operation: "GET /operator/organizations" },
+				next_steps: [{ action: "check_connection", service: "control_plane", compose: true }],
+			}),
+		);
+
+		const failed = await unreachableOf(operator.read("/operator/organizations"));
+
+		expect(failed.diagnostic).toEqual({
+			kind: "connection_failed",
+			message: "the control plane could not be reached",
+			field: null,
+			context: { url: ORIGIN, operation: "GET /operator/organizations" },
+			next_steps: [
+				{
+					action: "retry_read",
+					operation: "GET /operator/organizations",
+					resource: null,
+					retry_after_seconds: null,
+				},
+				{ action: "check_connection", service: "control_plane", compose: true },
+			],
+		});
+	});
 });
 
 describe("a write", () => {
@@ -287,15 +317,13 @@ describe("a stream", () => {
 		expect(delivered).toEqual([{ event: "message", id: undefined, data: "one\ntwo" }]);
 	});
 
-	it("resumes after the cursor it is given", async () => {
+	it("asks for an event stream", async () => {
 		const { operator, seen } = answering(() => events());
 
-		for await (const _ of operator.stream("/s", { after: "41" })) {
+		for await (const _ of operator.stream("/s")) {
 		}
 
-		const headers = new Headers(seen[0].init.headers);
-		expect(headers.get("Last-Event-ID")).toBe("41");
-		expect(headers.get("accept")).toBe("text/event-stream");
+		expect(new Headers(seen[0].init.headers).get("accept")).toBe("text/event-stream");
 	});
 
 	it("is refused before it opens like any other request", async () => {
@@ -303,7 +331,7 @@ describe("a stream", () => {
 
 		const refused = await refusalOf(
 			(async () => {
-				for await (const _ of operator.stream("/s", { after: "nope" })) {
+				for await (const _ of operator.stream("/s")) {
 				}
 			})(),
 		);

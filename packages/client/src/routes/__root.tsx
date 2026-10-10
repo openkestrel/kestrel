@@ -1,6 +1,13 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { createRootRouteWithContext, HeadContent, Link, Scripts } from "@tanstack/react-router";
+import {
+	createRootRouteWithContext,
+	HeadContent,
+	Link,
+	Outlet,
+	Scripts,
+} from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { OutageGuard } from "#/components/outage";
 import appCss from "../styles.css?url";
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
@@ -13,6 +20,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 		links: [{ rel: "stylesheet", href: appCss }],
 	}),
 	shellComponent: Document,
+	component: () => (
+		<OutageGuard>
+			<Outlet />
+		</OutageGuard>
+	),
 	notFoundComponent: NotFound,
 });
 

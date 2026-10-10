@@ -26,5 +26,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - uses: ./.github/actions/docker-hub-mirror
+
       - name: Format, lint, build and test inside the image
         run: cargo test --locked --package kestrel --test development -- --ignored kestrel_passes_its_own_checks

@@ -83,7 +83,7 @@ async fn refused(kestrel: &Kestrel) -> String {
             let record = event.record_id.to_string();
             let operator = kestrel.operator();
             let shown = tokio::task::spawn_blocking(move || {
-                client::ran(&operator, &["event", "show", &record, "--json", "firings"])
+                client::ran(&operator, &["event", "show", &record, "--json"])
             })
             .await
             .expect("the client should run");

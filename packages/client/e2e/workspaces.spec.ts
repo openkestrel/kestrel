@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { Streamed } from "./streamed";
 
 const ORGANIZATION = "acme";
 
@@ -216,15 +217,9 @@ class Reads {
 
 function noticing(page: Page) {
 	const { promise: sent, resolve: send } = Promise.withResolvers<string>();
-	let connections = 0;
-	void page.route(
-		(url) => url.pathname === `/operator/organizations/${ORGANIZATION}/changes`,
-		async (route) => {
-			connections += 1;
-			const body = connections === 1 ? "event: open\ndata: {}\n\n" : await sent;
-			await route.fulfill({ status: 200, contentType: "text/event-stream", body });
-		},
-	);
+	void new Streamed({
+		notices: (_, attempt) => (attempt === 1 ? "event: open\ndata: {}\n\n" : sent),
+	}).install(page);
 	return {
 		change: (changed: unknown) => send(`event: change\ndata: ${JSON.stringify(changed)}\n\n`),
 	};

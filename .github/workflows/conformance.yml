@@ -27,6 +27,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - uses: ./.github/actions/docker-hub-mirror
+
       # One gateway, one model and one host daemon, so a Session at a time.
       - name: Run the suite against both agents
         env:

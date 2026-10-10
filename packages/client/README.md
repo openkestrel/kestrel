@@ -6,11 +6,11 @@ It reaches the control plane only through the operator interface, on its own ori
 
 ```sh
 bun install
-bun run dev        # Vite on :3000, proxying /operator to 127.0.0.1:7718; HTTP/1.1, so few tabs stay live
+bun run dev        # Vite on :3000, proxying /operator to 127.0.0.1:7718
 bun run build      # dist/client, which images/kestrel-client serves
 bun run typecheck
-bun run test       # the transport, the change notices and the Transcript follow
-bun run e2e        # builds, then drives it over HTTPS through images/kestrel-client/Caddyfile and `kestrel-control-plane serve`; needs caddy on PATH, and the first run compiles the control plane
+bun run test       # the transport, the tab's stream, the change notices and the Transcript follow
+bun run e2e        # builds, then drives it over plain HTTP through images/kestrel-client/Caddyfile and `kestrel-control-plane serve`; needs caddy on PATH, and the first run compiles the control plane
 bun run check      # oxlint and oxfmt
 ```
 

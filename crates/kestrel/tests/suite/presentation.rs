@@ -155,42 +155,246 @@ async fn a_terminal_gets_lines_it_can_hold_and_a_pipe_gets_them_whole() {
     kestrel.teardown().await;
 }
 
+async fn answered(kestrel: &Kestrel, path: &str) -> Value {
+    reqwest::get(format!("{}/operator/{path}", kestrel.operator()))
+        .await
+        .expect("the operator boundary should answer")
+        .json()
+        .await
+        .expect("a JSON answer")
+}
+
 #[tokio::test]
-async fn json_emits_the_fields_it_names_and_nothing_the_boundary_adds() {
+async fn json_is_the_whole_collection_as_one_document_jq_reads_whole() {
     let kestrel = an_organization_holding_two_agents().await;
 
-    let listed = piped(&kestrel, &["agent", "list", "--json", "name,model"]).await;
+    let listed = piped(&kestrel, &["agent", "list", "--json"]).await;
 
-    let agents: Vec<Value> = listed.records();
+    assert_eq!(listed.out.len(), 1, "{:?}", listed.out);
     assert_eq!(
-        agents,
-        [
-            serde_json::json!({ "name": "builder", "model": "claude-opus-5" }),
-            serde_json::json!({ "name": "reviewer", "model": null }),
-        ]
+        listed.json(),
+        answered(&kestrel, "organizations/acme/agents").await
+    );
+    assert_eq!(listed.jq("length"), "2");
+    assert_eq!(
+        listed.jq("map(.name)"),
+        r#"["builder","reviewer"]"#,
+        "jq did not see the whole collection"
     );
     kestrel.teardown().await;
 }
 
 #[tokio::test]
-async fn json_without_a_field_list_is_refused_rather_than_guessed_at() {
+async fn json_answers_an_empty_collection_with_an_empty_array() {
     let kestrel = an_organization_holding_two_agents().await;
 
-    let bare = piped(&kestrel, &["agent", "list", "--json"]).await;
-    let empty = piped(&kestrel, &["agent", "list", "--json", ""]).await;
-    let unknown = piped(&kestrel, &["agent", "list", "--json", "naem"]).await;
+    let listed = piped(&kestrel, &["workspace", "list", "--json"]).await;
 
-    for refused in [&bare, &empty, &unknown] {
-        assert!(!refused.status.success(), "{:?}", refused.out);
-        assert!(refused.out.is_empty(), "{:?}", refused.out);
-    }
-    assert!(bare.err.contains("--json"), "{}", bare.err);
+    assert_eq!(listed.out, ["[]"]);
+    assert!(listed.err.is_empty(), "{}", listed.err);
+    assert_eq!(listed.jq("length"), "0");
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn json_is_the_whole_record_however_little_a_terminal_is_shown() {
+    let kestrel = an_organization_holding_two_agents().await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let id = workspace.id.to_string();
+
+    let shown = piped(&kestrel, &["workspace", "show", &id, "--json"]).await;
+
+    assert_eq!(
+        shown.json(),
+        answered(&kestrel, &format!("organizations/acme/workspaces/{id}")).await
+    );
+    assert_eq!(shown.jq(".id"), format!("\"{id}\""));
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn json_answers_a_compound_write_whole() {
+    let kestrel = an_organization_holding_two_agents().await;
+
+    let opened = piped(
+        &kestrel,
+        &[
+            "workspace",
+            "open",
+            "--project",
+            "kestrel",
+            "--agent",
+            "builder",
+            "--json",
+        ],
+    )
+    .await;
+    assert_eq!(
+        opened.jq("[.workspace.id == .session.workspace, .workspace.state]"),
+        r#"[true,"open"]"#
+    );
+    let opened = opened.json();
+    let workspace = opened["workspace"]["id"].as_str().expect("the Workspace");
+    assert_eq!(opened["session"]["workspace"], workspace, "{opened}");
+    assert_eq!(opened["workspace"]["state"], "open", "{opened}");
+
+    let posted = piped(
+        &kestrel,
+        &[
+            "workspace",
+            "post",
+            workspace,
+            "--as-participant",
+            "operator",
+            "begin",
+            "--json",
+        ],
+    )
+    .await;
+    assert_eq!(posted.jq("has(\"held_message\")"), "true");
+    let posted = posted.json();
+    assert_eq!(posted["session"]["id"], opened["session"]["id"], "{posted}");
     assert!(
-        unknown.err.contains("no naem") && unknown.err.contains("name"),
-        "{}",
-        unknown.err
+        posted
+            .as_object()
+            .is_some_and(|posted| posted.contains_key("held_message")),
+        "{posted}"
     );
     kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn json_streams_a_transcript_one_whole_record_a_line() {
+    let kestrel = an_organization_holding_two_agents().await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let session = kestrel.dispatch_session(workspace.id).await;
+    kestrel.said(&session, "one line\nand another").await;
+
+    let read = piped(
+        &kestrel,
+        &[
+            "workspace",
+            "transcript",
+            &workspace.id.to_string(),
+            "--json",
+        ],
+    )
+    .await;
+
+    assert!(read.out.len() > 1, "{:?}", read.out);
+    for line in &read.out {
+        let record: Value = serde_json::from_str(line)
+            .unwrap_or_else(|error| panic!("{line} is not one record: {error}"));
+        assert!(
+            record.get("seq").is_some() && record.get("entry").is_some(),
+            "{line}"
+        );
+    }
+    assert_eq!(
+        read.jq(".seq").lines().count(),
+        read.out.len(),
+        "jq did not read one record a line"
+    );
+    assert!(
+        read.out
+            .iter()
+            .any(|line| line.contains(r"one line\nand another")),
+        "{:?}",
+        read.out
+    );
+    assert!(read.err.contains("cursor  "), "{}", read.err);
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn json_answers_a_held_secret_without_the_secret() {
+    let kestrel = an_organization_holding_two_agents().await;
+
+    let held = client::ran_by(
+        &kestrel,
+        &["credential", "set", "ANTHROPIC_API_KEY", "--json"],
+        Invocation::default().given("sk-a-secret-key\n"),
+    )
+    .await;
+
+    assert_eq!(held.json()["variable"], "ANTHROPIC_API_KEY");
+    assert!(
+        !held.out.join("\n").contains("sk-a-secret-key") && !held.err.contains("sk-a-secret-key"),
+        "the secret was written back: {:?} {}",
+        held.out,
+        held.err
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_field_list_after_json_is_refused_before_anything_is_written() {
+    let kestrel = an_organization_holding_two_agents().await;
+
+    let listed = piped(
+        &kestrel,
+        &["organization", "declare", "globex", "--json", "id,name"],
+    )
+    .await;
+    let assigned = piped(
+        &kestrel,
+        &["organization", "declare", "globex", "--json=id"],
+    )
+    .await;
+    let named = piped(
+        &kestrel,
+        &["organization", "declare", "globex", "--json", "id"],
+    )
+    .await;
+
+    for refused in [&listed, &assigned, &named] {
+        assert_eq!(refused.status.code(), Some(2), "{}", refused.err);
+        assert!(refused.out.is_empty(), "{:?}", refused.out);
+        let diagnostic: Value = serde_json::from_str(refused.err.trim()).expect("one diagnostic");
+        assert_eq!(diagnostic["kind"], "client_failure", "{diagnostic}");
+        assert_eq!(diagnostic["context"]["operation"], "organization declare");
+        assert!(
+            diagnostic["message"].as_str().unwrap().contains("jq"),
+            "{diagnostic}"
+        );
+    }
+    assert_eq!(
+        kestrel.organizations().await.len(),
+        1,
+        "a refused invocation declared an Organization"
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn json_reports_a_write_whose_answer_was_lost_as_one_diagnostic_on_stderr() {
+    let server = tiny_http::Server::http("127.0.0.1:0").expect("a stub operator");
+    let operator = format!("http://{}", server.server_addr());
+    std::thread::spawn(move || {
+        if let Ok(request) = server.recv() {
+            let _ = request.respond(tiny_http::Response::from_string("not json"));
+        }
+    });
+
+    let finished = tokio::task::spawn_blocking(move || {
+        client::ran(&operator, &["organization", "declare", "acme", "--json"])
+    })
+    .await
+    .expect("the client should run");
+
+    assert_eq!(finished.status.code(), Some(5), "{}", finished.err);
+    assert!(finished.out.is_empty(), "{:?}", finished.out);
+    let diagnostic: Value = serde_json::from_str(finished.err.trim_end())
+        .unwrap_or_else(|error| panic!("{} is not one diagnostic: {error}", finished.err));
+    assert_eq!(diagnostic["kind"], "unknown_response", "{diagnostic}");
+    assert_eq!(
+        diagnostic["next_steps"][0]["action"], "inspect_operation",
+        "{diagnostic}"
+    );
+    assert_eq!(
+        diagnostic["next_steps"][0]["uncertain"], true,
+        "{diagnostic}"
+    );
 }
 
 #[tokio::test]

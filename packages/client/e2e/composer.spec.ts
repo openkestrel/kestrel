@@ -86,7 +86,6 @@ function following(workspace: string, participant: string): { lines: string[]; e
 			"--as-participant",
 			participant,
 			"--json",
-			"seq,appended_at,entry",
 		],
 		{
 			env: { ...process.env, KESTREL_CONTROL_PLANE: CONTROL_PLANE },

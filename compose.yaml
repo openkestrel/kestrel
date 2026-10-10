@@ -11,7 +11,8 @@ services:
       - -allowfrom=0.0.0.0/0
       - -allowbindmountfrom=/nowhere
       - -allowHEAD=^/_ping$$
-      - -allowGET=^/_ping$$|^(/v[0-9.]+)?/containers/[^/]+/json$$|^(/v[0-9.]+)?/exec/[^/]+/json$$
+      # An image reference may carry a registry, path, tag or digest, but no `.` or `..` segment.
+      - -allowGET=^/_ping$$|^(/v[0-9.]+)?/containers/[^/]+/json$$|^(/v[0-9.]+)?/exec/[^/]+/json$$|^(/v[0-9.]+)?/images/[a-zA-Z0-9_-][a-zA-Z0-9_.:@-]*(/[a-zA-Z0-9_-][a-zA-Z0-9_.:@-]*)*/json$$
       - -allowPOST=^(/v[0-9.]+)?/containers/create$$|^(/v[0-9.]+)?/containers/[^/]+/(start|exec)$$|^(/v[0-9.]+)?/exec/[^/]+/start$$
       - -allowDELETE=^(/v[0-9.]+)?/containers/[^/]+$$
     # The socket belongs to a group whose id differs on every host, and an operator supplies
@@ -25,8 +26,11 @@ services:
     networks: [daemon]
     restart: unless-stopped
 
+  # Each product image defaults to what main last published, and keeps its build so
+  # `compose.source.env` can build all three from this checkout under local names instead.
   kestrel:
-    image: ${KESTREL_CONTROL_IMAGE:-kestrel}
+    image: ${KESTREL_CONTROL_IMAGE:-ghcr.io/openkestrel/kestrel:main}
+    pull_policy: ${KESTREL_PULL_POLICY:-missing}
     build:
       context: .
       dockerfile: images/kestrel/Dockerfile
@@ -38,8 +42,9 @@ services:
     environment:
       DOCKER_HOST: tcp://socket-proxy:2375
       KESTREL_NETWORK: ${KESTREL_LINK_NETWORK:-kestrel-link}
-      KESTREL_IMAGE: ${KESTREL_ENV_IMAGE:-kestrel-env}
+      KESTREL_IMAGE: ${KESTREL_ENV_IMAGE:-ghcr.io/openkestrel/kestrel-env:main}
       KESTREL_LINK: http://kestrel:7717
+      KESTREL_CLIENT_URL: ${KESTREL_CLIENT_URL:-http://localhost:${KESTREL_CLIENT_PORT:-7719}}
       RUST_LOG: info
     volumes:
       - kestrel:/var/lib/kestrel
@@ -57,19 +62,18 @@ services:
       start_period: 30s
 
   # The browser Client, on the operator boundary's origin: its assets, and `/operator` forwarded
-  # to the control plane, over HTTPS from Caddy's local CA. It adds no trust, so it is published
-  # on the host's loopback too.
+  # to the control plane, over plain HTTP. It adds no trust, so it is published on the host's
+  # loopback too. It waits on nothing, so a control plane that cannot start still has a page
+  # that says so.
   client:
-    image: ${KESTREL_CLIENT_IMAGE:-kestrel-client}
+    image: ${KESTREL_CLIENT_IMAGE:-ghcr.io/openkestrel/kestrel-client:main}
+    pull_policy: ${KESTREL_PULL_POLICY:-missing}
     build:
       context: .
       dockerfile: images/kestrel-client/Dockerfile
-    depends_on:
-      kestrel:
-        condition: service_healthy
+    environment:
+      KESTREL_COMPOSE: "true"
     networks: [operator]
-    volumes:
-      - kestrel-client:/data
     ports:
       - 127.0.0.1:${KESTREL_CLIENT_PORT-7719}:8080
     restart: unless-stopped
@@ -77,7 +81,8 @@ services:
   # Built here and started by nothing: an Instance is a container the control plane
   # provisions for one Workspace, never a service beside it.
   kestrel-env:
-    image: ${KESTREL_ENV_IMAGE:-kestrel-env}
+    image: ${KESTREL_ENV_IMAGE:-ghcr.io/openkestrel/kestrel-env:main}
+    pull_policy: ${KESTREL_PULL_POLICY:-missing}
     build:
       context: .
       dockerfile: images/kestrel-env/Dockerfile
@@ -99,5 +104,3 @@ networks:
 volumes:
   kestrel:
     name: ${KESTREL_VOLUME:-kestrel}
-  # The CA the operator's browser trusts; a new one each start would mean trusting it again.
-  kestrel-client:

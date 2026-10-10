@@ -163,6 +163,12 @@ fn correlation_overridden(
     })
 }
 
+fn client_url() -> url::Url {
+    kestrel::cli::CLIENT_URL
+        .parse()
+        .expect("the default Client URL")
+}
+
 const LOOPBACK: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 0);
 
@@ -409,7 +415,7 @@ impl Kestrel {
             .await
             .expect("the control plane should boot against a fresh data directory");
         let shutdown = CancellationToken::new();
-        let all_in_one = kestrel::role::bind(store.clone(), listen, follow_lease)
+        let all_in_one = kestrel::role::bind(store.clone(), listen, client_url(), follow_lease)
             .await
             .expect("the control plane should bind its link");
         let bound = all_in_one.bound();
@@ -454,6 +460,7 @@ impl Kestrel {
                 link: LOOPBACK,
                 operator: LOOPBACK,
             },
+            client_url(),
             Wake::default(),
             kestrel::presence::LEASE,
         )

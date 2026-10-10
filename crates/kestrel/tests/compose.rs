@@ -54,6 +54,28 @@ fn the_client_port_serves_the_client_and_the_operator_interface() {
     assert!(organizations.contains("\"acme\""), "{organizations}");
 }
 
+/// With the control plane stopped the Client still opens a deep link, and its operator path says
+/// in a typed Diagnostic that nothing answered, which is what its outage page reads.
+#[test]
+#[ignore = "builds images and brings a stack up"]
+fn the_client_outlives_its_control_plane() {
+    let stack = Stack::up();
+    stack.stop(CONTROL_PLANE);
+
+    let (opened, shell) = stack.what_the_client_serves("/organizations/acme");
+    assert_eq!(opened, 200, "{shell}");
+    assert!(shell.contains("<title>kestrel</title>"), "{shell}");
+
+    let (status, said) = stack.what_the_client_serves("/operator/organizations");
+    assert_eq!(status, 502, "{said}");
+    let diagnostic: Value = serde_json::from_str(&said).expect("a Diagnostic");
+    assert_eq!(diagnostic["kind"], "connection_failed");
+    assert_eq!(
+        diagnostic["next_steps"][0],
+        serde_json::json!({"action": "check_connection", "service": "control_plane", "compose": true})
+    );
+}
+
 /// The compose file must be the stable operator-facing stack with nothing set: one project,
 /// one volume, one link network and its images, under the names an operator already knows.
 #[test]
@@ -75,17 +97,41 @@ fn the_operator_supplies_nothing() {
     let model = model(rendered);
     assert_eq!(model["name"], "kestrel");
     assert_eq!(model["volumes"]["kestrel"]["name"], "kestrel");
+    assert_eq!(
+        model["volumes"].as_object().map(|volumes| volumes.len()),
+        Some(1),
+        "the Client keeps no certificate authority, so no volume but the database's: {}",
+        model["volumes"]
+    );
+    assert!(
+        model["services"][CLIENT].get("volumes").is_none(),
+        "{}",
+        model["services"][CLIENT]
+    );
     assert_eq!(model["networks"]["link"]["name"], "kestrel-link");
-    assert_eq!(model["services"]["kestrel"]["image"], "kestrel");
-    assert_eq!(model["services"]["kestrel-env"]["image"], "kestrel-env");
-    assert_eq!(model["services"][CLIENT]["image"], "kestrel-client");
+    assert_eq!(
+        model["services"]["kestrel"]["image"],
+        "ghcr.io/openkestrel/kestrel:main"
+    );
+    assert_eq!(
+        model["services"]["kestrel-env"]["image"],
+        "ghcr.io/openkestrel/kestrel-env:main"
+    );
+    assert_eq!(
+        model["services"][CLIENT]["image"],
+        "ghcr.io/openkestrel/kestrel-client:main"
+    );
     assert_eq!(
         model["services"]["kestrel"]["environment"]["KESTREL_NETWORK"],
         "kestrel-link"
     );
     assert_eq!(
         model["services"]["kestrel"]["environment"]["KESTREL_IMAGE"],
-        "kestrel-env"
+        "ghcr.io/openkestrel/kestrel-env:main"
+    );
+    assert_eq!(
+        model["services"]["kestrel"]["environment"]["KESTREL_CLIENT_URL"],
+        "http://localhost:7719"
     );
     assert_eq!(
         model["services"]["kestrel"]["ports"],
@@ -106,6 +152,61 @@ fn the_operator_supplies_nothing() {
             "published": "7719",
             "protocol": "tcp",
         }])
+    );
+}
+
+/// The control plane names the Client by the port compose publishes it on.
+#[test]
+#[ignore = "renders the compose file with docker"]
+fn the_client_url_the_control_plane_names_is_the_port_the_client_is_published_on() {
+    let model = model(compose::rendered_given(&[("KESTREL_CLIENT_PORT", "8000")]));
+
+    assert_eq!(model["services"][CLIENT]["ports"][0]["published"], "8000");
+    assert_eq!(
+        model["services"]["kestrel"]["environment"]["KESTREL_CLIENT_URL"],
+        "http://localhost:8000"
+    );
+}
+
+/// A control plane that cannot start, or is still starting, leaves the Client up to say so.
+#[test]
+#[ignore = "renders the compose file with docker"]
+fn the_client_starts_whatever_the_control_plane_does() {
+    let model = model(compose::rendered_against_an_empty_environment());
+
+    assert!(
+        model["services"][CLIENT].get("depends_on").is_none(),
+        "{}",
+        model["services"][CLIENT]
+    );
+    assert_eq!(
+        model["services"][CLIENT]["environment"]["KESTREL_COMPOSE"],
+        "true"
+    );
+}
+
+/// The source build names every product image locally, provisions Instances from the
+/// `kestrel-env` it built, and builds rather than pulls.
+#[test]
+#[ignore = "renders the compose file with docker"]
+fn a_source_build_runs_the_images_it_built_and_pulls_none_over_them() {
+    let rendered = compose::rendered_from_source();
+    assert_eq!(rendered.code, 0, "{}", rendered.err);
+    let model = model(rendered);
+    let services = &model["services"];
+
+    for (service, image) in [
+        (CONTROL_PLANE, "kestrel"),
+        (CLIENT, "kestrel-client"),
+        ("kestrel-env", "kestrel-env"),
+    ] {
+        assert_eq!(services[service]["image"], image);
+        assert_eq!(services[service]["pull_policy"], "build", "{service}");
+        assert!(services[service]["build"].is_object(), "{service}");
+    }
+    assert_eq!(
+        services[CONTROL_PLANE]["environment"]["KESTREL_IMAGE"],
+        "kestrel-env"
     );
 }
 
@@ -233,6 +334,77 @@ fn the_daemon_is_reached_through_the_filter_rather_than_by_its_socket() {
     );
 }
 
+/// The one image request the driver makes is reading an image's metadata, by whatever reference
+/// `KESTREL_IMAGE` names, and nothing else under `/images` (ADR-0048).
+#[test]
+fn the_filter_reads_image_metadata_by_any_reference_and_nothing_else_about_images() {
+    let compose: yaml_serde::Value = yaml_serde::from_str(
+        &std::fs::read_to_string(docker::repository().join("compose.yaml"))
+            .expect("compose.yaml should read"),
+    )
+    .expect("compose.yaml should parse");
+    let allowed = compose["services"]["socket-proxy"]["command"]
+        .as_sequence()
+        .expect("the filter's flags")
+        .iter()
+        .filter_map(yaml_serde::Value::as_str)
+        .find_map(|flag| flag.strip_prefix("-allowGET="))
+        .expect("the filter allows some reads")
+        .replace("$$", "$");
+    let allowed = regex::Regex::new(&allowed).expect("the filter's reads are a regex");
+    let digest = format!("sha256:{}", "0".repeat(64));
+
+    for read in [
+        "/v1.47/images/kestrel-env/json".to_owned(),
+        "/images/kestrel-env:main/json".to_owned(),
+        "/v1.47/images/ghcr.io/openkestrel/kestrel-env:main/json".to_owned(),
+        format!("/v1.47/images/localhost:5000/team/kestrel-env@{digest}/json"),
+        format!("/v1.47/images/{digest}/json"),
+    ] {
+        assert!(allowed.is_match(&read), "the filter refuses {read}");
+    }
+    for refused in [
+        "/v1.47/images/json",
+        "/v1.47/images/search",
+        "/v1.47/images/kestrel-env/history",
+        "/v1.47/images/kestrel-env/get",
+        "/v1.47/images/../containers/escaped/json",
+        "/v1.47/images/kestrel-env/../../containers/escaped/json",
+        "/v1.47/images/./json",
+    ] {
+        assert!(!allowed.is_match(refused), "the filter allows {refused}");
+    }
+}
+
+/// The catalogue answers what the image the stack provisions declares, read through the filter.
+#[test]
+#[ignore = "builds images and brings a stack up"]
+fn the_control_plane_reads_the_harnesses_its_image_declares_through_the_filter() {
+    let stack = Stack::up();
+
+    let read = stack.in_the_control_plane(&[
+        "curl",
+        "--fail",
+        "--silent",
+        "--show-error",
+        "http://127.0.0.1:7718/operator/harnesses",
+    ]);
+    assert_eq!(read.code, 0, "the catalogue did not answer: {read:?}");
+    let rows: Value = serde_json::from_str(&read.out).expect("the catalogue is JSON");
+    for row in rows.as_array().expect("catalogue rows") {
+        assert_eq!(
+            row["availability"]["state"], "available",
+            "the image does not declare {}: {row}",
+            row["name"]
+        );
+    }
+    let filter = stack.everything_a_service_said(FILTER);
+    assert!(
+        !(filter.contains("not allowed") && filter.contains("/images/")),
+        "the filter refused reading the image. it said:\n{filter}"
+    );
+}
+
 /// The filter is on a network the control plane joins and nothing else does, so an agent that
 /// reaches past kestrel for the daemon finds nothing listening rather than a filter to probe.
 #[test]
@@ -305,7 +477,6 @@ async fn a_session_provisions_an_instance_and_releasing_it_destroys_it_through_t
         "operator",
         "go",
         "--json",
-        "session.id",
     ]);
     let posted: Value = serde_json::from_str(&posted)
         .unwrap_or_else(|error| panic!("{posted} is no record: {error}"));
@@ -357,17 +528,26 @@ async fn a_session_provisions_an_instance_and_releasing_it_destroys_it_through_t
 fn the_stack_comes_back_up_with_every_workspace_it_had() {
     let stack = Stack::up();
     let workspace = a_workspace(&stack);
-    let shown = stack.ran(&["workspace", "show", &workspace, "--json", WORKSPACE]);
-    let transcript = stack.ran(&["workspace", "transcript", &workspace, "--json", "seq,entry"]);
+    let before = shown(&stack, &workspace);
+    let transcript = stack.ran(&["workspace", "transcript", &workspace, "--json"]);
 
     stack.comes_back();
 
+    let after = shown(&stack, &workspace);
+    for field in [
+        "id",
+        "name",
+        "organization",
+        "project",
+        "opened_with",
+        "checkout",
+        "state",
+        "opened_at",
+    ] {
+        assert_eq!(after[field], before[field], "{field}");
+    }
     assert_eq!(
-        stack.ran(&["workspace", "show", &workspace, "--json", WORKSPACE]),
-        shown
-    );
-    assert_eq!(
-        stack.ran(&["workspace", "transcript", &workspace, "--json", "seq,entry"]),
+        stack.ran(&["workspace", "transcript", &workspace, "--json"]),
         transcript
     );
     assert!(
@@ -421,10 +601,8 @@ fn the_commands_usage_documents_are_the_commands_that_work() {
     );
 }
 
-const WORKSPACE: &str = "id,name,organization,project,opened_with,checkout,state,opened_at";
-
 fn shown(stack: &Stack, workspace: &str) -> Value {
-    let shown = stack.ran(&["workspace", "show", workspace, "--json", WORKSPACE]);
+    let shown = stack.ran(&["workspace", "show", workspace, "--json"]);
 
     serde_json::from_str(&shown).unwrap_or_else(|error| panic!("{shown} is no record: {error}"))
 }
@@ -462,12 +640,11 @@ fn a_workspace(stack: &Stack) -> String {
         "--agent",
         "builder",
         "--json",
-        "workspace_id",
     ]);
     let opened: Value = serde_json::from_str(&opened)
         .unwrap_or_else(|error| panic!("{opened} is no record: {error}"));
 
-    opened["workspace_id"]
+    opened["workspace"]["id"]
         .as_str()
         .expect("the opened workspace's identifier")
         .to_owned()
@@ -479,7 +656,7 @@ struct Listed {
 }
 
 fn listed(stack: &Stack, session: &str) -> Listed {
-    let shown = stack.ran(&["session", "show", session, "--json", "instance,exit"]);
+    let shown = stack.ran(&["session", "show", session, "--json"]);
     let shown: Value = serde_json::from_str(&shown)
         .unwrap_or_else(|error| panic!("{shown} is no session: {error}"));
 

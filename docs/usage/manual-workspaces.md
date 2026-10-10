@@ -48,7 +48,7 @@ kestrel workspace transcript latest --follow --as-participant Ada
 
 A transcript without `--follow` ends with a cursor on stderr. Pass it to `--cursor` to get only later entries. With `--follow`, the CLI reconnects and resumes after the last printed entry if the control plane drops. `--as-participant NAME` joins the workspace's presence under that name while following, and renews its one-minute lease every 20 seconds; presence is never printed. Harness stderr goes to `docker compose logs -f kestrel`, labeled by session, and stays out of the transcript.
 
-The CLI renders readable columns at a terminal and tab-delimited records when piped. `--json id,state` selects fields for scripts; use exit codes rather than parsing diagnostic text. `kestrel exit-codes` lists them.
+The CLI renders readable columns at a terminal and tab-delimited records when piped. `--json` writes the complete response as one JSON document (a collection is one array, `[]` when empty), and a transcript as one JSON record a line; select fields with `jq`, such as `kestrel session list --workspace latest --json | jq '.[] | {id, state}'`. Under `--json` a failure is one JSON diagnostic on stderr; use exit codes rather than parsing diagnostic text. `kestrel exit-codes` lists them.
 
 ## Continue the work
 
@@ -76,7 +76,7 @@ kestrel session list --workspace latest        # note the session's name, once i
 kestrel workspace open --project kestrel --agent builder \
   --brief "Document the endpoint" --depends-on <first session>
 kestrel queue                                  # the second session is waiting on the first
-kestrel queue --json name,position,reasons
+kestrel queue --json | jq '.queued[] | {name, position, reasons}'
 kestrel session stop <first session>           # it was waiting, so it succeeds
 kestrel queue                                  # the second session is ready in its place
 ```

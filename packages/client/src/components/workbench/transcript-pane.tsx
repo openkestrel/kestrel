@@ -15,6 +15,7 @@ import { Composer } from "./composer";
 import { useOptionWrite } from "./option-write";
 import { SessionHeader } from "./session-header";
 import { ActivityRow } from "./transcript/activity-row";
+import { ConnectionNotice } from "./transcript/connection-notice";
 import { EntryRow, type Disclosure } from "./transcript/entry-row";
 import { LiveLine } from "./transcript/live-line";
 
@@ -26,6 +27,7 @@ const MODES: { value: Disclosure; label: string }[] = [
 
 export function TranscriptPane({
 	transcript,
+	reconnect,
 	organization,
 	workspace,
 	read,
@@ -33,6 +35,7 @@ export function TranscriptPane({
 	workspaces,
 }: {
 	transcript: TranscriptSnapshot;
+	reconnect: () => void;
 	organization: string;
 	workspace: string;
 	read: Workspace;
@@ -108,13 +111,24 @@ export function TranscriptPane({
 					))}
 				</ToggleGroup>
 			</div>
+			<ConnectionNotice connection={transcript.connection} reconnect={reconnect} />
 			<Conversation aria-live="off">
 				<ConversationContent className="gap-2">
 					{emptyOfEverything ? (
-						<ConversationEmptyState
-							title="Transcript"
-							description={`${read.project} on ${read.checkout.branch}`}
-						/>
+						// Reconnecting follows a live read, so an empty history then is known to be empty.
+						transcript.connection.state === "live" ||
+						transcript.connection.state === "reconnecting" ? (
+							<ConversationEmptyState
+								title="Transcript"
+								description={`${read.project} on ${read.checkout.branch}`}
+							/>
+						) : transcript.connection.state === "connecting" ? (
+							<ConversationEmptyState data-transcript-connection="connecting">
+								<output className="text-muted-foreground text-sm">
+									Connecting to the Transcript…
+								</output>
+							</ConversationEmptyState>
+						) : null
 					) : (
 						<>
 							{items.map((item) =>

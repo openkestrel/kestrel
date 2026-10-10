@@ -1,5 +1,5 @@
-import { reasonText } from "./format";
 import type { Queue } from "./generated";
+import { queuedSessions } from "./queue-read";
 
 export function openingQueueLine(queue: Queue | undefined, briefed: boolean): string {
 	if (!queue?.work_role) {
@@ -21,15 +21,13 @@ export function openingQueueLine(queue: Queue | undefined, briefed: boolean): st
 }
 
 export function sessionQueueLine(queue: Queue, workspace: string): string | undefined {
-	const queued = queue.queued.find((row) => row.workspace === workspace);
-	const waiting = queue.waiting.find((row) => row.workspace === workspace);
-	const unbriefed = queue.unbriefed.find((row) => row.workspace === workspace);
-	const row = queued ?? waiting ?? unbriefed;
+	const row = queuedSessions(queue).find((queued) => queued.workspace === workspace);
 	if (!row) return undefined;
-	const label = queued ? "Queued" : waiting ? "Next Turn" : "First Turn";
-	const position = row.position !== null ? `${label} at position ${row.position}.` : undefined;
+	const position = row.position !== null ? `${row.label} at position ${row.position}.` : undefined;
 	const reasons =
-		row.reasons.length > 0 ? `Waiting: ${row.reasons.map(reasonText).join("; ")}.` : undefined;
+		row.reasons === ""
+			? undefined
+			: `${row.reasons.charAt(0).toUpperCase()}${row.reasons.slice(1)}.`;
 	if (position) return reasons ? `${position} ${reasons}` : position;
 	if (!queue.work_role) {
 		const unknown = "Queue order is unknown: no dispatch configuration is recorded.";
