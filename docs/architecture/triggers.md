@@ -63,6 +63,19 @@ rather than held, and its repository no longer counts as watched. Maintenance an
 `state_conflict` that names no repair. Nothing is asked of GitHub: the App, its installation and
 its keys are the operator's to remove, and the CLI says how.
 
+`integration::replace_private_key` swaps a GitHub Integration's App private key and nothing else.
+It reads the Integration, then asks GitHub with the replacement outside any transaction: mint a
+token as the same App for the same installation, and read the same repository with it, comparing
+its id (`Github::proves`). Only then does one write seal the key and bump `revision`, fenced on the
+revision it read, so maintenance that landed meanwhile refuses the replacement instead of being
+overwritten. Every failure saves nothing and is typed: a key that is not PEM or that GitHub answers
+401 is an `invalid_field` on `private_key`; an installation or repository that no longer answers is
+a `state_conflict`; a rate limit or an outage is a 503 `unavailable` with `service: github`. Each
+but the first offers `replace_integration_private_key`, which never carries the key. A disabled
+Integration takes a replacement and stays disabled; a generic webhook has none to replace. The
+token cache is keyed by revision and drops an Integration's older entries when it mints, so no
+token minted with the previous key is handed out afterwards.
+
 ## Firing
 
 `timer::firing` calls `trigger::fire` on each tick or wake. It takes up to 32 unfired matches and

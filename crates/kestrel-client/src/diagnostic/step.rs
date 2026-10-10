@@ -386,6 +386,21 @@ fn step(action: &wire::Action, invocation: &Invocation, wrote: bool) -> Step {
             given(&["integration", "enable", &a.integration]),
             Some(a.organization.clone()),
         ),
+        A::ReplaceIntegrationPrivateKeyAction(a) => {
+            let wait = match a.retry_after_seconds {
+                Some(seconds) if seconds > 0 => format!(" after {seconds}s"),
+                _ => String::new(),
+            };
+            Step::run(
+                format!(
+                    "replace the Integration {}'s App private key{wait}; it is read from \
+                     standard input, unechoed, or from --private-key-file",
+                    a.integration
+                ),
+                given(&["integration", "github", "replace-key", &a.integration]),
+                Some(a.organization.clone()),
+            )
+        }
         A::ReleaseInstanceAction(a) => Step {
             consequence: Some(a.consequence.clone()),
             ..Step::run(

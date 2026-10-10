@@ -88,6 +88,8 @@ pub const INTEGRATION_ENABLE: &str =
     "/operator/organizations/{organization}/integrations/{integration}/enable";
 pub const INTEGRATION_RETIRE: &str =
     "/operator/organizations/{organization}/integrations/{integration}/retire";
+pub const INTEGRATION_PRIVATE_KEY: &str =
+    "/operator/organizations/{organization}/integrations/{integration}/private-key";
 pub const EVENT_REFUSAL: &str =
     "/operator/organizations/{organization}/integrations/{integration}/event-refusal";
 pub const EVENTS: &str = "/operator/organizations/{organization}/events";
@@ -372,6 +374,10 @@ pub fn router(
         .route(INTEGRATION_DISABLE, post(disable_integration))
         .route(INTEGRATION_ENABLE, post(enable_integration))
         .route(INTEGRATION_RETIRE, post(retire_integration))
+        .route(
+            INTEGRATION_PRIVATE_KEY,
+            put(replace_integration_private_key),
+        )
         .route(GITHUB_APP, post(start_github_app))
         .route(integration::manifest::PAGE, get(github_app_page))
         .route(integration::manifest::CALLBACK, get(github_app_callback))
@@ -2149,6 +2155,25 @@ async fn retire_integration(
     .await?;
 
     Ok(Json(integration_record(retired, &organization)))
+}
+
+async fn replace_integration_private_key(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, name)): Path<(String, String)>,
+    replacement: Result<Json<wire::IntegrationPrivateKeyReplacement>, JsonRejection>,
+) -> Result<Json<wire::Integration>, Refused> {
+    let Json(replacement) = replacement?;
+    let replaced = integration::replace_private_key(
+        &control_plane.store,
+        &Github::unfenced()?,
+        &organization,
+        &name,
+        &replacement.private_key,
+        replacement.revision,
+    )
+    .await?;
+
+    Ok(Json(integration_record(replaced, &organization)))
 }
 
 async fn register_integration(
@@ -4158,6 +4183,9 @@ fn next_steps(next: declined::Next, organization: Option<&str>) -> Vec<wire::Act
                 integration,
             })
         }
+        Step::ReplacePrivateKey { integration } => {
+            replace_private_key(organization.to_owned(), integration, None)
+        }
         Step::ReleaseInstance {
             workspace,
             instance,
@@ -4172,6 +4200,19 @@ fn next_steps(next: declined::Next, organization: Option<&str>) -> Vec<wire::Act
         }),
     }));
     steps
+}
+
+fn replace_private_key(
+    organization: String,
+    integration: String,
+    retry_after_seconds: Option<i64>,
+) -> wire::Action {
+    wire::Action::ReplaceIntegrationPrivateKeyAction(wire::ReplaceIntegrationPrivateKeyAction {
+        action: serde_json::json!("replace_integration_private_key"),
+        organization,
+        integration,
+        retry_after_seconds,
+    })
 }
 
 const fn explained(consequence: Consequence) -> &'static str {
@@ -4512,6 +4553,32 @@ fn diagnosis(reason: Reason, field: Option<&'static str>) -> (StatusCode, wire::
                 },
             }),
         ),
+        Reason::GithubUnavailable {
+            operation,
+            integration,
+            organization,
+            retry_after_seconds,
+            message,
+        } => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            wire::Diagnostic::UnavailableDiagnostic(wire::UnavailableDiagnostic {
+                kind: serde_json::json!("unavailable"),
+                message,
+                field,
+                context: wire::UnavailableContext {
+                    service: "github".to_owned(),
+                    resource: Some(integration.clone()),
+                    operation: operation.to_owned(),
+                    retry_after_seconds,
+                    saved: None,
+                },
+                next_steps: vec![replace_private_key(
+                    organization,
+                    integration,
+                    retry_after_seconds,
+                )],
+            }),
+        ),
         Reason::ImageUnavailable {
             operation,
             harness,
@@ -4815,6 +4882,7 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("POST", INTEGRATION_DISABLE) => "disable_integration",
         ("POST", INTEGRATION_ENABLE) => "enable_integration",
         ("POST", INTEGRATION_RETIRE) => "retire_integration",
+        ("PUT", INTEGRATION_PRIVATE_KEY) => "replace_integration_private_key",
         ("POST", GITHUB_APP) => "start_github_app",
         ("GET", integration::manifest::PAGE) => "github_app_setup",
         ("GET", integration::manifest::CALLBACK) => "github_app_callback",

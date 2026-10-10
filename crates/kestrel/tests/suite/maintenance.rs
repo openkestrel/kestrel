@@ -4,11 +4,12 @@ use std::time::Duration;
 
 use hmac::{Hmac, KeyInit as _, Mac as _};
 use jiff::SignedDuration;
-use kestrel::domain::{Direction, IntegrationState};
+use kestrel::declined::{Constraint, Reason, Step};
+use kestrel::domain::{Direction, Integration, IntegrationState};
 use kestrel::integration::Change;
 use sha2::Sha256;
-use support::Kestrel;
-use support::github_stub::{self, GithubStub};
+use support::github_stub::{self, GithubStub, ScriptedResponse};
+use support::{Kestrel, PRIVATE_KEY, REPLACEMENT_PRIVATE_KEY};
 
 const PATIENCE: Duration = Duration::from_secs(30);
 const REPOSITORY: &str = "jtmthf/kestrel";
@@ -515,6 +516,385 @@ async fn a_webhook_to_a_retired_integration_is_refused_whatever_it_presents() {
 
     assert!(answered.is_client_error(), "answered {answered}");
     assert!(kestrel.events("acme").await.is_empty());
+
+    kestrel.teardown().await;
+}
+
+const MINTED: &str = "/access_tokens";
+const WATCHED: &str = "/repos/jtmthf/kestrel";
+
+async fn registered(kestrel: &Kestrel, stub: &GithubStub) -> Integration {
+    kestrel.declare_organization("acme").await;
+    kestrel
+        .register_integration(
+            "acme",
+            "github",
+            REPOSITORY,
+            &stub.base_url(),
+            BOTH,
+            SignedDuration::from_hours(1),
+        )
+        .await
+}
+
+fn private_key(integration: &Integration) -> &str {
+    integration
+        .github()
+        .expect("a github one")
+        .credential
+        .private_key()
+        .expect("a key it signs with")
+}
+
+fn mints(stub: &GithubStub) -> usize {
+    stub.requests()
+        .iter()
+        .filter(|request| request.url.contains(MINTED))
+        .count()
+}
+
+fn reason(refused: &anyhow::Error) -> &Reason {
+    refused
+        .downcast_ref::<Reason>()
+        .unwrap_or_else(|| panic!("an untyped refusal: {refused:#}"))
+}
+
+fn resumes(reason: &Reason) -> bool {
+    let Reason::StateConflict { next, .. } = reason else {
+        return false;
+    };
+    next.then.contains(&Step::ReplacePrivateKey {
+        integration: "github".to_owned(),
+    })
+}
+
+#[tokio::test]
+async fn a_validated_replacement_becomes_the_key_without_changing_what_it_connects_to() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    let before = registered(&kestrel, &stub).await;
+
+    let replaced = kestrel
+        .replace_private_key("acme", "github", REPLACEMENT_PRIVATE_KEY, None)
+        .await
+        .expect("a key github accepts should replace the last");
+
+    let after = kestrel.integration("acme", "github").await;
+    assert_eq!(private_key(&after), REPLACEMENT_PRIVATE_KEY);
+    assert_eq!(replaced.revision, after.revision);
+    assert!(after.revision > before.revision);
+    assert_eq!(after.id, before.id);
+    assert_eq!(after.state, before.state);
+    let (was, is) = (
+        before.github().expect("a github one"),
+        after.github().expect("a github one"),
+    );
+    assert_eq!(
+        (is.credential.id, is.credential.installation),
+        (was.credential.id, was.credential.installation)
+    );
+    assert_eq!(
+        (&is.repository, is.repository_id, &is.api, &is.bot_login),
+        (&was.repository, was.repository_id, &was.api, &was.bot_login)
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_replacement_that_is_not_proven_leaves_the_previous_key_in_use() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    let before = registered(&kestrel, &stub).await;
+
+    let unproven = [
+        ("unreadable", "not a private key", None),
+        (
+            "rejected",
+            REPLACEMENT_PRIVATE_KEY,
+            Some(("POST", MINTED, ScriptedResponse::answering(401))),
+        ),
+        (
+            "installation",
+            REPLACEMENT_PRIVATE_KEY,
+            Some(("POST", MINTED, ScriptedResponse::answering(404))),
+        ),
+        (
+            "repository",
+            REPLACEMENT_PRIVATE_KEY,
+            Some(("GET", WATCHED, ScriptedResponse::answering(404))),
+        ),
+        (
+            "another repository",
+            REPLACEMENT_PRIVATE_KEY,
+            Some((
+                "GET",
+                WATCHED,
+                ScriptedResponse::ok(serde_json::json!({ "id": 99 }).to_string()),
+            )),
+        ),
+        (
+            "rate limited",
+            REPLACEMENT_PRIVATE_KEY,
+            Some(("POST", MINTED, github_stub::rate_limited())),
+        ),
+        (
+            "outage",
+            REPLACEMENT_PRIVATE_KEY,
+            Some(("POST", MINTED, ScriptedResponse::answering(502))),
+        ),
+    ];
+    for (why, key, answer) in unproven {
+        if let Some((method, path, response)) = answer {
+            stub.script_answer(method, path, response);
+        }
+
+        let refused = kestrel
+            .replace_private_key("acme", "github", key, None)
+            .await
+            .expect_err(why);
+
+        let said = format!("{refused:#} {refused:?}");
+        assert!(
+            !said.contains(key),
+            "{why}: the refusal spelled the key out"
+        );
+        match (why, reason(&refused)) {
+            (
+                "unreadable",
+                Reason::InvalidField {
+                    field: "private_key",
+                    constraint: Constraint::RsaPrivateKey,
+                    ..
+                },
+            )
+            | (
+                "rejected",
+                Reason::InvalidField {
+                    field: "private_key",
+                    constraint: Constraint::AcceptedByApp,
+                    ..
+                },
+            )
+            | (
+                "installation",
+                Reason::StateConflict {
+                    state: "installation_unreachable",
+                    ..
+                },
+            )
+            | (
+                "repository" | "another repository",
+                Reason::StateConflict {
+                    state: "repository_unreachable",
+                    ..
+                },
+            )
+            | (
+                "rate limited",
+                Reason::GithubUnavailable {
+                    retry_after_seconds: Some(_),
+                    ..
+                },
+            )
+            | (
+                "outage",
+                Reason::GithubUnavailable {
+                    retry_after_seconds: None,
+                    ..
+                },
+            ) => {}
+            (why, reason) => panic!("{why} was refused as {reason:?}"),
+        }
+        let after = kestrel.integration("acme", "github").await;
+        assert_eq!(private_key(&after), PRIVATE_KEY, "{why}");
+        assert_eq!(after.revision, before.revision, "{why}");
+    }
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_token_cached_before_a_replacement_is_not_handed_out_after_it() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    let before = registered(&kestrel, &stub).await;
+    let github = kestrel.github();
+    github
+        .issue(&before, 43)
+        .await
+        .expect("the issue should read");
+    let hour = SignedDuration::from_hours(1);
+    stub.script_answer(
+        "POST",
+        MINTED,
+        github_stub::minted_token("ghs_proving", hour),
+    );
+    stub.script_answer("POST", MINTED, github_stub::minted_token("ghs_after", hour));
+
+    let after = kestrel
+        .replace_private_key("acme", "github", REPLACEMENT_PRIVATE_KEY, None)
+        .await
+        .expect("the key should replace");
+
+    assert!(
+        github.issue(&before, 43).await.is_err(),
+        "work begun before the replacement was handed a token"
+    );
+    github
+        .issue(&after, 43)
+        .await
+        .expect("the issue should read");
+    let presented: Vec<String> = stub
+        .requests()
+        .iter()
+        .filter(|request| request.url.ends_with("/issues/43"))
+        .flat_map(|request| request.headers.clone())
+        .filter(|(name, _)| name == "authorization")
+        .map(|(_, value)| value)
+        .collect();
+    assert_eq!(
+        presented,
+        [
+            format!("Bearer {}", github_stub::INSTALLATION_TOKEN),
+            "Bearer ghs_after".to_owned()
+        ]
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_replacement_decided_against_an_older_revision_asks_github_nothing() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    let before = registered(&kestrel, &stub).await;
+    kestrel.disable_integration("acme", "github").await;
+    let asked = mints(&stub);
+
+    let refused = kestrel
+        .replace_private_key(
+            "acme",
+            "github",
+            REPLACEMENT_PRIVATE_KEY,
+            Some(before.revision),
+        )
+        .await
+        .expect_err("a stale replacement");
+
+    assert!(
+        matches!(
+            reason(&refused),
+            Reason::StateConflict {
+                state: "revised",
+                ..
+            }
+        ),
+        "{refused:#}"
+    );
+    assert!(resumes(reason(&refused)), "{refused:#}");
+    assert_eq!(mints(&stub), asked);
+    assert_eq!(
+        private_key(&kestrel.integration("acme", "github").await),
+        PRIVATE_KEY
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn maintenance_that_lands_while_a_replacement_is_proven_refuses_it() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    registered(&kestrel, &stub).await;
+    stub.script_answer(
+        "POST",
+        MINTED,
+        github_stub::minted_token("ghs_proving", SignedDuration::from_hours(1))
+            .after(Duration::from_secs(1)),
+    );
+
+    let (refused, disabled) = tokio::join!(
+        kestrel.replace_private_key("acme", "github", REPLACEMENT_PRIVATE_KEY, None),
+        async {
+            eventually("the replacement being proven", async || mints(&stub) > 1).await;
+            kestrel.disable_integration("acme", "github").await
+        }
+    );
+
+    let refused = refused.expect_err("a replacement proven against what has since changed");
+    assert!(resumes(reason(&refused)), "{refused:#}");
+    let after = kestrel.integration("acme", "github").await;
+    assert_eq!(private_key(&after), PRIVATE_KEY);
+    assert_eq!(after.revision, disabled.revision);
+    assert_eq!(after.state, IntegrationState::Disabled);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_disabled_integration_takes_a_replacement_and_stays_disabled() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    registered(&kestrel, &stub).await;
+    kestrel.disable_integration("acme", "github").await;
+
+    let replaced = kestrel
+        .replace_private_key("acme", "github", REPLACEMENT_PRIVATE_KEY, None)
+        .await
+        .expect("a disabled integration keeps its credentials maintainable");
+
+    assert_eq!(replaced.state, IntegrationState::Disabled);
+    assert_eq!(private_key(&replaced), REPLACEMENT_PRIVATE_KEY);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_retired_integration_takes_no_replacement() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    registered(&kestrel, &stub).await;
+    kestrel.retire_integration("acme", "github").await;
+    let asked = mints(&stub);
+
+    let refused = kestrel
+        .replace_private_key("acme", "github", REPLACEMENT_PRIVATE_KEY, None)
+        .await
+        .expect_err("a retired integration has no key to replace");
+
+    assert!(
+        matches!(
+            reason(&refused),
+            Reason::StateConflict {
+                state: "retired",
+                ..
+            }
+        ),
+        "{refused:#}"
+    );
+    assert_eq!(mints(&stub), asked);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_generic_webhook_has_no_private_key_to_replace() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+    kestrel
+        .register_webhook("acme", "ci", "a-shared-secret")
+        .await;
+
+    let refused = kestrel
+        .replace_private_key("acme", "ci", REPLACEMENT_PRIVATE_KEY, None)
+        .await
+        .expect_err("a webhook presents no private key");
+
+    assert!(
+        matches!(reason(&refused), Reason::Forbidden { .. }),
+        "{refused:#}"
+    );
 
     kestrel.teardown().await;
 }

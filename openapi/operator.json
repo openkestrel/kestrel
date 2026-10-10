@@ -1864,6 +1864,73 @@
         }
       }
     },
+    "/operator/organizations/{organization}/integrations/{integration}/private-key": {
+      "put": {
+        "operationId": "replaceIntegrationPrivateKey",
+        "summary": "Replace a GitHub Integration's App private key.",
+        "description": "The replacement is checked against GitHub first: it must sign as the same App, mint for the same installation and reach the same repository. Only then does it replace the stored key, in one write that bumps the revision, so an installation token minted with the previous key is never handed out afterwards. A replacement that is not accepted, an App that no longer reaches its installation or repository, a rate limit or an outage saves nothing and leaves the previous key in use. Maintenance that lands while GitHub is being asked refuses the replacement with 409. The key is never returned.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationPrivateKeyReplacement"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Integration, at its new revision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
     "/operator/organizations/{organization}/integrations/{integration}/event-refusal": {
       "delete": {
         "operationId": "acknowledgeEventRefusal",
@@ -5815,6 +5882,21 @@
           }
         }
       },
+      "IntegrationPrivateKeyReplacement": {
+        "description": "A replacement for the private key a GitHub Integration signs as its App with. The App, installation and repository it is checked against are the Integration's own and cannot be named.",
+        "type": "object",
+        "properties": {
+          "private_key": {
+            "type": "string",
+            "description": "The App's RSA private key, in PEM."
+          },
+          "revision": {
+            "type": "integer",
+            "description": "The revision this replacement was decided against."
+          }
+        },
+        "required": ["private_key"]
+      },
       "Integration": {
         "description": "A registered Integration. What it presents to the external system is never part of it.",
         "type": "object",
@@ -7066,6 +7148,7 @@
           { "$ref": "#/components/schemas/StopSessionAction" },
           { "$ref": "#/components/schemas/EnqueueSessionAction" },
           { "$ref": "#/components/schemas/EnableIntegrationAction" },
+          { "$ref": "#/components/schemas/ReplaceIntegrationPrivateKeyAction" },
           { "$ref": "#/components/schemas/ReleaseInstanceAction" },
           { "$ref": "#/components/schemas/CorrectFieldAction" },
           { "$ref": "#/components/schemas/SignInAction" },
@@ -7203,6 +7286,29 @@
           "action",
           "organization",
           "integration"
+        ]
+      },
+      "ReplaceIntegrationPrivateKeyAction": {
+        "description": "Never carries the key: a Client reads it from a file or standard input when the step is taken.",
+        "properties": {
+          "action": {
+            "const": "replace_integration_private_key"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "integration": {
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "type": ["integer", "null"]
+          }
+        },
+        "required": [
+          "action",
+          "organization",
+          "integration",
+          "retry_after_seconds"
         ]
       },
       "ReleaseInstanceAction": {

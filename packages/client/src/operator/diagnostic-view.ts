@@ -354,6 +354,21 @@ export function stepOf(action: Action, origin: string): Step {
 					body: {},
 				}),
 			};
+		case "replace_integration_private_key":
+			return {
+				kind: "guidance",
+				label: `Replace the Integration ${action.integration}'s App private key`,
+				detail: `${
+					action.retry_after_seconds === null || action.retry_after_seconds <= 0
+						? ""
+						: `GitHub asks for ${action.retry_after_seconds}s first. `
+				}The key is read from standard input or a file, never from the command.`,
+				command: command(
+					["integration", "github", "replace-key", action.integration],
+					action.organization,
+					origin,
+				),
+			};
 		case "sign_in":
 			return {
 				kind: "guidance",

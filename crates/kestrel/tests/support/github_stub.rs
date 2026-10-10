@@ -20,6 +20,7 @@ pub struct ScriptedResponse {
     pub status: u16,
     pub body: String,
     pub headers: Vec<(String, String)>,
+    pub delay: Duration,
 }
 
 impl ScriptedResponse {
@@ -28,6 +29,7 @@ impl ScriptedResponse {
             status: 200,
             body: body.into(),
             headers: Vec::new(),
+            delay: Duration::ZERO,
         }
     }
 
@@ -36,7 +38,14 @@ impl ScriptedResponse {
             status,
             body: String::new(),
             headers: Vec::new(),
+            delay: Duration::ZERO,
         }
+    }
+
+    /// Holds the answer back, and every request behind it, so a test can act while one is in flight.
+    pub fn after(mut self, delay: Duration) -> Self {
+        self.delay = delay;
+        self
     }
 
     pub fn with_header(mut self, name: &str, value: &str) -> Self {
@@ -153,6 +162,7 @@ pub fn created(id: i64, body: &str) -> ScriptedResponse {
         status: 201,
         body: comment(id, body).to_string(),
         headers: Vec::new(),
+        delay: Duration::ZERO,
     }
 }
 
@@ -461,6 +471,7 @@ fn respond(
     });
 
     let scripted = scripted.unwrap_or_else(|| ScriptedResponse::answering(404));
+    std::thread::sleep(scripted.delay);
 
     let mut response =
         tiny_http::Response::from_string(scripted.body).with_status_code(scripted.status);
