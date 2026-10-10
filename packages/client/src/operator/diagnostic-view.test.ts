@@ -329,6 +329,21 @@ describe("enqueueing a Session", () => {
 			body: { agent: "builder" },
 		});
 	});
+
+	it("enables the Integration a paused step waits on", () => {
+		const step = stepOf(
+			{ action: "enable_integration", organization: "acme", integration: "github" },
+			ORIGIN,
+		);
+		if (step.kind !== "write") throw new Error("not a write");
+
+		expect(step).toMatchObject({ label: "Enable the Integration github", destructive: false });
+		expect(step.request({})).toEqual({
+			method: "POST",
+			path: "/operator/organizations/acme/integrations/github/enable",
+			body: {},
+		});
+	});
 });
 
 describe("a step outside the browser's screens", () => {

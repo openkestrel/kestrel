@@ -32,6 +32,22 @@ nothing twice. A GitHub Event's `id` is its Delivery's GUID for every type, howe
   out before reaching where it started, the poll records on the Integration that some may have
   been lost; nothing is rebuilt from a resource read. A later refusal replaces that notice.
 
+## Maintenance
+
+An Integration's name, directions and poll interval change in place; its kind, API origin,
+repository, App and installation never do
+([ADR-0056](../adr/0056-an-integration-keeps-its-identity-through-maintenance.md)). Disabling it,
+or taking a direction away, pauses that use and keeps the credentials, `deliveries_read_from` and
+pending posts it resumes with: `due` polls only an enabled inbound one, its webhook refuses
+(GitHub keeps the Delivery for the poll), `posts_due` skips it, and a firing from it is held
+until it is enabled. Enabling makes it due a poll at once.
+
+Every change bumps `revision`. Work that read the Integration before a change commits nothing:
+the poll's and the webhook's write transactions, and a post's attempt and deferral, first ask
+`integrations().current`, and the fenced `Github` client rechecks the revision before handing a
+cached or newly minted installation token to a request. A request already sent is not recalled;
+a post that may have landed is reconciled by its marker as before.
+
 ## Firing
 
 `timer::firing` calls `trigger::fire` on each tick or wake. It takes up to 32 unfired matches and
@@ -115,8 +131,8 @@ fetches the issue's current state, delegation and blockers; `Readiness::decide` 
 | Command (`@kestrel` comment) | cancel | hold | start, recording `worked_ahead` |
 | Operator dispatch | start | start | start, recording `worked_ahead` |
 
-A held firing is reconsidered after any newer Event from its Integration and at least every 5
-minutes. An opening firing supersedes older held ones for the same Trigger and correlation. A
+A held firing is reconsidered after any newer Event from its Integration, after its Integration
+is maintained, and at least every 5 minutes. An opening firing supersedes older held ones for the same Trigger and correlation. A
 dispatch whose readiness cannot be read is refused rather than held, because the operator is
 waiting on the answer.
 

@@ -144,7 +144,7 @@ async fn manifest_setup_registers_a_usable_app_without_returning_secrets() {
         assert!(!records.to_string().contains("manifest-webhook-secret"));
         assert!(!records.to_string().contains("PRIVATE KEY"));
         let integrations = kestrel.integrations("acme").await;
-        kestrel::integration::github::Github::dialling_out()
+        kestrel::integration::github::Github::unfenced()
             .unwrap()
             .issue(&integrations[0], 1)
             .await

@@ -33,9 +33,10 @@ use crate::declined::{
     Step,
 };
 use crate::domain::{
-    self, Agent, Connection, Correlation, Declared, Direction, EventRecordId, EventRefusal, Fires,
-    Firing, HeldMessage, Integration, Occurrence, Organization, Project, Schedule, Session,
-    StartedBy, SubscriptionProfile, Templates, Trigger, Workspace, WorkspaceId, WorkspaceState,
+    self, Agent, Connection, Correlation, Declared, Direction, EventRecordId, Fires, Firing,
+    HeldMessage, Integration, IntegrationKind, IntegrationState, Occurrence, Organization, Project,
+    Schedule, Session, StartedBy, SubscriptionProfile, Templates, Trigger, Workspace, WorkspaceId,
+    WorkspaceState,
 };
 use crate::fanout;
 use crate::filter::Filter;
@@ -77,6 +78,11 @@ pub const PROFILE_FILE: &str =
     "/operator/organizations/{organization}/profiles/{profile}/files/{path}";
 pub const GITHUB_APP: &str = "/operator/organizations/{organization}/github-app";
 pub const INTEGRATIONS: &str = "/operator/organizations/{organization}/integrations";
+pub const INTEGRATION: &str = "/operator/organizations/{organization}/integrations/{integration}";
+pub const INTEGRATION_DISABLE: &str =
+    "/operator/organizations/{organization}/integrations/{integration}/disable";
+pub const INTEGRATION_ENABLE: &str =
+    "/operator/organizations/{organization}/integrations/{integration}/enable";
 pub const EVENT_REFUSAL: &str =
     "/operator/organizations/{organization}/integrations/{integration}/event-refusal";
 pub const EVENTS: &str = "/operator/organizations/{organization}/events";
@@ -352,6 +358,9 @@ pub fn router(
             put(hold_profile_file).delete(forget_profile_file),
         )
         .route(INTEGRATIONS, get(integrations).post(register_integration))
+        .route(INTEGRATION, get(show_integration).patch(change_integration))
+        .route(INTEGRATION_DISABLE, post(disable_integration))
+        .route(INTEGRATION_ENABLE, post(enable_integration))
         .route(GITHUB_APP, post(start_github_app))
         .route(integration::manifest::PAGE, get(github_app_page))
         .route(integration::manifest::CALLBACK, get(github_app_callback))
@@ -1705,7 +1714,7 @@ async fn github_app_callback(
         .code
         .ok_or_else(|| Refused::Unprocessable("GitHub did not supply a manifest code".into()))?;
     Ok(setup_page(
-        integration::manifest::callback(&cp.store, &Github::dialling_out()?, &query.state, &code)
+        integration::manifest::callback(&cp.store, &Github::unfenced()?, &query.state, &code)
             .await?,
     ))
 }
@@ -1714,7 +1723,7 @@ async fn github_app_installed(
     State(cp): State<ControlPlane>,
     Query(query): Query<GithubAppQuery>,
 ) -> Result<Response, Refused> {
-    integration::manifest::installed(&cp.store, &Github::dialling_out()?, &query.state).await?;
+    integration::manifest::installed(&cp.store, &Github::unfenced()?, &query.state).await?;
     Ok(setup_page("<!doctype html><title>GitHub App ready</title><h1>The GitHub Integration is ready</h1><p>You can close this tab.</p>".into()))
 }
 
@@ -1745,85 +1754,199 @@ enum ConnectionRegistration {
 
 /// Never the private key or a webhook secret: what an Integration presents stays behind the
 /// boundary. The bot login is not a secret — it is the name GitHub already shows in public.
-#[derive(Serialize)]
-struct IntegrationRecord {
-    id: String,
-    name: String,
-    kind: &'static str,
-    repository: Option<String>,
-    bot_login: Option<String>,
-    carries: Vec<Direction>,
-    polled_every: Option<String>,
-    webhook_path: Option<String>,
-    last_event_refusal: Option<EventRefusalRecord>,
-}
-
-#[derive(Serialize)]
-struct EventRefusalRecord {
-    source: String,
-    id: Option<String>,
-    bytes: Option<usize>,
-    reason: String,
-    observed_at: Timestamp,
-}
-
-impl From<Integration> for IntegrationRecord {
-    fn from(integration: Integration) -> Self {
-        let webhook_path = integration.webhook_path();
-        let kind = integration.kind().as_str();
-        let (repository, bot_login, polled_every, webhook_path) = match integration.connection {
-            Connection::Github(github) if !integration.carries.contains(&Direction::Inbound) => {
-                (Some(github.repository), Some(github.bot_login), None, None)
-            }
-            Connection::Github(github) => (
-                Some(github.repository),
-                Some(github.bot_login),
-                Some(format!("{:#}", github.interval)),
-                Some(webhook_path),
-            ),
-            Connection::Webhook => (None, None, None, Some(webhook_path)),
-        };
-
-        Self {
-            id: integration.id.to_string(),
-            name: integration.name,
-            kind,
-            repository,
-            bot_login,
-            carries: integration.carries,
-            polled_every,
-            webhook_path,
-            last_event_refusal: integration.last_event_refusal.map(Into::into),
+fn integration_record(integration: Integration, organization: &str) -> wire::Integration {
+    let diagnostic = integration.disabled().then(|| {
+        diagnosis(
+            integration::paused(&integration, organization, "use_integration"),
+            None,
+        )
+        .1
+    });
+    let webhook_path = integration.webhook_path();
+    let kind = match integration.kind() {
+        IntegrationKind::Github => wire::IntegrationKind::Github,
+        IntegrationKind::Webhook => wire::IntegrationKind::Webhook,
+    };
+    let (repository, bot_login, polled_every, webhook_path) = match integration.connection {
+        Connection::Github(github) if !integration.carries.contains(&Direction::Inbound) => {
+            (Some(github.repository), Some(github.bot_login), None, None)
         }
+        Connection::Github(github) => (
+            Some(github.repository),
+            Some(github.bot_login),
+            Some(format!("{:#}", github.interval)),
+            Some(webhook_path),
+        ),
+        Connection::Webhook => (None, None, None, Some(webhook_path)),
+    };
+
+    wire::Integration {
+        id: integration
+            .id
+            .to_string()
+            .parse()
+            .expect("an Integration UUID"),
+        name: integration.name,
+        kind,
+        repository,
+        bot_login,
+        carries: integration
+            .carries
+            .into_iter()
+            .map(wire_direction)
+            .collect(),
+        state: match integration.state {
+            IntegrationState::Enabled => wire::IntegrationState::Enabled,
+            IntegrationState::Disabled => wire::IntegrationState::Disabled,
+        },
+        revision: integration.revision,
+        disabled_at: integration.disabled_at.map(|at| at.to_string()),
+        polled_every,
+        webhook_path,
+        last_event_refusal: integration
+            .last_event_refusal
+            .map(|refusal| wire::EventRefusal {
+                source: refusal.source,
+                id: refusal.id,
+                bytes: refusal
+                    .bytes
+                    .map(|bytes| i64::try_from(bytes).unwrap_or(i64::MAX)),
+                reason: refusal.reason,
+                observed_at: refusal.observed_at.to_string(),
+            }),
+        diagnostic,
     }
 }
 
-impl From<EventRefusal> for EventRefusalRecord {
-    fn from(refusal: EventRefusal) -> Self {
-        Self {
-            source: refusal.source,
-            id: refusal.id,
-            bytes: refusal.bytes,
-            reason: refusal.reason,
-            observed_at: refusal.observed_at,
-        }
+const fn wire_direction(direction: Direction) -> wire::Direction {
+    match direction {
+        Direction::Inbound => wire::Direction::Inbound,
+        Direction::Outbound => wire::Direction::Outbound,
+    }
+}
+
+const fn domain_direction(direction: &wire::Direction) -> Direction {
+    match direction {
+        wire::Direction::Inbound => Direction::Inbound,
+        wire::Direction::Outbound => Direction::Outbound,
     }
 }
 
 async fn integrations(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<IntegrationRecord>>, Refused> {
+) -> Result<Json<Vec<wire::Integration>>, Refused> {
     let integrations = integration::integrations(&control_plane.store, &organization).await?;
 
-    Ok(Json(integrations.into_iter().map(Into::into).collect()))
+    Ok(Json(
+        integrations
+            .into_iter()
+            .map(|integration| integration_record(integration, &organization))
+            .collect(),
+    ))
+}
+
+async fn show_integration(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, name)): Path<(String, String)>,
+) -> Result<Json<wire::Integration>, Refused> {
+    let integration = integration::integration(&control_plane.store, &organization, &name).await?;
+
+    Ok(Json(integration_record(integration, &organization)))
+}
+
+/// What identifies the connection; naming one in a change is refused rather than ignored.
+const FIXED: [&str; 7] = [
+    "organization",
+    "kind",
+    "api",
+    "repository",
+    "app_id",
+    "installation",
+    "id",
+];
+
+async fn change_integration(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, name)): Path<(String, String)>,
+    change: Result<Json<serde_json::Value>, JsonRejection>,
+) -> Result<Json<wire::Integration>, Refused> {
+    let Json(change) = change?;
+    if let Some(fixed) = FIXED.into_iter().find(|field| change.get(field).is_some()) {
+        return Err(invalid_field(
+            "change_integration",
+            fixed,
+            Constraint::Immutable,
+            format!(
+                "an integration's {fixed} identifies it and cannot change; register a new \
+                 integration for a different one"
+            ),
+        ));
+    }
+    let change: wire::IntegrationChange =
+        serde_json::from_value(change).map_err(|error| Refused::Malformed {
+            field: None,
+            why: error.to_string(),
+        })?;
+    if let Some(name) = &change.name {
+        named("change_integration", name)?;
+    }
+    let interval = change
+        .interval
+        .as_deref()
+        .map(str::parse::<SignedDuration>)
+        .transpose()
+        .map_err(|error| {
+            invalid_field(
+                "change_integration",
+                "interval",
+                Constraint::Positive,
+                format!("an interval is a duration: {error}"),
+            )
+        })?;
+    let carries: Option<Vec<Direction>> = change
+        .carries
+        .as_ref()
+        .map(|carries| carries.iter().map(domain_direction).collect());
+    let changed = integration::change(
+        &control_plane.store,
+        &organization,
+        &name,
+        integration::Change {
+            name: change.name.as_deref(),
+            carries: carries.as_deref(),
+            interval,
+            revision: change.revision,
+        },
+    )
+    .await?;
+
+    Ok(Json(integration_record(changed, &organization)))
+}
+
+async fn disable_integration(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, name)): Path<(String, String)>,
+) -> Result<Json<wire::Integration>, Refused> {
+    let disabled = integration::disable(&control_plane.store, &organization, &name).await?;
+
+    Ok(Json(integration_record(disabled, &organization)))
+}
+
+async fn enable_integration(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, name)): Path<(String, String)>,
+) -> Result<Json<wire::Integration>, Refused> {
+    let enabled = integration::enable(&control_plane.store, &organization, &name).await?;
+
+    Ok(Json(integration_record(enabled, &organization)))
 }
 
 async fn register_integration(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
     registration: Result<Json<IntegrationRegistration>, JsonRejection>,
-) -> Result<(StatusCode, Json<IntegrationRecord>), Refused> {
+) -> Result<(StatusCode, Json<wire::Integration>), Refused> {
     let Json(registration) = registration?;
     named("register_integration", &registration.name)?;
 
@@ -1857,7 +1980,7 @@ async fn register_integration(
             (Connecting::Webhook { secret }, &[Direction::Inbound][..])
         }
     };
-    let github = Github::dialling_out()?;
+    let github = Github::unfenced()?;
     let registered = integration::register(
         &control_plane.store,
         &github,
@@ -1870,7 +1993,10 @@ async fn register_integration(
     )
     .await?;
 
-    Ok((StatusCode::CREATED, Json(registered.into())))
+    Ok((
+        StatusCode::CREATED,
+        Json(integration_record(registered, &organization)),
+    ))
 }
 
 async fn acknowledge_event_refusal(
@@ -2027,7 +2153,7 @@ async fn test_trigger(
         }
         (Some(event), _, None) => trigger::Against::Event(event),
         (None, Some(integration), Some(issue)) => {
-            github = Github::dialling_out()?;
+            github = Github::dialling_out(&control_plane.store)?;
             trigger::Against::Issue {
                 github: &github,
                 integration,
@@ -2146,7 +2272,7 @@ async fn dispatch_trigger(
     let Json(dispatch) = dispatch?;
     let fired = trigger::dispatch(
         &control_plane.store,
-        &Github::dialling_out()?,
+        &Github::dialling_out(&control_plane.store)?,
         trigger::Dispatch {
             organization: &organization,
             trigger: &name,
@@ -3816,6 +3942,13 @@ fn next_steps(next: declined::Next, organization: Option<&str>) -> Vec<wire::Act
                 missing: Vec::new(),
             })
         }
+        Step::EnableIntegration { integration } => {
+            wire::Action::EnableIntegrationAction(wire::EnableIntegrationAction {
+                action: serde_json::json!("enable_integration"),
+                organization: organization.to_owned(),
+                integration,
+            })
+        }
         Step::ReleaseInstance {
             workspace,
             instance,
@@ -3918,8 +4051,16 @@ async fn name_operator(
 }
 
 fn diagnosed(reason: Reason, field: Option<&'static str>) -> Refused {
+    let (status, diagnostic) = diagnosis(reason, field);
+    Refused::Diagnosed {
+        status,
+        diagnostic: Box::new(diagnostic),
+    }
+}
+
+fn diagnosis(reason: Reason, field: Option<&'static str>) -> (StatusCode, wire::Diagnostic) {
     let field = field.map(str::to_owned);
-    let (status, diagnostic) = match reason {
+    match reason {
         Reason::MissingOperator { operation } => (
             if operation == "show_operator" {
                 StatusCode::NOT_FOUND
@@ -4003,7 +4144,7 @@ fn diagnosed(reason: Reason, field: Option<&'static str>) -> Refused {
             constraint,
             allowed,
             message,
-        } => return invalid_value(operation, field, constraint, allowed, message),
+        } => invalid_value(operation, field, constraint, allowed, message),
         Reason::StateConflict {
             operation,
             resource,
@@ -4141,10 +4282,6 @@ fn diagnosed(reason: Reason, field: Option<&'static str>) -> Refused {
                 operation, harness, image, message, field,
             )),
         ),
-    };
-    Refused::Diagnosed {
-        status,
-        diagnostic: Box::new(diagnostic),
     }
 }
 
@@ -4202,7 +4339,11 @@ fn invalid_field(
     constraint: Constraint,
     message: impl Into<String>,
 ) -> Refused {
-    invalid_value(operation, field, constraint, None, message.into())
+    let (status, diagnostic) = invalid_value(operation, field, constraint, None, message.into());
+    Refused::Diagnosed {
+        status,
+        diagnostic: Box::new(diagnostic),
+    }
 }
 
 fn invalid_value(
@@ -4211,30 +4352,28 @@ fn invalid_value(
     constraint: Constraint,
     allowed: Option<Vec<String>>,
     message: String,
-) -> Refused {
-    Refused::Diagnosed {
-        status: StatusCode::UNPROCESSABLE_ENTITY,
-        diagnostic: Box::new(wire::Diagnostic::InvalidFieldDiagnostic(
-            wire::InvalidFieldDiagnostic {
-                kind: serde_json::json!("invalid_field"),
-                message,
-                field: Some(field.to_owned()),
-                context: wire::InvalidFieldContext {
-                    field: field.to_owned(),
-                    constraint: constraint.as_str().to_owned(),
-                    allowed_values: allowed.clone(),
-                },
-                next_steps: vec![wire::Action::CorrectFieldAction(wire::CorrectFieldAction {
-                    action: serde_json::json!("correct_field"),
-                    operation: operation.to_owned(),
-                    resource: None,
-                    field: field.to_owned(),
-                    constraint: constraint.as_str().to_owned(),
-                    allowed_values: allowed,
-                })],
+) -> (StatusCode, wire::Diagnostic) {
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        wire::Diagnostic::InvalidFieldDiagnostic(wire::InvalidFieldDiagnostic {
+            kind: serde_json::json!("invalid_field"),
+            message,
+            field: Some(field.to_owned()),
+            context: wire::InvalidFieldContext {
+                field: field.to_owned(),
+                constraint: constraint.as_str().to_owned(),
+                allowed_values: allowed.clone(),
             },
-        )),
-    }
+            next_steps: vec![wire::Action::CorrectFieldAction(wire::CorrectFieldAction {
+                action: serde_json::json!("correct_field"),
+                operation: operation.to_owned(),
+                resource: None,
+                field: field.to_owned(),
+                constraint: constraint.as_str().to_owned(),
+                allowed_values: allowed,
+            })],
+        }),
+    )
 }
 
 impl From<anyhow::Error> for Refused {
@@ -4426,6 +4565,10 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("DELETE", PROFILE_FILE) => "forget_subscription_profile_file",
         ("GET", INTEGRATIONS) => "list_integrations",
         ("POST", INTEGRATIONS) => "register_integration",
+        ("GET", INTEGRATION) => "show_integration",
+        ("PATCH", INTEGRATION) => "change_integration",
+        ("POST", INTEGRATION_DISABLE) => "disable_integration",
+        ("POST", INTEGRATION_ENABLE) => "enable_integration",
         ("POST", GITHUB_APP) => "start_github_app",
         ("GET", integration::manifest::PAGE) => "github_app_setup",
         ("GET", integration::manifest::CALLBACK) => "github_app_callback",

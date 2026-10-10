@@ -12,6 +12,10 @@ CREATE TABLE integration (
     bot_login TEXT,
     inbound INTEGER NOT NULL,
     outbound INTEGER NOT NULL,
+    state TEXT NOT NULL DEFAULT 'enabled' CHECK (state IN ('enabled', 'disabled')),
+    -- Bumped by every maintenance change, so work begun under an older one commits nothing.
+    revision INTEGER NOT NULL DEFAULT 1,
+    disabled_at TEXT,
     interval_ms INTEGER,
     signing_secret TEXT,
     shared_secret_digest TEXT,
@@ -24,6 +28,8 @@ CREATE TABLE integration (
     last_event_refusal_reason TEXT,
     last_event_refusal_at TEXT,
     registered_at TEXT NOT NULL,
+    -- Held Firings waiting on it are looked at again once it changes after they were.
+    maintained_at TEXT NOT NULL,
     UNIQUE (organization_id, name),
     CHECK ((kind = 'github') = (repository IS NOT NULL AND repository_id IS NOT NULL
                                 AND api IS NOT NULL
@@ -31,7 +37,8 @@ CREATE TABLE integration (
                                 AND private_key_sealed IS NOT NULL AND bot_login IS NOT NULL
                                 AND interval_ms IS NOT NULL)),
     CHECK (kind = 'github' OR signing_secret IS NULL),
-    CHECK ((kind = 'webhook') = (shared_secret_digest IS NOT NULL))
+    CHECK ((kind = 'webhook') = (shared_secret_digest IS NOT NULL)),
+    CHECK ((state = 'disabled') = (disabled_at IS NOT NULL))
 ) STRICT;
 
 CREATE INDEX integration_poll_due ON integration (poll_due_at) WHERE poll_due_at IS NOT NULL;

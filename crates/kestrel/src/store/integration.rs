@@ -1,4 +1,4 @@
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, ensure};
 use jiff::{SignedDuration, Timestamp};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
@@ -6,8 +6,8 @@ use sqlx::{Row, SqliteConnection};
 use crate::declined::Declined;
 use crate::domain::{
     Connection, Direction, Event, EventRecordId, EventRefusal, GithubConnection, Integration,
-    IntegrationId, IntegrationKind, Occurrence, Organization, OrganizationId, Post, Session,
-    SessionId, Workspace,
+    IntegrationId, IntegrationKind, IntegrationState, Occurrence, Organization, OrganizationId,
+    Post, Session, SessionId, Workspace,
 };
 use crate::integration::credential::App;
 use crate::integration::webhook::Verifier;
@@ -30,8 +30,8 @@ macro_rules! integrations_where {
         concat!(
             "SELECT id, organization_id, name, kind, repository, repository_id, api, app_id,
                     installation_id,
-                    private_key_sealed, bot_login, inbound, outbound, interval_ms,
-                    poll_due_at, deliveries_read_from, last_polled_at,
+                    private_key_sealed, bot_login, inbound, outbound, state, revision,
+                    disabled_at, interval_ms, poll_due_at, deliveries_read_from, last_polled_at,
                     last_event_refusal_source, last_event_refusal_id, last_event_refusal_bytes,
                     last_event_refusal_reason, last_event_refusal_at
              FROM integration
@@ -95,6 +95,9 @@ impl<'a> Integrations<'a> {
             name: name.to_owned(),
             connection,
             carries: carries.to_vec(),
+            state: IntegrationState::Enabled,
+            revision: 1,
+            disabled_at: None,
             // Due the moment it is registered, so an operator who registers one sees what is
             // on the repository rather than waiting an interval to find out.
             poll_due_at: polled.then_some(registered_at),
@@ -124,8 +127,8 @@ impl<'a> Integrations<'a> {
                  (id, organization_id, name, kind, repository, repository_id, api, app_id,
                   installation_id, private_key_sealed, bot_login, inbound, outbound, interval_ms,
                   signing_secret, shared_secret_digest, poll_due_at, deliveries_read_from,
-                  last_polled_at, registered_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  last_polled_at, registered_at, maintained_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(integration.id.to_string())
         .bind(integration.organization.to_string())
@@ -154,6 +157,7 @@ impl<'a> Integrations<'a> {
                 .map(|from| from.to_string()),
         )
         .bind(integration.last_polled_at.map(|at| at.to_string()))
+        .bind(registered_at.to_string())
         .bind(registered_at.to_string())
         .execute(&mut *self.connection)
         .await
@@ -211,7 +215,7 @@ impl<'a> Integrations<'a> {
     /// is what it does, rather than a label beside it.
     pub async fn due(&mut self, at: Timestamp) -> Result<Vec<Integration>> {
         sqlx::query(integrations_where!(
-            "inbound = TRUE AND poll_due_at <= ? ORDER BY poll_due_at"
+            "inbound = TRUE AND state = 'enabled' AND poll_due_at <= ? ORDER BY poll_due_at"
         ))
         .bind(due(at))
         .fetch_all(&mut *self.connection)
@@ -260,6 +264,77 @@ impl<'a> Integrations<'a> {
             })?;
 
         integration(&row, self.keyring)
+    }
+
+    /// Asked inside the write transaction that would commit work begun on `integration`.
+    pub async fn unchanged(&mut self, integration: &Integration) -> Result<bool> {
+        Ok(sqlx::query(
+            "SELECT 1 FROM integration WHERE id = ? AND revision = ? AND state = 'enabled'",
+        )
+        .bind(integration.id.to_string())
+        .bind(integration.revision)
+        .fetch_optional(&mut *self.connection)
+        .await
+        .with_context(|| {
+            format!(
+                "reading whether integration {} is unchanged",
+                integration.name
+            )
+        })?
+        .is_some())
+    }
+
+    pub async fn current(
+        &mut self,
+        integration: &Integration,
+        direction: Direction,
+    ) -> Result<bool> {
+        Ok(integration.carries(direction) && self.unchanged(integration).await?)
+    }
+
+    pub async fn maintain(&mut self, read: &Integration, maintained: &Integration) -> Result<()> {
+        let github = maintained.github().ok();
+        let changed = sqlx::query(
+            "UPDATE integration
+             SET name = ?, inbound = ?, outbound = ?, interval_ms = ?, state = ?,
+                 disabled_at = ?, poll_due_at = ?, deliveries_read_from = ?, last_polled_at = ?,
+                 revision = revision + 1, maintained_at = ?
+             WHERE id = ? AND revision = ?",
+        )
+        .bind(&maintained.name)
+        .bind(maintained.carries(Direction::Inbound))
+        .bind(maintained.carries(Direction::Outbound))
+        .bind(
+            github
+                .map(|github| i64::try_from(github.interval.as_millis()))
+                .transpose()?,
+        )
+        .bind(maintained.state.as_str())
+        .bind(maintained.disabled_at.map(|at| at.to_string()))
+        .bind(maintained.poll_due_at.map(due))
+        .bind(maintained.deliveries_read_from.map(|from| from.to_string()))
+        .bind(maintained.last_polled_at.map(|at| at.to_string()))
+        .bind(Timestamp::now().to_string())
+        .bind(read.id.to_string())
+        .bind(read.revision)
+        .execute(&mut *self.connection)
+        .await
+        .map_err(|error| match error.as_database_error() {
+            Some(refused) if refused.is_unique_violation() => Declined::Taken(format!(
+                "the organization already has an integration named {}",
+                maintained.name
+            ))
+            .into(),
+            _ => anyhow::Error::new(error)
+                .context(format!("maintaining the integration {}", read.name)),
+        })?;
+        ensure!(
+            changed.rows_affected() > 0,
+            "the integration {} changed while it was being maintained",
+            read.name
+        );
+
+        Ok(())
     }
 
     pub async fn record_event(
@@ -610,11 +685,13 @@ impl<'a> Integrations<'a> {
 
     pub async fn posts_due(&mut self, at: Timestamp) -> Result<Vec<Post>> {
         sqlx::query(
-            "SELECT session_id, turn, organization_id, integration_id, event_record_id, subject, body,
-                    attempted_at
+            "SELECT post.session_id, post.turn, post.organization_id, post.integration_id,
+                    post.event_record_id, post.subject, post.body, post.attempted_at
              FROM post
-             WHERE due_at <= ?
-             ORDER BY due_at",
+             JOIN integration ON integration.id = post.integration_id
+             WHERE post.due_at <= ? AND integration.state = 'enabled'
+               AND integration.outbound = TRUE
+             ORDER BY post.due_at",
         )
         .bind(due(at))
         .fetch_all(&mut *self.connection)
@@ -779,6 +856,9 @@ fn integration(row: &SqliteRow, keyring: &Keyring) -> Result<Integration> {
         name: row.get("name"),
         connection,
         carries,
+        state: row.get::<String, _>("state").parse()?,
+        revision: row.get("revision"),
+        disabled_at: timestamp(row, "disabled_at")?,
         poll_due_at: timestamp(row, "poll_due_at")?,
         deliveries_read_from: timestamp(row, "deliveries_read_from")?,
         last_polled_at: timestamp(row, "last_polled_at")?,

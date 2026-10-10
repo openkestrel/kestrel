@@ -257,6 +257,28 @@ async fn a_comment_that_landed_while_the_control_plane_died_is_not_posted_twice(
 /// A refusal is not a failure of the work: the Session's exit status was decided before anything
 /// was said, and the delivery is tried again rather than given up on.
 #[tokio::test]
+async fn a_disabled_integration_holds_its_post_until_it_is_enabled() {
+    let stub = GithubStub::start();
+    labelled(&stub);
+    stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
+    let kestrel = Kestrel::boot().await;
+    watching(&kestrel, &stub, BOTH).await;
+    let (_, session) = working(&kestrel).await;
+
+    kestrel.disable_integration("acme", "github").await;
+    kestrel.said(&session, "Done.").await;
+    kestrel.complete_session(&session).await;
+    nothing_is_said(&stub).await;
+
+    kestrel.enable_integration("acme", "github").await;
+
+    assert!(said(&commented(&stub).await).contains("> Done."));
+    assert_eq!(comments_on_the_issue(&stub).len(), 1);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_comment_that_is_refused_is_tried_again_and_leaves_the_session_as_it_was() {
     let stub = GithubStub::start();
     labelled(&stub);

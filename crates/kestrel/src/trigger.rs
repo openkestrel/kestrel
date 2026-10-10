@@ -14,6 +14,7 @@ use crate::domain::{
     StartedBy, Templates, Trigger, TriggerId, TriggerState, Workspace, WorkspaceId,
 };
 use crate::integration::github::{self, EventData, Github};
+use crate::integration::paused;
 use crate::log::{BriefSource, Entry};
 use crate::readiness::{Decision, Readiness, Request};
 use crate::store::integration::Recorded;
@@ -633,16 +634,39 @@ pub async fn fire(store: &Store, github: &Github) -> Result<Vec<Fired>> {
             at: Timestamp::now(),
             reconsidering,
         };
-        let readiness = if event.occurrence.r#type.starts_with("com.github.") {
-            Some(readiness(store, github, &event).await?)
-        } else {
-            None
+        let integration = match event.integration {
+            Some(id) => Some(store.read().await?.integrations().with_id(id).await?),
+            None => None,
+        };
+        let readiness = match &integration {
+            Some(integration) if integration.disabled() => Some(Err(paused(
+                integration,
+                &trigger.organization.name,
+                "fire_trigger",
+            )
+            .to_string())),
+            _ if !event.occurrence.r#type.starts_with("com.github.") => None,
+            Some(integration) => Some(readiness(github, integration, &event).await),
+            None => Some(Err(
+                "the work item has no integration to check readiness".to_owned()
+            )),
         };
         let mut tx = store.begin().await?;
         // An earlier firing in this sweep may have opened or superseded it.
         if reconsidering && !tx.triggers().still_held(&trigger, &event).await? {
             continue;
         }
+        let readiness = match &integration {
+            Some(integration)
+                if !integration.disabled() && !tx.integrations().unchanged(integration).await? =>
+            {
+                Some(Err(format!(
+                    "the integration {} was disabled or changed while this firing was considered",
+                    integration.name
+                )))
+            }
+            _ => readiness,
+        };
         fired.push(
             firing(
                 tx,
@@ -659,29 +683,17 @@ pub async fn fire(store: &Store, github: &Github) -> Result<Vec<Fired>> {
 }
 
 async fn readiness(
-    store: &Store,
     github: &Github,
+    integration: &Integration,
     event: &Event,
-) -> Result<Result<Readiness, String>> {
-    let Some(id) = event.integration else {
-        return Ok(Err(
-            "the work item has no integration to check readiness".to_owned()
-        ));
-    };
-    let integration = {
-        let mut tx = store.begin().await?;
-        tx.integrations().with_id(id).await
-    };
-    Ok(match integration {
-        Ok(integration) if integration.github().is_ok() => github
-            .readiness(&integration, &event.occurrence)
-            .await
-            .map_err(|error| error.to_string()),
-        Ok(_) => Err("the work item has no GitHub integration to check readiness".to_owned()),
-        Err(error) => Err(format!(
-            "the work item's integration could not be read: {error}"
-        )),
-    })
+) -> Result<Readiness, String> {
+    if integration.github().is_err() {
+        return Err("the work item has no GitHub integration to check readiness".to_owned());
+    }
+    github
+        .readiness(integration, &event.occurrence)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// Fires one Trigger for an issue an operator names, whether or not its filter would match: the
@@ -715,6 +727,13 @@ pub async fn dispatch(store: &Store, github: &Github, dispatch: Dispatch<'_>) ->
         })?;
 
     let mut tx = store.begin().await?;
+    if !tx.integrations().unchanged(&integration).await? {
+        bail!(
+            "the integration {} was disabled or changed while the dispatch read the issue; \
+             dispatch it again",
+            integration.name
+        );
+    }
     if let Recorded::Refused { because } = tx
         .integrations()
         .record_event(&integration, &occurrence)
@@ -754,6 +773,13 @@ async fn dispatched(
             "the trigger {} fires on a schedule, so it cannot be dispatched",
             trigger.name
         );
+    }
+    if integration.disabled() {
+        bail!(paused(
+            integration,
+            &trigger.organization.name,
+            "dispatch_trigger"
+        ));
     }
     let fetched = github
         .issue(integration, issue)
