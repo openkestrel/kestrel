@@ -98,6 +98,8 @@ pub enum Constraint {
     OmittedWhenContinuing,
     RequiresBrief,
     Offered,
+    SingleToken,
+    ChatgptLoginFile,
     Positive,
     Immutable,
 }
@@ -120,6 +122,8 @@ impl Constraint {
             Constraint::OmittedWhenContinuing => "omitted_when_continuing",
             Constraint::RequiresBrief => "requires_brief",
             Constraint::Offered => "offered",
+            Constraint::SingleToken => "single_token",
+            Constraint::ChatgptLoginFile => "chatgpt_login_file",
             Constraint::Positive => "positive",
             Constraint::Immutable => "immutable",
         }
@@ -235,6 +239,16 @@ pub enum Reason {
         instance: String,
         message: String,
     },
+    CredentialRejected {
+        operation: &'static str,
+        organization: String,
+        harness: String,
+        method: String,
+        provider: &'static str,
+        status: Option<u16>,
+        provider_error: Option<String>,
+        message: String,
+    },
     HarnessNotCarried {
         operation: &'static str,
         harness: String,
@@ -271,6 +285,7 @@ impl fmt::Display for Reason {
             | Reason::Forbidden { message, .. }
             | Reason::Expired { message, .. }
             | Reason::InstanceTimeout { message, .. }
+            | Reason::CredentialRejected { message, .. }
             | Reason::HarnessNotCarried { message, .. }
             | Reason::ImageUnavailable { message, .. } => message,
         };

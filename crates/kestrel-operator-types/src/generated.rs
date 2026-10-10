@@ -2150,6 +2150,7 @@ pub struct SubscriptionProfile {
     pub owner: String,
     pub owner_operator: Option<uuid::Uuid>,
 }
+pub type ListSignInsResponse = Vec<SavedSignIn>;
 pub type ListSessionsResponse = Vec<Session>;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Session {
@@ -2831,183 +2832,6 @@ impl AsRef<str> for SignInMethodInput {
     fn as_ref(&self) -> &str {
         self.as_str()
     }
-}
-#[derive(Debug, Clone)]
-pub enum SignInFill {
-    SignInVariableFill(SignInVariableFill),
-    SignInFileFill(SignInFileFill),
-}
-impl serde::Serialize for SignInFill {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            Self::SignInVariableFill(payload) => {
-                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
-                let object = value.as_object_mut().ok_or_else(|| {
-                    serde::ser::Error::custom(concat!(
-                        "discriminated union variant `",
-                        stringify!(SignInVariableFill),
-                        "` did not serialize as an object",
-                    ))
-                })?;
-                match object.get("kind") {
-                    Some(serde_json::Value::String(tag)) if matches!(tag.as_str(), "variable") => {}
-                    Some(serde_json::Value::String(tag)) => {
-                        return Err(serde::ser::Error::custom(format!(
-                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
-                            "kind",
-                            stringify!(SignInVariableFill),
-                        )));
-                    }
-                    Some(_) => {
-                        return Err(serde::ser::Error::custom(concat!(
-                            "discriminator `",
-                            "kind",
-                            "` did not serialize as a string",
-                        )));
-                    }
-                    None => {
-                        object.insert(
-                            "kind".to_string(),
-                            serde_json::Value::String("variable".to_string()),
-                        );
-                    }
-                }
-                value.serialize(serializer)
-            }
-            Self::SignInFileFill(payload) => {
-                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
-                let object = value.as_object_mut().ok_or_else(|| {
-                    serde::ser::Error::custom(concat!(
-                        "discriminated union variant `",
-                        stringify!(SignInFileFill),
-                        "` did not serialize as an object",
-                    ))
-                })?;
-                match object.get("kind") {
-                    Some(serde_json::Value::String(tag)) if matches!(tag.as_str(), "file") => {}
-                    Some(serde_json::Value::String(tag)) => {
-                        return Err(serde::ser::Error::custom(format!(
-                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
-                            "kind",
-                            stringify!(SignInFileFill),
-                        )));
-                    }
-                    Some(_) => {
-                        return Err(serde::ser::Error::custom(concat!(
-                            "discriminator `",
-                            "kind",
-                            "` did not serialize as a string",
-                        )));
-                    }
-                    None => {
-                        object.insert(
-                            "kind".to_string(),
-                            serde_json::Value::String("file".to_string()),
-                        );
-                    }
-                }
-                value.serialize(serializer)
-            }
-        }
-    }
-}
-impl<'de> serde::Deserialize<'de> for SignInFill {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        let discriminator = match value.get("kind") {
-            Some(serde_json::Value::String(discriminator)) => Some(discriminator.as_str()),
-            Some(_) => {
-                return Err(serde::de::Error::custom(concat!(
-                    "non-string discriminator `",
-                    "kind",
-                    "`",
-                )));
-            }
-            None => None,
-        };
-        match discriminator {
-            Some(discriminator) => match discriminator {
-                "variable" => {
-                    let primary_error =
-                        match serde_json::from_value::<SignInVariableFill>(value.clone()) {
-                            Ok(payload) => return Ok(Self::SignInVariableFill(payload)),
-                            Err(error) => error,
-                        };
-                    let mut structural_match: Option<(Self, &'static str)> = None;
-                    if let Ok(payload) = serde_json::from_value::<SignInFileFill>(value.clone()) {
-                        if let Some((_, first_name)) = &structural_match {
-                            return Err(serde::de::Error::custom(format!(
-                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
-                                "kind",
-                                "variable",
-                                first_name,
-                                stringify!(SignInFileFill),
-                            )));
-                        }
-                        structural_match =
-                            Some((Self::SignInFileFill(payload), stringify!(SignInFileFill)));
-                    }
-                    match structural_match {
-                        Some((payload, _)) => Ok(payload),
-                        None => Err(serde::de::Error::custom(primary_error)),
-                    }
-                }
-                "file" => {
-                    let primary_error =
-                        match serde_json::from_value::<SignInFileFill>(value.clone()) {
-                            Ok(payload) => return Ok(Self::SignInFileFill(payload)),
-                            Err(error) => error,
-                        };
-                    let mut structural_match: Option<(Self, &'static str)> = None;
-                    if let Ok(payload) = serde_json::from_value::<SignInVariableFill>(value.clone())
-                    {
-                        if let Some((_, first_name)) = &structural_match {
-                            return Err(serde::de::Error::custom(format!(
-                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
-                                "kind",
-                                "file",
-                                first_name,
-                                stringify!(SignInVariableFill),
-                            )));
-                        }
-                        structural_match = Some((
-                            Self::SignInVariableFill(payload),
-                            stringify!(SignInVariableFill),
-                        ));
-                    }
-                    match structural_match {
-                        Some((payload, _)) => Ok(payload),
-                        None => Err(serde::de::Error::custom(primary_error)),
-                    }
-                }
-                other => Err(serde::de::Error::custom(format!(
-                    "unknown discriminator value `{other}` for `{}`",
-                    "kind",
-                ))),
-            },
-            None => Err(serde::de::Error::custom(concat!(
-                "missing string discriminator `",
-                "kind",
-                "`",
-            ))),
-        }
-    }
-}
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SignInVariableFill {
-    pub kind: serde_json::Value,
-    pub variable: String,
-}
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SignInFileFill {
-    pub kind: serde_json::Value,
-    pub path: String,
 }
 ///`available` and `not_carried` come from inspecting the configured image's `dev.kestrel.harnesses` label (ADR-0048). `unavailable` means the inspection failed, so nothing is claimed about the harness, and carries why. `unchecked` means the compute driver runs no image.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -7422,6 +7246,7 @@ pub enum Diagnostic {
     SetupGapDiagnostic(SetupGapDiagnostic),
     UnavailableDiagnostic(UnavailableDiagnostic),
     InstanceTimeoutDiagnostic(InstanceTimeoutDiagnostic),
+    CredentialRejectedDiagnostic(CredentialRejectedDiagnostic),
     AuthenticationFailedDiagnostic(AuthenticationFailedDiagnostic),
     ExecutableMissingDiagnostic(ExecutableMissingDiagnostic),
     UnknownFailureDiagnostic(UnknownFailureDiagnostic),
@@ -7455,6 +7280,9 @@ impl Serialize for Diagnostic {
             Self::SetupGapDiagnostic(value) => serde::Serialize::serialize(value, serializer),
             Self::UnavailableDiagnostic(value) => serde::Serialize::serialize(value, serializer),
             Self::InstanceTimeoutDiagnostic(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::CredentialRejectedDiagnostic(value) => {
                 serde::Serialize::serialize(value, serializer)
             }
             Self::AuthenticationFailedDiagnostic(value) => {
@@ -7811,6 +7639,33 @@ impl<'de> Deserialize<'de> for Diagnostic {
         }
         if input.as_object().is_some_and(|object| {
             true && object.get("kind").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"credential_rejected\"")
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<CredentialRejectedDiagnostic>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Diagnostic),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::CredentialRejectedDiagnostic(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::CredentialRejectedDiagnostic(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("kind").is_some_and(|value| {
                 value.is_null() || matches!(value.to_string().as_str(), "\"authentication_failed\"")
             })
         }) {
@@ -8037,7 +7892,323 @@ pub struct UnavailableContext {
     pub operation: String,
     pub resource: Option<String>,
     pub retry_after_seconds: Option<i64>,
+    ///What a write saved before the service it then asked could not answer.
+    pub saved: Option<SavedSignIn>,
     pub service: String,
+}
+///Material saved for a catalogued Sign-in Method, as everything but the Session it is handed to sees it.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SavedSignIn {
+    pub authentication: AuthenticationEvidence,
+    pub harness: String,
+    pub holding: SignInHolding,
+    pub kind: SavedSignInKind,
+    pub method: String,
+    ///The latest result per model of this harness using this revision. A result for one model never stands for another.
+    pub model_use: Vec<ModelUseEvidence>,
+    ///Minted for every accepted write of the material, a generic Profile or Provider Credential write included, and never reused.
+    pub revision: i64,
+    pub saved_at: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SignInHolding {
+    pub fills: SignInFill,
+    ///The Profile's name, or the Provider Credential's variable.
+    pub reference: String,
+    pub resource: SignInHoldingResource,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum SignInHoldingResource {
+    #[default]
+    #[serde(rename = "subscription_profile")]
+    SubscriptionProfile,
+    #[serde(rename = "provider_credential")]
+    ProviderCredential,
+}
+impl SignInHoldingResource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::SubscriptionProfile => "subscription_profile",
+            Self::ProviderCredential => "provider_credential",
+        }
+    }
+}
+impl ::std::fmt::Display for SignInHoldingResource {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for SignInHoldingResource {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone)]
+pub enum SignInFill {
+    SignInVariableFill(SignInVariableFill),
+    SignInFileFill(SignInFileFill),
+}
+impl serde::Serialize for SignInFill {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::SignInVariableFill(payload) => {
+                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::ser::Error::custom(concat!(
+                        "discriminated union variant `",
+                        stringify!(SignInVariableFill),
+                        "` did not serialize as an object",
+                    ))
+                })?;
+                match object.get("kind") {
+                    Some(serde_json::Value::String(tag)) if matches!(tag.as_str(), "variable") => {}
+                    Some(serde_json::Value::String(tag)) => {
+                        return Err(serde::ser::Error::custom(format!(
+                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
+                            "kind",
+                            stringify!(SignInVariableFill),
+                        )));
+                    }
+                    Some(_) => {
+                        return Err(serde::ser::Error::custom(concat!(
+                            "discriminator `",
+                            "kind",
+                            "` did not serialize as a string",
+                        )));
+                    }
+                    None => {
+                        object.insert(
+                            "kind".to_string(),
+                            serde_json::Value::String("variable".to_string()),
+                        );
+                    }
+                }
+                value.serialize(serializer)
+            }
+            Self::SignInFileFill(payload) => {
+                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::ser::Error::custom(concat!(
+                        "discriminated union variant `",
+                        stringify!(SignInFileFill),
+                        "` did not serialize as an object",
+                    ))
+                })?;
+                match object.get("kind") {
+                    Some(serde_json::Value::String(tag)) if matches!(tag.as_str(), "file") => {}
+                    Some(serde_json::Value::String(tag)) => {
+                        return Err(serde::ser::Error::custom(format!(
+                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
+                            "kind",
+                            stringify!(SignInFileFill),
+                        )));
+                    }
+                    Some(_) => {
+                        return Err(serde::ser::Error::custom(concat!(
+                            "discriminator `",
+                            "kind",
+                            "` did not serialize as a string",
+                        )));
+                    }
+                    None => {
+                        object.insert(
+                            "kind".to_string(),
+                            serde_json::Value::String("file".to_string()),
+                        );
+                    }
+                }
+                value.serialize(serializer)
+            }
+        }
+    }
+}
+impl<'de> serde::Deserialize<'de> for SignInFill {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let discriminator = match value.get("kind") {
+            Some(serde_json::Value::String(discriminator)) => Some(discriminator.as_str()),
+            Some(_) => {
+                return Err(serde::de::Error::custom(concat!(
+                    "non-string discriminator `",
+                    "kind",
+                    "`",
+                )));
+            }
+            None => None,
+        };
+        match discriminator {
+            Some(discriminator) => match discriminator {
+                "variable" => {
+                    let primary_error =
+                        match serde_json::from_value::<SignInVariableFill>(value.clone()) {
+                            Ok(payload) => return Ok(Self::SignInVariableFill(payload)),
+                            Err(error) => error,
+                        };
+                    let mut structural_match: Option<(Self, &'static str)> = None;
+                    if let Ok(payload) = serde_json::from_value::<SignInFileFill>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "kind",
+                                "variable",
+                                first_name,
+                                stringify!(SignInFileFill),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::SignInFileFill(payload), stringify!(SignInFileFill)));
+                    }
+                    match structural_match {
+                        Some((payload, _)) => Ok(payload),
+                        None => Err(serde::de::Error::custom(primary_error)),
+                    }
+                }
+                "file" => {
+                    let primary_error =
+                        match serde_json::from_value::<SignInFileFill>(value.clone()) {
+                            Ok(payload) => return Ok(Self::SignInFileFill(payload)),
+                            Err(error) => error,
+                        };
+                    let mut structural_match: Option<(Self, &'static str)> = None;
+                    if let Ok(payload) = serde_json::from_value::<SignInVariableFill>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "kind",
+                                "file",
+                                first_name,
+                                stringify!(SignInVariableFill),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::SignInVariableFill(payload),
+                            stringify!(SignInVariableFill),
+                        ));
+                    }
+                    match structural_match {
+                        Some((payload, _)) => Ok(payload),
+                        None => Err(serde::de::Error::custom(primary_error)),
+                    }
+                }
+                other => Err(serde::de::Error::custom(format!(
+                    "unknown discriminator value `{other}` for `{}`",
+                    "kind",
+                ))),
+            },
+            None => Err(serde::de::Error::custom(concat!(
+                "missing string discriminator `",
+                "kind",
+                "`",
+            ))),
+        }
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SignInVariableFill {
+    pub kind: serde_json::Value,
+    pub variable: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SignInFileFill {
+    pub kind: serde_json::Value,
+    pub path: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum SavedSignInKind {
+    #[default]
+    #[serde(rename = "subscription")]
+    Subscription,
+    #[serde(rename = "key")]
+    Key,
+}
+impl SavedSignInKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Subscription => "subscription",
+            Self::Key => "key",
+        }
+    }
+}
+impl ::std::fmt::Display for SavedSignInKind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for SavedSignInKind {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ModelUseEvidence {
+    pub harness: String,
+    pub image: String,
+    pub model: String,
+    pub observed_at: String,
+    pub result: ModelUseEvidenceResult,
+    pub source: ModelUseEvidenceSource,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum ModelUseEvidenceSource {
+    #[default]
+    #[serde(rename = "model_test")]
+    ModelTest,
+    #[serde(rename = "session")]
+    Session,
+}
+impl ModelUseEvidenceSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ModelTest => "model_test",
+            Self::Session => "session",
+        }
+    }
+}
+impl ::std::fmt::Display for ModelUseEvidenceSource {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for ModelUseEvidenceSource {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum ModelUseEvidenceResult {
+    #[default]
+    #[serde(rename = "worked")]
+    Worked,
+    #[serde(rename = "authentication_failed")]
+    AuthenticationFailed,
+    #[serde(rename = "not_covered")]
+    NotCovered,
+}
+impl ModelUseEvidenceResult {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Worked => "worked",
+            Self::AuthenticationFailed => "authentication_failed",
+            Self::NotCovered => "not_covered",
+        }
+    }
+}
+impl ::std::fmt::Display for ModelUseEvidenceResult {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for ModelUseEvidenceResult {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StateConflictDiagnostic {
@@ -8844,6 +9015,25 @@ impl AgentDeclarationBuilder {
         self.value
     }
 }
+///A provider refused the credential itself when it was saved, so whatever was saved before is kept.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CredentialRejectedDiagnostic {
+    pub context: CredentialRejectedContext,
+    pub field: Option<String>,
+    pub kind: serde_json::Value,
+    pub message: String,
+    pub next_steps: Vec<Action>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CredentialRejectedContext {
+    pub harness: String,
+    pub method: String,
+    pub organization: String,
+    pub provider: String,
+    ///The provider's error type or code, never its message.
+    pub provider_error: Option<String>,
+    pub status: Option<i64>,
+}
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ConnectionFailedDiagnostic {
     pub context: ConnectionFailedContext,
@@ -9641,6 +9831,157 @@ pub struct AuthenticationRequiredEvidence {
     pub method: Option<String>,
     ///The ids of the ACP auth methods the agent offered.
     pub methods: Vec<String>,
+}
+///Whether this revision authenticates, which says nothing of whether a harness can use a model with it. `login_completed` is a finished vendor sign-in and `credential_accepted` a provider accepting the one request recorded in `provider_check`; neither is a model call. Expiry and lack of coverage are only ever established by evidence.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthenticationEvidence {
+    pub observed_at: String,
+    pub provider_check: Option<ProviderCheck>,
+    pub source: AuthenticationEvidenceSource,
+    pub state: AuthenticationEvidenceState,
+}
+///One authenticated model-metadata read. Only `rejected` says the provider refused the credential; `inconclusive` is a refusal about permission, credit or another matter; `unavailable` includes a timeout and a rate or quota limit.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProviderCheck {
+    pub outcome: ProviderCheckOutcome,
+    pub provider: ProviderCheckProvider,
+    ///The provider's error type or code, never its message.
+    pub provider_error: Option<String>,
+    pub status: Option<i64>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum ProviderCheckProvider {
+    #[default]
+    #[serde(rename = "anthropic")]
+    Anthropic,
+    #[serde(rename = "openai")]
+    Openai,
+}
+impl ProviderCheckProvider {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::Openai => "openai",
+        }
+    }
+}
+impl ::std::fmt::Display for ProviderCheckProvider {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for ProviderCheckProvider {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum ProviderCheckOutcome {
+    #[default]
+    #[serde(rename = "accepted")]
+    Accepted,
+    #[serde(rename = "rejected")]
+    Rejected,
+    #[serde(rename = "inconclusive")]
+    Inconclusive,
+    #[serde(rename = "unavailable")]
+    Unavailable,
+}
+impl ProviderCheckOutcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
+            Self::Inconclusive => "inconclusive",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+impl ::std::fmt::Display for ProviderCheckOutcome {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for ProviderCheckOutcome {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum AuthenticationEvidenceState {
+    #[default]
+    #[serde(rename = "unchecked")]
+    Unchecked,
+    #[serde(rename = "login_completed")]
+    LoginCompleted,
+    #[serde(rename = "credential_accepted")]
+    CredentialAccepted,
+    #[serde(rename = "authentication_failed")]
+    AuthenticationFailed,
+    #[serde(rename = "expired")]
+    Expired,
+    #[serde(rename = "not_covered")]
+    NotCovered,
+}
+impl AuthenticationEvidenceState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Unchecked => "unchecked",
+            Self::LoginCompleted => "login_completed",
+            Self::CredentialAccepted => "credential_accepted",
+            Self::AuthenticationFailed => "authentication_failed",
+            Self::Expired => "expired",
+            Self::NotCovered => "not_covered",
+        }
+    }
+}
+impl ::std::fmt::Display for AuthenticationEvidenceState {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for AuthenticationEvidenceState {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum AuthenticationEvidenceSource {
+    #[default]
+    #[serde(rename = "import")]
+    Import,
+    #[serde(rename = "provider_check")]
+    ProviderCheck,
+    #[serde(rename = "relay")]
+    Relay,
+    #[serde(rename = "generic_write")]
+    GenericWrite,
+    #[serde(rename = "refresh")]
+    Refresh,
+    #[serde(rename = "session")]
+    Session,
+}
+impl AuthenticationEvidenceSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Import => "import",
+            Self::ProviderCheck => "provider_check",
+            Self::Relay => "relay",
+            Self::GenericWrite => "generic_write",
+            Self::Refresh => "refresh",
+            Self::Session => "session",
+        }
+    }
+}
+impl ::std::fmt::Display for AuthenticationEvidenceSource {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for AuthenticationEvidenceSource {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppliedTriggers {
@@ -11047,6 +11388,12 @@ pub struct SessionDeclaration {
 pub struct SessionInterrupt {
     ///The person asking. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization.
     pub participant: String,
+}
+///Never answered back, logged or kept in a diagnostic.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SignInMaterial {
+    ///The token or key, or the login file's whole contents, as the method's input says.
+    pub value: String,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StartGithubAppRequest {

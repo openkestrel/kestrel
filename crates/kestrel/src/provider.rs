@@ -8,6 +8,7 @@ use jiff::Timestamp;
 
 use crate::declined::{Constraint, Reason, Resource};
 use crate::domain::OrganizationId;
+use crate::sign_in::{Authentication, Source};
 use crate::store::Store;
 
 /// A credential as everything but the spawn that carries it sees it: what it is read from,
@@ -16,6 +17,7 @@ use crate::store::Store;
 pub struct Held {
     pub variable: String,
     pub set_at: Timestamp,
+    pub revision: i64,
 }
 
 pub async fn hold(store: &Store, organization: &str, variable: &str, secret: &str) -> Result<Held> {
@@ -25,7 +27,12 @@ pub async fn hold(store: &Store, organization: &str, variable: &str, secret: &st
     let organization = tx.organizations().named(organization).await?;
     let held = tx
         .organizations()
-        .hold_provider_credential(organization.id, variable, secret)
+        .hold_provider_credential(
+            organization.id,
+            variable,
+            secret,
+            &Authentication::unchecked(Source::GenericWrite),
+        )
         .await?;
     tx.commit().await?;
 

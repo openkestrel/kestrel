@@ -18,6 +18,10 @@ erDiagram
     organization ||--o{ subscription_profile : holds
     project ||--|{ project_repository : lists
     subscription_profile ||--o{ subscription_profile_entry : holds
+    material_revision ||--o| provider_credential : "is current in"
+    material_revision ||--o| subscription_profile_entry : "is current in"
+    material_revision ||--|| authentication_evidence : "is known to"
+    material_revision ||--o{ model_use_evidence : "was used as"
 
     trigger }o--|| project : "opens from"
     trigger }o--|| agent : "starts with"
@@ -60,6 +64,8 @@ erDiagram
 | `agent` | Harness and optional model | A null `model` means the harness default. |
 | `provider_credential` | Organization secrets by variable name | `sealed` is encrypted with `kestrel.key`. |
 | `subscription_profile`, `…_entry` | A person's harness login | `owner_operator` fixes Operator ownership separately from free-text ownership. Entries are `variable` or `file`, sealed to the Profile ID. |
+| `material_revision` | One write of a credential or Profile entry | `AUTOINCREMENT`, so a write after a delete never reuses a revision. Every write mints one, generic or catalogued, and both material tables carry their current `revision`. |
+| `authentication_evidence`, `model_use_evidence` | What a revision is known to do | Keyed by revision, so a late result attaches to the material it examined and never to its replacement. `provider_check` keeps a provider's status and error type, never its message. Model use is the latest result per harness and model. |
 | `integration` | GitHub or generic webhook | `CHECK`s tie columns to `kind`. GitHub's `signing_secret` and its App private key (`private_key_sealed`) are both sealed; a webhook keeps `shared_secret_digest`. The poll cursor (`deliveries_read_from`, GitHub's clock), `last_polled_at` (kestrel's), `repository_id` and the last refusal live here; a refusal with no `last_event_refusal_id` is Deliveries lost to GitHub's retention. `state`, `revision` and `maintained_at` are its lifecycle: every maintenance change bumps `revision`, which fences work begun before it. |
 | `event` | Every recorded CloudEvent | `integration_id` null for minted Events. |
 | `trigger`, `trigger_agent` | The rule and its allowed Agents | Exactly one of `filter`, `every_ms`, `cron`. `due_at` is set only for schedules. |

@@ -175,6 +175,20 @@ fn facts(diagnostic: &wire::Diagnostic) -> Vec<String> {
             }
             facts
         }
+        D::CredentialRejectedDiagnostic(d) => {
+            let context = &d.context;
+            let mut facts = vec![format!(
+                "{} refused the {} key for harness {}",
+                context.provider, context.method, context.harness
+            )];
+            if let Some(status) = context.status {
+                facts.push(format!("the provider answered {status}"));
+            }
+            if let Some(error) = &context.provider_error {
+                facts.push(format!("the provider said {error}"));
+            }
+            facts
+        }
         D::ExecutableMissingDiagnostic(d) => vec![
             ran_by(&d.context.harness, d.context.image.as_deref()),
             format!(

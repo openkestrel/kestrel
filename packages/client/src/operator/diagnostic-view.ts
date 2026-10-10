@@ -444,6 +444,14 @@ export function factsOf(diagnostic: Diagnostic): Fact[] {
 				["Workspace", diagnostic.context.workspace],
 				["Instance", diagnostic.context.instance],
 			);
+		case "credential_rejected":
+			return present(
+				["Harness", diagnostic.context.harness],
+				["Sign-in method", diagnostic.context.method],
+				["Provider", diagnostic.context.provider],
+				["Status", diagnostic.context.status?.toString()],
+				["Provider error", diagnostic.context.provider_error],
+			);
 		case "authentication_failed": {
 			const { context } = diagnostic;
 			return present(

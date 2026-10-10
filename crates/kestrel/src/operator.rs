@@ -49,6 +49,7 @@ use crate::provider::{self, Held};
 use crate::repository;
 use crate::role::serve;
 use crate::scheduling;
+use crate::sign_in;
 use crate::store::workspace::HeldMessageRefusal;
 use crate::store::{self, Declared as DeclaredRecord, Store};
 use crate::stream::{self, Emitted};
@@ -76,6 +77,8 @@ pub const PROFILE_VARIABLE: &str =
 /// One segment, with the path's slashes percent-encoded in it.
 pub const PROFILE_FILE: &str =
     "/operator/organizations/{organization}/profiles/{profile}/files/{path}";
+pub const SIGN_INS: &str = "/operator/organizations/{organization}/sign-ins";
+pub const SIGN_IN: &str = "/operator/organizations/{organization}/sign-ins/{harness}/{method}";
 pub const GITHUB_APP: &str = "/operator/organizations/{organization}/github-app";
 pub const INTEGRATIONS: &str = "/operator/organizations/{organization}/integrations";
 pub const INTEGRATION: &str = "/operator/organizations/{organization}/integrations/{integration}";
@@ -154,6 +157,7 @@ struct ControlPlane {
     live: crate::live::Live,
     followers: crate::presence::Followers,
     streams: stream::Streams,
+    providers: sign_in::check::Providers,
     images: Images,
 }
 
@@ -315,12 +319,13 @@ fn availability(capability: &Capability, harness: &str) -> wire::HarnessAvailabi
 async fn sign_in_method(
     Path((harness, method)): Path<(String, String)>,
 ) -> Result<Json<wire::SignInMethod>, Refused> {
-    crate::catalogue::sign_in_method(&harness, &method)
+    crate::catalogue::sign_in_method("show_sign_in_method", &harness, &method)
         .cloned()
         .map(Json)
         .map_err(Into::into)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn router(
     store: Store,
     shutdown: CancellationToken,
@@ -329,6 +334,7 @@ pub fn router(
     streams: stream::Streams,
     images: Images,
     client: url::Url,
+    providers: sign_in::check::Providers,
 ) -> Router {
     let root = format!(
         "kestrel operator API\n\nClients reach this API under /operator. Open the browser Client at {client}\n"
@@ -357,6 +363,8 @@ pub fn router(
             PROFILE_FILE,
             put(hold_profile_file).delete(forget_profile_file),
         )
+        .route(SIGN_INS, get(sign_ins))
+        .route(SIGN_IN, put(save_sign_in))
         .route(INTEGRATIONS, get(integrations).post(register_integration))
         .route(INTEGRATION, get(show_integration).patch(change_integration))
         .route(INTEGRATION_DISABLE, post(disable_integration))
@@ -414,6 +422,7 @@ pub fn router(
             live,
             followers,
             streams,
+            providers,
             images,
         })
         .layer(middleware::from_fn(diagnosing))
@@ -1664,6 +1673,172 @@ async fn forget_profile_file(
     profile::forget(&control_plane.store, &organization, &profile, &entry).await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+impl From<sign_in::SignIn> for wire::SavedSignIn {
+    fn from(saved: sign_in::SignIn) -> Self {
+        let authentication = saved.authentication;
+        Self {
+            harness: saved.harness,
+            method: saved.method.id.clone(),
+            kind: match saved.method.kind {
+                wire::SignInMethodKind::Subscription => wire::SavedSignInKind::Subscription,
+                wire::SignInMethodKind::Key => wire::SavedSignInKind::Key,
+            },
+            holding: match saved.holding {
+                sign_in::Holding::Profile(profile) => wire::SignInHolding {
+                    resource: wire::SignInHoldingResource::SubscriptionProfile,
+                    reference: profile.name,
+                    fills: saved.method.fills.clone(),
+                },
+                sign_in::Holding::ProviderCredential(variable) => wire::SignInHolding {
+                    resource: wire::SignInHoldingResource::ProviderCredential,
+                    reference: variable,
+                    fills: saved.method.fills.clone(),
+                },
+            },
+            revision: saved.revision,
+            saved_at: saved.saved_at.to_string(),
+            authentication: wire::AuthenticationEvidence {
+                state: match authentication.state {
+                    sign_in::State::Unchecked => wire::AuthenticationEvidenceState::Unchecked,
+                    sign_in::State::LoginCompleted => {
+                        wire::AuthenticationEvidenceState::LoginCompleted
+                    }
+                    sign_in::State::CredentialAccepted => {
+                        wire::AuthenticationEvidenceState::CredentialAccepted
+                    }
+                    sign_in::State::AuthenticationFailed => {
+                        wire::AuthenticationEvidenceState::AuthenticationFailed
+                    }
+                    sign_in::State::Expired => wire::AuthenticationEvidenceState::Expired,
+                    sign_in::State::NotCovered => wire::AuthenticationEvidenceState::NotCovered,
+                },
+                source: match authentication.source {
+                    sign_in::Source::Import => wire::AuthenticationEvidenceSource::Import,
+                    sign_in::Source::ProviderCheck => {
+                        wire::AuthenticationEvidenceSource::ProviderCheck
+                    }
+                    sign_in::Source::Relay => wire::AuthenticationEvidenceSource::Relay,
+                    sign_in::Source::GenericWrite => {
+                        wire::AuthenticationEvidenceSource::GenericWrite
+                    }
+                    sign_in::Source::Refresh => wire::AuthenticationEvidenceSource::Refresh,
+                    sign_in::Source::Session => wire::AuthenticationEvidenceSource::Session,
+                },
+                observed_at: authentication.observed_at.to_string(),
+                provider_check: authentication
+                    .provider_check
+                    .map(|checked| wire::ProviderCheck {
+                        provider: match checked.provider {
+                            sign_in::check::Provider::Anthropic => {
+                                wire::ProviderCheckProvider::Anthropic
+                            }
+                            sign_in::check::Provider::OpenAi => wire::ProviderCheckProvider::Openai,
+                        },
+                        outcome: match checked.outcome {
+                            sign_in::check::Outcome::Accepted => {
+                                wire::ProviderCheckOutcome::Accepted
+                            }
+                            sign_in::check::Outcome::Rejected => {
+                                wire::ProviderCheckOutcome::Rejected
+                            }
+                            sign_in::check::Outcome::Inconclusive => {
+                                wire::ProviderCheckOutcome::Inconclusive
+                            }
+                            sign_in::check::Outcome::Unavailable => {
+                                wire::ProviderCheckOutcome::Unavailable
+                            }
+                        },
+                        status: checked.status.map(i64::from),
+                        provider_error: checked.provider_error,
+                    }),
+            },
+            model_use: saved
+                .model_use
+                .into_iter()
+                .map(|used| wire::ModelUseEvidence {
+                    harness: used.harness,
+                    model: used.model,
+                    image: used.image,
+                    result: match used.result {
+                        sign_in::UseResult::Worked => wire::ModelUseEvidenceResult::Worked,
+                        sign_in::UseResult::AuthenticationFailed => {
+                            wire::ModelUseEvidenceResult::AuthenticationFailed
+                        }
+                        sign_in::UseResult::NotCovered => wire::ModelUseEvidenceResult::NotCovered,
+                    },
+                    source: match used.source {
+                        sign_in::UseSource::ModelTest => wire::ModelUseEvidenceSource::ModelTest,
+                        sign_in::UseSource::Session => wire::ModelUseEvidenceSource::Session,
+                    },
+                    observed_at: used.observed_at.to_string(),
+                })
+                .collect(),
+        }
+    }
+}
+
+async fn sign_ins(
+    State(control_plane): State<ControlPlane>,
+    Path(organization): Path<String>,
+) -> Result<Json<Vec<wire::SavedSignIn>>, Refused> {
+    let saved = sign_in::saved(&control_plane.store, &organization).await?;
+
+    Ok(Json(saved.into_iter().map(Into::into).collect()))
+}
+
+async fn save_sign_in(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, harness, method)): Path<(String, String, String)>,
+    material: Result<Json<wire::SignInMaterial>, JsonRejection>,
+) -> Result<Json<wire::SavedSignIn>, Refused> {
+    let Json(material) = material?;
+    let saved = sign_in::save(
+        &control_plane.store,
+        &control_plane.providers,
+        &organization,
+        &harness,
+        &method,
+        &material.value,
+    )
+    .await?;
+
+    let Some(provider) = saved.unavailable else {
+        return Ok(Json(saved.sign_in.into()));
+    };
+    let holding = inspect(
+        match &saved.sign_in.holding {
+            sign_in::Holding::Profile(profile) => {
+                Locator::new(Resource::SubscriptionProfile, profile.name.clone())
+            }
+            sign_in::Holding::ProviderCredential(variable) => {
+                Locator::new(Resource::ProviderCredential, variable.clone())
+            }
+        },
+        Some(organization),
+    );
+    Err(Refused::Diagnosed {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        diagnostic: Box::new(wire::Diagnostic::UnavailableDiagnostic(
+            wire::UnavailableDiagnostic {
+                kind: serde_json::json!("unavailable"),
+                message: format!(
+                    "{} could not be asked whether it accepts this key, so it was saved unchecked",
+                    provider.as_str()
+                ),
+                field: None,
+                context: wire::UnavailableContext {
+                    service: provider.as_str().to_owned(),
+                    resource: None,
+                    operation: sign_in::SAVE.to_owned(),
+                    retry_after_seconds: None,
+                    saved: Some(saved.sign_in.into()),
+                },
+                next_steps: vec![holding],
+            },
+        )),
+    })
 }
 
 #[derive(Deserialize)]
@@ -4013,6 +4188,7 @@ fn diagnostic_message(diagnostic: &wire::Diagnostic) -> &str {
         wire::Diagnostic::SetupGapDiagnostic(d) => &d.message,
         wire::Diagnostic::UnavailableDiagnostic(d) => &d.message,
         wire::Diagnostic::InstanceTimeoutDiagnostic(d) => &d.message,
+        wire::Diagnostic::CredentialRejectedDiagnostic(d) => &d.message,
         wire::Diagnostic::AuthenticationFailedDiagnostic(d) => &d.message,
         wire::Diagnostic::ExecutableMissingDiagnostic(d) => &d.message,
         wire::Diagnostic::UnknownFailureDiagnostic(d) => &d.message,
@@ -4236,6 +4412,37 @@ fn diagnosis(reason: Reason, field: Option<&'static str>) -> (StatusCode, wire::
                 },
             }),
         ),
+        Reason::CredentialRejected {
+            operation: _,
+            organization,
+            harness,
+            method,
+            provider,
+            status,
+            provider_error,
+            message,
+        } => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            wire::Diagnostic::CredentialRejectedDiagnostic(wire::CredentialRejectedDiagnostic {
+                kind: serde_json::json!("credential_rejected"),
+                message,
+                field: Some(field.unwrap_or_else(|| "value".to_owned())),
+                next_steps: vec![wire::Action::SignInAction(wire::SignInAction {
+                    action: serde_json::json!("sign_in"),
+                    harness: Some(harness.clone()),
+                    method: Some(method.clone()),
+                    sign_in: None,
+                })],
+                context: wire::CredentialRejectedContext {
+                    organization,
+                    harness,
+                    method,
+                    provider: provider.to_owned(),
+                    status: status.map(i64::from),
+                    provider_error,
+                },
+            }),
+        ),
         Reason::HarnessNotCarried {
             operation,
             harness,
@@ -4312,6 +4519,7 @@ fn image_unavailable(
             resource: Some(image.clone()),
             operation: operation.to_owned(),
             retry_after_seconds: None,
+            saved: None,
         },
         next_steps: vec![
             inspect_harness_image(harness, image),
@@ -4509,6 +4717,7 @@ async fn diagnosing(request: Request, next: Next) -> Response {
                     resource: None,
                     operation: operation.to_owned(),
                     retry_after_seconds: busy.then_some(serve::BUSY_RETRY_AFTER_SECONDS),
+                    saved: None,
                 },
                 // A write that went unanswered may have landed, so it is inspected, never replayed.
                 next_steps: vec![if read {
@@ -4563,6 +4772,8 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("DELETE", PROFILE_VARIABLE) => "forget_subscription_profile_variable",
         ("PUT", PROFILE_FILE) => "hold_subscription_profile_file",
         ("DELETE", PROFILE_FILE) => "forget_subscription_profile_file",
+        ("GET", SIGN_INS) => "list_sign_ins",
+        ("PUT", SIGN_IN) => "save_sign_in",
         ("GET", INTEGRATIONS) => "list_integrations",
         ("POST", INTEGRATIONS) => "register_integration",
         ("GET", INTEGRATION) => "show_integration",

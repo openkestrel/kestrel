@@ -24,6 +24,7 @@ pub mod lineage;
 pub mod link_client;
 pub mod model;
 pub mod operator_log;
+pub mod provider_stub;
 pub mod repository;
 pub mod scripted_agent;
 pub mod supervisor;
@@ -64,6 +65,7 @@ use kestrel::provider::{self, Held};
 use kestrel::role::serve::{self, Listen};
 use kestrel::role::work::{Dispatch, HarnessCommand};
 use kestrel::scheduling;
+use kestrel::sign_in::check::Providers;
 use kestrel::store::Store;
 use kestrel::timer::Wake;
 use kestrel::trigger::apply::Applied;
@@ -209,6 +211,17 @@ impl Drop for Cleanup {
 }
 
 pub const DEFAULT_INTERRUPT_DEADLINE: Duration = Duration::from_secs(30);
+/// Short, so a test of a provider that never answers does not wait the ten seconds a real one gets.
+pub const PROVIDER_DEADLINE: Duration = Duration::from_secs(2);
+
+/// Refuses every connection, so a test that saves a key without a stub never reaches a provider.
+fn no_provider() -> Providers {
+    Providers::at(
+        "http://127.0.0.1:1",
+        "http://127.0.0.1:1",
+        PROVIDER_DEADLINE,
+    )
+}
 /// Short, so a Session that answered is waiting soon after, unless a test watches it trail.
 pub const QUIET_PERIOD: Duration = Duration::from_secs(1);
 
@@ -405,11 +418,36 @@ impl Kestrel {
         .await
     }
 
+    /// Checks API keys against `providers`, a stub's address, never a real provider's.
+    pub async fn boot_checking_sign_ins_at(providers: &str) -> Self {
+        Self::boot_checking(
+            TempDir::new().expect("a temporary data directory"),
+            Listen {
+                link: LOOPBACK,
+                operator: LOOPBACK,
+            },
+            None,
+            kestrel::presence::LEASE,
+            Providers::at(providers, providers, PROVIDER_DEADLINE),
+        )
+        .await
+    }
+
     async fn boot_against(
         data_dir: TempDir,
         listen: Listen,
         environment: Option<Provisions>,
         follow_lease: Duration,
+    ) -> Self {
+        Self::boot_checking(data_dir, listen, environment, follow_lease, no_provider()).await
+    }
+
+    async fn boot_checking(
+        data_dir: TempDir,
+        listen: Listen,
+        environment: Option<Provisions>,
+        follow_lease: Duration,
+        providers: Providers,
     ) -> Self {
         let store = Store::open(data_dir.path())
             .await
@@ -417,7 +455,8 @@ impl Kestrel {
         let shutdown = CancellationToken::new();
         let all_in_one = kestrel::role::bind(store.clone(), listen, client_url(), follow_lease)
             .await
-            .expect("the control plane should bind its link");
+            .expect("the control plane should bind its link")
+            .checking_sign_ins_with(providers);
         let bound = all_in_one.bound();
         let address = bound.link;
         let dispatch = environment.clone().map(|provisions| Dispatch {
@@ -465,7 +504,8 @@ impl Kestrel {
             kestrel::presence::LEASE,
         )
         .await
-        .expect("the control plane should bind its link");
+        .expect("the control plane should bind its link")
+        .checking_sign_ins_with(no_provider());
         let bound = listening.bound();
         let roles = tokio::spawn(serve::run(listening, shutdown.clone()));
 

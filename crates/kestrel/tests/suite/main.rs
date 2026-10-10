@@ -45,6 +45,7 @@ mod scope;
 mod seal;
 mod seam;
 mod session_info;
+mod sign_in;
 mod start;
 mod startup_store;
 mod stream;

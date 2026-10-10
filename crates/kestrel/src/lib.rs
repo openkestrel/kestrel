@@ -32,6 +32,7 @@ pub mod repository;
 pub mod role;
 pub mod scheduling;
 pub mod shutdown;
+pub mod sign_in;
 pub mod start;
 pub mod store;
 pub mod stream;

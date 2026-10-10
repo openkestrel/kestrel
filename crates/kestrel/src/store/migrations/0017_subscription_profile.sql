@@ -15,6 +15,7 @@ CREATE TABLE subscription_profile_entry (
     name TEXT NOT NULL,
     sealed TEXT NOT NULL,
     set_at TEXT NOT NULL,
+    revision INTEGER NOT NULL REFERENCES material_revision (revision),
     PRIMARY KEY (profile_id, kind, name)
 ) STRICT;
 

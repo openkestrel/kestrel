@@ -5,6 +5,7 @@ use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 
 use crate::capability::Images;
+use crate::sign_in::check::Providers;
 use crate::store::Store;
 use crate::timer::Wake;
 use std::time::Duration;
@@ -35,6 +36,12 @@ pub async fn bind(
 impl AllInOne {
     pub fn bound(&self) -> serve::Listen {
         self.listening.bound()
+    }
+
+    #[must_use]
+    pub fn checking_sign_ins_with(mut self, providers: Providers) -> Self {
+        self.listening = self.listening.checking_sign_ins_with(providers);
+        self
     }
 
     pub async fn run(

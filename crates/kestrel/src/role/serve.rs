@@ -12,6 +12,7 @@ use url::Url;
 use crate::capability::{Capability, Images};
 use crate::cli::Role;
 use crate::integration::webhook;
+use crate::sign_in::check::Providers;
 use crate::store::Store;
 use crate::timer::Wake;
 use crate::{link, operator};
@@ -32,6 +33,7 @@ pub struct Listening {
     store: Store,
     wake: Wake,
     follow_lease: Duration,
+    providers: Providers,
     images: Images,
     pub(crate) live: crate::live::Live,
 }
@@ -39,6 +41,12 @@ pub struct Listening {
 impl Listening {
     pub fn bound(&self) -> Listen {
         self.bound
+    }
+
+    #[must_use]
+    pub fn checking_sign_ins_with(mut self, providers: Providers) -> Self {
+        self.providers = providers;
+        self
     }
 
     #[must_use]
@@ -76,6 +84,7 @@ pub async fn bind(
         store,
         wake,
         follow_lease,
+        providers: Providers::default(),
         images: Images::default(),
         live: crate::live::Live::default(),
     })
@@ -90,6 +99,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         store,
         wake,
         follow_lease,
+        providers,
         images,
         live,
     } = listening;
@@ -122,6 +132,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         streams,
         images,
         client,
+        providers,
     );
 
     let serving_link = axum::serve(link_listener, link_router)

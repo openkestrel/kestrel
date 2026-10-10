@@ -10,7 +10,8 @@ use crate::declined::{Reason, Resource};
 use crate::domain::{Organization, OrganizationId};
 use crate::keyring::Keyring;
 use crate::provider::Held;
-use crate::store::Declared;
+use crate::sign_in::Authentication;
+use crate::store::{Declared, sign_in};
 
 pub struct Organizations<'a> {
     connection: &'a mut SqliteConnection,
@@ -117,6 +118,7 @@ impl<'a> Organizations<'a> {
         organization: OrganizationId,
         variable: &str,
         secret: &str,
+        authentication: &Authentication,
     ) -> Result<Held> {
         let sealed = self
             .keyring
@@ -124,18 +126,21 @@ impl<'a> Organizations<'a> {
         let held = Held {
             variable: variable.to_owned(),
             set_at: Timestamp::now(),
+            revision: sign_in::mint(self.connection, authentication).await?,
         };
 
         sqlx::query(
-            "INSERT INTO provider_credential (organization_id, variable, sealed, set_at)
-             VALUES (?, ?, ?, ?)
+            "INSERT INTO provider_credential (organization_id, variable, sealed, set_at, revision)
+             VALUES (?, ?, ?, ?, ?)
              ON CONFLICT (organization_id, variable)
-             DO UPDATE SET sealed = excluded.sealed, set_at = excluded.set_at",
+             DO UPDATE SET sealed = excluded.sealed, set_at = excluded.set_at,
+                           revision = excluded.revision",
         )
         .bind(organization.to_string())
         .bind(variable)
         .bind(sealed)
         .bind(held.set_at.to_string())
+        .bind(held.revision)
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("holding the provider credential {variable}"))?;
@@ -148,7 +153,7 @@ impl<'a> Organizations<'a> {
         organization: OrganizationId,
     ) -> Result<Vec<Held>> {
         sqlx::query(
-            "SELECT variable, set_at
+            "SELECT variable, set_at, revision
              FROM provider_credential
              WHERE organization_id = ?
              ORDER BY variable",
@@ -161,9 +166,24 @@ impl<'a> Organizations<'a> {
             Ok(Held {
                 variable: row.get("variable"),
                 set_at: row.get::<String, _>("set_at").parse()?,
+                revision: row.get("revision"),
             })
         })
         .collect()
+    }
+
+    pub async fn provider_credential_revision(
+        &mut self,
+        organization: OrganizationId,
+        variable: &str,
+    ) -> Result<Option<i64>> {
+        Ok(sqlx::query_scalar(
+            "SELECT revision FROM provider_credential WHERE organization_id = ? AND variable = ?",
+        )
+        .bind(organization.to_string())
+        .bind(variable)
+        .fetch_optional(&mut *self.connection)
+        .await?)
     }
 
     /// The one place a Provider Credential is decrypted.
