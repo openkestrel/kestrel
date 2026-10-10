@@ -330,6 +330,26 @@ describe("enqueueing a Session", () => {
 		});
 	});
 
+	it("describes replacing an Integration's private key without holding the key", () => {
+		expect(
+			stepOf(
+				{
+					action: "replace_integration_private_key",
+					organization: "acme",
+					integration: "github",
+					retry_after_seconds: 30,
+				},
+				ORIGIN,
+			),
+		).toEqual({
+			kind: "guidance",
+			label: "Replace the Integration github's App private key",
+			detail:
+				"GitHub asks for 30s first. The key is read from standard input or a file, never from the command.",
+			command: `kestrel integration github replace-key github --organization acme --control-plane ${ORIGIN}`,
+		});
+	});
+
 	it("enables the Integration a paused step waits on", () => {
 		const step = stepOf(
 			{ action: "enable_integration", organization: "acme", integration: "github" },

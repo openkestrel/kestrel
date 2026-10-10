@@ -102,6 +102,8 @@ pub enum Constraint {
     ChatgptLoginFile,
     Positive,
     Immutable,
+    RsaPrivateKey,
+    AcceptedByApp,
 }
 
 impl Constraint {
@@ -126,6 +128,8 @@ impl Constraint {
             Constraint::ChatgptLoginFile => "chatgpt_login_file",
             Constraint::Positive => "positive",
             Constraint::Immutable => "immutable",
+            Constraint::RsaPrivateKey => "rsa_private_key",
+            Constraint::AcceptedByApp => "accepted_by_app",
         }
     }
 }
@@ -152,6 +156,9 @@ pub enum Step {
         instance: String,
     },
     EnableIntegration {
+        integration: String,
+    },
+    ReplacePrivateKey {
         integration: String,
     },
 }
@@ -256,6 +263,14 @@ pub enum Reason {
         carried: Vec<String>,
         message: String,
     },
+    /// GitHub did not answer, so nothing was saved and asking again is safe.
+    GithubUnavailable {
+        operation: &'static str,
+        integration: String,
+        organization: String,
+        retry_after_seconds: Option<i64>,
+        message: String,
+    },
     /// Never a claim that the harness is absent: nothing established whether it is.
     ImageUnavailable {
         operation: &'static str,
@@ -287,6 +302,7 @@ impl fmt::Display for Reason {
             | Reason::InstanceTimeout { message, .. }
             | Reason::CredentialRejected { message, .. }
             | Reason::HarnessNotCarried { message, .. }
+            | Reason::GithubUnavailable { message, .. }
             | Reason::ImageUnavailable { message, .. } => message,
         };
         f.write_str(message)

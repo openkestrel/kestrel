@@ -117,7 +117,9 @@ operation; `operator::diagnosing` fills it in from the route, as the route's `op
 snake case (`operator::operation`, pinned against the document by a unit test). A 503 on a read
 offers `retry_read`; on a write it offers `inspect_operation` with `uncertain: true`, because an
 unanswered write may have landed and is never replayed. A busy database carries the same delay in
-`Retry-After` and `retry_after_seconds`.
+`Retry-After` and `retry_after_seconds`. A private-key replacement GitHub could not check is the
+exception: it is refused before anything is written, so its 503 (`service: github`) offers the
+replacement again, after `retry_after_seconds` when GitHub named a wait.
 
 `declined::Declined` remains for producers no ticket has typed yet (Integration registration,
 the GitHub App flow, starts, Trigger declaration and supervisor-relayed read refusals); they answer
@@ -137,6 +139,7 @@ follower lease's 404 are also plain. Anything else is `Unavailable`.
 | `Declined::Missing`, `Declined::Ambiguous` | 404 | 3 unresolved |
 | `Declined::Taken` | 409 | 4 rejected |
 | SQLite busy | 503 with `Retry-After: 1` | 5 unavailable |
+| `Reason::GithubUnavailable` | 503 | 5 unavailable |
 | `Reason::InstanceTimeout` | 504 | 5 unavailable |
 | Anything else | 503 | 5 unavailable |
 

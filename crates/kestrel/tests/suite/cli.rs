@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use support::client::{self, Finished, Invocation};
-use support::github_stub::{self, GithubStub};
+use support::github_stub::{self, GithubStub, ScriptedResponse};
 use support::scripted_agent::Script;
 use tempfile::TempDir;
 
@@ -1143,6 +1143,73 @@ fn the_client_disables_changes_and_enables_an_integration() {
 
     assert_eq!(enabled["state"], "enabled");
     assert_eq!(enabled["diagnostic"], Value::Null);
+}
+
+#[test]
+fn the_client_replaces_a_private_key_from_a_file_or_standard_input_and_never_says_it() {
+    let kestrel = Kestrel::new();
+    let stub = GithubStub::start();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "trace");
+    watching(&booted, &stub, "1h");
+    let before = booted.record(&["integration", "show", "hub", "--json"]);
+
+    stub.script_answer("POST", "/access_tokens", ScriptedResponse::answering(401));
+    let mut printed = booted.refused_as(
+        &["integration", "github", "replace-key", "hub"],
+        Invocation::default().given(support::REPLACEMENT_PRIVATE_KEY),
+    );
+    assert!(printed.contains("private_key"), "{printed}");
+    stub.script_answer("POST", "/access_tokens", ScriptedResponse::answering(502));
+    let unanswered = booted.refused_as(
+        &["integration", "github", "replace-key", "hub"],
+        Invocation::default().given(support::REPLACEMENT_PRIVATE_KEY),
+    );
+    assert!(
+        unanswered.contains("kestrel integration github replace-key hub --organization acme"),
+        "an outage named no way to try again:\n{unanswered}"
+    );
+    printed += &unanswered;
+    assert_eq!(
+        booted.record(&["integration", "show", "hub", "--json"])["revision"],
+        before["revision"]
+    );
+
+    let from_input = booted
+        .client_as(
+            &["integration", "github", "replace-key", "hub", "--json"],
+            Invocation::default().given(support::REPLACEMENT_PRIVATE_KEY),
+        )
+        .json();
+    let from_file = booted
+        .client_as(
+            &[
+                "integration",
+                "github",
+                "replace-key",
+                "hub",
+                "--private-key-file",
+                "app.pem",
+                "--json",
+            ],
+            Invocation::default().file("app.pem", support::PRIVATE_KEY),
+        )
+        .json();
+    printed += &format!("{from_input}{from_file}");
+    printed += &booted.run(&["integration", "show", "hub"]);
+    let said = booted.said();
+    booted.killed();
+
+    assert!(from_input["revision"].as_i64() > before["revision"].as_i64());
+    assert!(from_file["revision"].as_i64() > from_input["revision"].as_i64());
+    assert_eq!(from_file["id"], before["id"]);
+    for key in [support::PRIVATE_KEY, support::REPLACEMENT_PRIVATE_KEY] {
+        assert!(!printed.contains(key), "the client printed a private key");
+        assert!(!said.contains(key), "a log line spelled a private key out");
+    }
+    for said in [&printed, &said] {
+        assert!(!said.contains("PRIVATE KEY"), "{said}");
+        assert!(!said.contains(github_stub::INSTALLATION_TOKEN), "{said}");
+    }
 }
 
 /// The one command that has a credential in it, and the whole of what kestrel says while it
