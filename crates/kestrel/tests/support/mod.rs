@@ -841,6 +841,29 @@ impl Kestrel {
         integration::change(&self.store, organization, name, change).await
     }
 
+    pub async fn retire_integration(&self, organization: &str, name: &str) -> Integration {
+        integration::retire(&self.store, organization, name, None)
+            .await
+            .expect("the integration should retire")
+    }
+
+    pub async fn try_enable_integration(
+        &self,
+        organization: &str,
+        name: &str,
+    ) -> anyhow::Result<Integration> {
+        integration::enable(&self.store, organization, name).await
+    }
+
+    pub async fn authenticates_webhooks(&self, integration: &Integration) -> bool {
+        let mut tx = self.store.read().await.expect("a read");
+        tx.integrations()
+            .verifier(integration)
+            .await
+            .expect("how it is verified should read")
+            .is_some()
+    }
+
     pub async fn replace_private_key(
         &self,
         organization: &str,

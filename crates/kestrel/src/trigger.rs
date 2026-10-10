@@ -14,7 +14,7 @@ use crate::domain::{
     StartedBy, Templates, Trigger, TriggerId, TriggerState, Workspace, WorkspaceId,
 };
 use crate::integration::github::{self, EventData, Github};
-use crate::integration::paused;
+use crate::integration::out_of_use;
 use crate::log::{BriefSource, Entry};
 use crate::readiness::{Decision, Readiness, Request};
 use crate::store::integration::Recorded;
@@ -639,7 +639,7 @@ pub async fn fire(store: &Store, github: &Github) -> Result<Vec<Fired>> {
             None => None,
         };
         let readiness = match &integration {
-            Some(integration) if integration.disabled() => Some(Err(paused(
+            Some(integration) if !integration.enabled() => Some(Err(out_of_use(
                 integration,
                 &trigger.organization.name,
                 "fire_trigger",
@@ -656,16 +656,22 @@ pub async fn fire(store: &Store, github: &Github) -> Result<Vec<Fired>> {
         if reconsidering && !tx.triggers().still_held(&trigger, &event).await? {
             continue;
         }
-        let readiness = match &integration {
-            Some(integration)
-                if !integration.disabled() && !tx.integrations().unchanged(integration).await? =>
+        let readiness = match (&integration, readiness) {
+            // Nothing resumes a retired Integration, so waiting on it would never end.
+            (Some(integration), Some(Err(because))) if integration.retired() => {
+                fired.push(canceled(tx, &trigger, &event, because).await?);
+                continue;
+            }
+            (Some(integration), _)
+                if integration.enabled() && !tx.integrations().unchanged(integration).await? =>
             {
                 Some(Err(format!(
-                    "the integration {} was disabled or changed while this firing was considered",
+                    "the integration {} was disabled, retired or changed while this firing was \
+                     considered",
                     integration.name
                 )))
             }
-            _ => readiness,
+            (_, readiness) => readiness,
         };
         fired.push(
             firing(
@@ -729,7 +735,7 @@ pub async fn dispatch(store: &Store, github: &Github, dispatch: Dispatch<'_>) ->
     let mut tx = store.begin().await?;
     if !tx.integrations().unchanged(&integration).await? {
         bail!(
-            "the integration {} was disabled or changed while the dispatch read the issue; \
+            "the integration {} was disabled, retired or changed while the dispatch read the issue; \
              dispatch it again",
             integration.name
         );
@@ -774,8 +780,8 @@ async fn dispatched(
             trigger.name
         );
     }
-    if integration.disabled() {
-        bail!(paused(
+    if !integration.enabled() {
+        bail!(out_of_use(
             integration,
             &trigger.organization.name,
             "dispatch_trigger"

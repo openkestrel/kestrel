@@ -279,6 +279,58 @@ async fn a_disabled_integration_holds_its_post_until_it_is_enabled() {
 }
 
 #[tokio::test]
+async fn retiring_an_integration_cancels_its_pending_post_and_says_why() {
+    let stub = GithubStub::start();
+    labelled(&stub);
+    stub.script_answer("POST", COMMENTS, github_stub::created(1, "posted"));
+    let kestrel = Kestrel::boot().await;
+    watching(&kestrel, &stub, BOTH).await;
+    let (_, session) = working(&kestrel).await;
+    kestrel.disable_integration("acme", "github").await;
+    kestrel.said(&session, "Done.").await;
+    kestrel.complete_session(&session).await;
+
+    let retired = kestrel.retire_integration("acme", "github").await;
+
+    assert!(!retired.canceled_posts.is_empty());
+    for canceled in &retired.canceled_posts {
+        assert_eq!(canceled.session, session.id);
+        assert!(canceled.because.contains("retired"), "{canceled:?}");
+    }
+    nothing_is_said(&stub).await;
+    assert_eq!(
+        kestrel.integration("acme", "github").await.canceled_posts,
+        retired.canceled_posts
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_session_that_ends_after_its_integration_retired_leaves_no_post_waiting() {
+    let stub = GithubStub::start();
+    labelled(&stub);
+    let kestrel = Kestrel::boot().await;
+    watching(&kestrel, &stub, BOTH).await;
+    let (_, session) = working(&kestrel).await;
+
+    kestrel.retire_integration("acme", "github").await;
+    kestrel.said(&session, "Done.").await;
+    kestrel.complete_session(&session).await;
+
+    nothing_is_said(&stub).await;
+    assert!(
+        kestrel
+            .integration("acme", "github")
+            .await
+            .canceled_posts
+            .is_empty()
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_comment_that_is_refused_is_tried_again_and_leaves_the_session_as_it_was() {
     let stub = GithubStub::start();
     labelled(&stub);

@@ -362,6 +362,164 @@ async fn a_change_that_changes_nothing_keeps_the_revision() {
     kestrel.teardown().await;
 }
 
+#[tokio::test]
+async fn retiring_erases_what_it_authenticates_with_and_keeps_its_history() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+    let registered = kestrel
+        .register_signed_github(
+            "acme",
+            "github",
+            REPOSITORY,
+            &stub.base_url(),
+            &uuid::Uuid::now_v7().to_string(),
+        )
+        .await;
+    stub.deliver(github_stub::labelled(43, "ready-for-agent"));
+    eventually("the delivery being recorded", async || {
+        kestrel.events("acme").await.len() == 1
+    })
+    .await;
+
+    let retired = kestrel.retire_integration("acme", "github").await;
+
+    assert_eq!(retired.id, registered.id);
+    assert_eq!(retired.state, IntegrationState::Retired);
+    assert!(retired.retired_at.is_some());
+    assert!(retired.revision > registered.revision);
+    let github = retired.github().expect("still a github one");
+    assert_eq!(github.repository, REPOSITORY);
+    assert_eq!(github.credential.id, 1);
+    assert!(github.credential.private_key().is_none());
+    assert!(!kestrel.authenticates_webhooks(&retired).await);
+    let events = kestrel.events("acme").await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].integration, Some(retired.id));
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_retired_integration_is_never_maintained_or_enabled_again() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    watching(&kestrel, &stub).await;
+    let retired = kestrel.retire_integration("acme", "github").await;
+
+    assert!(
+        kestrel
+            .try_enable_integration("acme", "github")
+            .await
+            .is_err()
+    );
+    assert!(
+        kestrel
+            .change_integration(
+                "acme",
+                "github",
+                Change {
+                    name: Some("hub"),
+                    ..Change::default()
+                },
+            )
+            .await
+            .is_err()
+    );
+
+    let again = kestrel.retire_integration("acme", "github").await;
+    assert_eq!(again.revision, retired.revision);
+    assert_eq!(again.retired_at, retired.retired_at);
+    assert_eq!(again.name, "github");
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_retired_integration_is_not_polled() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    watching(&kestrel, &stub).await;
+    eventually("a first poll", async || polls(&stub) > 0).await;
+
+    kestrel.retire_integration("acme", "github").await;
+    a_while().await;
+    let asked = stub.requests().len();
+    stub.deliver(github_stub::labelled(43, "ready-for-agent"));
+    a_while().await;
+
+    assert_eq!(
+        stub.requests().len(),
+        asked,
+        "a retired integration reached github"
+    );
+    assert!(kestrel.events("acme").await.is_empty());
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_poll_begun_before_retirement_asks_and_records_nothing() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+    kestrel
+        .register_integration(
+            "acme",
+            "github",
+            REPOSITORY,
+            &stub.base_url(),
+            BOTH,
+            SignedDuration::from_hours(1),
+        )
+        .await;
+    eventually("a first poll", async || polls(&stub) > 0).await;
+    let stale = kestrel.integration("acme", "github").await;
+    kestrel.retire_integration("acme", "github").await;
+    stub.deliver(github_stub::labelled(43, "ready-for-agent"));
+    let asked = stub.requests().len();
+
+    let polled = kestrel.poll_as(&stale).await;
+
+    assert_eq!(polled.recorded, 0);
+    assert_eq!(
+        stub.requests().len(),
+        asked,
+        "a key read before retirement was presented after it"
+    );
+    assert!(kestrel.events("acme").await.is_empty());
+    let after = kestrel.integration("acme", "github").await;
+    assert_eq!(after.state, IntegrationState::Retired);
+    assert_eq!(after.poll_due_at, None);
+    assert_eq!(after.last_event_refusal.map(|refusal| refusal.reason), None);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_webhook_to_a_retired_integration_is_refused_whatever_it_presents() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+    let secret = uuid::Uuid::now_v7().to_string();
+    let integration = kestrel.register_webhook("acme", "ci", &secret).await;
+    kestrel.retire_integration("acme", "ci").await;
+
+    let answered = reqwest::Client::new()
+        .post(format!("{}{}", kestrel.link(), integration.webhook_path()))
+        .bearer_auth(&secret)
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .expect("the webhook answers")
+        .status();
+
+    assert!(answered.is_client_error(), "answered {answered}");
+    assert!(kestrel.events("acme").await.is_empty());
+
+    kestrel.teardown().await;
+}
+
 const MINTED: &str = "/access_tokens";
 const WATCHED: &str = "/repos/jtmthf/kestrel";
 
@@ -385,6 +543,7 @@ fn private_key(integration: &Integration) -> &str {
         .expect("a github one")
         .credential
         .private_key()
+        .expect("a key it signs with")
 }
 
 fn mints(stub: &GithubStub) -> usize {
@@ -687,6 +846,34 @@ async fn a_disabled_integration_takes_a_replacement_and_stays_disabled() {
 
     assert_eq!(replaced.state, IntegrationState::Disabled);
     assert_eq!(private_key(&replaced), REPLACEMENT_PRIVATE_KEY);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_retired_integration_takes_no_replacement() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    registered(&kestrel, &stub).await;
+    kestrel.retire_integration("acme", "github").await;
+    let asked = mints(&stub);
+
+    let refused = kestrel
+        .replace_private_key("acme", "github", REPLACEMENT_PRIVATE_KEY, None)
+        .await
+        .expect_err("a retired integration has no key to replace");
+
+    assert!(
+        matches!(
+            reason(&refused),
+            Reason::StateConflict {
+                state: "retired",
+                ..
+            }
+        ),
+        "{refused:#}"
+    );
+    assert_eq!(mints(&stub), asked);
 
     kestrel.teardown().await;
 }

@@ -992,6 +992,31 @@ async fn a_held_delegation_waits_on_a_disabled_integration_and_starts_once_it_is
 }
 
 #[tokio::test]
+async fn a_held_delegation_is_canceled_when_its_integration_is_retired() {
+    let stub = GithubStub::start();
+    stub.deliver(github_stub::assigned(43, KESTREL, MAINTAINER));
+    blocked_by(&stub, 43, 42);
+    let kestrel = Kestrel::boot().await;
+    delegating(&kestrel, &stub).await;
+    firing_of(&kestrel, ASSIGNED, "held").await;
+
+    kestrel.retire_integration("acme", "github").await;
+
+    let canceled = firing_of(&kestrel, ASSIGNED, "canceled").await;
+    assert!(
+        canceled
+            .failure
+            .unwrap_or_default()
+            .contains("the integration github is retired")
+    );
+    unblocked(&stub, 43);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(kestrel.workspaces("acme").await.is_empty());
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_held_delegation_whose_unblocking_event_was_missed_starts_on_the_sweep() {
     let stub = GithubStub::start();
     stub.deliver(github_stub::assigned(43, KESTREL, MAINTAINER));

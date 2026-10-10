@@ -192,7 +192,7 @@ async fn reconciling(
     }
     let integration = read.integrations().with_id(integration).await?;
     drop(read);
-    if integration.disabled() {
+    if !integration.enabled() {
         return Ok(None);
     }
 

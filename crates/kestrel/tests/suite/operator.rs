@@ -4167,6 +4167,91 @@ async fn a_client_maintains_an_integration_without_changing_what_it_is() {
 }
 
 #[tokio::test]
+async fn a_client_retires_an_integration_and_still_reads_it() {
+    let kestrel = Kestrel::boot().await;
+    let stub = GithubStub::start();
+    kestrel.declare_organization("acme").await;
+    kestrel
+        .register_integration(
+            "acme",
+            "github",
+            "jtmthf/kestrel",
+            &stub.base_url(),
+            &[Direction::Inbound, Direction::Outbound],
+            SignedDuration::from_mins(1),
+        )
+        .await;
+    let retire = operator::INTEGRATION_RETIRE
+        .replace("{organization}", "acme")
+        .replace("{integration}", "github");
+    let (_, shown) = got(&kestrel, &integration_of("acme", "github")).await;
+    let revision = shown["revision"].as_i64().expect("a revision");
+
+    let (status, stale) = declared(&kestrel, &retire, &json!({ "revision": revision - 1 })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+    let (status, unchosen) = requested(&kestrel, reqwest::Method::POST, &retire, None).await;
+    assert!(status.is_client_error(), "{unchosen}");
+    let (_, kept) = got(&kestrel, &integration_of("acme", "github")).await;
+    assert_eq!(kept["state"], "enabled");
+
+    let (status, retired) = declared(&kestrel, &retire, &json!({ "revision": revision })).await;
+    assert_eq!(status, StatusCode::OK, "{retired}");
+    assert_eq!(retired["state"], "retired");
+    assert_eq!(retired["id"], shown["id"]);
+    assert_eq!(retired["repository"], "jtmthf/kestrel");
+    assert!(retired["retired_at"].is_string());
+    assert_eq!(retired["canceled_posts"], json!([]));
+    assert_eq!(retired["polled_every"], Value::Null);
+    assert_eq!(retired["webhook_path"], Value::Null);
+    assert_eq!(retired["diagnostic"]["kind"], "state_conflict");
+    assert_eq!(retired["diagnostic"]["context"]["state"], "retired");
+    assert_eq!(
+        retired["diagnostic"]["context"]["organization"], "acme",
+        "{retired}"
+    );
+    assert!(
+        retired["diagnostic"]["next_steps"]
+            .as_array()
+            .expect("steps")
+            .iter()
+            .all(|step| step["action"] != "enable_integration"),
+        "{retired}"
+    );
+    assert!(!retired.to_string().contains(PRIVATE_KEY));
+
+    for path in [operator::INTEGRATION_ENABLE, operator::INTEGRATION_DISABLE] {
+        let (status, refused) = declared(
+            &kestrel,
+            &path
+                .replace("{organization}", "acme")
+                .replace("{integration}", "github"),
+            &json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+        assert_eq!(refused["context"]["state"], "retired");
+    }
+    let (status, refused) = requested(
+        &kestrel,
+        reqwest::Method::PATCH,
+        &integration_of("acme", "github"),
+        Some(&json!({ "name": "hub" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+
+    let (status, again) = declared(&kestrel, &retire, &json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["revision"], retired["revision"]);
+    assert_eq!(
+        listed(&kestrel, &integrations_of("acme")).await[0]["state"],
+        "retired"
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_client_replaces_a_private_key_and_is_told_how_to_repair_one_github_refuses() {
     let kestrel = Kestrel::boot().await;
     let stub = GithubStub::start();

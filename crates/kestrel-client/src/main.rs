@@ -304,7 +304,7 @@ enum IntegrationCommand {
         after_help = "Empty lists show scoped guidance at a terminal; non-JSON pipes emit nothing."
     )]
     List,
-    /// Show an Integration: its state, revision, directions and why its use is paused
+    /// Show an Integration: its state, revision, directions and why it is out of use
     Show { name: String },
     /// Change an Integration's name, directions or poll interval; what it connects to is fixed
     Change {
@@ -326,6 +326,17 @@ enum IntegrationCommand {
     Disable { name: String },
     /// Resume a disabled Integration; its poll catches up on what GitHub still keeps
     Enable { name: String },
+    /// Permanently end an Integration's use: erase the credentials kestrel holds, keep its history
+    #[command(
+        after_help = "Retiring cannot be undone, and changes nothing on GitHub: the App, its \
+                      installation and its keys stay as they are."
+    )]
+    Retire {
+        name: String,
+        /// Retire it without being asked to type its name; required where nothing can be asked
+        #[arg(long)]
+        yes: bool,
+    },
     /// Acknowledge the latest oversized Event refused by an Integration
     AcknowledgeRefusal { name: String },
 }
@@ -1409,6 +1420,41 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                 .await?,
             )?;
         }
+        Command::Integration(IntegrationCommand::Retire { name, yes }) => {
+            let organization = scoping.resolve().await?.organization;
+            let path = ["organizations", &organization, "integrations", &name];
+            let reviewed: wire::Integration = serde_json::from_value(api.get(&path).await?)?;
+            if !yes && !matches!(reviewed.state, wire::IntegrationState::Retired) {
+                if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
+                    bail!(
+                        "retiring the Integration {name} is permanent and nothing here can be \
+                         asked to confirm it; pass --yes to retire it"
+                    );
+                }
+                eprintln!(
+                    "retiring the Integration {name} of the Organization {organization} will"
+                );
+                for consequence in RETIRING {
+                    eprintln!("  {consequence}");
+                }
+                if !typed(&name)? {
+                    eprintln!("nothing was retired");
+                    return Ok(());
+                }
+            }
+            let retired = api
+                .post(
+                    &[path.as_slice(), &["retire"]].concat(),
+                    &wire::IntegrationRetirement {
+                        revision: Some(reviewed.revision),
+                    },
+                )
+                .await?;
+            shown_integration(&presentation, invocation, retired)?;
+            if matches!(reviewed.kind, wire::IntegrationKind::Github) {
+                eprintln!("{}", github_cleanup(&reviewed));
+            }
+        }
         Command::Integration(IntegrationCommand::List) => {
             let organization = scoping.resolve().await?.organization;
             collection(
@@ -2299,6 +2345,43 @@ fn empty_list(
     )
 }
 
+const RETIRING: [&str; 5] = [
+    "erase the credentials kestrel holds for it, for good",
+    "cancel what it has not yet posted, and the Firings held on it",
+    "refuse every later use, change or enable; no other Integration takes its place",
+    "keep it and its name, and the Projects, Triggers, Events and Workspaces that refer to it",
+    "change nothing on GitHub",
+];
+
+fn typed(name: &str) -> Result<bool> {
+    eprint!("type {name} to retire it: ");
+    let mut answer = String::new();
+    std::io::stdin()
+        .read_line(&mut answer)
+        .context("reading the answer")?;
+
+    Ok(answer.trim() == name)
+}
+
+/// Optional, and the operator's to do: kestrel changes nothing on GitHub (ADR-0056).
+fn github_cleanup(integration: &wire::Integration) -> String {
+    let app = integration.bot_login.as_deref().unwrap_or("the GitHub App");
+    let repository = integration
+        .repository
+        .as_deref()
+        .unwrap_or("its repository");
+    format!(
+        "kestrel erased its own copy of {app}'s credentials. It changed nothing on GitHub: the \
+         App is still installed on {repository} and its private keys still work. A request \
+         already sent, or a token already issued, was not recalled; an installation token \
+         lapses within the hour.\n\
+         If nothing else uses the App, you can finish on GitHub, in the App's settings:\n  \
+         delete its private keys under General\n  \
+         uninstall it from {repository} under Install App\n  \
+         delete the App under Advanced"
+    )
+}
+
 fn shown_integration(
     presentation: &Presentation,
     invocation: &Invocation,
@@ -2307,6 +2390,19 @@ fn shown_integration(
     let integration: wire::Integration = serde_json::from_value(answered)?;
     let mut record = serde_json::to_value(&integration)?;
     if !matches!(presentation, Presentation::Json) {
+        record["canceled_posts"] = integration
+            .canceled_posts
+            .iter()
+            .map(|post| {
+                let said = post
+                    .turn
+                    .map_or_else(|| "outcome".to_owned(), |turn| format!("turn {turn}"));
+                let attempted = post.attempted_at.as_ref().map_or_else(String::new, |at| {
+                    format!(" (a request went out at {at}, so it may be there all the same)")
+                });
+                format!("{} {said}: {}{attempted}", post.session, post.reason)
+            })
+            .collect();
         record["diagnostic"] = integration
             .diagnostic
             .as_ref()

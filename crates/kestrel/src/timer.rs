@@ -367,6 +367,7 @@ async fn post_due(store: &Store, github: &Github) -> Result<()> {
 /// on the network, and so an Integration whose poll runs long is not asked again underneath
 /// the one in flight.
 async fn poll(store: &Store, github: &Github) -> Result<()> {
+    github.forget_unused().await?;
     let due = {
         let mut tx = store.begin().await?;
         tx.integrations().due(Timestamp::now()).await?
