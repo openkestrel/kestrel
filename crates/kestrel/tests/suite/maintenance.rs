@@ -6,7 +6,6 @@ use hmac::{Hmac, KeyInit as _, Mac as _};
 use jiff::SignedDuration;
 use kestrel::domain::{Direction, IntegrationState};
 use kestrel::integration::Change;
-use rand::random;
 use sha2::Sha256;
 use support::Kestrel;
 use support::github_stub::{self, GithubStub};
@@ -289,7 +288,7 @@ async fn a_signed_webhook_to_a_disabled_integration_is_refused_and_the_poll_catc
     let stub = GithubStub::start();
     let kestrel = Kestrel::boot().await;
     kestrel.declare_organization("acme").await;
-    let webhook_secret = format!("test-secret-{}", random::<u128>());
+    let webhook_secret = uuid::Uuid::now_v7().to_string();
     let integration = kestrel
         .register_signed_github(
             "acme",
