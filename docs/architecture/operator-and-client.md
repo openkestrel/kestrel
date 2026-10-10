@@ -316,6 +316,15 @@ headings. Each command's `--json` returns the operator response.
 - `POST /operator/starts` backs `kestrel start`: it adds whatever is missing to run a first Session
   and refuses to change anything that exists (`start.rs`). It opens through the same write.
 - `session enqueue` only continues a Workspace: it refuses one that has never had a Session.
+- A Project's repositories go through one resolver (`repository.rs`) on each of the three paths
+  that declare one. It checks syntax only, expands `owner/repo` and `github.com/owner/repo` to
+  HTTPS `.git`, and refuses repositories that would share a checkout directory, as a typed
+  `invalid_field`. Projects hold the resolved addresses, and the preview diffs against them. It
+  contacts no source, so a checkout failure still arrives as supervisor evidence
+  ([ADR-0057](../adr/0057-a-repository-declaration-is-not-a-successful-checkout.md)).
+  `POST /operator/repository-resolutions` exposes the resolver to Clients without declaring
+  anything. `kestrel start` calls it before planning, so it matches Projects by resolved address.
+  `purpose: public_setup` accepts HTTPS addresses only and warns that no App-backed push follows.
 
 ## The Client
 

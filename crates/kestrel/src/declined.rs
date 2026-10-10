@@ -85,6 +85,9 @@ impl Locator {
 pub enum Constraint {
     NonEmpty,
     DistinctCheckoutDirectories,
+    GitRepository,
+    HttpsRepository,
+    CheckoutDirectory,
     MatchesDeclared,
     NotReserved,
     EnvironmentVariableName,
@@ -102,6 +105,9 @@ impl Constraint {
         match self {
             Constraint::NonEmpty => "non_empty",
             Constraint::DistinctCheckoutDirectories => "distinct_checkout_directories",
+            Constraint::GitRepository => "git_repository",
+            Constraint::HttpsRepository => "https_repository",
+            Constraint::CheckoutDirectory => "checkout_directory",
             Constraint::MatchesDeclared => "matches_declared",
             Constraint::NotReserved => "not_reserved",
             Constraint::EnvironmentVariableName => "environment_variable_name",

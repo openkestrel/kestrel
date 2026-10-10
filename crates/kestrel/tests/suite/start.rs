@@ -317,6 +317,76 @@ async fn a_plan_the_control_plane_refuses_leaves_no_partial_setup() {
 }
 
 #[tokio::test]
+async fn github_shorthand_finds_the_project_declared_against_its_address() {
+    let kestrel = Kestrel::boot().await;
+    let acme = kestrel.declare_organization("acme").await;
+    kestrel
+        .declare_project(
+            &acme,
+            "widgets",
+            &["https://github.com/acme/widgets.git".to_owned()],
+            repository::BRANCH,
+        )
+        .await;
+
+    let started = ran_by(
+        &kestrel,
+        &[
+            "start",
+            "--brief",
+            BRIEF,
+            "--repository",
+            "acme/widgets",
+            "--branch",
+            repository::BRANCH,
+            "--credential",
+            PROVIDER_KEY,
+        ],
+        in_a_fresh_clone().env(PROVIDER_KEY, A_PROVIDER_KEY),
+    )
+    .await;
+
+    assert!(started.status.success(), "{}", started.err);
+    let explained = resolved(&started.err);
+    assert!(
+        explained
+            .iter()
+            .any(|row| row.ends_with("https://github.com/acme/widgets.git")),
+        "{explained:?}"
+    );
+    assert!(
+        explained
+            .iter()
+            .any(|row| row.ends_with("widgets") && row.contains("project")),
+        "{explained:?}"
+    );
+    assert_eq!(kestrel.projects(&acme).await.len(), 1);
+    assert_eq!(kestrel.workspaces("acme").await.len(), 1);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_repository_no_declaration_could_hold_is_refused_before_anything_is_sent() {
+    let kestrel = Kestrel::boot().await;
+    let acme = kestrel.declare_organization("acme").await;
+
+    let refused = ran_by(
+        &kestrel,
+        &["start", "--brief", BRIEF, "--repository", "widgets"],
+        in_a_fresh_clone(),
+    )
+    .await;
+
+    assert!(!refused.status.success());
+    assert!(refused.err.contains("--repository"), "{}", refused.err);
+    assert!(kestrel.projects(&acme).await.is_empty());
+    assert!(kestrel.agents(&acme).await.is_empty());
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_declaration_the_plan_would_change_is_named_before_anything_is_sent() {
     let kestrel = Kestrel::boot().await;
     let acme = kestrel.declare_organization("acme").await;
