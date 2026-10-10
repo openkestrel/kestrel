@@ -550,13 +550,16 @@ async fn a_delivery_backlog_longer_than_a_page_loses_nothing() {
             repository_id: github_stub::REPOSITORY_ID,
         }),
         carries: vec![Direction::Inbound],
+        state: kestrel::domain::IntegrationState::Enabled,
+        revision: 1,
+        disabled_at: None,
         poll_due_at: None,
         deliveries_read_from: Some(from),
         last_polled_at: Some(from),
         last_event_refusal: None,
     };
 
-    let listing = Github::dialling_out()
+    let listing = Github::unfenced()
         .expect("the GitHub client")
         .deliveries(&integration, from)
         .await

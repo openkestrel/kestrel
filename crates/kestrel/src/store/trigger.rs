@@ -508,7 +508,11 @@ impl<'a> Triggers<'a> {
                     OR EXISTS (
                         SELECT 1 FROM event later
                          WHERE later.integration_id = held.integration_id
-                           AND later.recorded_at > firing.considered_at))
+                           AND later.recorded_at > firing.considered_at)
+                    OR EXISTS (
+                        SELECT 1 FROM integration
+                         WHERE integration.id = held.integration_id
+                           AND integration.maintained_at > firing.considered_at))
              ORDER BY firing.considered_at, firing.event_record_id
              LIMIT ?",
         )

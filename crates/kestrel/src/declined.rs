@@ -100,6 +100,8 @@ pub enum Constraint {
     Offered,
     SingleToken,
     ChatgptLoginFile,
+    Positive,
+    Immutable,
 }
 
 impl Constraint {
@@ -122,6 +124,8 @@ impl Constraint {
             Constraint::Offered => "offered",
             Constraint::SingleToken => "single_token",
             Constraint::ChatgptLoginFile => "chatgpt_login_file",
+            Constraint::Positive => "positive",
+            Constraint::Immutable => "immutable",
         }
     }
 }
@@ -146,6 +150,9 @@ pub enum Step {
     ReleaseInstance {
         workspace: String,
         instance: String,
+    },
+    EnableIntegration {
+        integration: String,
     },
 }
 

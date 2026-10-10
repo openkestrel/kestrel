@@ -195,6 +195,39 @@ impl fmt::Display for IntegrationKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegrationState {
+    Enabled,
+    Disabled,
+}
+
+impl IntegrationState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            IntegrationState::Enabled => "enabled",
+            IntegrationState::Disabled => "disabled",
+        }
+    }
+}
+
+impl FromStr for IntegrationState {
+    type Err = anyhow::Error;
+
+    fn from_str(state: &str) -> Result<Self> {
+        match state {
+            "enabled" => Ok(IntegrationState::Enabled),
+            "disabled" => Ok(IntegrationState::Disabled),
+            other => bail!("{other} is not a state an integration is in"),
+        }
+    }
+}
+
+impl fmt::Display for IntegrationState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Integration {
     pub id: IntegrationId,
@@ -202,6 +235,9 @@ pub struct Integration {
     pub name: String,
     pub connection: Connection,
     pub carries: Vec<Direction>,
+    pub state: IntegrationState,
+    pub revision: i64,
+    pub disabled_at: Option<Timestamp>,
     pub poll_due_at: Option<Timestamp>,
     /// By GitHub's clock: every Delivery made earlier has been read.
     pub deliveries_read_from: Option<Timestamp>,
@@ -213,6 +249,18 @@ pub struct Integration {
 impl Integration {
     pub fn carries(&self, direction: Direction) -> bool {
         self.carries.contains(&direction)
+    }
+
+    pub fn in_use(&self, direction: Direction) -> bool {
+        !self.disabled() && self.carries(direction)
+    }
+
+    pub fn disabled(&self) -> bool {
+        self.state == IntegrationState::Disabled
+    }
+
+    pub fn polled(&self) -> bool {
+        self.kind() == IntegrationKind::Github && self.carries(Direction::Inbound)
     }
 
     pub const fn kind(&self) -> IntegrationKind {

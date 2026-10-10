@@ -1601,6 +1601,202 @@
         }
       }
     },
+    "/operator/organizations/{organization}/integrations/{integration}": {
+      "get": {
+        "operationId": "showIntegration",
+        "summary": "Show an Integration.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The named Integration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "changeIntegration",
+        "summary": "Change an Integration's name, directions or poll interval.",
+        "description": "Its Organization, kind, API origin, repository, App and installation identify the connection and cannot change; naming one is refused with 422. An invalid direction or interval is refused before anything is saved. Every change bumps the revision, and a change naming an older `revision` is refused with 409.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The changed Integration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/integrations/{integration}/disable": {
+      "post": {
+        "operationId": "disableIntegration",
+        "summary": "Disable an Integration.",
+        "description": "Pauses its polling, webhook ingestion, outbound posts, dispatch and held Firings, keeping its credentials, cursor and pending posts. Running Sessions continue, and a request already sent to the external system is not recalled. Disabling a disabled Integration changes nothing.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The disabled Integration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/integrations/{integration}/enable": {
+      "post": {
+        "operationId": "enableIntegration",
+        "summary": "Enable a disabled Integration.",
+        "description": "Resumes what disabling paused; its poll reads on from where it stopped, within the external system's retention, and a gap it cannot read is reported on the Integration. Enabling an enabled Integration changes nothing.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The enabled Integration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
     "/operator/organizations/{organization}/integrations/{integration}/event-refusal": {
       "delete": {
         "operationId": "acknowledgeEventRefusal",
@@ -5471,6 +5667,37 @@
           "secret"
         ]
       },
+      "IntegrationState": {
+        "description": "Disabled pauses every use of an Integration and keeps everything it resumes with.",
+        "enum": [
+          "enabled",
+          "disabled"
+        ]
+      },
+      "IntegrationChange": {
+        "description": "What maintenance may change; an omitted field keeps its value.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "carries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Direction"
+            },
+            "description": "Every direction it carries afterwards; a generic webhook carries inbound only."
+          },
+          "interval": {
+            "type": "string",
+            "description": "How often a GitHub Integration's poll reads its App's Delivery log, as a positive duration."
+          },
+          "revision": {
+            "type": "integer",
+            "description": "The revision this change was decided against."
+          }
+        }
+      },
       "Integration": {
         "description": "A registered Integration. What it presents to the external system is never part of it.",
         "type": "object",
@@ -5508,6 +5735,20 @@
               "$ref": "#/components/schemas/Direction"
             }
           },
+          "state": {
+            "$ref": "#/components/schemas/IntegrationState"
+          },
+          "revision": {
+            "type": "integer",
+            "description": "Bumped by every change, so a Client can say which one it decided against."
+          },
+          "disabled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "polled_every": {
             "type": [
               "string",
@@ -5531,6 +5772,17 @@
                 "type": "null"
               }
             ]
+          },
+          "diagnostic": {
+            "description": "Why its use is paused now, with the steps that resume it; null while nothing is.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Diagnostic"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -5540,9 +5792,13 @@
           "repository",
           "bot_login",
           "carries",
+          "state",
+          "revision",
+          "disabled_at",
           "polled_every",
           "webhook_path",
-          "last_event_refusal"
+          "last_event_refusal",
+          "diagnostic"
         ]
       },
       "EventRefusal": {
@@ -6676,6 +6932,7 @@
           { "$ref": "#/components/schemas/ListResourcesAction" },
           { "$ref": "#/components/schemas/StopSessionAction" },
           { "$ref": "#/components/schemas/EnqueueSessionAction" },
+          { "$ref": "#/components/schemas/EnableIntegrationAction" },
           { "$ref": "#/components/schemas/ReleaseInstanceAction" },
           { "$ref": "#/components/schemas/CorrectFieldAction" },
           { "$ref": "#/components/schemas/SignInAction" },
@@ -6796,6 +7053,24 @@
           }
         },
         "required": ["action", "organization", "workspace", "missing"]
+      },
+      "EnableIntegrationAction": {
+        "properties": {
+          "action": {
+            "const": "enable_integration"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "integration": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "organization",
+          "integration"
+        ]
       },
       "ReleaseInstanceAction": {
         "properties": {

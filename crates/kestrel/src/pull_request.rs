@@ -2,7 +2,8 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use tracing::warn;
 
 use crate::domain::{
-    Event, EventRecordId, PullRequest, PullRequestState, Workspace, WorkspaceId, WorkspaceState,
+    Event, EventRecordId, Integration, PullRequest, PullRequestState, Workspace, WorkspaceId,
+    WorkspaceState,
 };
 use crate::integration::github::{self, Github};
 use crate::log::Entry;
@@ -58,6 +59,14 @@ async fn learning(store: &Store, github: &Github, event: &Event) -> Result<Learn
     };
 
     let mut tx = store.begin().await?;
+    let reconciled = match reconciled {
+        Some((integration, reconciled)) => tx
+            .integrations()
+            .unchanged(&integration)
+            .await?
+            .then_some(reconciled),
+        None => None,
+    };
     let matched = match &observed {
         Some(observed) => matching(&mut tx, event, observed).await?,
         None => Vec::new(),
@@ -157,7 +166,7 @@ async fn reconciling(
     github: &Github,
     event: &Event,
     observed: &Observed,
-) -> Result<Option<PullRequest>> {
+) -> Result<Option<(Integration, PullRequest)>> {
     let Some(integration) = event.integration else {
         return Ok(None);
     };
@@ -183,6 +192,9 @@ async fn reconciling(
     }
     let integration = read.integrations().with_id(integration).await?;
     drop(read);
+    if integration.disabled() {
+        return Ok(None);
+    }
 
     let pull_request = github
         .pull_request(&integration, observed.number)
@@ -203,9 +215,10 @@ async fn reconciling(
         );
     }
 
-    Ok(Some(
+    Ok(Some((
+        integration,
         reconciled.into_pull_request(repository.clone(), event.record_id),
-    ))
+    )))
 }
 
 fn observed_action(event: &Event) -> String {

@@ -47,7 +47,7 @@ pub async fn sweeping(
     summaries: &crate::live_work::Summaries,
     shutdown: &CancellationToken,
 ) -> Result<()> {
-    let github = Github::dialling_out()?;
+    let github = Github::dialling_out(store)?;
 
     // Beside the lease sweep rather than in it: a poll waits on GitHub, and a lease left
     // unswept for the length of an HTTP request is a Workspace wedged for that long.

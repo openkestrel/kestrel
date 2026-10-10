@@ -959,6 +959,39 @@ async fn a_held_delegation_starts_once_its_blocker_closes() {
 }
 
 #[tokio::test]
+async fn a_held_delegation_waits_on_a_disabled_integration_and_starts_once_it_is_enabled() {
+    let stub = GithubStub::start();
+    stub.deliver(github_stub::assigned(43, KESTREL, MAINTAINER));
+    blocked_by(&stub, 43, 42);
+    let kestrel = Kestrel::boot().await;
+    delegating(&kestrel, &stub).await;
+    firing_of(&kestrel, ASSIGNED, "held").await;
+
+    kestrel.disable_integration("acme", "github").await;
+    unblocked(&stub, 43);
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while !firing_of(&kestrel, ASSIGNED, "held")
+        .await
+        .failure
+        .unwrap_or_default()
+        .contains("the integration github is disabled")
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the held firing never said its integration is disabled"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(kestrel.workspaces("acme").await.is_empty());
+
+    kestrel.enable_integration("acme", "github").await;
+
+    assert_eq!(workspaces(&kestrel, 1).await.len(), 1);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_held_delegation_whose_unblocking_event_was_missed_starts_on_the_sweep() {
     let stub = GithubStub::start();
     stub.deliver(github_stub::assigned(43, KESTREL, MAINTAINER));

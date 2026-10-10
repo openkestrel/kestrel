@@ -412,8 +412,8 @@ async fn standard_output_carries_the_value_and_standard_error_carries_the_rest()
         &kestrel,
         &[
             "integration",
-            "register",
             "github",
+            "register",
             "hub",
             "--repository",
             "jtmthf/kestrel",

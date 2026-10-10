@@ -381,6 +381,11 @@ fn step(action: &wire::Action, invocation: &Invocation, wrote: bool) -> Step {
                 Some(a.organization.clone()),
             )
         }
+        A::EnableIntegrationAction(a) => Step::run(
+            format!("enable the Integration {}", a.integration),
+            given(&["integration", "enable", &a.integration]),
+            Some(a.organization.clone()),
+        ),
         A::ReleaseInstanceAction(a) => Step {
             consequence: Some(a.consequence.clone()),
             ..Step::run(
@@ -514,6 +519,7 @@ fn inspection(
         R::Workspace => (given(&["workspace", "show", reference]), scoped),
         R::Session => (given(&["session", "show", reference]), scoped),
         R::Trigger => (given(&["trigger", "show", reference]), scoped),
+        R::Integration => (given(&["integration", "show", reference]), scoped),
         R::Event => (given(&["event", "show", reference]), None),
         resource => listing(resource, organization),
     }

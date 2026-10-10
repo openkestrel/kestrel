@@ -4,7 +4,10 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::time::Duration;
 
-use kestrel::domain::{EventRecordId, Exit, Preparing, SessionId, SessionState, WorkspaceId};
+use jiff::SignedDuration;
+use kestrel::domain::{
+    Direction, EventRecordId, Exit, Preparing, SessionId, SessionState, WorkspaceId,
+};
 use kestrel::instance::{Git, Observed};
 use kestrel::link;
 use kestrel::log::{BriefSource, Entry, Message, ToolStatus};
@@ -228,6 +231,12 @@ fn profile_variable_of(organization: &str, profile: &str, variable: &str) -> Str
 
 fn integrations_of(organization: &str) -> String {
     operator::INTEGRATIONS.replace("{organization}", organization)
+}
+
+fn integration_of(organization: &str, integration: &str) -> String {
+    operator::INTEGRATION
+        .replace("{organization}", organization)
+        .replace("{integration}", integration)
 }
 
 fn event_refusal_of(organization: &str, integration: &str) -> String {
@@ -730,8 +739,8 @@ async fn a_trigger_applied_after_an_event_never_fires_for_that_event() {
             &kestrel,
             &[
                 "integration",
-                "register",
                 "github",
+                "register",
                 "origin",
                 "--organization",
                 "acme",
@@ -3938,8 +3947,8 @@ async fn a_client_registers_and_lists_integrations_without_saying_their_secrets(
         &kestrel,
         &[
             "integration",
-            "register",
             "github",
+            "register",
             "hub",
             "--organization",
             "acme",
@@ -4045,6 +4054,114 @@ async fn an_integration_is_registered_with_what_it_is_declared_to_carry() {
     assert_eq!(signed["webhook_path"], Value::Null, "{signed}");
     assert!(!signed.to_string().contains("a-signing-secret"));
     assert!(!signed.to_string().contains(PRIVATE_KEY));
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_client_maintains_an_integration_without_changing_what_it_is() {
+    let kestrel = Kestrel::boot().await;
+    let stub = GithubStub::start();
+    kestrel.declare_organization("acme").await;
+    kestrel
+        .register_integration(
+            "acme",
+            "hub",
+            "jtmthf/kestrel",
+            &stub.base_url(),
+            &[Direction::Inbound, Direction::Outbound],
+            SignedDuration::from_mins(1),
+        )
+        .await;
+    let (status, shown) = got(&kestrel, &integration_of("acme", "hub")).await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(shown["state"], "enabled");
+    assert_eq!(shown["diagnostic"], Value::Null);
+    let revision = shown["revision"].as_i64().expect("a revision");
+
+    let (status, refused) = requested(
+        &kestrel,
+        reqwest::Method::PATCH,
+        &integration_of("acme", "hub"),
+        Some(&json!({ "repository": "jtmthf/other" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(refused["context"]["field"], "repository");
+    assert_eq!(refused["context"]["constraint"], "immutable");
+
+    let (status, refused) = requested(
+        &kestrel,
+        reqwest::Method::PATCH,
+        &integration_of("acme", "hub"),
+        Some(&json!({ "interval": "0s" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(refused["context"]["field"], "interval");
+
+    let (status, changed) = requested(
+        &kestrel,
+        reqwest::Method::PATCH,
+        &integration_of("acme", "hub"),
+        Some(&json!({ "name": "github", "carries": ["outbound"], "revision": revision })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["name"], "github");
+    assert_eq!(changed["carries"], json!(["outbound"]));
+    assert_eq!(changed["repository"], "jtmthf/kestrel");
+    assert_eq!(changed["id"], shown["id"]);
+
+    let (status, stale) = requested(
+        &kestrel,
+        reqwest::Method::PATCH,
+        &integration_of("acme", "github"),
+        Some(&json!({ "name": "hub", "revision": revision })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+
+    let (status, disabled) = declared(
+        &kestrel,
+        &operator::INTEGRATION_DISABLE
+            .replace("{organization}", "acme")
+            .replace("{integration}", "github"),
+        &json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+    assert_eq!(disabled["state"], "disabled");
+    assert!(disabled["disabled_at"].is_string());
+    assert_eq!(disabled["diagnostic"]["kind"], "state_conflict");
+    assert!(
+        disabled["diagnostic"]["next_steps"]
+            .as_array()
+            .expect("steps")
+            .iter()
+            .any(|step| step["action"] == "enable_integration"
+                && step["integration"] == "github"
+                && step["organization"] == "acme"),
+        "{disabled}"
+    );
+    assert_eq!(
+        listed(&kestrel, &integrations_of("acme")).await[0]["state"],
+        "disabled"
+    );
+
+    let (status, enabled) = declared(
+        &kestrel,
+        &operator::INTEGRATION_ENABLE
+            .replace("{organization}", "acme")
+            .replace("{integration}", "github"),
+        &json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{enabled}");
+    assert_eq!(enabled["state"], "enabled");
+    assert_eq!(enabled["diagnostic"], Value::Null);
+    assert!(enabled["revision"].as_i64() > disabled["revision"].as_i64());
+    assert!(!enabled.to_string().contains(PRIVATE_KEY));
 
     kestrel.teardown().await;
 }
@@ -6343,6 +6460,10 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (kestrel::integration::manifest::PAGE, "get"),
         (kestrel::integration::manifest::CALLBACK, "get"),
         (kestrel::integration::manifest::INSTALLED, "get"),
+        (operator::INTEGRATION, "get"),
+        (operator::INTEGRATION, "patch"),
+        (operator::INTEGRATION_DISABLE, "post"),
+        (operator::INTEGRATION_ENABLE, "post"),
         (operator::EVENT_REFUSAL, "delete"),
         (operator::EVENTS, "get"),
         (operator::EVENT, "get"),
