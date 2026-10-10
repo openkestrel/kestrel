@@ -510,7 +510,6 @@ async fn the_cli_follow_is_counted_renews_and_prints_no_presence() {
             "Ada",
             "--no-summaries",
             "--json",
-            "seq,entry",
         ],
     );
 

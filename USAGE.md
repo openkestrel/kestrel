@@ -2,33 +2,59 @@
 
 Kestrel runs a coding agent against a repository in an isolated container. The work belongs to a **workspace**, which keeps its branch and transcript across sessions. A **session** is one agent conversation in that workspace. You can start one yourself, then add a trigger when you want repository events to start work for you.
 
-This guide gets you from a source checkout to a working session. The linked guides cover the commands you will need as the work continues.
+This guide gets you from an empty machine to a working session. The linked guides cover the commands you will need as the work continues.
 
 ## Install and start
 
-You need Docker with Compose v2, an amd64 or arm64 machine, and Rust through [rustup](https://rustup.rs). The first start builds the images from source and can take several minutes.
+You need Docker with Compose v2 on an amd64 or arm64 machine.
+
+A release attaches a `compose.yaml` that pulls that release's images, pinned by digest, and needs no checkout: download it into an empty directory and run `docker compose up -d` there. Kestrel has no release yet, so until it does, run main from a checkout:
 
 ```sh
 git clone https://github.com/openkestrel/kestrel
 cd kestrel
 docker compose up -d
+```
+
+This pulls the images main last published to GHCR. `docker compose pull` followed by `docker compose up -d` moves to newer ones. Main does not publish them yet; until it does, [build from source](#build-from-source).
+
+Compose starts the control plane, a filtered Docker socket proxy and the browser Client, and pulls the environment image from which Kestrel creates a container when a workspace needs one. The database lives on a named volume, so `docker compose down` preserves workspaces and their transcripts. `docker compose down --volumes` deletes that volume and its data.
+
+The browser Client is at <http://localhost:7719>, over plain HTTP on the host's loopback, so there is no certificate to trust. `KESTREL_CLIENT_PORT=8000 docker compose up -d` publishes it on another port and tells the control plane where it moved. Each tab holds one connection for its live views, and a browser gives an origin six, so about five Kestrel tabs stay live at once; more stall until one closes.
+
+The Client starts whether or not the control plane does. When the control plane is not answering, the Client says so and checks again on its own. Find out why with:
+
+```sh
+docker compose ps
+docker compose logs kestrel
+```
+
+### Run the CLI
+
+The control-plane image carries the CLI, so it works with nothing installed on the host:
+
+```sh
+docker compose exec kestrel kestrel status
+```
+
+To run `kestrel` on the host instead, install it with Rust through [rustup](https://rustup.rs):
+
+```sh
 cargo install --locked --path crates/kestrel-client
 kestrel status
 ```
 
-Compose starts the control plane and a filtered Docker socket proxy. It also builds the environment image from which Kestrel creates a container when a workspace needs one. The database lives on a named volume, so `docker compose down` preserves workspaces and their transcripts. `docker compose down --volumes` deletes that volume and its data.
+The host CLI connects to the operator API at `127.0.0.1:7718` by default. Opening that address in a browser shows only a note pointing at the Client. The API does not authenticate callers; Compose binds it to loopback. Use a tunnel if the control plane runs on another machine, and set `--control-plane` or `KESTREL_CONTROL_PLANE` to its URL. `docker compose logs -f kestrel` shows control plane and session diagnostics.
 
-The browser Client is at <https://localhost:7719>. Caddy issues its certificate from a local CA it creates on first start, so trust that CA once:
+### Build from source
+
+To run your own changes, build all three product images from the checkout:
 
 ```sh
-docker compose cp client:/data/caddy/pki/authorities/local/root.crt kestrel-ca.crt
-# macOS; on Linux, copy it into your distribution's CA directory and update the store
-security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db kestrel-ca.crt
+docker compose --env-file compose.source.env up -d
 ```
 
-The CA lives on the `client` service's volume, so it survives `docker compose down`; `--volumes` deletes it, and the next start makes a new one to trust.
-
-The CLI connects to the operator API at `127.0.0.1:7718` by default. That API does not authenticate callers; Compose binds it to loopback. Use a tunnel if the control plane runs on another machine, and set `--control-plane` or `KESTREL_CONTROL_PLANE` to its URL. `docker compose logs -f kestrel` shows control plane and session diagnostics.
+`compose.source.env` names the images locally, so a `docker compose pull` never replaces what you built, and the control plane creates workspace containers from the environment image it just built. It rebuilds on every `up`; Docker's cache keeps an unchanged image quick.
 
 ## Create the GitHub App
 
@@ -42,7 +68,7 @@ For a repository owned by a GitHub organization, add `--app-organization OWNER` 
 
 Open the printed URL in your browser, click **Create GitHub App**, and confirm its name on GitHub. Then follow the installation link and select the requested repository. GitHub returns you to Kestrel, which verifies the installation and registers the Integration. `kestrel integration list` shows it when setup is complete. You never download or paste the private key; Kestrel seals it and the generated webhook secret beside its database.
 
-Complete setup within one hour. The callback uses the browser, so localhost works without exposing the operator API. If you reach Kestrel through a tunnel or the browser Client, pass its loopback origin, for example `--callback-base https://localhost:7719`. Keep that address reachable until setup finishes. If GitHub does not return after installation, use the **finish setup after installing** link in the setup tab.
+Complete setup within one hour. The callback uses the browser, so localhost works without exposing the operator API. If you reach Kestrel through a tunnel or the browser Client, pass its loopback origin, for example `--callback-base http://localhost:7719`. Keep that address reachable until setup finishes. If GitHub does not return after installation, use the **finish setup after installing** link in the setup tab.
 
 The App subscribes to issues, issue comments, and pull requests, and Kestrel polls the App's delivery log every minute. Polling learns everything a webhook does, about a minute later and back as far as GitHub keeps deliveries (three days); a poll that has been away longer reports what it lost on `kestrel integration list`. If GitHub can reach your webhook listener, add `--webhook-base https://hooks.example.com` and Kestrel fills in the webhook path: deliveries then arrive at once, and the poll recognises them. Without one, the App's hook points at an address that never resolves, because GitHub refuses a localhost URL. Expose the webhook listener (7717), keeping the operator listener private. The App requests contents, issues, and pull requests read/write, and metadata read. Each Kestrel installation creates its own App.
 

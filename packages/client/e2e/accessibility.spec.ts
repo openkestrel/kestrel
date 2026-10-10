@@ -1,5 +1,6 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { Streamed } from "./streamed";
 
 test.beforeAll(async ({ request }) => {
 	await request.post("/operator/organizations", { data: { name: "acme" } });
@@ -183,56 +184,50 @@ async function populated(page: Page, request: APIRequestContext): Promise<void> 
 
 	await page.route(
 		(url) => url.pathname.endsWith("/transcript"),
-		async (route) => {
-			const url = new URL(route.request().url());
-			if (url.searchParams.has("first_seq") && url.searchParams.has("last_seq")) {
-				await route.fulfill({
-					status: 200,
-					contentType: "text/event-stream",
-					body: wire(tool(61), tool(62), { name: "end", data: { because: "caught_up" } }),
-				});
-				return;
-			}
-			await route.fulfill({
+		(route) =>
+			route.fulfill({
 				status: 200,
 				contentType: "text/event-stream",
-				body: wire(
-					...Array.from({ length: 60 }, (_, index) => said(id, index + 1, `message ${index + 1}`)),
-					{
-						name: "activity",
-						id: `${id}:62`,
-						data: {
-							first_seq: 61,
-							last_seq: 62,
-							counts: { tool_calls: 2, failed_calls: 0, thoughts: 0, plans: 0, tombstones: 0 },
-							latest: { kind: "detail", title: "tool 62", status: "completed" },
-							started_at: "2026-09-30T10:00:00Z",
-							finished_at: "2026-09-30T10:00:02Z",
-							anomaly: false,
-							closed: true,
-						},
-					},
-					{
-						name: "entry",
-						id: `${id}:63`,
-						data: {
-							kind: "shared_state",
-							session_id: null,
-							seq: 63,
-							appended_at: "2026-09-30T10:00:03Z",
-							entry: {
-								type: "said",
-								participant: "jack",
-								message: reference,
-								payload_fields: ["message"],
-							},
-						},
-					},
-					{ name: "end", data: { because: "sealed" } },
-				),
-			});
-		},
+				body: wire(tool(61), tool(62), { name: "end", data: { because: "caught_up" } }),
+			}),
 	);
+	await new Streamed({
+		transcript: () =>
+			wire(
+				...Array.from({ length: 60 }, (_, index) => said(id, index + 1, `message ${index + 1}`)),
+				{
+					name: "activity",
+					id: `${id}:62`,
+					data: {
+						first_seq: 61,
+						last_seq: 62,
+						counts: { tool_calls: 2, failed_calls: 0, thoughts: 0, plans: 0, tombstones: 0 },
+						latest: { kind: "detail", title: "tool 62", status: "completed" },
+						started_at: "2026-09-30T10:00:00Z",
+						finished_at: "2026-09-30T10:00:02Z",
+						anomaly: false,
+						closed: true,
+					},
+				},
+				{
+					name: "entry",
+					id: `${id}:63`,
+					data: {
+						kind: "shared_state",
+						session_id: null,
+						seq: 63,
+						appended_at: "2026-09-30T10:00:03Z",
+						entry: {
+							type: "said",
+							participant: "jack",
+							message: reference,
+							payload_fields: ["message"],
+						},
+					},
+				},
+				{ name: "end", data: { because: "sealed" } },
+			),
+	}).install(page);
 	await page.route(
 		(url) => url.pathname.includes("/transcript/payloads/"),
 		(route) =>
@@ -286,18 +281,13 @@ test("a Transcript of plain messages scrolls by keyboard and has no serious viol
 	request,
 }) => {
 	const { id, name } = await openWorkspace(request);
-	await page.route(
-		(url) => url.pathname.endsWith("/transcript"),
-		(route) =>
-			route.fulfill({
-				status: 200,
-				contentType: "text/event-stream",
-				body: wire(
-					...Array.from({ length: 60 }, (_, index) => said(id, index + 1, `message ${index + 1}`)),
-					{ name: "end", data: { because: "sealed" } },
-				),
-			}),
-	);
+	await new Streamed({
+		transcript: () =>
+			wire(
+				...Array.from({ length: 60 }, (_, index) => said(id, index + 1, `message ${index + 1}`)),
+				{ name: "end", data: { because: "sealed" } },
+			),
+	}).install(page);
 
 	await page.goto(`/organizations/acme/workspaces/${name}`);
 	await expect(page.getByRole("log").getByText("message 60")).toBeVisible();

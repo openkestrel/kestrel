@@ -5,7 +5,7 @@ import { chromium, type Page } from "@playwright/test";
 
 const [workspace, activitySeq, entrySeq, flag] = process.argv.slice(2);
 if (!workspace || !activitySeq || !entrySeq || !flag) throw new Error("arguments missing");
-const base = process.env.KESTREL_CLIENT_URL ?? "https://127.0.0.1:7739";
+const base = process.env.KESTREL_CLIENT_URL ?? "http://127.0.0.1:7739";
 const organization = process.env.KESTREL_ORGANIZATION ?? "acme";
 const say = (record: Record<string, unknown>) =>
 	console.log(JSON.stringify({ at: new Date().toISOString(), ...record }));
@@ -28,7 +28,7 @@ async function openActivity(page: Page) {
 }
 
 const browser = await chromium.launch();
-const context = await browser.newContext({ ignoreHTTPSErrors: true });
+const context = await browser.newContext();
 await context.addInitScript(() => localStorage.setItem("kestrel:participant", "jack"));
 const page = await context.newPage();
 

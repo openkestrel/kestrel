@@ -141,6 +141,7 @@ describe("an inspection", () => {
 				to: "/organizations/$organization/workspaces/$workspace",
 				params: { organization: "acme", workspace: "brave-otter" },
 			},
+			command: `kestrel workspace show brave-otter --organization acme --control-plane ${ORIGIN}`,
 		});
 	});
 
@@ -168,7 +169,11 @@ describe("an inspection", () => {
 				},
 				ORIGIN,
 			),
-		).toEqual({ kind: "guidance", label: "Inspect the Session calm-river in acme" });
+		).toEqual({
+			kind: "guidance",
+			label: "Inspect the Session calm-river in acme",
+			command: `kestrel session show calm-river --organization acme --control-plane ${ORIGIN}`,
+		});
 	});
 });
 
@@ -509,5 +514,78 @@ describe("a diagnostic newer than this Client", () => {
 		const unknown = answered as Diagnostic;
 
 		expect(factsOf(unknown)).toEqual([["Field", "model"]]);
+	});
+});
+
+describe("a recovery command", () => {
+	const commandOf = (action: Action) => {
+		const step = stepOf(action, ORIGIN);
+		return step.kind === "link" || step.kind === "guidance" ? step.command : undefined;
+	};
+	const at = `--control-plane ${ORIGIN}`;
+
+	it("shows an Organization by its status, and an Event outside any Organization", () => {
+		expect(
+			commandOf({
+				action: "inspect_resource",
+				resource: "organization",
+				reference: "acme",
+				organization: null,
+			}),
+		).toBe(`kestrel status --organization acme ${at}`);
+		expect(
+			commandOf({
+				action: "inspect_resource",
+				resource: "event",
+				reference: "e1",
+				organization: "acme",
+			}),
+		).toBe(`kestrel event show e1 ${at}`);
+	});
+
+	it("lists what it cannot show by name", () => {
+		expect(
+			commandOf({
+				action: "inspect_resource",
+				resource: "instance",
+				reference: "i1",
+				organization: "acme",
+			}),
+		).toBe(`kestrel instance list --organization acme ${at}`);
+		expect(
+			commandOf({
+				action: "inspect_resource",
+				resource: "workspace",
+				reference: null,
+				organization: "acme",
+			}),
+		).toBe(`kestrel workspace list --organization acme ${at}`);
+	});
+
+	it("lists a record's kind, with Sessions and payloads under their Workspaces", () => {
+		expect(
+			commandOf({
+				action: "list_resources",
+				resource: "subscription_profile",
+				organization: "acme",
+			}),
+		).toBe(`kestrel profile list --organization acme ${at}`);
+		expect(commandOf({ action: "list_resources", resource: "session", organization: "acme" })).toBe(
+			`kestrel workspace list --organization acme ${at}`,
+		);
+		expect(
+			commandOf({ action: "list_resources", resource: "organization", organization: "acme" }),
+		).toBe(`kestrel organization list ${at}`);
+	});
+
+	it("quotes a reference the shell would split", () => {
+		expect(
+			commandOf({
+				action: "inspect_resource",
+				resource: "session",
+				reference: "it's here",
+				organization: "acme",
+			}),
+		).toBe(`kestrel session show 'it'"'"'s here' --organization acme ${at}`);
 	});
 });

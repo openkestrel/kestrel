@@ -149,7 +149,7 @@ impl Stack {
     }
 
     /// What the browser Client's port answers `path` with, as a browser on this host asks it:
-    /// over HTTP/2, trusting Caddy's local CA as the operator has.
+    /// over plain HTTP/1.1, trusting no certificate.
     pub fn what_the_client_serves(&self, path: &str) -> (u16, String) {
         let address = completed(
             &["port", CLIENT, "8080"],
@@ -158,13 +158,12 @@ impl Stack {
         let asked = Command::new("curl")
             .args([
                 "--silent",
-                "--insecure",
-                "--http2",
+                "--http1.1",
                 "--write-out",
                 "\n%{http_version} %{http_code}",
             ])
-            .args(["--header", &format!("Origin: https://{address}")])
-            .arg(format!("https://{address}{path}"))
+            .args(["--header", &format!("Origin: http://{address}")])
+            .arg(format!("http://{address}{path}"))
             .output()
             .expect("curl should run");
         assert!(asked.status.success(), "curl failed: {asked:?}");
@@ -176,7 +175,7 @@ impl Stack {
         let (version, status) = written
             .split_once(' ')
             .unwrap_or_else(|| panic!("{path} was answered with no status: {written}"));
-        assert_eq!(version, "2", "{path} was answered over HTTP/{version}");
+        assert_eq!(version, "1.1", "{path} was answered over HTTP/{version}");
         let status = status
             .parse()
             .unwrap_or_else(|_| panic!("{path} was answered with no status: {written}"));
@@ -205,6 +204,10 @@ impl Stack {
         );
 
         ran.out.join("\n")
+    }
+
+    pub fn stop(&self, service: &str) {
+        completed(&["stop", service], "stopping a service");
     }
 
     pub fn in_the_control_plane(&self, command: &[&str]) -> Ran {
@@ -304,7 +307,7 @@ fn tagged(source: &str, named: &str) {
     );
 }
 
-fn rendered(variables: &[(&str, &str)]) -> Ran {
+fn rendered(variables: &[(&str, &str)], options: &[&str]) -> Ran {
     let mut rendering = Command::new("docker");
     rendering.current_dir(repository()).env_clear();
     for kept in ["PATH", "HOME"] {
@@ -316,7 +319,9 @@ fn rendered(variables: &[(&str, &str)]) -> Ran {
         rendering.env(key, value);
     }
     let output = rendering
-        .args(["compose", "config", "--format", "json"])
+        .arg("compose")
+        .args(options)
+        .args(["config", "--format", "json"])
         .output()
         .expect("docker should be reachable");
 
@@ -330,13 +335,22 @@ fn rendered(variables: &[(&str, &str)]) -> Ran {
 /// The compose file rendered with nothing in the environment but a path to docker and the
 /// context it reads: what an operator has to supply shows up here as a warning.
 pub fn rendered_against_an_empty_environment() -> Ran {
-    rendered(&[])
+    rendered(&[], &[])
+}
+
+pub fn rendered_given(variables: &[(&str, &str)]) -> Ran {
+    rendered(variables, &[])
+}
+
+/// The compose file rendered the way a contributor builds every product image from source.
+pub fn rendered_from_source() -> Ran {
+    rendered(&[], &["--env-file", "compose.source.env"])
 }
 
 /// The compose file rendered the way this checkout's suite runs it: every resource the
 /// control plane addresses points into this checkout's namespace.
 pub fn rendered_with_the_checkout_namespace() -> Ran {
-    rendered(&namespace().environment())
+    rendered(&namespace().environment(), &[])
 }
 
 pub fn until<T>(what: &str, ready: impl Fn() -> Option<T>) -> T {

@@ -125,14 +125,7 @@ impl Booted {
     }
 
     fn record(&self, args: &[&str]) -> Value {
-        let mut records = self.records(args);
-        assert_eq!(
-            records.len(),
-            1,
-            "`kestrel {}` answered {records:?}",
-            args.join(" ")
-        );
-        records.remove(0)
+        self.client(args).json()
     }
 
     /// The refusal itself, so a test asserting one never passes on a command that succeeded.
@@ -266,17 +259,8 @@ fn a_free_port() -> String {
     format!("127.0.0.1:{port}")
 }
 
-const SESSION: &str = "id,state,exit,instance,worked_model";
-
 fn sessions(kestrel: &Booted, workspace: &str) -> Vec<Value> {
-    kestrel.records(&[
-        "session",
-        "list",
-        "--workspace",
-        workspace,
-        "--json",
-        SESSION,
-    ])
+    kestrel.records(&["session", "list", "--workspace", workspace, "--json"])
 }
 
 /// Answering a turn never ends a Session, so one waiting is stopped the way a person would.
@@ -339,10 +323,9 @@ fn opened(kestrel: &Booted) -> String {
         "--agent",
         "builder",
         "--json",
-        "workspace",
     ]);
 
-    opened["workspace"]
+    opened["workspace"]["name"]
         .as_str()
         .expect("the opened workspace's generated name")
         .to_owned()
@@ -358,7 +341,6 @@ fn transcribed(kestrel: &Booted, workspace: &str) -> Vec<String> {
             workspace,
             "--no-summaries",
             "--json",
-            "seq,entry",
         ])
         .iter()
         .map(|recorded| {
@@ -401,14 +383,7 @@ fn a_session_show_says_the_title_its_options_and_its_commands() {
     ]);
 
     let listed = booted.until(
-        &[
-            "session",
-            "list",
-            "--workspace",
-            &workspace,
-            "--json",
-            "id,title",
-        ],
+        &["session", "list", "--workspace", &workspace, "--json"],
         |listed| listed.iter().any(|session| !session["title"].is_null()),
         "show the harness's title",
     );
@@ -457,14 +432,7 @@ fn a_session_option_set_changes_an_option_and_warns_about_the_cache() {
     ]);
 
     let waiting = booted.until(
-        &[
-            "session",
-            "list",
-            "--workspace",
-            &workspace,
-            "--json",
-            "id,state",
-        ],
+        &["session", "list", "--workspace", &workspace, "--json"],
         |listed| listed.iter().any(|session| session["state"] == "waiting"),
         "reach a waiting session",
     );
@@ -476,7 +444,7 @@ fn a_session_option_set_changes_an_option_and_warns_about_the_cache() {
         .to_owned();
     // The bookkeeping report is debounced, so the option is waited for before it is changed.
     booted.until(
-        &["session", "show", &session, "--json", "id,options"],
+        &["session", "show", &session, "--json"],
         |shown| {
             shown[0]["options"]
                 .as_array()
@@ -509,13 +477,7 @@ fn a_session_option_set_changes_an_option_and_warns_about_the_cache() {
     );
 
     let settled = booted.until(
-        &[
-            "session",
-            "show",
-            &session,
-            "--json",
-            "id,options,changing_options",
-        ],
+        &["session", "show", &session, "--json"],
         |shown| {
             let shown = &shown[0];
             shown["changing_options"]
@@ -559,33 +521,19 @@ fn workspace_open_declares_the_mode_its_first_session_runs_in() {
         "--as-participant",
         "operator",
         "--json",
-        "workspace",
-    ])["workspace"]
+    ])["workspace"]["name"]
         .as_str()
         .expect("the opened workspace's name")
         .to_owned();
 
     let listed = booted.until(
-        &[
-            "session",
-            "list",
-            "--workspace",
-            &workspace,
-            "--json",
-            "id,state",
-        ],
+        &["session", "list", "--workspace", &workspace, "--json"],
         |listed| listed.iter().any(|session| session["state"] == "waiting"),
         "answer its first turn",
     );
     let session = listed[0]["id"].as_str().expect("the session's identifier");
-    let shown: Value = serde_json::from_str(&booted.run(&[
-        "session",
-        "show",
-        session,
-        "--json",
-        "mode,worked_model",
-    ]))
-    .expect("the session's fields as JSON");
+    let shown: Value = serde_json::from_str(&booted.run(&["session", "show", session, "--json"]))
+        .expect("the session's fields as JSON");
 
     assert_eq!(
         shown["mode"],
@@ -626,13 +574,7 @@ fn a_disabled_trigger_shows_its_reason_and_budget() {
     ]);
     booted.run(&["trigger", "disable", "ready"]);
 
-    let trigger = booted.record(&[
-        "trigger",
-        "show",
-        "ready",
-        "--json",
-        "state,disabled_because,firing_budget",
-    ]);
+    let trigger = booted.record(&["trigger", "show", "ready", "--json"]);
 
     assert_eq!(trigger["state"], "disabled:operator");
     assert_eq!(trigger["disabled_because"], "disabled by an operator");
@@ -658,12 +600,13 @@ fn an_agents_model_changes_without_declaring_the_agent_again() {
         booted.run(&["agent", "model", "builder", "--model", "claude-sonnet-5"]),
         "claude-sonnet-5"
     );
+    let agents = booted.records(&["agent", "list", "--json"]);
+    assert_eq!(agents.len(), 1, "{agents:?}");
+    assert_eq!(agents[0]["name"], "builder");
+    assert_eq!(agents[0]["harness"], "codex");
+    assert_eq!(agents[0]["model"], "claude-sonnet-5");
     assert_eq!(
-        booted.records(&["agent", "list", "--json", "name,harness,model"]),
-        [serde_json::json!({ "name": "builder", "harness": "codex", "model": "claude-sonnet-5" })]
-    );
-    assert_eq!(
-        booted.record(&["agent", "model", "builder", "--json", "model"])["model"],
+        booted.record(&["agent", "model", "builder", "--json"])["model"],
         Value::Null
     );
     assert!(
@@ -689,7 +632,7 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
     ]);
     dispatched(&booted, &workspace);
 
-    let shown = booted.record(&["workspace", "show", &workspace, "--json", "instance,held"]);
+    let shown = booted.record(&["workspace", "show", &workspace, "--json"]);
     let instance = shown["instance"]
         .as_str()
         .expect("the workspace keeps its instance")
@@ -704,7 +647,7 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
     assert_eq!(booted.run(&["instance", "release", &workspace]), instance);
 
     assert_eq!(
-        booted.record(&["workspace", "show", &workspace, "--json", "instance"])["instance"],
+        booted.record(&["workspace", "show", &workspace, "--json"])["instance"],
         Value::Null,
         "a released instance is still the workspace's"
     );
@@ -750,14 +693,7 @@ fn a_held_message_is_printed_listed_edited_and_withdrawn() {
         "go",
     ]);
     booted.until(
-        &[
-            "session",
-            "list",
-            "--workspace",
-            &workspace,
-            "--json",
-            "state",
-        ],
+        &["session", "list", "--workspace", &workspace, "--json"],
         |listed| listed.iter().any(|session| session["state"] == "working"),
         "reach a working session",
     );
@@ -771,7 +707,7 @@ fn a_held_message_is_printed_listed_edited_and_withdrawn() {
         "one more change",
     ]);
     let id: i64 = held.parse().expect("the post prints the held id");
-    let listed = booted.record(&["workspace", "show", &workspace, "--json", "held_messages"]);
+    let listed = booted.record(&["workspace", "show", &workspace, "--json"]);
     assert_eq!(listed["held_messages"][0]["id"], id);
     assert_eq!(listed["held_messages"][0]["participant"], "alice");
     assert_eq!(listed["held_messages"][0]["message"], "one more change");
@@ -786,7 +722,6 @@ fn a_held_message_is_printed_listed_edited_and_withdrawn() {
         "alice",
         "the edited change",
         "--json",
-        "id,message,edited_at",
     ]);
     assert_eq!(edited["id"], id);
     assert_eq!(edited["message"], "the edited change");
@@ -817,7 +752,7 @@ fn a_held_message_is_printed_listed_edited_and_withdrawn() {
         "alice",
     ]);
     assert_eq!(
-        booted.record(&["workspace", "show", &workspace, "--json", "held_messages"])["held_messages"],
+        booted.record(&["workspace", "show", &workspace, "--json"])["held_messages"],
         serde_json::json!([])
     );
     let refused = booted.refused(&[
@@ -848,20 +783,12 @@ fn a_session_interrupt_names_who_asked_and_a_waiting_one_is_refused() {
         "--brief",
         "go",
         "--json",
-        "workspace",
-    ])["workspace"]
+    ])["workspace"]["name"]
         .as_str()
         .expect("the opened workspace's name")
         .to_owned();
     let listed = booted.until(
-        &[
-            "session",
-            "list",
-            "--workspace",
-            &workspace,
-            "--json",
-            "id,state",
-        ],
+        &["session", "list", "--workspace", &workspace, "--json"],
         |listed| listed.iter().any(|session| session["state"] == "working"),
         "reach a working session",
     );
@@ -877,14 +804,13 @@ fn a_session_interrupt_names_who_asked_and_a_waiting_one_is_refused() {
         "--as-participant",
         "alice",
         "--json",
-        "id,state,interrupting.participant",
     ]);
     assert_eq!(interrupted["id"], session);
     assert_eq!(interrupted["state"], "working");
     assert_eq!(interrupted["interrupting"]["participant"], "alice");
 
     let waiting = booted.until(
-        &["session", "show", &session, "--json", "state"],
+        &["session", "show", &session, "--json"],
         |shown| shown.iter().any(|session| session["state"] == "waiting"),
         "settle waiting",
     );
@@ -908,7 +834,6 @@ fn a_session_interrupt_names_who_asked_and_a_waiting_one_is_refused() {
         "--kinds",
         "shared_state,narration,detail",
         "--json",
-        "entry",
     ]);
     assert!(
         entries.iter().any(|recorded| {
@@ -974,14 +899,7 @@ async fn a_supervisor_outlives_its_stopped_control_plane_and_goes_with_its_insta
         "go",
     ]);
     let listed = booted.until(
-        &[
-            "session",
-            "list",
-            "--workspace",
-            &workspace,
-            "--json",
-            "state,supervisor",
-        ],
+        &["session", "list", "--workspace", &workspace, "--json"],
         |listed| listed.iter().any(|session| session["state"] == "waiting"),
         "reach a waiting session",
     );
@@ -1019,14 +937,7 @@ async fn killing_a_control_plane_without_restarting_stops_its_supervisor() {
         "go",
     ]);
     let listed = booted.until(
-        &[
-            "session",
-            "list",
-            "--workspace",
-            &workspace,
-            "--json",
-            "state,supervisor,instance",
-        ],
+        &["session", "list", "--workspace", &workspace, "--json"],
         |listed| listed.iter().any(|session| session["state"] == "waiting"),
         "reach a waiting session",
     );
@@ -1060,7 +971,6 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
         "operator",
         "go",
         "--json",
-        "session.id",
     ])["session"]["id"]
         .as_str()
         .expect("the session the post reached")
@@ -1068,7 +978,7 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
     // The transcript says the Session started only once the supervisor holds the Start instruction,
     // which is the first moment a restart has anything to recover; an instance alone is not.
     killed.until(
-        &["workspace", "transcript", &workspace, "--json", "seq,entry"],
+        &["workspace", "transcript", &workspace, "--json"],
         |transcribed| {
             transcribed
                 .iter()
@@ -1080,14 +990,7 @@ fn a_control_plane_killed_mid_turn_comes_back_and_the_turn_is_answered() {
 
     let restarted = kestrel.booting(&listen, Script::Lingers, "info");
     restarted.until(
-        &[
-            "session",
-            "list",
-            "--workspace",
-            &workspace,
-            "--json",
-            SESSION,
-        ],
+        &["session", "list", "--workspace", &workspace, "--json"],
         |listed| {
             listed
                 .iter()
@@ -1260,13 +1163,13 @@ fn the_client_lists_what_a_poll_recorded_and_the_credential_appears_in_neither_i
     watching(&booted, &stub, "1ms");
 
     let listed = booted.until(
-        &["event", "list", "--json", "record,event"],
+        &["event", "list", "--json"],
         |listed| !listed.is_empty(),
         "listed an event polled from github",
     );
     let said = booted.said();
     let record = listed[0]["record"].as_str().expect("an event record");
-    let shown = booted.record(&["event", "show", record, "--json", "record,event"]);
+    let shown = booted.record(&["event", "show", record, "--json"]);
     booted.killed();
 
     assert_eq!(shown["record"], record);
@@ -1344,13 +1247,8 @@ fn a_dispatch_starts_a_triggers_work_on_the_issue_it_names() {
         "--instruction",
         "/tdd the parser",
         "--json",
-        "matches,brief,branch,agent",
     ]);
-    assert!(
-        booted
-            .records(&["event", "list", "--json", "record"])
-            .is_empty()
-    );
+    assert!(booted.records(&["event", "list", "--json"]).is_empty());
 
     let fired = booted.record(&[
         "trigger",
@@ -1363,23 +1261,17 @@ fn a_dispatch_starts_a_triggers_work_on_the_issue_it_names() {
         "--instruction",
         "/tdd the parser",
         "--json",
-        "outcome,workspace,session",
     ]);
 
-    assert_eq!(
-        tested,
-        serde_json::json!({
-            "matches": true,
-            "brief": "/tdd the parser 60",
-            "branch": "kestrel/issue-60",
-            "agent": "builder",
-        })
-    );
+    assert_eq!(tested["matches"], true, "{tested}");
+    assert_eq!(tested["brief"], "/tdd the parser 60", "{tested}");
+    assert_eq!(tested["branch"], "kestrel/issue-60", "{tested}");
+    assert_eq!(tested["agent"], "builder", "{tested}");
     assert_eq!(fired["outcome"], "opened");
     let workspace = fired["workspace"]
         .as_str()
         .expect("the workspace it opened");
-    let shown = booted.record(&["workspace", "show", workspace, "--json", "checkout"]);
+    let shown = booted.record(&["workspace", "show", workspace, "--json"]);
     assert_eq!(shown["checkout"]["branch"], "kestrel/issue-60");
     for misused in [
         &["trigger", "test", "delegated", "--issue", "60"][..],
@@ -1452,7 +1344,7 @@ fn applied(kestrel: &Booted, declarations: &str, flags: &[&str]) -> (String, Str
 
 fn trigger_names(kestrel: &Booted) -> Vec<String> {
     kestrel
-        .records(&["trigger", "list", "--json", "name"])
+        .records(&["trigger", "list", "--json"])
         .iter()
         .map(|trigger| trigger["name"].as_str().expect("a name").to_owned())
         .collect()
@@ -1474,7 +1366,7 @@ fn apply_prints_the_diff_it_makes_and_nothing_once_it_is_made() {
     );
     assert_eq!(trigger_names(&booted), ["ready", "triage"]);
     assert_eq!(
-        booted.record(&["trigger", "show", "ready", "--json", "applied"])["applied"],
+        booted.record(&["trigger", "show", "ready", "--json"])["applied"],
         true
     );
 
@@ -1646,7 +1538,7 @@ fn a_trigger_is_tested_as_a_file_declares_it_rather_than_as_it_was_applied() {
         "builder",
     ]);
     let event = booted.until(
-        &["event", "list", "--json", "record"],
+        &["event", "list", "--json"],
         |listed| !listed.is_empty(),
         "listed an event polled from github",
     )[0]["record"]
@@ -1668,22 +1560,17 @@ fn a_trigger_is_tested_as_a_file_declares_it_rather_than_as_it_was_applied() {
                 "--instruction",
                 "@instruction.md",
                 "--json",
-                "matches,brief",
             ],
             Invocation::default()
                 .file("triggers.yaml", declaring)
                 .file("instruction.md", "/triage"),
         )
-        .records();
+        .json();
 
+    assert_eq!(tested["matches"], true, "{tested}");
+    assert_eq!(tested["brief"], "/triage #43", "{tested}");
     assert_eq!(
-        tested,
-        [serde_json::json!({ "matches": true, "brief": "/triage #43" })]
-    );
-    assert_eq!(
-        booted.record(&[
-            "trigger", "test", "ready", "--event", &event, "--json", "matches"
-        ])["matches"],
+        booted.record(&["trigger", "test", "ready", "--event", &event, "--json"])["matches"],
         false
     );
     assert!(
@@ -1733,7 +1620,7 @@ fn a_brief_and_a_filter_are_read_from_a_file_or_standard_input() {
     );
     succeeded(&["trigger", "declare"], &finished);
 
-    let shown = booted.record(&["trigger", "show", "ready", "--json", "filter,brief,applied"]);
+    let shown = booted.record(&["trigger", "show", "ready", "--json"]);
     assert_eq!(
         shown["filter"],
         serde_json::json!({ "exact": { "type": "com.github.issues.labeled" } })
@@ -1795,7 +1682,6 @@ fn transcript_kinds_select_the_entries_the_client_streams() {
         &workspace,
         "--no-summaries",
         "--json",
-        "kind,entry",
     ]);
     assert!(shared.iter().all(|record| record["kind"] == "shared_state"));
     let narration = booted.records(&[
@@ -1806,7 +1692,6 @@ fn transcript_kinds_select_the_entries_the_client_streams() {
         "narration",
         "--no-summaries",
         "--json",
-        "seq,kind,session_id,entry",
     ]);
     assert_eq!(narration.len(), 2);
     assert_eq!(narration[0]["entry"]["type"], "plan");
@@ -1824,7 +1709,6 @@ fn transcript_kinds_select_the_entries_the_client_streams() {
         "narration,shared_state",
         "--no-summaries",
         "--json",
-        "seq,kind,entry",
     ]);
     assert_eq!(all.len(), shared.len() + narration.len());
     assert!(
@@ -1849,7 +1733,7 @@ fn empty_cli_lists_guide_a_terminal_and_leave_pipes_empty() {
     assert!(booted.client(&args).out.is_empty());
     let json = client::ran_on_a_terminal(
         &booted.operator,
-        &["organization", "list", "--json", "name"],
+        &["organization", "list", "--json"],
         120,
         "",
     );
@@ -1984,12 +1868,14 @@ fn empty_cli_inspection_lists_leave_pipes_empty_and_json_unmodified() {
         assert!(piped.status.success(), "{}", piped.err);
         assert!(piped.out.is_empty(), "{:?}", piped.out);
         assert!(piped.err.is_empty(), "{}", piped.err);
-        args.extend(["--json", "name"]);
+        args.push("--json");
         let json = client::ran(&operator, &args);
         assert!(json.status.success(), "{}", json.err);
         assert!(!json.out.join("\n").contains("No "));
         if args[0] == "workspace" {
-            assert_eq!(json.records().len(), 1);
+            assert!(json.json().is_object(), "{:?}", json.out);
+        } else {
+            assert_eq!(json.json(), serde_json::json!([]));
         }
     }
     let args = [

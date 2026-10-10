@@ -1818,6 +1818,7 @@ dependencies = [
  "kestrel-scripted-agent",
  "libc",
  "minijinja",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -1831,6 +1832,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "yaml_serde",
 ]

@@ -33,11 +33,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "signal", "time"] }
 tokio-stream = "0.1"
 tokio-util = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
 uuid = { version = "1", features = ["serde", "v7"] }
 yaml_serde = "0.10"
 
@@ -45,6 +46,7 @@ yaml_serde = "0.10"
 kestrel-scripted-agent = { path = "../kestrel-scripted-agent" }
 reqwest = { version = "0.13", default-features = false, features = ["stream"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
+regex = "1"
 tempfile = "3"
 tiny_http = "0.12"
 tokio = { version = "1", features = ["test-util"] }

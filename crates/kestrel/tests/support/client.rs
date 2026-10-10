@@ -230,13 +230,49 @@ impl Client {
 }
 
 impl Finished {
+    pub fn json(&self) -> Value {
+        assert!(self.status.success(), "the client failed:\n{}", self.err);
+        let said = self.out.join("\n");
+        serde_json::from_str(&said)
+            .unwrap_or_else(|error| panic!("{said} is not one JSON document: {error}"))
+    }
+
+    pub fn jq(&self, filter: &str) -> String {
+        let mut jq = Command::new("jq")
+            .args(["--compact-output", filter])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("jq should be on the PATH");
+        let mut input = jq.stdin.take().expect("stdin should be piped");
+        for line in &self.out {
+            writeln!(input, "{line}").expect("stdout should reach jq");
+        }
+        drop(input);
+        let read = jq.wait_with_output().expect("jq should finish");
+        assert!(
+            read.status.success(),
+            "jq {filter} failed:\n{}",
+            String::from_utf8_lossy(&read.stderr)
+        );
+        String::from_utf8(read.stdout)
+            .expect("jq writes utf-8")
+            .trim_end()
+            .to_owned()
+    }
+
     pub fn records(&self) -> Vec<Value> {
         assert!(self.status.success(), "the client failed:\n{}", self.err);
         self.out
             .iter()
-            .map(|line| {
-                serde_json::from_str(line)
+            .flat_map(|line| {
+                match serde_json::from_str(line)
                     .unwrap_or_else(|error| panic!("{line} is not a record: {error}"))
+                {
+                    Value::Array(records) => records,
+                    record => vec![record],
+                }
             })
             .collect()
     }
@@ -249,6 +285,14 @@ impl Drop for Client {
 }
 
 /// Runs to completion, printing whatever it prints.
+pub fn picked(record: &Value, fields: &[&str]) -> Value {
+    fields
+        .iter()
+        .map(|&field| (field.to_owned(), record[field].clone()))
+        .collect::<serde_json::Map<_, _>>()
+        .into()
+}
+
 pub fn ran(control_plane: &str, args: &[&str]) -> Finished {
     Client::spawn(control_plane, args).finish()
 }

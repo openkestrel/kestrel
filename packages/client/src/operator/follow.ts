@@ -1,55 +1,47 @@
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Change } from "./generated";
 import { useParticipant } from "./participant";
 import { operator, refetchNoticed, refetchOrganization } from "./queries";
+import { type Subscribed, TabStream } from "./tab-stream";
 import { FollowSession, TranscriptMirror, type TranscriptSnapshot } from "./transcript";
-import { operatorPath, type Transport } from "./transport";
 
-const RETRY = 250;
-const RETRY_CAP = 5_000;
+const tab = new TabStream(operator);
 
 export function useChangeNotices(organization: string): void {
 	const queryClient = useQueryClient();
 	useEffect(() => {
-		const controller = new AbortController();
-		void followChanges(operator, queryClient, organization, controller.signal);
-		return () => controller.abort();
+		const subscribed = followChanges(tab, queryClient, organization);
+		return () => subscribed.unsubscribe();
 	}, [queryClient, organization]);
 }
 
-// Every open refetches the whole Organization, so reads that raced the stream's opening are healed.
-export async function followChanges(
-	operations: Transport,
+// Every subscription opens with `open`, so a resubscription after any drop refetches the whole
+// Organization, healing whatever changed unnoticed.
+export function followChanges(
+	stream: TabStream,
 	client: QueryClient,
 	organization: string,
-	signal: AbortSignal,
-): Promise<void> {
-	const path = operatorPath("organizations", organization, "changes");
-	let backoff = RETRY;
-	while (!signal.aborted) {
-		try {
-			// oxlint-disable-next-line no-await-in-loop -- the next stream starts after this one ends.
-			for await (const event of operations.stream(path, { signal })) {
-				backoff = RETRY;
-				if (event.event === "change") {
-					const change = changeOf(event.data);
-					if (change) void refetchNoticed(client, organization, change);
-				} else if (event.event === "open" || event.event === "resync") {
-					void refetchOrganization(client, organization);
-				}
+): Subscribed {
+	return stream.subscribe({
+		subscription: () => ({ kind: "notices", organization }),
+		deliver: (event) => {
+			if (event.event === "change") {
+				const change = changeOf(event.data);
+				if (change) void refetchNoticed(client, organization, change);
+			} else if (event.event === "open" || event.event === "resync") {
+				void refetchOrganization(client, organization);
 			}
-		} catch {}
-		// oxlint-disable-next-line typescript/no-unnecessary-condition -- the controller can abort while the stream awaits; TS narrowed aborted false for the loop.
-		if (signal.aborted) return;
-		// oxlint-disable-next-line no-await-in-loop -- the backoff must grow between attempts.
-		await new Promise((resolve) => setTimeout(resolve, backoff));
-		backoff = Math.min(backoff * 2, RETRY_CAP);
-	}
+		},
+	});
 }
 
-export function useTranscript(organization: string, workspace: string): TranscriptSnapshot {
+export function useTranscript(
+	organization: string,
+	workspace: string,
+): { transcript: TranscriptSnapshot; reconnect: () => void } {
 	const participant = useParticipant();
+	const follow = useRef<FollowSession | undefined>(undefined);
 	const followed = `${organization}/${workspace}`;
 	const [held, hold] = useState(() => ({ followed, mirror: new TranscriptMirror() }));
 	let mirror = held.mirror;
@@ -57,19 +49,23 @@ export function useTranscript(organization: string, workspace: string): Transcri
 		mirror = new TranscriptMirror();
 		hold({ followed, mirror });
 	}
-	// A follower registers its name when the follow opens, so a new name reopens the follow.
+	// A follower registers its name when it subscribes, so a new name subscribes again.
 	useEffect(() => {
-		const follow = new FollowSession({
+		const session = new FollowSession({
+			stream: tab,
 			operations: operator,
 			organization,
 			workspace,
 			participant,
 			mirror,
 		});
-		follow.start();
-		return () => follow.stop();
+		follow.current = session;
+		session.start();
+		return () => session.stop();
 	}, [mirror, organization, workspace, participant]);
-	return useSyncExternalStore(mirror.subscribe, mirror.snapshot, mirror.snapshot);
+	const transcript = useSyncExternalStore(mirror.subscribe, mirror.snapshot, mirror.snapshot);
+	const reconnect = useCallback(() => follow.current?.retry(), []);
+	return { transcript, reconnect };
 }
 
 function changeOf(data: string): Change | undefined {

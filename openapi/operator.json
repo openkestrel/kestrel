@@ -22,13 +22,35 @@
   ],
   "security": [],
   "paths": {
+    "/": {
+      "get": {
+        "operationId": "showApiRoot",
+        "summary": "Say that this is the operator API, and where the browser Client is",
+        "description": "For a person who opens the operator port in a browser. The Client URL is the control plane's `KESTREL_CLIENT_URL`; nothing parses this text.",
+        "responses": {
+          "200": {
+            "description": "Plain text naming the API and the configured Client URL.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
     "/operator/harnesses": {
       "get": {
         "operationId": "listHarnesses",
         "summary": "Read the product harness catalogue",
         "responses": {
           "200": {
-            "description": "Catalogue metadata; no image inspection or sign-in is performed.",
+            "description": "Catalogue metadata, each row with its availability in the configured image, inspected afresh; no sign-in is performed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -229,7 +251,7 @@
       "post": {
         "operationId": "start",
         "summary": "Take a control plane from whatever it holds to a Session carrying a Brief, in one step.",
-        "description": "Declares the Organization, Project and Agent the plan names where they do not exist, holds the Provider Credentials it carries, opens a Workspace with the Brief, and enqueues its Session, all in one transaction: a refused plan leaves nothing behind. A start never changes a declaration that exists, and refuses one that would.",
+        "description": "Declares the Organization, Project and Agent the plan names where they do not exist, holds the Provider Credentials it carries, opens a Workspace with the Brief, and enqueues its Session, all in one transaction: a refused plan leaves nothing behind. A start never changes a declaration that exists, and refuses one that would. The Agent's harness passes the same image capability check as declaring an Agent, before anything is written.",
         "requestBody": {
           "required": true,
           "content": {
@@ -392,7 +414,7 @@
       "post": {
         "operationId": "declareAgent",
         "summary": "Declare an Agent.",
-        "description": "Desired state: an Agent by this name that already exists keeps its identity and takes on the harness and model declared, so a declaration naming no model leaves it naming none. A named model is taken at its word: what a harness offers is only learned from a Session, and a Subscription Profile added since can widen it. A Session already in flight keeps the model it was dispatched with.",
+        "description": "Desired state: an Agent by this name that already exists keeps its identity and takes on the harness and model declared, so a declaration naming no model leaves it naming none. A named model is taken at its word: what a harness offers is only learned from a Session, and a Subscription Profile added since can widen it. A Session already in flight keeps the model it was dispatched with. A harness the configured image does not declare is a `setup_gap` (409) naming the image, and an image that could not be inspected is `unavailable` (503); either way nothing is declared.",
         "parameters": [
           {
             "name": "organization",
@@ -441,6 +463,9 @@
           "404": {
             "$ref": "#/components/responses/Refused"
           },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
           "422": {
             "$ref": "#/components/responses/Refused"
           },
@@ -473,7 +498,7 @@
       "post": {
         "operationId": "applyDeclaration",
         "summary": "Apply a Project, Agent and Trigger declaration together.",
-        "description": "The three records converge in one transaction. A Trigger declared here never fires for Events already retained.",
+        "description": "The three records converge in one transaction. A Trigger declared here never fires for Events already retained. The Agent's harness passes the same image capability check as declaring an Agent and a preview, before anything is written.",
         "parameters": [
           {
             "name": "organization",
@@ -501,6 +526,7 @@
           },
           "400": { "$ref": "#/components/responses/Refused" },
           "404": { "$ref": "#/components/responses/Refused" },
+          "409": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
           "503": { "$ref": "#/components/responses/Refused" }
         }
@@ -537,6 +563,7 @@
           },
           "400": { "$ref": "#/components/responses/Refused" },
           "404": { "$ref": "#/components/responses/Refused" },
+          "409": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
           "503": { "$ref": "#/components/responses/Refused" }
         }
@@ -2823,7 +2850,7 @@
       "put": {
         "operationId": "subscribeStream",
         "summary": "Subscribe a reserved stream to an Organization's notices or a Workspace's Transcript.",
-        "description": "Starts the subscription under the id the tab chose, replacing and ending any it already held under that id. A `notices` subscription opens with `open`, as the Organization's change stream does; a `transcript` subscription follows the Workspace's Transcript from `after` exactly as a per-resource follow from that `Last-Event-ID` does, registering an anonymous follower once caught up whose lease the tab renews through the Workspace's follower lease. A reservation holds at most 32 subscriptions.",
+        "description": "Starts the subscription under the id the tab chose, replacing and ending any it already held under that id. A `notices` subscription opens with `open`, as the Organization's change stream does; a `transcript` subscription follows the Workspace's Transcript from `after` exactly as a per-resource follow from that `Last-Event-ID` does, registering a follower, anonymous unless it names a `participant`, once caught up whose lease the tab renews through the Workspace's follower lease. A reservation holds at most 32 subscriptions.",
         "parameters": [
           {
             "name": "token",
@@ -2943,12 +2970,70 @@
             "items": {
               "$ref": "#/components/schemas/SignInMethod"
             }
+          },
+          "availability": {
+            "description": "Whether the configured image declares this harness, read from the image at this request. Null only in the catalogue's own data, never in a response.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HarnessAvailability"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "name",
           "command",
-          "sign_in_methods"
+          "sign_in_methods",
+          "availability"
+        ],
+        "additionalProperties": false
+      },
+      "HarnessAvailability": {
+        "type": "object",
+        "description": "`available` and `not_carried` come from inspecting the configured image's `dev.kestrel.harnesses` label (ADR-0048). `unavailable` means the inspection failed, so nothing is claimed about the harness, and carries why. `unchecked` means the compute driver runs no image.",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "available",
+              "not_carried",
+              "unchecked",
+              "unavailable"
+            ]
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The configured image reference."
+          },
+          "identity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The immutable local image ID the reference resolved to when it was inspected."
+          },
+          "diagnostic": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Diagnostic"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "image",
+          "identity",
+          "diagnostic"
         ],
         "additionalProperties": false
       },
@@ -6115,9 +6200,10 @@
           "organization": { "type": ["string", "null"] },
           "harness": { "type": ["string", "null"] },
           "method": { "type": ["string", "null"] },
-          "sign_in": { "type": ["string", "null"] }
+          "sign_in": { "type": ["string", "null"] },
+          "image": { "type": ["string", "null"] }
         },
-        "required": ["prerequisite", "resource", "reference", "organization", "harness", "method", "sign_in"]
+        "required": ["prerequisite", "resource", "reference", "organization", "harness", "method", "sign_in", "image"]
       },
       "SetupGapDiagnostic": {
         "properties": {
@@ -7516,6 +7602,10 @@
             "type": "string",
             "description": "Comma-separated Transcript kinds, as the Transcript read takes them.",
             "default": "shared_state"
+          },
+          "participant": {
+            "type": "string",
+            "description": "The name a `transcript` subscription's follower joins presence under, refused as the Transcript read's `as` is. Absent means anonymous."
           }
         },
         "required": [

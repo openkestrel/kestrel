@@ -138,14 +138,14 @@ The rest of `crates/kestrel/src`, grouped by the page that covers them:
 | Sessions | `work.rs`, `workspace.rs`, `instance.rs`, `scheduling.rs`, `role/work.rs` |
 | Link | `link/`, `provider.rs`, `profile.rs`, `keyring.rs` |
 | Triggers | `trigger.rs`, `trigger/apply.rs`, `filter.rs`, `template.rs`, `cron.rs`, `readiness.rs`, `follow_up.rs`, `pull_request.rs`, `integration/` |
-| Operator | `operator.rs`, `operator_identity.rs`, `declaration.rs`, `start.rs`, `agent.rs`, `reference.rs`, `declined.rs` |
+| Operator | `operator.rs`, `operator_identity.rs`, `declaration.rs`, `start.rs`, `agent.rs`, `reference.rs`, `declined.rs`, `capability.rs` |
 | Shared | `domain.rs` (every record type), `log.rs`, `store/`, `timer.rs`, `cli.rs`, `telemetry.rs`, `shutdown.rs`, `hex.rs`, `participant.rs` (the one rule a declared name obeys) |
 
 ## Trust boundaries
 
 | Boundary | Who is on the other side | What protects it |
 | --- | --- | --- |
-| Operator (7718) | A Client | A loopback bind, plus a loopback `Host` and same-origin `Origin` check ([ADR-0036](../adr/0036-the-browser-client-shares-the-loopback-operator-origin.md), [ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md), [ADR-0044](../adr/0044-the-browser-client-is-served-over-https.md)). |
+| Operator (7718) | A Client | A loopback bind, plus a loopback `Host` and same-origin `Origin` check ([ADR-0036](../adr/0036-the-browser-client-shares-the-loopback-operator-origin.md), [ADR-0043](../adr/0043-a-web-server-serves-the-browser-client.md), [ADR-0045](../adr/0045-a-browser-tab-holds-one-stream-and-subscribes-over-requests.md)). |
 | Link (7717) | A supervisor | A per-Instance bearer credential, and a live lease for anything about a Session ([Link](link.md#authentication)). |
 | Webhooks (7717) | Any producer | The Integration's HMAC signing secret or shared secret. A refusal becomes no Event; the last one is kept on the Integration. |
 | Docker daemon | The control plane | socket-proxy's allowlist, on an internal network. |
@@ -158,6 +158,14 @@ supervisor ([ADR-0026](../adr/0026-kestrel-carries-named-credentials-never-a-run
 ## Where the code lags the ADRs
 
 An accepted ADR is a decision, not a description. These are decided and not yet built:
+
+- **First run** ([ADR-0046](../adr/0046-kestrel-ships-a-catalogue-of-how-each-harness-signs-in.md),
+  [ADR-0047](../adr/0047-kestrel-relays-a-persons-own-sign-in.md),
+  [ADR-0048](../adr/0048-the-environment-image-carries-every-catalogued-harness.md),
+  [ADR-0049](../adr/0049-an-install-has-one-operator-and-by-default-one-organization.md)):
+  the sign-in catalogue and image capability labels are implemented, but the sign-in relay is not.
+  First-run setup still infers `kestrel start`'s Organization from the repository owner; the browser
+  has no Operator-naming setup and still asks for a browser-local Participant name.
 
 - **Repository declaration validation** ([ADR-0057](../adr/0057-a-repository-declaration-is-not-a-successful-checkout.md)):
   declaration paths still save raw repository strings after list/branch and directory-collision checks.
@@ -172,7 +180,9 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
 - **Release preparation and acceptance** ([ADR-0053](../adr/0053-a-tag-prepares-a-release-acceptance-publishes-it.md)):
   tag publishing still races Conformance, covers only two images on amd64, and has no draft-release
   acceptance gate, CLI distribution or generated digest-pinned release Compose. Main still moves
-  `latest`; the decided release process reserves it for accepted releases.
+  `latest`; the decided release process reserves it for accepted releases. Development Compose
+  already defaults to the three `:main` images, which main does not publish yet, so until it does
+  `docker compose --env-file compose.source.env up -d` is the path that runs.
 
 - **Typed next steps** ([ADR-0052](../adr/0052-a-refusal-carries-its-next-steps.md)): the CLI
   still reads refusal sentences for corrections, and the browser has no sign-in or settings
@@ -188,9 +198,6 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   opened, reopened, closed (including merges) and head-moved Events are learned. The Audit Record
   that explains unattended attachment verdicts remains `0.5` work.
 - **Split roles**: `serve` and `work` parse separately but run correctly only in one process.
-- **The first run** ([ADR-0045](../adr/0045-a-browser-tab-holds-one-stream-and-subscribes-over-requests.md)–[ADR-0049](../adr/0049-an-install-has-one-operator-and-by-default-one-organization.md)):
-  the Client is still served over HTTPS with a stream per follow; there is no sign-in catalogue,
-  relay, image label or shared default Organization selection, and `kestrel-env` carries opencode alone.
 - **Policy, Approvals, Questions, Workflows, Campaigns** exist in `GLOSSARY.md` and
   [`ROADMAP.md`](../../ROADMAP.md), not in code. `session_dependency` and the Unreachable state are
   the only Workflow machinery built.

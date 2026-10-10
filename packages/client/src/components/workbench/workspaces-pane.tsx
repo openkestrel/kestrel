@@ -4,9 +4,11 @@ import { Plus } from "lucide-react";
 import { Refusal } from "#/components/refusal";
 import { buttonVariants } from "#/components/ui/button";
 import { Skeleton } from "#/components/ui/skeleton";
+import { QueueReadNotice, useQueueRead } from "#/components/workbench/queue-read";
 import type { Queue } from "#/operator/generated";
-import { queueQuery, workspacesQuery } from "#/operator/queries";
+import { workspacesQuery } from "#/operator/queries";
 import { instancesLine, slotsLine } from "#/operator/queue-limits";
+import { knownQueue } from "#/operator/queue-read";
 import { order } from "#/operator/workspace-list";
 import { PaneHeading } from "./workbench";
 import { WorkspaceRowView } from "./workspace-row";
@@ -19,13 +21,16 @@ export function WorkspacesPane({
 	headingLevel?: 1 | 2;
 }) {
 	const workspaces = useQuery(workspacesQuery(organization));
-	const queue = useQuery(queueQuery(organization));
+	const queueReading = useQueueRead(organization);
 	const rows = order(workspaces.data ?? []);
 
 	return (
 		<>
 			<PaneHeading level={headingLevel}>Workspaces</PaneHeading>
-			<QueueHeader queue={queue.data} />
+			<QueueHeader queue={knownQueue(queueReading.read)} />
+			<div className="border-b px-3 py-2 empty:hidden">
+				<QueueReadNotice {...queueReading} compact />
+			</div>
 			<div className="p-2">
 				<Link
 					to="/organizations/$organization/new"
