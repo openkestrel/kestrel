@@ -358,10 +358,11 @@ export function stepOf(action: Action, origin: string): Step {
 			return {
 				kind: "guidance",
 				label: `Replace the Integration ${action.integration}'s App private key`,
-				detail:
+				detail: `${
 					action.retry_after_seconds === null || action.retry_after_seconds <= 0
-						? "The key is read from standard input or a file, never from the command."
-						: `GitHub asks for ${action.retry_after_seconds}s first. The key is read from standard input or a file, never from the command.`,
+						? ""
+						: `GitHub asks for ${action.retry_after_seconds}s first. `
+				}The key is read from standard input or a file, never from the command.`,
 				command: command(
 					["integration", "github", "replace-key", action.integration],
 					action.organization,

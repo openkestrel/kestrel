@@ -59,7 +59,6 @@ impl fmt::Display for Refused {
     }
 }
 
-/// Why a replacement private key was not shown to reach what the Integration already connects to.
 #[derive(Debug)]
 pub enum Unproven {
     Unreadable,
@@ -282,8 +281,7 @@ impl Github {
         })
     }
 
-    /// Signs as the same App and mints for the same installation, so only the key is on trial;
-    /// the repository is then read with what that minted.
+    /// Signs as the same App and mints for the same installation, so only the key is on trial.
     pub async fn proves(
         &self,
         connection: &GithubConnection,
@@ -826,7 +824,7 @@ async fn answered<T: DeserializeOwned>(response: Response, asked_for: &str) -> R
     })
 }
 
-/// `denied` is what a 403 or 404 means for the thing asked for; a 401 is always the key.
+/// `denied` is what a refusal means for the thing asked for; a 401 is always the key.
 async fn proven<T: DeserializeOwned>(
     request: reqwest::RequestBuilder,
     asked_for: &str,
@@ -843,7 +841,7 @@ async fn proven<T: DeserializeOwned>(
     }
     match status {
         StatusCode::UNAUTHORIZED => return Err(Unproven::Rejected),
-        StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => return Err(denied),
+        status if status.is_client_error() => return Err(denied),
         status if !status.is_success() => {
             return Err(Unproven::Unanswered(anyhow!(
                 "github answered {status} for {asked_for}"

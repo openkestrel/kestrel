@@ -111,7 +111,6 @@ Ax8ECK4JhZG/0uoJtjPuII1U8vS261Xmeqg72AxcC85BLTnQawUjmboq9gYauuoa
 -----END RSA PRIVATE KEY-----
 ";
 
-/// A second key for the same App, as GitHub issues when an operator generates one to rotate to.
 pub const REPLACEMENT_PRIVATE_KEY: &str = "-----BEGIN RSA PRIVATE KEY-----
 MIIEpAIBAAKCAQEAmZ/iLSN68HeXC/Jsh1Fnc5qdG8mYttMu4orK30+Un0peGdHp
 l757gHyNtyzkVl22ojm+kpeGNIBxGCh6supcu+GPJMihNbZA+DEteHYfaA16uLVD

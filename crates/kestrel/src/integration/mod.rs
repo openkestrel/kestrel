@@ -418,7 +418,7 @@ fn unproven_replacement(
             "installation_unreachable",
             format!(
                 "the replacement signs as the App, but the App's installation no longer answers \
-                 for the integration {}; {KEPT}",
+                 for the integration {}; restore it on GitHub, then replace the key again; {KEPT}",
                 read.name
             ),
         ),
@@ -426,7 +426,8 @@ fn unproven_replacement(
             "repository_unreachable",
             format!(
                 "the replacement signs as the App, but its installation no longer reaches the \
-                 repository the integration {} watches; {KEPT}",
+                 repository the integration {} watches; restore its access on GitHub, then \
+                 replace the key again; {KEPT}",
                 read.name
             ),
         ),
