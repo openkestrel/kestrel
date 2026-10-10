@@ -111,6 +111,36 @@ Ax8ECK4JhZG/0uoJtjPuII1U8vS261Xmeqg72AxcC85BLTnQawUjmboq9gYauuoa
 -----END RSA PRIVATE KEY-----
 ";
 
+/// A second key for the same App, as GitHub issues when an operator generates one to rotate to.
+pub const REPLACEMENT_PRIVATE_KEY: &str = "-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEAmZ/iLSN68HeXC/Jsh1Fnc5qdG8mYttMu4orK30+Un0peGdHp
+l757gHyNtyzkVl22ojm+kpeGNIBxGCh6supcu+GPJMihNbZA+DEteHYfaA16uLVD
+BaROR32B3rMCqCJOvU9ocE83q2jGMfK8GGZvQDG6qnQkkpsZzRhTR9j6T47gKRhE
+OP8QxYcYBHPtAyGfnpQcdu2L7DVLS2PUjK9hY+WBHmd1KfHlwKRy+aXN3DY+0r/C
+1x0kthU1JFhIfkYPmvw2g8QizLZcys6sBUnLLbt2lw6Snppn4q+FVX5fZH/5jjxA
+ad8oz0dXfANL79hlb/+gbvEw9uHwZGzJhDFc5wIDAQABAoIBABIk+KVFLgWN0mjG
+UrwuyK22Qr0f8+oQClcWdnymnRKtSWz6RoE2LccQrvpGEpgCzInfkRsmS2MTEoh8
+a3WLSbWlH++DxMqfwo+t20WBihcTlH2RZx+Y9ufpsneXpAYwuyUP5nFxYc1cfCA1
+H7MwEg6+cOImApXQPN1k9J0lSvcvZYAPHQbDhZIHNJ7Kpz3e1kA2SvSdwm5ibXak
+O45ceO6vddauGrB8SGPBn8esA8Wm0sC/j1jqzK+DY7OWlBxTk/EshLLdWyPFoSQP
+UrpeU0kNIYVpwPfkERmWZLPh1YYBoS0iBMgwzbpPDGzjO8HufD0HWUpL7ezRy5tG
+v2JE/30CgYEAyK7btHcSei1nLUsJerFCjRSbBiSWpVt38UHhd0lsAL/F+ykyLheM
+7Eo2uHovikBgdGHuEInLuAUu/R5lYzOTqD4io+dbDOJhw5pIBBrwdgzDqHnQWCGh
+52JsX1tX3ZZNEbCHr6h8mNARnQb5csbWn18hdECQohuJj9SOLiIwCfMCgYEAw/hb
+HjTEk140f/LnYMHi56RUoI1quemPsyIK8sxdk/cB0rcVL05bONyjwHDzJhovxLu3
++q6+5GM967mbhvzjC4LeTmsyRG2SKpJB3xuLALbsPmlVoaMvZzH6rR66S8UQ0XNW
+Nil+zzIAJIYVDh7toHHzPvYyHdKB60iRxgeWij0CgYAYqyXmsRxcWGhucOLhahi8
+LuQ/hQ/fk7bSuT5141ibXvd/QDki4VI5WYYQdzSQ0gkJRWB2N/oKzNhR1QKxhw2H
+iNvJOg8/LjTGTpi7qHQWjsseUpsBumCkiLy5nAjY/DjNC94iAZwPTMRdgRX4vehz
+/sWl/KnKw4fNXlt74Ef3cQKBgQCXgvOHpgp5WXNDnRxQjXaN21pmiw+Bz1b/iwll
+8KVE2cs6C7zAR1d13fhot6r1wXc/Jlc25FXIJAZisqzRL8GmS7bucCh8CS7h5RQy
+l4vfsI10L2I6Rv1GTrjdkg08uY6oMQDtfSWCsci0dEnhEf5sds0214el0PQLYZ76
+uTEljQKBgQCKhaw3sri9CF7NludpO0LPiVG4Ty/tMlZ4eFE417GTGMXNGUeraLlR
+ftEri1WqDbF5EK0BFURQsZUNoxpghqVvehZydrWnvx+4RAZvNye+iWqFNoMz9ZgI
+/Qu2+51lho6V1/PPrmH6cCwNlHST+vsR+mhVhqSUTKMbvQJG3pSYmA==
+-----END RSA PRIVATE KEY-----
+";
+
 /// The Provider Credential every fixture holds: a Session reaches no model without one, and the
 /// scripted agent's `Confides` script says it can see this one.
 pub const PROVIDER_KEY: &str = "SCRIPTED_API_KEY";
@@ -810,6 +840,29 @@ impl Kestrel {
         change: integration::Change<'_>,
     ) -> anyhow::Result<Integration> {
         integration::change(&self.store, organization, name, change).await
+    }
+
+    pub async fn replace_private_key(
+        &self,
+        organization: &str,
+        name: &str,
+        private_key: &str,
+        revision: Option<i64>,
+    ) -> anyhow::Result<Integration> {
+        integration::replace_private_key(
+            &self.store,
+            &Github::unfenced()?,
+            organization,
+            name,
+            private_key,
+            revision,
+        )
+        .await
+    }
+
+    /// One client, so what it cached before a change is there to be refused after it.
+    pub fn github(&self) -> Github {
+        Github::dialling_out(&self.store).expect("a github client")
     }
 
     pub async fn disable_integration(&self, organization: &str, name: &str) -> Integration {

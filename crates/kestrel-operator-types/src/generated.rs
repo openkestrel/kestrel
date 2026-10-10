@@ -10255,6 +10255,7 @@ pub enum Action {
     StopSessionAction(StopSessionAction),
     EnqueueSessionAction(EnqueueSessionAction),
     EnableIntegrationAction(EnableIntegrationAction),
+    ReplaceIntegrationPrivateKeyAction(ReplaceIntegrationPrivateKeyAction),
     ReleaseInstanceAction(ReleaseInstanceAction),
     CorrectFieldAction(CorrectFieldAction),
     SignInAction(SignInAction),
@@ -10286,6 +10287,9 @@ impl Serialize for Action {
             Self::StopSessionAction(value) => serde::Serialize::serialize(value, serializer),
             Self::EnqueueSessionAction(value) => serde::Serialize::serialize(value, serializer),
             Self::EnableIntegrationAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::ReplaceIntegrationPrivateKeyAction(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
             Self::ReleaseInstanceAction(value) => serde::Serialize::serialize(value, serializer),
             Self::CorrectFieldAction(value) => serde::Serialize::serialize(value, serializer),
             Self::SignInAction(value) => serde::Serialize::serialize(value, serializer),
@@ -10703,6 +10707,38 @@ impl<'de> Deserialize<'de> for Action {
         }
         if input.as_object().is_some_and(|object| {
             true && object.get("action").is_some_and(|value| {
+                value.is_null()
+                    || matches!(
+                        value.to_string().as_str(),
+                        "\"replace_integration_private_key\""
+                    )
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<ReplaceIntegrationPrivateKeyAction>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::ReplaceIntegrationPrivateKeyAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent
+                            .get_or_insert(Self::ReplaceIntegrationPrivateKeyAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
                 value.is_null() || matches!(value.to_string().as_str(), "\"release_instance\"")
             }) && object.get("effect").is_some_and(|value| {
                 value.is_null()
@@ -10937,6 +10973,14 @@ pub struct RetryReadAction {
     pub resource: Option<String>,
     pub retry_after_seconds: Option<i64>,
 }
+///Never carries the key: a Client reads it from a file or standard input when the step is taken.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReplaceIntegrationPrivateKeyAction {
+    pub action: serde_json::Value,
+    pub integration: String,
+    pub organization: String,
+    pub retry_after_seconds: Option<i64>,
+}
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ReleaseInstanceAction {
     pub action: serde_json::Value,
@@ -11156,6 +11200,52 @@ pub struct FileText {
 pub struct InstanceRelease {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub participant: Option<String>,
+}
+///A replacement for the private key a GitHub Integration signs as its App with. The App, installation and repository it is checked against are the Integration's own and cannot be named.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IntegrationPrivateKeyReplacement {
+    ///The App's RSA private key, in PEM.
+    pub private_key: String,
+    ///The revision this replacement was decided against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+}
+impl IntegrationPrivateKeyReplacement {
+    /// Construct this request with every required wire field.
+    pub fn new(private_key: String) -> Self {
+        Self {
+            private_key,
+            revision: None,
+        }
+    }
+    /// Start a dependency-free builder with every required wire field.
+    pub fn builder(private_key: String) -> IntegrationPrivateKeyReplacementBuilder {
+        IntegrationPrivateKeyReplacementBuilder::new(private_key)
+    }
+}
+/// Dependency-free builder for [`#struct_name`].
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct IntegrationPrivateKeyReplacementBuilder {
+    value: IntegrationPrivateKeyReplacement,
+}
+impl IntegrationPrivateKeyReplacementBuilder {
+    /// Start a builder with every required wire field.
+    pub fn new(private_key: String) -> Self {
+        Self {
+            value: IntegrationPrivateKeyReplacement::new(private_key),
+        }
+    }
+    #[doc = concat!("Set the optional `", "revision", "` request field.")]
+    #[must_use]
+    pub fn revision(mut self, revision: i64) -> Self {
+        self.value.revision = Some(revision);
+        self
+    }
+    /// Finish building the request model.
+    pub fn build(self) -> IntegrationPrivateKeyReplacement {
+        self.value
+    }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Operator {

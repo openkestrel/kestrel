@@ -376,6 +376,17 @@ enum GithubCommand {
         #[arg(long, env = "KESTREL_GITHUB_API", hide = true)]
         api: Option<String>,
     },
+    /// Replace the App private key an Integration signs with; GitHub must accept it for the
+    /// same App, installation and repository before the previous key is given up
+    ReplaceKey {
+        name: String,
+        /// Read the key from this file instead of standard input
+        #[arg(long, value_name = "FILE")]
+        private_key_file: Option<std::path::PathBuf>,
+        /// Refuse the replacement if the Integration is no longer at this revision
+        #[arg(long, value_name = "REVISION")]
+        revision: Option<i64>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1279,6 +1290,37 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                 &api.post(
                     &["organizations", &organization, "integrations"],
                     &registration,
+                )
+                .await?,
+            )?;
+        }
+        Command::Integration(IntegrationCommand::Github(GithubCommand::ReplaceKey {
+            name,
+            private_key_file,
+            revision,
+        })) => {
+            let organization = scoping.resolve().await?.organization;
+            let private_key = match &private_key_file {
+                Some(file) => std::fs::read_to_string(file).with_context(|| {
+                    Failed::new(Exit::Usage, format!("reading {}", file.display()))
+                })?,
+                None => read_standard_input("the App's private key")?,
+            };
+            shown_integration(
+                &presentation,
+                invocation,
+                api.put(
+                    &[
+                        "organizations",
+                        &organization,
+                        "integrations",
+                        &name,
+                        "private-key",
+                    ],
+                    &wire::IntegrationPrivateKeyReplacement {
+                        private_key,
+                        revision,
+                    },
                 )
                 .await?,
             )?;

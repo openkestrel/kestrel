@@ -137,6 +137,7 @@ follower lease's 404 are also plain. Anything else is `Unavailable`.
 | `Declined::Missing`, `Declined::Ambiguous` | 404 | 3 unresolved |
 | `Declined::Taken` | 409 | 4 rejected |
 | SQLite busy | 503 with `Retry-After: 1` | 5 unavailable |
+| `Reason::GithubUnavailable` | 503 | 5 unavailable |
 | `Reason::InstanceTimeout` | 504 | 5 unavailable |
 | Anything else | 503 | 5 unavailable |
 

@@ -16,6 +16,8 @@ Kestrel learns the App's own login (`<slug>[bot]`) when the Integration is regis
 
 `kestrel integration disable origin` pauses polling, webhook deliveries, comments and the work its events would start, keeping everything it resumes with; `kestrel integration enable origin` resumes and catches up on what GitHub still keeps. `kestrel integration change origin` renames it or changes its directions or interval. Its repository and App cannot change: register a new Integration for those.
 
+To rotate the App's private key, generate a new one in the App's settings on GitHub, then run `kestrel integration github replace-key origin --private-key-file new.pem` (or pipe the key to standard input). Kestrel checks the new key against the same App, installation and repository before it gives the old one up, and keeps the old one when GitHub rejects the new key, limits the rate or does not answer. Delete the old key on GitHub afterwards; kestrel never does.
+
 `kestrel event list` shows recorded events, and `kestrel event show <record>` includes an event's payload and trigger firings. Register the integration before applying a trigger so you can inspect the event shape and test the rule against a real example.
 
 ## Declare a trigger

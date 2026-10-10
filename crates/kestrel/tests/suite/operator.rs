@@ -17,9 +17,9 @@ use reqwest::StatusCode;
 use serde_json::{Value, json};
 use support::client::{self, Client};
 use support::fixture::Fixture;
-use support::github_stub::{self, GithubStub};
+use support::github_stub::{self, GithubStub, ScriptedResponse};
 use support::supervisor;
-use support::{Kestrel, PRIVATE_KEY, SERIALIZED};
+use support::{Kestrel, PRIVATE_KEY, REPLACEMENT_PRIVATE_KEY, SERIALIZED};
 
 async fn an_open_workspace(kestrel: &Kestrel, said: usize) -> (String, kestrel::domain::Session) {
     Fixture::acme().declare(kestrel).await;
@@ -4167,6 +4167,140 @@ async fn a_client_maintains_an_integration_without_changing_what_it_is() {
 }
 
 #[tokio::test]
+async fn a_client_replaces_a_private_key_and_is_told_how_to_repair_one_github_refuses() {
+    let kestrel = Kestrel::boot().await;
+    let stub = GithubStub::start();
+    kestrel.declare_organization("acme").await;
+    let registered = kestrel
+        .register_integration(
+            "acme",
+            "hub",
+            "jtmthf/kestrel",
+            &stub.base_url(),
+            &[Direction::Inbound, Direction::Outbound],
+            SignedDuration::from_hours(1),
+        )
+        .await;
+    let private_key = operator::INTEGRATION_PRIVATE_KEY
+        .replace("{organization}", "acme")
+        .replace("{integration}", "hub");
+    let replacing = json!({ "private_key": REPLACEMENT_PRIVATE_KEY });
+    let mut answers = Vec::new();
+
+    stub.script_answer("POST", "/access_tokens", ScriptedResponse::answering(401));
+    let (status, rejected) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &private_key,
+        Some(&replacing),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{rejected}");
+    assert_eq!(rejected["kind"], "invalid_field");
+    assert_eq!(rejected["field"], "private_key");
+    assert_eq!(rejected["context"]["constraint"], "accepted_by_app");
+    assert_eq!(rejected["next_steps"][0]["action"], "correct_field");
+    assert_eq!(
+        rejected["next_steps"][0]["operation"],
+        "replace_integration_private_key"
+    );
+    answers.push(rejected);
+
+    stub.script_answer("POST", "/access_tokens", github_stub::rate_limited());
+    let (status, limited) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &private_key,
+        Some(&replacing),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{limited}");
+    assert_eq!(limited["kind"], "unavailable");
+    assert_eq!(limited["context"]["service"], "github");
+    assert_eq!(limited["context"]["saved"], Value::Null);
+    assert!(
+        limited["context"]["retry_after_seconds"].is_i64(),
+        "{limited}"
+    );
+    assert_eq!(
+        limited["next_steps"],
+        json!([{
+            "action": "replace_integration_private_key",
+            "organization": "acme",
+            "integration": "hub",
+            "retry_after_seconds": limited["context"]["retry_after_seconds"],
+        }])
+    );
+    answers.push(limited);
+
+    stub.script_answer(
+        "GET",
+        "/repos/jtmthf/kestrel",
+        ScriptedResponse::answering(404),
+    );
+    let (status, unreachable) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &private_key,
+        Some(&replacing),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{unreachable}");
+    assert_eq!(unreachable["context"]["state"], "repository_unreachable");
+    answers.push(unreachable);
+
+    let (status, stale) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &private_key,
+        Some(&json!({
+            "private_key": REPLACEMENT_PRIVATE_KEY,
+            "revision": registered.revision + 1,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+    assert_eq!(stale["context"]["state"], "revised");
+    assert_eq!(stale["next_steps"][0]["action"], "inspect_resource");
+    assert_eq!(
+        stale["next_steps"][1]["action"],
+        "replace_integration_private_key"
+    );
+    answers.push(stale);
+
+    let (_, shown) = got(&kestrel, &integration_of("acme", "hub")).await;
+    assert_eq!(shown["revision"], registered.revision);
+
+    let (status, replaced) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &private_key,
+        Some(&json!({
+            "private_key": REPLACEMENT_PRIVATE_KEY,
+            "revision": registered.revision,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{replaced}");
+    assert_eq!(replaced["id"], shown["id"]);
+    assert_eq!(replaced["repository"], "jtmthf/kestrel");
+    assert!(replaced["revision"].as_i64() > shown["revision"].as_i64());
+    answers.push(replaced);
+    answers.push(got(&kestrel, &integration_of("acme", "hub")).await.1);
+
+    for answer in answers {
+        let answer = answer.to_string();
+        assert!(!answer.contains("PRIVATE KEY"), "{answer}");
+        assert!(
+            !answer.contains(github_stub::INSTALLATION_TOKEN),
+            "{answer}"
+        );
+    }
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_registration_that_describes_no_usable_integration_is_refused() {
     let kestrel = Kestrel::boot().await;
     kestrel.declare_organization("acme").await;
@@ -6464,6 +6598,7 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::INTEGRATION, "patch"),
         (operator::INTEGRATION_DISABLE, "post"),
         (operator::INTEGRATION_ENABLE, "post"),
+        (operator::INTEGRATION_PRIVATE_KEY, "put"),
         (operator::EVENT_REFUSAL, "delete"),
         (operator::EVENTS, "get"),
         (operator::EVENT, "get"),

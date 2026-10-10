@@ -337,6 +337,31 @@ impl<'a> Integrations<'a> {
         Ok(())
     }
 
+    /// False, having replaced nothing, when the Integration was maintained after `read`.
+    pub async fn replace_private_key(
+        &mut self,
+        read: &Integration,
+        replacement: &App,
+    ) -> Result<bool> {
+        let sealed = self
+            .keyring
+            .seal(&bound_to(read.id), replacement.private_key())?;
+        let replaced = sqlx::query(
+            "UPDATE integration
+             SET private_key_sealed = ?, revision = revision + 1, maintained_at = ?
+             WHERE id = ? AND revision = ?",
+        )
+        .bind(sealed)
+        .bind(Timestamp::now().to_string())
+        .bind(read.id.to_string())
+        .bind(read.revision)
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("replacing the private key of integration {}", read.name))?;
+
+        Ok(replaced.rows_affected() > 0)
+    }
+
     pub async fn record_event(
         &mut self,
         integration: &Integration,

@@ -14,7 +14,7 @@ use crate::domain::{
     IntegrationState, Occurrence,
 };
 use crate::integration::credential::App;
-use crate::integration::github::{Github, Refused};
+use crate::integration::github::{Github, Refused, Unproven};
 use crate::store::Store;
 use crate::store::integration::Recorded;
 
@@ -252,20 +252,13 @@ async fn maintained(
     let organization = tx.organizations().named(organization).await?;
     let read = tx.integrations().named(&organization, name).await?;
     if let Some(against) = against.filter(|against| *against != read.revision) {
-        bail!(Reason::StateConflict {
+        bail!(revised(
+            &read,
+            &organization.name,
             operation,
-            resource: Resource::Integration,
-            reference: read.name.clone(),
-            organization: Some(organization.name.clone()),
-            state: "revised",
-            holding_session: None,
-            next: Next::inspect(Resource::Integration, read.name.clone()),
-            message: format!(
-                "the integration {} has changed since revision {against}; read it again and \
-                 decide on what it is now",
-                read.name
-            ),
-        });
+            against,
+            Next::inspect(Resource::Integration, read.name.clone()),
+        ));
     }
     let Some(maintained) = maintain(&read)? else {
         return Ok(read);
@@ -278,6 +271,183 @@ async fn maintained(
     tx.commit().await?;
 
     Ok(maintained)
+}
+
+fn revised(
+    read: &Integration,
+    organization: &str,
+    operation: &'static str,
+    against: i64,
+    next: Next,
+) -> Reason {
+    Reason::StateConflict {
+        operation,
+        resource: Resource::Integration,
+        reference: read.name.clone(),
+        organization: Some(organization.to_owned()),
+        state: "revised",
+        holding_session: None,
+        next,
+        message: format!(
+            "the integration {} has changed since revision {against}; read it again and \
+             decide on what it is now",
+            read.name
+        ),
+    }
+}
+
+const REPLACE_PRIVATE_KEY: &str = "replace_integration_private_key";
+
+/// GitHub is asked between the read and the write, so the write is fenced on the revision read.
+pub async fn replace_private_key(
+    store: &Store,
+    github: &Github,
+    organization: &str,
+    name: &str,
+    private_key: &str,
+    against: Option<i64>,
+) -> Result<Integration> {
+    let read = integration(store, organization, name).await?;
+    let again = || {
+        Next::inspect(Resource::Integration, read.name.clone()).then(Step::ReplacePrivateKey {
+            integration: read.name.clone(),
+        })
+    };
+    if let Some(against) = against.filter(|against| *against != read.revision) {
+        bail!(revised(
+            &read,
+            organization,
+            REPLACE_PRIVATE_KEY,
+            against,
+            again()
+        ));
+    }
+    let Connection::Github(connection) = &read.connection else {
+        bail!(Reason::Forbidden {
+            operation: REPLACE_PRIVATE_KEY,
+            resource: Resource::Integration,
+            reference: read.name.clone(),
+            organization: Some(organization.to_owned()),
+            constraint: "github_app",
+            next: Next::inspect(Resource::Integration, read.name.clone()),
+            message: format!(
+                "the integration {} is a generic webhook, which presents no App private key",
+                read.name
+            ),
+        });
+    };
+    // Exhaustive, so a state that gives its credentials up has to be refused here (ADR-0056).
+    match read.state {
+        IntegrationState::Enabled | IntegrationState::Disabled => {}
+    }
+    let replacement = App::held(
+        connection.credential.id,
+        connection.credential.installation,
+        private_key,
+    );
+    if let Err(unproven) = github.proves(connection, &replacement).await {
+        bail!(unproven_replacement(&read, organization, unproven, again()));
+    }
+
+    let mut tx = store.begin().await?;
+    if !tx
+        .integrations()
+        .replace_private_key(&read, &replacement)
+        .await?
+    {
+        bail!(revised(
+            &read,
+            organization,
+            REPLACE_PRIVATE_KEY,
+            read.revision,
+            again()
+        ));
+    }
+    let replaced = tx.integrations().with_id(read.id).await?;
+    tx.commit().await?;
+
+    Ok(replaced)
+}
+
+fn unproven_replacement(
+    read: &Integration,
+    organization: &str,
+    unproven: Unproven,
+    again: Next,
+) -> Reason {
+    const KEPT: &str = "the previous key is still in use";
+    let rejected = |constraint, message: String| Reason::InvalidField {
+        field: "private_key",
+        operation: REPLACE_PRIVATE_KEY,
+        constraint,
+        allowed: None,
+        message,
+    };
+    let unreachable = |state, message: String| Reason::StateConflict {
+        operation: REPLACE_PRIVATE_KEY,
+        resource: Resource::Integration,
+        reference: read.name.clone(),
+        organization: Some(organization.to_owned()),
+        state,
+        holding_session: None,
+        next: again,
+        message,
+    };
+    let unavailable = |retry_after_seconds, message: String| Reason::GithubUnavailable {
+        operation: REPLACE_PRIVATE_KEY,
+        integration: read.name.clone(),
+        organization: organization.to_owned(),
+        retry_after_seconds,
+        message,
+    };
+
+    match unproven {
+        Unproven::Unreadable => rejected(
+            Constraint::RsaPrivateKey,
+            format!("the replacement does not read as an RSA private key in PEM; {KEPT}"),
+        ),
+        Unproven::Rejected => rejected(
+            Constraint::AcceptedByApp,
+            format!(
+                "github does not accept the replacement as a key of the App the integration {} \
+                 signs as; {KEPT}",
+                read.name
+            ),
+        ),
+        Unproven::Installation => unreachable(
+            "installation_unreachable",
+            format!(
+                "the replacement signs as the App, but the App's installation no longer answers \
+                 for the integration {}; {KEPT}",
+                read.name
+            ),
+        ),
+        Unproven::Repository => unreachable(
+            "repository_unreachable",
+            format!(
+                "the replacement signs as the App, but its installation no longer reaches the \
+                 repository the integration {} watches; {KEPT}",
+                read.name
+            ),
+        ),
+        Unproven::RateLimited { until } => unavailable(
+            Some(until.duration_since(Timestamp::now()).as_secs().max(0)),
+            format!(
+                "github is rate limiting until {until}, so the replacement was not checked; {KEPT}"
+            ),
+        ),
+        Unproven::Unanswered(error) => {
+            warn!(
+                integration = read.name,
+                because = %error,
+                "a replacement private key could not be checked"
+            );
+            unavailable(
+                None,
+                format!("github did not answer, so the replacement was not checked; {KEPT}"),
+            )
+        }
+    }
 }
 
 fn carried(integration: &Integration, carries: &[Direction]) -> Result<()> {

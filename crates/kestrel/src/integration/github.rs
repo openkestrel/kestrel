@@ -59,6 +59,17 @@ impl fmt::Display for Refused {
     }
 }
 
+/// Why a replacement private key was not shown to reach what the Integration already connects to.
+#[derive(Debug)]
+pub enum Unproven {
+    Unreadable,
+    Rejected,
+    Installation,
+    Repository,
+    RateLimited { until: Timestamp },
+    Unanswered(anyhow::Error),
+}
+
 /// A redelivery is listed again under the same `guid`.
 #[derive(Debug, Deserialize)]
 pub struct Listed {
@@ -233,10 +244,11 @@ impl Github {
         let minted = self.mint(&github.api, &github.credential).await?;
         self.still_current(integration).await?;
         let token = minted.token.clone();
-        self.tokens
-            .lock()
-            .expect("the token cache is not poisoned")
-            .insert((integration.id, integration.revision), minted);
+        let mut tokens = self.tokens.lock().expect("the token cache is not poisoned");
+        tokens
+            .retain(|(id, revision), _| *id != integration.id || *revision == integration.revision);
+        tokens.insert((integration.id, integration.revision), minted);
+        drop(tokens);
 
         Ok(token)
     }
@@ -268,6 +280,51 @@ impl Github {
             token: minted.token,
             expires_at: minted.expires_at,
         })
+    }
+
+    /// Signs as the same App and mints for the same installation, so only the key is on trial;
+    /// the repository is then read with what that minted.
+    pub async fn proves(
+        &self,
+        connection: &GithubConnection,
+        replacement: &App,
+    ) -> Result<(), Unproven> {
+        #[derive(Deserialize)]
+        struct Named {
+            id: i64,
+        }
+
+        app_jwt(replacement).map_err(|_| Unproven::Unreadable)?;
+        let api = connection.api.trim_end_matches('/');
+        let minted: MintedToken = proven(
+            self.as_app(
+                reqwest::Method::POST,
+                replacement,
+                &format!(
+                    "{api}/app/installations/{}/access_tokens",
+                    replacement.installation
+                ),
+            )
+            .map_err(Unproven::Unanswered)?,
+            "an installation token",
+            Unproven::Installation,
+        )
+        .await?;
+        let named: Named = proven(
+            self.client
+                .get(format!("{api}/repos/{}", connection.repository))
+                .header("accept", "application/vnd.github+json")
+                .header("x-github-api-version", VERSION)
+                .bearer_auth(minted.token),
+            &connection.repository,
+            Unproven::Repository,
+        )
+        .await?;
+        if named.id != connection.repository_id {
+            return Err(Unproven::Repository);
+        }
+
+        Ok(())
     }
 
     /// What GitHub calls the App's own identity: its bot account's login, `<slug>[bot]`,
@@ -764,6 +821,39 @@ async fn answered<T: DeserializeOwned>(response: Response, asked_for: &str) -> R
 
     response.json().await.map_err(|error| {
         Refused::Failed(anyhow!(
+            "github's account of {asked_for} could not be read: {error}"
+        ))
+    })
+}
+
+/// `denied` is what a 403 or 404 means for the thing asked for; a 401 is always the key.
+async fn proven<T: DeserializeOwned>(
+    request: reqwest::RequestBuilder,
+    asked_for: &str,
+    denied: Unproven,
+) -> Result<T, Unproven> {
+    let response = request.send().await.map_err(|error| {
+        Unproven::Unanswered(anyhow!(
+            "github could not be asked for {asked_for}: {error}"
+        ))
+    })?;
+    let status = response.status();
+    if let Some(until) = rate_limited(status, response.headers()) {
+        return Err(Unproven::RateLimited { until });
+    }
+    match status {
+        StatusCode::UNAUTHORIZED => return Err(Unproven::Rejected),
+        StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => return Err(denied),
+        status if !status.is_success() => {
+            return Err(Unproven::Unanswered(anyhow!(
+                "github answered {status} for {asked_for}"
+            )));
+        }
+        _ => {}
+    }
+
+    response.json().await.map_err(|error| {
+        Unproven::Unanswered(anyhow!(
             "github's account of {asked_for} could not be read: {error}"
         ))
     })
