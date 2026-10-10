@@ -2716,6 +2716,8 @@ pub struct EventRefusal {
 ///Something a Session said that will not be posted where its work came from.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CanceledPost {
+    ///When a request for it had already gone out; the comment may be there all the same.
+    pub attempted_at: Option<String>,
     pub canceled_at: String,
     pub reason: String,
     pub session: uuid::Uuid,

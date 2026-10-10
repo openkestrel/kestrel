@@ -37,7 +37,8 @@ macro_rules! integrations_where {
                     last_event_refusal_reason, last_event_refusal_at,
                     (SELECT json_group_array(json_object(
                                 'session', session_id, 'turn', turn,
-                                'canceled_at', canceled_at, 'because', canceled_because))
+                                'canceled_at', canceled_at, 'because', canceled_because,
+                                'attempted_at', attempted_at))
                      FROM (SELECT * FROM post
                            WHERE post.integration_id = integration.id
                              AND post.canceled_at IS NOT NULL
@@ -308,6 +309,16 @@ impl<'a> Integrations<'a> {
         Ok(integration.carries(direction) && self.unchanged(integration).await?)
     }
 
+    pub async fn in_use(&mut self) -> Result<std::collections::HashSet<(IntegrationId, i64)>> {
+        sqlx::query("SELECT id, revision FROM integration WHERE state = 'enabled'")
+            .fetch_all(&mut *self.connection)
+            .await
+            .context("reading which integrations are in use")?
+            .iter()
+            .map(|row| Ok((row.get::<String, _>("id").parse()?, row.get("revision"))))
+            .collect()
+    }
+
     pub async fn maintain(&mut self, read: &Integration, maintained: &Integration) -> Result<()> {
         let github = maintained.github().ok();
         let changed = sqlx::query(
@@ -353,9 +364,15 @@ impl<'a> Integrations<'a> {
         Ok(())
     }
 
-    /// Every secret column is erased here, so material a later operation parks on the row has
-    /// one place to be added to.
-    pub async fn retire(&mut self, read: &Integration, at: Timestamp, because: &str) -> Result<()> {
+    /// The one place an Integration's secrets are erased: a secret column missing here outlives
+    /// retirement.
+    pub async fn retire(
+        &mut self,
+        read: &Integration,
+        at: Timestamp,
+        because: &str,
+        held: &str,
+    ) -> Result<()> {
         let retired = sqlx::query(
             "UPDATE integration
              SET state = 'retired', retired_at = ?, disabled_at = NULL,
@@ -387,6 +404,22 @@ impl<'a> Integrations<'a> {
         .with_context(|| {
             format!(
                 "canceling what the integration {} had left to post",
+                read.name
+            )
+        })?;
+        // Not left to the firing sweep, which never looks at one held under a disabled Trigger.
+        sqlx::query(
+            "UPDATE firing SET outcome = 'canceled', failure = ?, considered_at = NULL
+             WHERE outcome = 'held'
+               AND event_record_id IN (SELECT record_id FROM event WHERE integration_id = ?)",
+        )
+        .bind(held)
+        .bind(read.id.to_string())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| {
+            format!(
+                "canceling the firings held on the integration {}",
                 read.name
             )
         })?;
@@ -777,7 +810,9 @@ impl<'a> Integrations<'a> {
 
     pub async fn posted(&mut self, post: &Post, to: &str) -> Result<()> {
         sqlx::query(
-            "UPDATE post SET posted_at = ?, posted_to = ?, due_at = NULL
+            "UPDATE post
+             SET posted_at = ?, posted_to = ?, due_at = NULL, canceled_at = NULL,
+                 canceled_because = NULL
              WHERE session_id = ? AND turn = ?",
         )
         .bind(Timestamp::now().to_string())
@@ -945,6 +980,7 @@ fn canceled_posts(row: &SqliteRow) -> Result<Vec<CanceledPost>> {
                 turn: post["turn"].as_i64().filter(|turn| *turn != 0),
                 canceled_at: text("canceled_at")?.parse()?,
                 because: text("because")?.to_owned(),
+                attempted_at: post["attempted_at"].as_str().map(str::parse).transpose()?,
             })
         })
         .collect()

@@ -367,6 +367,8 @@ pub struct CanceledPost {
     pub turn: Option<i64>,
     pub canceled_at: Timestamp,
     pub because: String,
+    /// Set when a request for it had gone out, so the comment may be there all the same.
+    pub attempted_at: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

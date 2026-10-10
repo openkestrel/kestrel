@@ -1990,6 +1990,7 @@ fn integration_record(integration: Integration, organization: &str) -> wire::Int
                 turn: post.turn,
                 canceled_at: post.canceled_at.to_string(),
                 reason: post.because,
+                attempted_at: post.attempted_at.map(|at| at.to_string()),
             })
             .collect(),
         polled_every,

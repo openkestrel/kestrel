@@ -1807,7 +1807,7 @@
       "post": {
         "operationId": "retireIntegration",
         "summary": "Retire an Integration, permanently.",
-        "description": "Erases the credentials kestrel holds for it and every token minted from them, cancels its pending posts with a reason, and cancels the Firings held on it. The Integration and every Project, Trigger, Event and Workspace that refers to it stay readable; it is never used, changed or enabled again, and no other Integration takes its place. Nothing is done on the external system: the GitHub App, its installation and its keys are untouched, and a request already sent or a credential already issued is not recalled. Retiring a retired Integration changes nothing.",
+        "description": "Erases the credentials kestrel holds for it and every token minted from them, cancels its pending posts with a reason, and cancels the Firings held on it in the same step. The Integration and every Project, Trigger, Event and Workspace that refers to it stay readable; it is never used, changed or enabled again, and no other Integration takes its place. Nothing is done on the external system: the GitHub App, its installation and its keys are untouched, and a request already sent or a credential already issued is not recalled. Retiring a retired Integration changes nothing.",
         "parameters": [
           {
             "name": "organization",
@@ -5773,13 +5773,22 @@
           },
           "reason": {
             "type": "string"
+          },
+          "attempted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a request for it had already gone out; the comment may be there all the same."
           }
         },
         "required": [
           "session",
           "turn",
           "canceled_at",
-          "reason"
+          "reason",
+          "attempted_at"
         ]
       },
       "IntegrationChange": {

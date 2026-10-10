@@ -215,7 +215,7 @@ pub async fn enable(store: &Store, organization: &str, name: &str) -> Result<Int
     switched(store, organization, name, IntegrationState::Enabled).await
 }
 
-pub const RETIRED: &str = "its integration was retired, so nothing more is said through it";
+pub const LEFT_UNSAID: &str = "its integration was retired, so nothing more is said through it";
 
 /// Erases what it authenticates with on this side only: the App, its installation and its
 /// GitHub keys are not kestrel's to remove (ADR-0056).
@@ -232,8 +232,17 @@ pub async fn retire(
     if read.retired() {
         return Ok(read);
     }
+    let held = out_of_use(
+        &Integration {
+            state: IntegrationState::Retired,
+            ..read.clone()
+        },
+        &organization.name,
+        "fire_trigger",
+    )
+    .to_string();
     tx.integrations()
-        .retire(&read, Timestamp::now(), RETIRED)
+        .retire(&read, Timestamp::now(), LEFT_UNSAID, &held)
         .await?;
     let retired = tx.integrations().named(&organization, name).await?;
     tx.commit().await?;
@@ -249,7 +258,8 @@ async fn switched(
 ) -> Result<Integration> {
     let operation = match to {
         IntegrationState::Enabled => "enable_integration",
-        IntegrationState::Disabled | IntegrationState::Retired => "disable_integration",
+        IntegrationState::Disabled => "disable_integration",
+        IntegrationState::Retired => "retire_integration",
     };
     maintained(store, organization, name, operation, None, |read| {
         if read.state == to {
@@ -348,8 +358,7 @@ fn invalid(field: &'static str, constraint: Constraint, message: &str) -> Reason
     }
 }
 
-/// Why an Integration that is not enabled refuses `operation`. A retired one names no repair:
-/// nothing resumes it, and no other Integration is chosen in its place.
+/// A retired one names no repair: offering another Integration would choose its replacement.
 pub fn out_of_use(
     integration: &Integration,
     organization: &str,

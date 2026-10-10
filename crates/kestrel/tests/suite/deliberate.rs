@@ -1001,7 +1001,6 @@ async fn a_held_delegation_is_canceled_when_its_integration_is_retired() {
     firing_of(&kestrel, ASSIGNED, "held").await;
 
     kestrel.retire_integration("acme", "github").await;
-    unblocked(&stub, 43);
 
     let canceled = firing_of(&kestrel, ASSIGNED, "canceled").await;
     assert!(
@@ -1010,6 +1009,7 @@ async fn a_held_delegation_is_canceled_when_its_integration_is_retired() {
             .unwrap_or_default()
             .contains("the integration github is retired")
     );
+    unblocked(&stub, 43);
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(kestrel.workspaces("acme").await.is_empty());
 

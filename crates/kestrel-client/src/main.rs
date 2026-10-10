@@ -2303,11 +2303,12 @@ fn empty_list(
     )
 }
 
-const RETIRING: [&str; 4] = [
+const RETIRING: [&str; 5] = [
     "erase the credentials kestrel holds for it, for good",
     "cancel what it has not yet posted, and the Firings held on it",
     "refuse every later use, change or enable; no other Integration takes its place",
-    "keep it, and the Projects, Triggers, Events and Workspaces that refer to it, readable",
+    "keep it and its name, and the Projects, Triggers, Events and Workspaces that refer to it",
+    "change nothing on GitHub",
 ];
 
 fn typed(name: &str) -> Result<bool> {
@@ -2354,7 +2355,10 @@ fn shown_integration(
                 let said = post
                     .turn
                     .map_or_else(|| "outcome".to_owned(), |turn| format!("turn {turn}"));
-                format!("{} {said}: {}", post.session, post.reason)
+                let attempted = post.attempted_at.as_ref().map_or_else(String::new, |at| {
+                    format!(" (a request went out at {at}, so it may be there all the same)")
+                });
+                format!("{} {said}: {}{attempted}", post.session, post.reason)
             })
             .collect();
         record["diagnostic"] = integration

@@ -188,6 +188,20 @@ impl Github {
         })
     }
 
+    /// A token whose Integration is retired is otherwise never asked for again, and so never
+    /// dropped.
+    pub async fn forget_unused(&self) -> Result<()> {
+        let Some(store) = &self.fence else {
+            return Ok(());
+        };
+        let in_use = store.read().await?.integrations().in_use().await?;
+        self.tokens
+            .lock()
+            .expect("the token cache is not poisoned")
+            .retain(|key, _| in_use.contains(key));
+        Ok(())
+    }
+
     async fn still_current(&self, integration: &Integration) -> Result<(), Refused> {
         let Some(store) = &self.fence else {
             return Ok(());

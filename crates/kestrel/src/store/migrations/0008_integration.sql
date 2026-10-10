@@ -38,7 +38,6 @@ CREATE TABLE integration (
                                 AND bot_login IS NOT NULL AND interval_ms IS NOT NULL)),
     CHECK (kind = 'github' OR (private_key_sealed IS NULL AND signing_secret IS NULL)),
     CHECK (kind = 'webhook' OR shared_secret_digest IS NULL),
-    -- Retirement erases everything it could authenticate with, in either direction.
     CHECK (CASE state
                WHEN 'retired' THEN private_key_sealed IS NULL AND signing_secret IS NULL
                                    AND shared_secret_digest IS NULL AND poll_due_at IS NULL

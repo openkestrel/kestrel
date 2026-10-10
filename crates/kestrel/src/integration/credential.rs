@@ -21,7 +21,6 @@ impl App {
         }
     }
 
-    /// What a retired Integration keeps: which App it was, and nothing to sign as it with.
     pub fn erased(id: i64, installation: i64) -> Self {
         Self {
             id,

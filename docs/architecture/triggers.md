@@ -52,12 +52,14 @@ Retiring is the one change nothing undoes. `store/integration.rs::retire` nulls 
 column on the row (the sealed private key, the signing secret, the shared-secret digest) and its
 poll due time, and a `CHECK` keeps a retired row that way; a later operation that parks secret
 material on the row erases it there. In the same transaction every post not yet posted is canceled
-with its reason (`post.canceled_at`, `canceled_because`), which the Integration's record lists.
+with its reason (`post.canceled_at`, `canceled_because`), which the Integration's record lists
+beside `attempted_at`: a request already out may still land, and one that does is recorded as
+posted after all. Every Firing held on one of its Events is canceled there too.
 The row, its Events and everything referring to them stay. Afterwards every fence above refuses,
 because a retired Integration is not enabled: a poll or Delivery read begun earlier asks GitHub
-nothing more and commits nothing, a cached installation token is dropped the first time it is
-asked for, a Session that ends records no post, and a Firing held on it, or matched from an Event
-it recorded earlier, is `canceled` rather than held. Maintenance and enable are refused with a
+nothing more and commits nothing, the poll sweep drops its cached installation token, a Session
+that ends records no post, a Firing matched later from an Event it recorded earlier is `canceled`
+rather than held, and its repository no longer counts as watched. Maintenance and enable are refused with a
 `state_conflict` that names no repair. Nothing is asked of GitHub: the App, its installation and
 its keys are the operator's to remove, and the CLI says how.
 
