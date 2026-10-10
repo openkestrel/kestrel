@@ -50,6 +50,7 @@ use crate::repository;
 use crate::role::serve;
 use crate::scheduling;
 use crate::sign_in;
+use crate::sign_in::handoff::{self, Attribution};
 use crate::store::workspace::HeldMessageRefusal;
 use crate::store::{self, Declared as DeclaredRecord, Store};
 use crate::stream::{self, Emitted};
@@ -525,6 +526,7 @@ struct WorkspaceDeclaration {
     project: String,
     agent: String,
     profile: Option<String>,
+    sign_in_method: Option<String>,
     branch: Option<String>,
     continues: Option<String>,
     model: Option<String>,
@@ -559,6 +561,7 @@ struct WorkspaceMessageWithdrawal {
 #[derive(Deserialize)]
 struct SessionDeclaration {
     agent: Option<String>,
+    sign_in_method: Option<String>,
     model: Option<String>,
     mode: Option<String>,
     thought_level: Option<String>,
@@ -833,6 +836,8 @@ struct SessionRecord {
     mode: Option<String>,
     thought_level: Option<String>,
     worked_model: Option<String>,
+    sign_in_method: Option<String>,
+    supplied: Vec<wire::SuppliedMaterial>,
     title: Option<String>,
     options: Vec<SessionOptionRecord>,
     changing_options: Vec<domain::ChangingOption>,
@@ -854,8 +859,48 @@ struct SessionRecord {
     observation: crate::live_work::Observation,
 }
 
-/// The Session's harness is the control plane's to add; no image is recorded against a Session,
-/// and no sign-in is attributed to one yet, so neither expiry nor coverage is ever established.
+fn supplied_material(harness: &str, supplied: &domain::Supplied) -> wire::SuppliedMaterial {
+    let entry = Entry {
+        kind: supplied.kind,
+        name: supplied.name.clone(),
+    };
+    wire::SuppliedMaterial {
+        resource: match supplied.profile {
+            Some(_) => wire::SuppliedMaterialResource::SubscriptionProfile,
+            None => wire::SuppliedMaterialResource::ProviderCredential,
+        },
+        reference: supplied
+            .profile
+            .clone()
+            .unwrap_or_else(|| supplied.name.clone()),
+        kind: match supplied.kind {
+            profile::Kind::Variable => wire::SuppliedMaterialKind::Variable,
+            profile::Kind::File => wire::SuppliedMaterialKind::File,
+        },
+        name: supplied.name.clone(),
+        method: handoff::slot(harness, &entry).map(|method| method.id.clone()),
+        revision: supplied.revision,
+        current: supplied.current,
+        handed_at: supplied.handed_at.to_string(),
+    }
+}
+
+fn holding(method: &wire::SignInMethod, supplied: &domain::Supplied) -> wire::SignInHolding {
+    wire::SignInHolding {
+        resource: match supplied.profile {
+            Some(_) => wire::SignInHoldingResource::SubscriptionProfile,
+            None => wire::SignInHoldingResource::ProviderCredential,
+        },
+        reference: supplied
+            .profile
+            .clone()
+            .unwrap_or_else(|| supplied.name.clone()),
+        fills: method.fills.clone(),
+    }
+}
+
+/// No image is recorded against a Session and no evidence a supervisor carries establishes
+/// expiry or coverage, so none of the three is ever claimed.
 fn diagnosed_failure(
     session: &Session,
     organization: &str,
@@ -872,33 +917,112 @@ fn diagnosed_failure(
             methods,
             method,
         } => {
+            let needed = format!("the {harness} harness needed a sign-in before it would work");
+            let evidence = wire::AuthenticationRequiredEvidence {
+                kind: serde_json::json!("authentication_required"),
+                code: code.into(),
+                methods,
+                method: method.clone(),
+            };
+            let sign_in = |method: Option<String>, held_in: Option<String>| {
+                wire::Action::SignInAction(wire::SignInAction {
+                    action: serde_json::json!("sign_in"),
+                    harness: Some(harness.clone()),
+                    method,
+                    sign_in: held_in,
+                })
+            };
+            let unattributed = wire::AuthenticationFailedContext {
+                session: session.id.to_string(),
+                harness: harness.clone(),
+                image: None,
+                evidence,
+                sign_in: session.sign_in_method.clone(),
+                attribution: wire::AuthenticationFailedContextAttribution::Unattributed,
+                candidates: Vec::new(),
+                holding: None,
+                revision: None,
+                current: None,
+                expired: None,
+                covered: None,
+            };
+            let (message, next_steps, context) = match handoff::attribution(session) {
+                Attribution::Established(used, supplied) => {
+                    let holding = holding(used, &supplied);
+                    (
+                        format!(
+                            "{needed}; it was handed the {} sign-in held in the {} {}{}",
+                            used.name,
+                            match supplied.profile {
+                                Some(_) => Resource::SubscriptionProfile.noun(),
+                                None => Resource::ProviderCredential.noun(),
+                            },
+                            holding.reference,
+                            match supplied.current {
+                                true => "",
+                                false => ", which has been replaced since",
+                            }
+                        ),
+                        vec![
+                            sign_in(Some(used.id.clone()), Some(holding.reference.clone())),
+                            inspect_session,
+                        ],
+                        wire::AuthenticationFailedContext {
+                            sign_in: Some(used.id.clone()),
+                            attribution: wire::AuthenticationFailedContextAttribution::Established,
+                            holding: Some(holding),
+                            revision: Some(supplied.revision),
+                            current: Some(supplied.current),
+                            ..unattributed
+                        },
+                    )
+                }
+                Attribution::Uncertain(candidates) => {
+                    let ids: Vec<String> = candidates
+                        .iter()
+                        .map(|(method, _)| method.id.clone())
+                        .collect();
+                    let mut next_steps = Vec::new();
+                    if let Some(profile) = candidates
+                        .iter()
+                        .find_map(|(_, supplied)| supplied.profile.clone())
+                    {
+                        next_steps.push(inspect(
+                            Locator::new(Resource::SubscriptionProfile, profile),
+                            Some(organization.to_owned()),
+                        ));
+                    }
+                    next_steps.push(inspect_session);
+                    (
+                        format!(
+                            "{needed}; it was handed several sign-ins ({}), and nothing \
+                             established which one it refused",
+                            ids.join(", ")
+                        ),
+                        next_steps,
+                        wire::AuthenticationFailedContext {
+                            sign_in: None,
+                            attribution: wire::AuthenticationFailedContextAttribution::Uncertain,
+                            candidates: ids,
+                            ..unattributed
+                        },
+                    )
+                }
+                Attribution::Unattributed => (
+                    needed,
+                    vec![
+                        sign_in(session.sign_in_method.clone().or(method), None),
+                        inspect_session,
+                    ],
+                    unattributed,
+                ),
+            };
             wire::Diagnostic::AuthenticationFailedDiagnostic(wire::AuthenticationFailedDiagnostic {
                 kind: serde_json::json!("authentication_failed"),
-                message: format!("the {harness} harness needed a sign-in before it would work"),
+                message,
                 field: None,
-                next_steps: vec![
-                    wire::Action::SignInAction(wire::SignInAction {
-                        action: serde_json::json!("sign_in"),
-                        harness: Some(harness.clone()),
-                        method: method.clone(),
-                        sign_in: None,
-                    }),
-                    inspect_session,
-                ],
-                context: wire::AuthenticationFailedContext {
-                    session: session.id.to_string(),
-                    harness,
-                    image: None,
-                    evidence: wire::AuthenticationRequiredEvidence {
-                        kind: serde_json::json!("authentication_required"),
-                        code: code.into(),
-                        methods,
-                        method,
-                    },
-                    sign_in: None,
-                    expired: None,
-                    covered: None,
-                },
+                next_steps,
+                context,
             })
         }
         domain::Evidence::ExecutableMissing { command, error } => {
@@ -1136,6 +1260,11 @@ impl SessionRecord {
             .evidence
             .clone()
             .map(|evidence| diagnosed_failure(&session, organization, evidence));
+        let supplied = session
+            .supplied
+            .iter()
+            .map(|supplied| supplied_material(&harness, supplied))
+            .collect();
         let options = session
             .options
             .into_iter()
@@ -1163,6 +1292,8 @@ impl SessionRecord {
             mode: session.agent.declared.mode,
             thought_level: session.agent.declared.thought_level,
             worked_model: session.worked_model,
+            sign_in_method: session.sign_in_method,
+            supplied,
             title: session.title,
             options,
             changing_options: session.changing_options,
@@ -1704,6 +1835,7 @@ impl From<sign_in::SignIn> for wire::SavedSignIn {
                 },
             },
             revision: saved.revision,
+            refreshed_from: saved.refreshed_from,
             saved_at: saved.saved_at.to_string(),
             authentication: wire::AuthenticationEvidence {
                 state: match authentication.state {
@@ -2932,6 +3064,7 @@ async fn open_workspace(
             project: &declaration.project,
             agent: &declaration.agent,
             profile: declaration.profile.as_deref(),
+            sign_in_method: declaration.sign_in_method.as_deref(),
             branch: declaration.branch.as_deref(),
             continues: declaration.continues.as_deref(),
             declared: declaration.declared(),
@@ -3297,11 +3430,12 @@ async fn enqueue_session(
             None,
         ));
     }
-    let session = work::enqueue(
+    let session = work::enqueue_selecting(
         &control_plane.store,
         workspace.id,
         declaration.agent.as_deref(),
         declaration.declared(),
+        declaration.sign_in_method.as_deref(),
         declaration.depends_on.as_deref().unwrap_or_default(),
     )
     .await?;

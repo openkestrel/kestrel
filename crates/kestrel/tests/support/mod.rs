@@ -66,6 +66,7 @@ use kestrel::role::serve::{self, Listen};
 use kestrel::role::work::{Dispatch, HarnessCommand};
 use kestrel::scheduling;
 use kestrel::sign_in::check::Providers;
+use kestrel::sign_in::credential_use::{self, CredentialUse};
 use kestrel::store::Store;
 use kestrel::timer::Wake;
 use kestrel::trigger::apply::Applied;
@@ -1389,6 +1390,30 @@ impl Kestrel {
             .expect("the profiles should list")
     }
 
+    /// What a dispatching work role records at its start, for a test that claims by hand.
+    pub async fn record_serialized_harnesses(&self) {
+        let mut tx = self.store.begin().await.expect("a transaction");
+        tx.queue()
+            .record(1, &[SERIALIZED.to_owned()], "local-exec")
+            .await
+            .expect("the work role should be recorded");
+        tx.commit().await.expect("the record should commit");
+    }
+
+    pub async fn acquire_credential_use(
+        &self,
+        profile: &str,
+        holder: &str,
+    ) -> anyhow::Result<CredentialUse> {
+        credential_use::acquire(&self.store, "acme", profile, SERIALIZED, holder).await
+    }
+
+    pub async fn release_credential_use(&self, held: &CredentialUse) {
+        credential_use::release(&self.store, held)
+            .await
+            .expect("the login should be released");
+    }
+
     /// What the next Session spawned with the profile would be handed.
     pub async fn profile_contents(&self, profile: &SubscriptionProfile) -> Contents {
         profile::contents(&self.store, profile)
@@ -1955,7 +1980,7 @@ impl Kestrel {
             .expect("the workspace should read");
         let session = tx
             .workspaces()
-            .enqueue_session(&workspace, None, Declared::default())
+            .enqueue_session(&workspace, None, Declared::default(), None)
             .await
             .expect("the session should enqueue");
         tx.workspaces()

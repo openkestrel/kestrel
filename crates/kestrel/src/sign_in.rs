@@ -2,6 +2,8 @@
 //! revision of it is known to do. Saving never spends model usage.
 
 pub mod check;
+pub mod credential_use;
+pub mod handoff;
 
 use std::str::FromStr;
 
@@ -116,7 +118,7 @@ impl Authentication {
 pub struct ModelUse {
     pub harness: String,
     pub model: String,
-    pub image: String,
+    pub image: Option<String>,
     pub result: UseResult,
     pub source: UseSource,
     pub observed_at: Timestamp,
@@ -134,6 +136,8 @@ pub struct SignIn {
     pub method: &'static SignInMethod,
     pub holding: Holding,
     pub revision: i64,
+    /// The revision a harness's own refresh advanced to make this one.
+    pub refreshed_from: Option<i64>,
     pub saved_at: Timestamp,
     pub authentication: Authentication,
     pub model_use: Vec<ModelUse>,
@@ -255,6 +259,7 @@ pub async fn save(
             method: offered,
             holding,
             revision,
+            refreshed_from: None,
             saved_at,
             authentication,
             model_use: Vec::new(),
@@ -319,6 +324,7 @@ pub async fn saved(store: &Store, organization: &str) -> Result<Vec<SignIn>> {
                     method,
                     holding,
                     revision,
+                    refreshed_from: tx.sign_ins().refreshed_from(revision).await?,
                     saved_at,
                     authentication: tx.sign_ins().authentication(revision).await?,
                     model_use: tx.sign_ins().model_use(revision, &row.name).await?,
@@ -412,7 +418,7 @@ fn chatgpt_login(value: &str) -> bool {
         })
 }
 
-fn filled(method: &SignInMethod) -> Result<Entry> {
+pub(crate) fn filled(method: &SignInMethod) -> Result<Entry> {
     match &method.fills {
         SignInFill::SignInVariableFill(fill) => Entry::variable(&fill.variable),
         SignInFill::SignInFileFill(fill) => Entry::file(&fill.path),

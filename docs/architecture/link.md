@@ -18,8 +18,8 @@ segment:
 | --- | --- | --- |
 | `GET` | `/instructions` | SSE stream of the Instance's instructions after `Last-Event-ID`. Closes once the Instance is let go. |
 | `POST` | `/reports` | One report. `202` when taken, including a replay. `connected` returns the Workspace checkout declaration. |
-| `GET` | `/credentials?session=` | Provider Credentials and Subscription Profile contents for a Session the Instance carries, decrypted for this request. |
-| `PATCH` | `/credentials?session=` | Hands back profile files the harness refreshed. |
+| `GET` | `/credentials?session=` | Provider Credentials and Subscription Profile contents for a Session the Instance carries, decrypted for this request, and recorded by revision as what the Session was handed. |
+| `PATCH` | `/credentials?session=` | Hands back profile files the harness refreshed; each is kept only while the Profile still holds the revision the Session was handed. |
 | `GET` | `/entries` | Pages the Workspace's Transcript with payload content hydrated for supervisor context. The supervisor does not currently call it. |
 | `POST` | `/answers/{request}` | The streamed answer to a read. `204` once the operator has taken it; `410` when nobody waits on it. |
 
@@ -219,6 +219,17 @@ answers `503` with `Retry-After: 1`.
 The supervisor fetches credentials only when it opens the conversation, never at provision
 ([ADR-0010](../adr/0010-a-provider-credential-crosses-the-link-at-the-spawn.md)).
 
+- The handoff is one transaction (`sign_in/handoff.rs`): it decrypts what is held now and writes
+  `session_material`, so material replaced after the enqueue is attributed as supplied. A Session
+  with a selected Sign-in Method is handed that method's material from where the method is held
+  and nothing else its harness's catalogue rows fill, the same variable held elsewhere included,
+  so a refused sign-in cannot fall back to another; entries the catalogue does not name for that
+  harness are handed over as before.
+- A refresh is a compare-and-set on the handoff revision. One that wins mints a revision whose
+  `refreshed_from` is the one it advanced and moves the Session's handoff on to it; one that
+  loses to an import or another Session's refresh is dropped and still answered `204`.
+- The supervisor learns none of this: it carries the same credentials and the same generic
+  failure evidence, and the control plane attributes them.
 - Variables go into the harness process's environment only.
 - Subscription Profile files are written beneath the agent's home, handed back with `PATCH` after
   every Turn so a rotated login is saved while the Session is still carried, and removed when the

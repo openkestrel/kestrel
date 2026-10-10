@@ -448,8 +448,13 @@ async fn a_session_refreshes_only_the_files_its_profile_already_holds() {
         .open_workspace_with("acme", repository::NAME, "builder", "jack")
         .await;
     let (session, on) = kestrel.dispatch_to_the_link(workspace.id).await;
+    let link = Link::to(&kestrel.link());
+    let handed = link
+        .credentials(&on.instance, session.id, Some(&on.credential))
+        .await;
+    assert_eq!(handed.status(), StatusCode::OK);
 
-    let answered = Link::to(&kestrel.link())
+    let answered = link
         .refresh(
             &on.instance,
             session.id,

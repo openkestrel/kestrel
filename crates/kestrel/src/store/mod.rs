@@ -522,7 +522,7 @@ mod tests {
         let mut tx = store.begin().await.unwrap();
         let session = tx
             .workspaces()
-            .enqueue_session(&workspace, None, DomainDeclared::default())
+            .enqueue_session(&workspace, None, DomainDeclared::default(), None)
             .await
             .unwrap();
         tx.commit().await.unwrap();

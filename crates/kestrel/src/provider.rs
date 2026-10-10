@@ -1,8 +1,6 @@
 //! A Provider Credential is held by the Organization rather than by an Agent, and is encrypted
 //! at rest with the key beside the database.
 
-use std::collections::BTreeMap;
-
 use anyhow::{Result, bail};
 use jiff::Timestamp;
 
@@ -96,18 +94,6 @@ pub async fn holds_any(store: &Store, organization: OrganizationId) -> Result<bo
         .provider_credentials_held(organization)
         .await?
         .is_empty())
-}
-
-pub async fn reaching(
-    store: &Store,
-    organization: OrganizationId,
-) -> Result<BTreeMap<String, String>> {
-    store
-        .begin()
-        .await?
-        .organizations()
-        .provider_credentials(organization)
-        .await
 }
 
 pub(crate) fn named(operation: &'static str, variable: &str) -> Result<()> {
