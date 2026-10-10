@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use directories::ProjectDirs;
 use url::Url;
 
+use crate::capability::Images;
 use crate::compute::{Docker, Driver, LocalExec};
 use crate::role::serve::Listen;
 use crate::role::work::{Dispatch, HarnessCommand};
@@ -285,6 +286,14 @@ impl Cli {
                 .quiet_period
                 .map(|seconds| Duration::from_secs(seconds.get())),
         })
+    }
+
+    /// What the serve role inspects when it runs without the work role that provisions.
+    pub fn images(&self) -> Images {
+        match self.compute {
+            ComputeDriver::Docker => Images::inspecting(&self.image),
+            ComputeDriver::LocalExec => Images::default(),
+        }
     }
 
     fn supervisor(&self) -> Result<PathBuf> {

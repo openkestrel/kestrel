@@ -46,10 +46,28 @@ The data in `crates/kestrel/src/catalogue/harnesses.json` supplies both the oper
 unconfigured dispatch commands; explicit harness-command configuration remains authoritative.
 Subscriptions name Operator ownership and keys Organization ownership. Each method names its
 accepted token/file input, a typed variable/file fill target, and any relay or console link.
-Metadata needs no credentials or compute inspection and makes no availability claim.
+Metadata needs no credentials. Each row's `availability` comes from inspecting the configured
+image's `dev.kestrel.harnesses` label at that read (ADR-0048): `available` or `not_carried` after a
+successful inspection, `unavailable` with an `unavailable` diagnostic when the image is missing or
+the daemon fails, and `unchecked` when the compute driver runs no image. Label names outside the
+catalogue add no rows.
 `GET /operator/harnesses/{harness}/sign-in-methods/{method}` reads one supported combination;
 unknown harnesses or methods answer a typed `invalid_field` with supported choices. Custom
 harness commands and generic Profiles remain usable without guided methods (ADR-0046).
+
+### Image capabilities
+
+`capability.rs` resolves the configured image reference again on every read, through
+`docker image inspect` and never a pull, and caches only parsed labels, keyed by the image ID the
+reference resolved to. A failed inspection is `Unavailable`; it never falls back to an earlier
+positive result. `Images::admit` gates declaring an Agent, previewing or applying a declaration,
+and a start. It runs before any transaction opens, so a refusal writes nothing. A harness the
+inspected image does not declare is a 409 `setup_gap` (`harness_in_image`) naming the image and
+harness. An uninspectable image is a 503 `unavailable` (`image_inspection`) whose steps inspect
+the image and then retry the capability read. Label membership admits a harness and leaves its
+configured command alone; a command still missing at spawn fails the Session with
+`executable_missing` evidence. The serve role logs one inspection at startup and serves either
+way. `Images::read` is the one capability read for any later consumer.
 
 ### Errors
 

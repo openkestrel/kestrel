@@ -1608,7 +1608,10 @@ impl<'de> Deserialize<'de> for QueueReason {
         ) -> bool {
             match (encoded, input) {
                 (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
-                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                    (encoded_keys_may_be_extra
+                        || encoded.iter().all(|(key, value)| {
+                            input.contains_key(key) || (nulls_may_be_absent && value.is_null())
+                        }))
                         && input.iter().all(|(key, value)| match encoded.get(key) {
                             Some(encoded_value) => preserves_complete_json_input(
                                 encoded_value,
@@ -2546,6 +2549,8 @@ pub struct EventRefusal {
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HarnessCatalogueEntry {
+    ///Whether the configured image declares this harness, read from the image at this request. Null only in the catalogue's own data, never in a response.
+    pub availability: Option<HarnessAvailability>,
     ///The default ACP command; explicit harness-command configuration remains authoritative.
     pub command: String,
     pub name: String,
@@ -2845,6 +2850,48 @@ pub struct SignInFileFill {
     pub kind: serde_json::Value,
     pub path: String,
 }
+///`available` and `not_carried` come from inspecting the configured image's `dev.kestrel.harnesses` label (ADR-0048). `unavailable` means the inspection failed, so nothing is claimed about the harness, and carries why. `unchecked` means the compute driver runs no image.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HarnessAvailability {
+    pub diagnostic: Option<Diagnostic>,
+    ///The immutable local image ID the reference resolved to when it was inspected.
+    pub identity: Option<String>,
+    ///The configured image reference.
+    pub image: Option<String>,
+    pub state: HarnessAvailabilityState,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum HarnessAvailabilityState {
+    #[default]
+    #[serde(rename = "available")]
+    Available,
+    #[serde(rename = "not_carried")]
+    NotCarried,
+    #[serde(rename = "unchecked")]
+    Unchecked,
+    #[serde(rename = "unavailable")]
+    Unavailable,
+}
+impl HarnessAvailabilityState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::NotCarried => "not_carried",
+            Self::Unchecked => "unchecked",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+impl ::std::fmt::Display for HarnessAvailabilityState {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for HarnessAvailabilityState {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
 ///A connection to GitHub, watching one repository.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GithubRegistration {
@@ -2966,7 +3013,10 @@ impl<'de> Deserialize<'de> for Fired {
         ) -> bool {
             match (encoded, input) {
                 (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
-                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                    (encoded_keys_may_be_extra
+                        || encoded.iter().all(|(key, value)| {
+                            input.contains_key(key) || (nulls_may_be_absent && value.is_null())
+                        }))
                         && input.iter().all(|(key, value)| match encoded.get(key) {
                             Some(encoded_value) => preserves_complete_json_input(
                                 encoded_value,
@@ -7123,7 +7173,10 @@ impl<'de> Deserialize<'de> for DiagnosedRefusal {
         ) -> bool {
             match (encoded, input) {
                 (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
-                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                    (encoded_keys_may_be_extra
+                        || encoded.iter().all(|(key, value)| {
+                            input.contains_key(key) || (nulls_may_be_absent && value.is_null())
+                        }))
                         && input.iter().all(|(key, value)| match encoded.get(key) {
                             Some(encoded_value) => preserves_complete_json_input(
                                 encoded_value,
@@ -7299,7 +7352,10 @@ impl<'de> Deserialize<'de> for Diagnostic {
         ) -> bool {
             match (encoded, input) {
                 (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
-                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                    (encoded_keys_may_be_extra
+                        || encoded.iter().all(|(key, value)| {
+                            input.contains_key(key) || (nulls_may_be_absent && value.is_null())
+                        }))
                         && input.iter().all(|(key, value)| match encoded.get(key) {
                             Some(encoded_value) => preserves_complete_json_input(
                                 encoded_value,
@@ -7853,6 +7909,7 @@ pub struct SetupGapDiagnostic {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SetupGapContext {
     pub harness: Option<String>,
+    pub image: Option<String>,
     pub method: Option<String>,
     pub organization: Option<String>,
     pub prerequisite: String,
@@ -9028,7 +9085,10 @@ impl<'de> Deserialize<'de> for Change {
         ) -> bool {
             match (encoded, input) {
                 (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
-                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                    (encoded_keys_may_be_extra
+                        || encoded.iter().all(|(key, value)| {
+                            input.contains_key(key) || (nulls_may_be_absent && value.is_null())
+                        }))
                         && input.iter().all(|(key, value)| match encoded.get(key) {
                             Some(encoded_value) => preserves_complete_json_input(
                                 encoded_value,
@@ -9236,7 +9296,10 @@ impl<'de> Deserialize<'de> for BriefSource {
         ) -> bool {
             match (encoded, input) {
                 (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
-                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                    (encoded_keys_may_be_extra
+                        || encoded.iter().all(|(key, value)| {
+                            input.contains_key(key) || (nulls_may_be_absent && value.is_null())
+                        }))
                         && input.iter().all(|(key, value)| match encoded.get(key) {
                             Some(encoded_value) => preserves_complete_json_input(
                                 encoded_value,
@@ -9770,7 +9833,10 @@ impl<'de> Deserialize<'de> for Action {
         ) -> bool {
             match (encoded, input) {
                 (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
-                    (encoded_keys_may_be_extra || encoded.keys().all(|key| input.contains_key(key)))
+                    (encoded_keys_may_be_extra
+                        || encoded.iter().all(|(key, value)| {
+                            input.contains_key(key) || (nulls_may_be_absent && value.is_null())
+                        }))
                         && input.iter().all(|(key, value)| match encoded.get(key) {
                             Some(encoded_value) => preserves_complete_json_input(
                                 encoded_value,

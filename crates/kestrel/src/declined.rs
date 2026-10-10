@@ -222,6 +222,20 @@ pub enum Reason {
         instance: String,
         message: String,
     },
+    HarnessNotCarried {
+        operation: &'static str,
+        harness: String,
+        image: String,
+        carried: Vec<String>,
+        message: String,
+    },
+    /// Never a claim that the harness is absent: nothing established whether it is.
+    ImageUnavailable {
+        operation: &'static str,
+        harness: Option<String>,
+        image: String,
+        message: String,
+    },
 }
 
 impl Reason {
@@ -243,7 +257,9 @@ impl fmt::Display for Reason {
             | Reason::StateConflict { message, .. }
             | Reason::Forbidden { message, .. }
             | Reason::Expired { message, .. }
-            | Reason::InstanceTimeout { message, .. } => message,
+            | Reason::InstanceTimeout { message, .. }
+            | Reason::HarnessNotCarried { message, .. }
+            | Reason::ImageUnavailable { message, .. } => message,
         };
         f.write_str(message)
     }
