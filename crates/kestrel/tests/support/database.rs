@@ -77,7 +77,6 @@ impl<'a> Database<'a> {
         done
     }
 
-    /// A model test's result, which nothing produces yet.
     pub async fn record_model_use(&self, revision: i64, harness: &str, model: &str, result: &str) {
         let pool = self.pool().await;
         sqlx::query(

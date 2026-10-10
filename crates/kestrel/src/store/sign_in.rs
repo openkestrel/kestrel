@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use jiff::Timestamp;
 use sqlx::{Row, SqliteConnection};
 
-use crate::domain::{Organization, Session, SessionId, SubscriptionProfile};
+use crate::domain::{Organization, Session, SessionId, SessionState, SubscriptionProfile};
 use crate::profile::{Entry, Kind};
 use crate::sign_in::credential_use::CredentialUse;
 use crate::sign_in::{Authentication, ModelUse, Source, State, UseResult, UseSource};
@@ -50,8 +50,6 @@ pub(crate) async fn mint(
     Ok(revision)
 }
 
-/// A harness's own refresh of `from`: unchecked like any new material, and known by what it
-/// advanced.
 pub(crate) async fn mint_refreshed(connection: &mut SqliteConnection, from: i64) -> Result<i64> {
     let revision = mint(connection, &Authentication::unchecked(Source::Refresh)).await?;
     sqlx::query("UPDATE material_revision SET refreshed_from = ? WHERE revision = ?")
@@ -128,7 +126,7 @@ impl<'a> SignIns<'a> {
     pub async fn observe(&mut self, revision: i64, state: State, source: Source) -> Result<()> {
         sqlx::query(
             "UPDATE authentication_evidence
-             SET state = ?, source = ?, observed_at = ?, provider_check = NULL
+             SET state = ?, source = ?, observed_at = ?
              WHERE revision = ?",
         )
         .bind(state.as_str())
@@ -138,26 +136,6 @@ impl<'a> SignIns<'a> {
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("recording what material revision {revision} did"))?;
-
-        Ok(())
-    }
-
-    /// A harness that then works with the revision is the better evidence; a failure a provider
-    /// or an import established is not a Session's to withdraw.
-    pub async fn withdraw_session_failure(&mut self, revision: i64) -> Result<()> {
-        sqlx::query(
-            "UPDATE authentication_evidence
-             SET state = ?, observed_at = ?
-             WHERE revision = ? AND state = ? AND source = ?",
-        )
-        .bind(State::Unchecked.as_str())
-        .bind(Timestamp::now().to_string())
-        .bind(revision)
-        .bind(State::AuthenticationFailed.as_str())
-        .bind(Source::Session.as_str())
-        .execute(&mut *self.connection)
-        .await
-        .with_context(|| format!("withdrawing a failure of material revision {revision}"))?;
 
         Ok(())
     }
@@ -337,7 +315,7 @@ impl<'a> SignIns<'a> {
         Ok(())
     }
 
-    /// The Profile and holder each pending Session on a serialized harness waits behind.
+    /// The lent Profile each pending Session on a serialized harness waits behind.
     pub async fn lent(
         &mut self,
         organization: &Organization,
@@ -352,12 +330,13 @@ impl<'a> SignIns<'a> {
              JOIN subscription_profile AS p ON p.id = u.profile_id
              WHERE s.organization_id = ?
                AND s.state NOT IN (SELECT value FROM json_each(?))
-               AND s.state != 'ended'
+               AND s.state != ?
                AND s.harness IN (SELECT value FROM json_each(?))
              ORDER BY s.id",
         )
         .bind(organization.id.to_string())
         .bind(occupying()?)
+        .bind(SessionState::Ended.as_str())
         .bind(serde_json::to_string(serialized)?)
         .fetch_all(&mut *self.connection)
         .await

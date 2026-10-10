@@ -1082,7 +1082,6 @@ pub struct Supplied {
     pub kind: crate::profile::Kind,
     pub name: String,
     pub revision: i64,
-    /// Whether that revision is still what is held.
     pub current: bool,
     pub handed_at: Timestamp,
 }

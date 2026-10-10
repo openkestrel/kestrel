@@ -221,9 +221,10 @@ The supervisor fetches credentials only when it opens the conversation, never at
 
 - The handoff is one transaction (`sign_in/handoff.rs`): it decrypts what is held now and writes
   `session_material`, so material replaced after the enqueue is attributed as supplied. A Session
-  with a selected Sign-in Method is handed that method's material and nothing else its harness's
-  catalogue rows fill, so a refused sign-in cannot fall back to another; entries the catalogue
-  does not name for that harness are handed over as before.
+  with a selected Sign-in Method is handed that method's material from where the method is held
+  and nothing else its harness's catalogue rows fill, the same variable held elsewhere included,
+  so a refused sign-in cannot fall back to another; entries the catalogue does not name for that
+  harness are handed over as before.
 - A refresh is a compare-and-set on the handoff revision. One that wins mints a revision whose
   `refreshed_from` is the one it advanced and moves the Session's handoff on to it; one that
   loses to an import or another Session's refresh is dropped and still answered `204`.

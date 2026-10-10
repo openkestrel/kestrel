@@ -640,8 +640,8 @@ impl<'a> Workspaces<'a> {
         latest.as_ref().map(session).transpose()
     }
 
-    /// `declared` is resolved over the Agent's, category by category. No `agent` continues with the latest Session's, and no `sign_in_method` with the latest's
-    /// while the harness is the same, so only an explicit method switches credentials.
+    /// No `agent` or `sign_in_method` continues with the latest Session's, the method only while
+    /// the harness is the same; `declared` is resolved over the Agent's, category by category.
     pub async fn enqueue_session(
         &mut self,
         workspace: &Workspace,

@@ -344,6 +344,70 @@ async fn a_selected_sign_in_is_handed_over_without_the_ones_it_competes_with() {
 }
 
 #[tokio::test]
+async fn a_selected_key_is_never_shadowed_by_the_same_variable_in_a_profile() {
+    let stub = ProviderStub::start();
+    let kestrel = booted(&stub, "claude").await;
+    let key = save(&kestrel, "claude", "anthropic-api-key", ANTHROPIC_KEY).await;
+    save(&kestrel, "claude", "claude-setup-token", CLAUDE_TOKEN).await;
+    kestrel
+        .hold_in_profile(
+            "acme",
+            OPERATOR,
+            &Entry::variable("ANTHROPIC_API_KEY").expect("a variable"),
+            "sk-ant-api03-someone-elses",
+        )
+        .await;
+
+    let (session, on) = carried(
+        &kestrel,
+        json!({ "profile": OPERATOR, "sign_in_method": "anthropic-api-key" }),
+    )
+    .await;
+    let handed = handed(&kestrel, &session, &on).await;
+    assert_eq!(
+        names(&handed, "variables"),
+        ["ANTHROPIC_API_KEY".to_owned()].into()
+    );
+    assert_eq!(handed["variables"]["ANTHROPIC_API_KEY"], ANTHROPIC_KEY);
+    let read_back = read(&kestrel, session.id).await;
+    let supplied = supplied(&read_back, "ANTHROPIC_API_KEY");
+    assert_eq!(supplied["resource"], "provider_credential");
+    assert_eq!(supplied["revision"], key);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_login_handed_beside_a_key_kestrel_does_not_catalogue_is_not_blamed() {
+    let stub = ProviderStub::start();
+    let kestrel = booted(&stub, "opencode").await;
+    save(&kestrel, "opencode", "opencode-go-zen", "an-opencode-key").await;
+    kestrel
+        .hold_in_profile(
+            "acme",
+            OPERATOR,
+            &Entry::variable("OPENROUTER_API_KEY").expect("a variable"),
+            "an-openrouter-key",
+        )
+        .await;
+
+    let (session, on) = carried(&kestrel, json!({ "profile": OPERATOR })).await;
+    handed(&kestrel, &session, &on).await;
+    refused_authentication(&kestrel, &session, &on, 1).await;
+
+    assert_eq!(
+        sign_in(&kestrel, "opencode", "opencode-go-zen").await["authentication"]["state"],
+        "unchecked"
+    );
+    let read = read(&kestrel, session.id).await;
+    let context = &read["diagnostic"]["context"];
+    assert_eq!(context["attribution"], "uncertain", "{read:#}");
+    assert_eq!(context["candidates"], json!(["opencode-go-zen"]));
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn material_replaced_before_the_handoff_is_the_revision_the_session_used() {
     let stub = ProviderStub::start();
     let kestrel = booted(&stub, "claude").await;

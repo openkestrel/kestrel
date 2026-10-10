@@ -95,14 +95,14 @@ An `authentication_failed` diagnostic names the sign-in in `context.attribution`
 
 | Attribution | When | Effect |
 | --- | --- | --- |
-| `established` | A method was selected and handed over, or the harness was handed exactly one of its catalogued sign-ins | The context carries the method, where it is held, the revision and whether it is `current`. Only a current revision's `authentication` evidence becomes `authentication_failed`, from source `session`. |
-| `uncertain` | No method was selected and the harness was handed several of its catalogued sign-ins | Nothing is marked; `candidates` lists them and the first step is inspection. |
+| `established` | A method was selected and handed over from where it is held, or one catalogued sign-in was all the harness was handed | The context carries the method, where it is held, the revision and whether it is `current`. Only a current revision's `authentication` evidence becomes `authentication_failed`, from source `session`. |
+| `uncertain` | No method was selected and the harness was handed more than one variable or file, catalogued or not | Nothing is marked; `candidates` lists the catalogued ones and the first step is inspection. |
 | `unattributed` | It was handed none kestrel catalogues | Nothing is marked. |
 
 No evidence a supervisor carries establishes expiry or coverage, so `expired` and `covered` stay
 null. A Turn answered on an established current revision records `model_use` `worked` for the
-model it ran on and withdraws a failure an earlier Session recorded; a refusal records
-`authentication_failed` for that model alone. Neither rewrites another model's result.
+model it ran on; a refusal records `authentication_failed` for that model alone, and leaves the
+revision's `provider_check` as it was. Neither rewrites another model's result.
 
 ### Image capabilities
 

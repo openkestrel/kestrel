@@ -14,8 +14,7 @@ use crate::domain::{Organization, Session, SubscriptionProfile, Supplied};
 use crate::profile::{Contents, Entry, Kind};
 use crate::store::{Store, Tx};
 
-/// Refuses a method the harness does not offer, or one whose material nothing this work would
-/// be handed holds; the Operator's Profile never stands in for the one a Workspace names.
+/// The Operator's Profile never stands in for the one a Workspace names.
 pub(crate) async fn selected(
     tx: &mut Tx<'_>,
     operation: &'static str,
@@ -102,7 +101,10 @@ fn concerning_the_method(error: anyhow::Error, harness: &str) -> anyhow::Error {
     }
 }
 
-/// The catalogued method of `harness` an entry fills, if it is one of its authentication slots.
+fn held_in_profile(method: &SignInMethod) -> bool {
+    method.ownership == SignInMethodOwnership::Operator
+}
+
 pub(crate) fn slot(harness: &str, entry: &Entry) -> Option<&'static SignInMethod> {
     catalogue::harnesses()
         .iter()
@@ -111,8 +113,8 @@ pub(crate) fn slot(harness: &str, entry: &Entry) -> Option<&'static SignInMethod
         .find(|method| filled(method).is_ok_and(|fills| fills == *entry))
 }
 
-/// Decrypts what the Session's harness is spawned with and records the revision of each value in
-/// the same transaction, so material replaced since the enqueue is attributed as supplied.
+/// Records each revision in the transaction that decrypts it, so material replaced since the
+/// enqueue is attributed as supplied.
 pub async fn hand_off(store: &Store, session: &Session) -> Result<Contents> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(session.workspace).await?;
@@ -120,11 +122,15 @@ pub async fn hand_off(store: &Store, session: &Session) -> Result<Contents> {
     let chosen = session
         .sign_in_method
         .as_deref()
-        .and_then(|method| catalogue::sign_in_method("hand_off", harness, method).ok());
-    // A selected method leaves the harness nothing else to authenticate with, so a refusal
-    // cannot be answered by another credential working.
-    let competes = |entry: &Entry| {
-        chosen.is_some_and(|chosen| slot(harness, entry).is_some_and(|slot| slot.id != chosen.id))
+        .map(|method| catalogue::sign_in_method("hand_off", harness, method))
+        .transpose()?;
+    // A selected method leaves the harness nothing else to authenticate with, its own variable
+    // held somewhere else included, so a refusal cannot be answered by another credential.
+    let competes = |entry: &Entry, in_profile: bool| {
+        chosen.is_some_and(|chosen| {
+            slot(harness, entry)
+                .is_some_and(|slot| slot.id != chosen.id || held_in_profile(chosen) != in_profile)
+        })
     };
 
     let mut handed = Contents::default();
@@ -144,7 +150,7 @@ pub async fn hand_off(store: &Store, session: &Session) -> Result<Contents> {
             kind: Kind::Variable,
             name: held.variable,
         };
-        if competes(&entry) {
+        if competes(&entry, false) {
             continue;
         }
         if let Some(secret) = credentials.remove(&entry.name) {
@@ -156,7 +162,7 @@ pub async fn hand_off(store: &Store, session: &Session) -> Result<Contents> {
     if let Some(profile) = &workspace.profile {
         let mut contents = tx.profiles().contents(profile).await?;
         for held in tx.profiles().held(profile).await? {
-            if competes(&held.entry) {
+            if competes(&held.entry, true) {
                 continue;
             }
             let (kept, into) = match held.entry.kind {
@@ -187,8 +193,7 @@ pub async fn hand_off(store: &Store, session: &Session) -> Result<Contents> {
     Ok(handed)
 }
 
-/// Writes back only a file still at the revision this Session was handed, and moves the
-/// Session's handoff on to what it wrote so its next refresh is not read as stale.
+/// Moves the Session's handoff on to what it wrote, so its own next refresh is not read as stale.
 pub async fn refresh(
     store: &Store,
     session: &Session,
@@ -231,12 +236,12 @@ pub async fn refresh(
     Ok(refreshed)
 }
 
-/// Which sign-in a Session's evidence is about.
 #[derive(Debug, Clone)]
 pub enum Attribution {
-    /// The method selected, or the only catalogued login its harness was handed.
+    /// The method selected, or a catalogued sign-in that was all its harness was handed.
     Established(&'static SignInMethod, Supplied),
-    /// Several logins the harness could have authenticated with, and nothing says which it did.
+    /// The harness was handed more than one thing it could have authenticated with, catalogued
+    /// or not, and nothing says which it used.
     Uncertain(Vec<(&'static SignInMethod, Supplied)>),
     Unattributed,
 }
@@ -259,12 +264,14 @@ pub fn attribution(session: &Session) -> Attribution {
     match (&session.sign_in_method, candidates.len()) {
         (Some(selected), _) => candidates
             .into_iter()
-            .find(|(method, _)| method.id == *selected)
+            .find(|(method, supplied)| {
+                method.id == *selected && held_in_profile(method) == supplied.profile.is_some()
+            })
             .map_or(Attribution::Unattributed, |(method, supplied)| {
                 Attribution::Established(method, supplied)
             }),
         (None, 0) => Attribution::Unattributed,
-        (None, 1) => {
+        (None, 1) if session.supplied.len() == 1 => {
             let (method, supplied) = candidates.remove(0);
             Attribution::Established(method, supplied)
         }
@@ -272,7 +279,7 @@ pub fn attribution(session: &Session) -> Attribution {
     }
 }
 
-/// The revision evidence may be written against: one sign-in, and still what is held.
+/// Evidence is written only against one established sign-in whose revision is still held.
 fn evidenced(session: &Session) -> Option<i64> {
     match attribution(session) {
         Attribution::Established(_, supplied) if supplied.current => Some(supplied.revision),
@@ -312,7 +319,6 @@ pub(crate) async fn worked(tx: &mut Tx<'_>, session: &Session) -> Result<()> {
     let (Some(revision), Some(model)) = (evidenced(session), model(session)) else {
         return Ok(());
     };
-    tx.sign_ins().withdraw_session_failure(revision).await?;
     tx.sign_ins()
         .record_use(revision, &session.agent.harness, model, UseResult::Worked)
         .await

@@ -893,9 +893,8 @@ fn holding(method: &wire::SignInMethod, supplied: &domain::Supplied) -> wire::Si
     }
 }
 
-/// The Session's harness and what it was handed are the control plane's to add. No image is
-/// recorded against a Session, and no evidence a supervisor carries establishes expiry or
-/// coverage, so neither is ever claimed.
+/// No image is recorded against a Session and no evidence a supervisor carries establishes
+/// expiry or coverage, so none of the three is ever claimed.
 fn diagnosed_failure(
     session: &Session,
     organization: &str,
@@ -927,6 +926,20 @@ fn diagnosed_failure(
                     sign_in: held_in,
                 })
             };
+            let unattributed = wire::AuthenticationFailedContext {
+                session: session.id.to_string(),
+                harness: harness.clone(),
+                image: None,
+                evidence,
+                sign_in: session.sign_in_method.clone(),
+                attribution: wire::AuthenticationFailedContextAttribution::Unattributed,
+                candidates: Vec::new(),
+                holding: None,
+                revision: None,
+                current: None,
+                expired: None,
+                covered: None,
+            };
             let (message, next_steps, context) = match handoff::attribution(session) {
                 Attribution::Established(used, supplied) => {
                     let holding = holding(used, &supplied);
@@ -934,11 +947,9 @@ fn diagnosed_failure(
                         format!(
                             "{needed}; it was handed the {} sign-in held in the {} {}{}",
                             used.name,
-                            match holding.resource {
-                                wire::SignInHoldingResource::SubscriptionProfile =>
-                                    Resource::SubscriptionProfile.noun(),
-                                wire::SignInHoldingResource::ProviderCredential =>
-                                    Resource::ProviderCredential.noun(),
+                            match supplied.profile {
+                                Some(_) => Resource::SubscriptionProfile.noun(),
+                                None => Resource::ProviderCredential.noun(),
                             },
                             holding.reference,
                             match supplied.current {
@@ -951,18 +962,12 @@ fn diagnosed_failure(
                             inspect_session,
                         ],
                         wire::AuthenticationFailedContext {
-                            session: session.id.to_string(),
-                            harness: harness.clone(),
-                            image: None,
-                            evidence,
                             sign_in: Some(used.id.clone()),
                             attribution: wire::AuthenticationFailedContextAttribution::Established,
-                            candidates: Vec::new(),
                             holding: Some(holding),
                             revision: Some(supplied.revision),
                             current: Some(supplied.current),
-                            expired: None,
-                            covered: None,
+                            ..unattributed
                         },
                     )
                 }
@@ -990,18 +995,10 @@ fn diagnosed_failure(
                         ),
                         next_steps,
                         wire::AuthenticationFailedContext {
-                            session: session.id.to_string(),
-                            harness: harness.clone(),
-                            image: None,
-                            evidence,
                             sign_in: None,
                             attribution: wire::AuthenticationFailedContextAttribution::Uncertain,
                             candidates: ids,
-                            holding: None,
-                            revision: None,
-                            current: None,
-                            expired: None,
-                            covered: None,
+                            ..unattributed
                         },
                     )
                 }
@@ -1011,20 +1008,7 @@ fn diagnosed_failure(
                         sign_in(session.sign_in_method.clone().or(method), None),
                         inspect_session,
                     ],
-                    wire::AuthenticationFailedContext {
-                        session: session.id.to_string(),
-                        harness: harness.clone(),
-                        image: None,
-                        evidence,
-                        sign_in: session.sign_in_method.clone(),
-                        attribution: wire::AuthenticationFailedContextAttribution::Unattributed,
-                        candidates: Vec::new(),
-                        holding: None,
-                        revision: None,
-                        current: None,
-                        expired: None,
-                        covered: None,
-                    },
+                    unattributed,
                 ),
             };
             wire::Diagnostic::AuthenticationFailedDiagnostic(wire::AuthenticationFailedDiagnostic {

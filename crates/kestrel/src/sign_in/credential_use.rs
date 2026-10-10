@@ -17,8 +17,8 @@ pub struct CredentialUse {
     pub holder: String,
 }
 
-/// Refused while a Session or another holder is using the login, never queued behind it. The
-/// caller releases only after it has handed back whatever the harness refreshed.
+/// Refused rather than queued; the caller releases only after handing back whatever its
+/// harness refreshed.
 pub async fn acquire(
     store: &Store,
     organization: &str,
@@ -44,7 +44,7 @@ pub async fn acquire(
         holding_session: holding,
         next,
         message: format!(
-            "the {harness} login in the subscription profile {} is in use by {by}",
+            "the {harness} sign-in in the subscription profile {} is in use by {by}",
             profile.name
         ),
     };
@@ -82,7 +82,7 @@ pub async fn release(store: &Store, held: &CredentialUse) -> Result<()> {
     tx.commit().await
 }
 
-/// Nothing that held a login outlives the process that was using it.
+/// No holder outlives the process it ran in.
 pub async fn release_all(store: &Store) -> Result<()> {
     let mut tx = store.begin().await?;
     tx.sign_ins().release_all().await?;

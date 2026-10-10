@@ -144,7 +144,7 @@ slot frees. The first Turn competes by when the Brief was written against held i
 Sessions, and the serialized-Profile rule applies to it then, not at dispatch.
 
 A Profile's login can also be lent to something that is not a Session
-(`sign_in/credential_use.rs`, for the optional model test). `acquire` refuses with a 409
+(`sign_in/credential_use.rs`). `acquire` refuses with a 409
 `credential_in_use` while a Session occupies that Profile on a serialized harness or another
 holder has it, and never queues; a Session on that Profile and harness is passed over until
 `release`, which the holder calls only after handing back whatever its harness refreshed.
