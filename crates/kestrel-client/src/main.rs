@@ -2683,6 +2683,7 @@ fn shown_queue(
     }
 
     let mut rows = Vec::new();
+    let mut diagnoses = Vec::new();
     for occupant in slots["occupants"].as_array().into_iter().flatten() {
         let mut record = occupant.as_object().cloned().with_context(|| {
             Failed::new(
@@ -2697,7 +2698,10 @@ fn shown_queue(
         record.insert("preparing".to_owned(), Value::Null);
         record.insert("brief_since".to_owned(), Value::Null);
         record.insert("reasons".to_owned(), Value::Array(Vec::new()));
-        record.insert("why".to_owned(), Value::from(why(&record, invocation)?));
+        record.insert(
+            "why".to_owned(),
+            Value::from(why(&record, invocation, presentation)?),
+        );
         record.insert("active_work".to_owned(), slots.clone());
         record.insert("instances".to_owned(), instances.clone());
         rows.push(Value::Object(record));
@@ -2722,17 +2726,42 @@ fn shown_queue(
             record.entry("brief_since").or_insert(Value::Null);
             record.entry("preparing").or_insert(Value::Null);
             record.entry("reasons").or_insert(Value::Array(Vec::new()));
-            record.insert("why".to_owned(), Value::from(why(&record, invocation)?));
+            if matches!(presentation, Presentation::Human(_)) {
+                for reason in record["reasons"].as_array().into_iter().flatten() {
+                    if reason["kind"] == "subscription_profile" {
+                        diagnoses.push((record["name"].clone(), queue_diagnosis(reason)?));
+                    }
+                }
+            }
+            record.insert(
+                "why".to_owned(),
+                Value::from(why(&record, invocation, presentation)?),
+            );
             record.insert("active_work".to_owned(), slots.clone());
             record.insert("instances".to_owned(), instances.clone());
             rows.push(Value::Object(record));
         }
     }
 
-    show(presentation, &view::QUEUE, &Value::from(rows))
+    show(presentation, &view::QUEUE, &Value::from(rows))?;
+    let mut out = std::io::stdout().lock();
+    for (session, diagnostic) in diagnoses {
+        writeln!(
+            out,
+            "\n{}:\n{}",
+            session.as_str().unwrap_or_default(),
+            diagnostic::inline(&diagnostic, invocation)
+        )
+        .context("writing the queue's sign-in repairs")?;
+    }
+    out.flush().context("writing to standard output")
 }
 
-fn why(row: &serde_json::Map<String, Value>, invocation: &Invocation) -> Result<String> {
+fn why(
+    row: &serde_json::Map<String, Value>,
+    invocation: &Invocation,
+    presentation: &Presentation,
+) -> Result<String> {
     let mut said: Vec<String> = Vec::new();
     if let Some(preparing) = row["preparing"].as_str() {
         said.push(match preparing {
@@ -2752,7 +2781,7 @@ fn why(row: &serde_json::Map<String, Value>, invocation: &Invocation) -> Result<
             .as_array()
             .into_iter()
             .flatten()
-            .map(|reason| reason_in_words(reason, invocation))
+            .map(|reason| reason_in_words(reason, invocation, presentation))
             .collect::<Result<Vec<_>>>()?,
     );
     if said.is_empty() {
@@ -2778,7 +2807,16 @@ fn environment(snapshot: &Value) -> String {
     )
 }
 
-fn reason_in_words(reason: &Value, invocation: &Invocation) -> Result<String> {
+fn queue_diagnosis(reason: &Value) -> Result<wire::Diagnostic> {
+    serde_json::from_value(reason["diagnostic"].clone())
+        .context("reading the queue's sign-in diagnosis")
+}
+
+fn reason_in_words(
+    reason: &Value,
+    invocation: &Invocation,
+    presentation: &Presentation,
+) -> Result<String> {
     let names = |field: &str| {
         reason[field]
             .as_array()
@@ -2795,9 +2833,12 @@ fn reason_in_words(reason: &Value, invocation: &Invocation) -> Result<String> {
     Ok(match reason["kind"].as_str().unwrap_or_default() {
         "dependencies" => format!("waits on {}", names("sessions")),
         "subscription_profile" => {
-            let diagnostic = serde_json::from_value(reason["diagnostic"].clone())
-                .context("reading the queue's sign-in diagnosis")?;
-            diagnostic::inline(&diagnostic, invocation)
+            let diagnostic = queue_diagnosis(reason)?;
+            if matches!(presentation, Presentation::Human(_)) {
+                diagnostic::message(&diagnostic).to_owned()
+            } else {
+                diagnostic::inline(&diagnostic, invocation)
+            }
         }
         "instance_archiving" => {
             format!("waits for the Instance {} to be archived", text("instance"))
@@ -2994,11 +3035,17 @@ mod parser_tests {
                 "next_steps": [{ "action": "inspect_resource", "resource": "session", "reference": "holding", "organization": "acme" }]
             }
         });
-        let rendered = reason_in_words(&reason, &diagnostic::tests::invocation()).unwrap();
+        let rendered = reason_in_words(
+            &reason,
+            &diagnostic::tests::invocation(),
+            &Presentation::Delimited,
+        )
+        .unwrap();
         assert!(
             reason_in_words(
                 &json!({ "kind": "subscription_profile" }),
-                &diagnostic::tests::invocation()
+                &diagnostic::tests::invocation(),
+                &Presentation::Delimited
             )
             .is_err()
         );

@@ -6594,7 +6594,7 @@ async fn kestrel_queue_says_each_reason_in_words_with_the_waiting_sessions_after
         (
             &every.prompted,
             format!(
-                "the Subscription Profile jack is held by {}",
+                "the codex sign-in in the subscription profile jack is in use by the session {}",
                 every.holding.name
             ),
         ),
@@ -6606,6 +6606,23 @@ async fn kestrel_queue_says_each_reason_in_words_with_the_waiting_sessions_after
     }
     assert!(lines[line_of(&every.prompted.name)].contains("input since "));
     assert!(lines[line_of(&every.unbriefed.name)].contains("input since "));
+
+    assert!(
+        shown.said.contains(&format!(
+            "kestrel session show {} --organization acme",
+            every.holding.name
+        )),
+        "{}",
+        shown.said
+    );
+    assert!(
+        shown.said.contains(&format!(
+            "kestrel session stop {} --organization acme",
+            every.holding.id
+        )),
+        "{}",
+        shown.said
+    );
 
     kestrel.teardown().await;
 }
