@@ -1279,21 +1279,26 @@ pub fn names(url: &str, repository: &str) -> bool {
 
 /// The `owner/name` a github.com URL names, in any of the forms git clones it by.
 pub fn named_repository(url: &str) -> Option<String> {
-    let named = [
-        "https://github.com/",
-        "http://github.com/",
-        "ssh://git@github.com/",
-        "git@github.com:",
-        "git://github.com/",
-    ]
-    .iter()
-    .find_map(|prefix| {
-        url.get(..prefix.len())
-            .filter(|scheme_and_host| scheme_and_host.eq_ignore_ascii_case(prefix))
-            .map(|_| &url[prefix.len()..])
-    })?
-    .trim_end_matches('/');
-
+    let parsed;
+    let named = if url.contains("://") {
+        parsed = Url::parse(url).ok()?;
+        if !matches!(parsed.scheme(), "https" | "http" | "ssh" | "git")
+            || !parsed.host_str()?.eq_ignore_ascii_case("github.com")
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+        {
+            return None;
+        }
+        parsed.path()
+    } else {
+        let (host, path) = url.split_once(':')?;
+        let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+        if !host.eq_ignore_ascii_case("github.com") {
+            return None;
+        }
+        path
+    };
+    let named = named.trim_matches('/');
     repository(named.strip_suffix(".git").unwrap_or(named)).ok()
 }
 

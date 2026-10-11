@@ -14,7 +14,14 @@ kestrel project declare kestrel \
 kestrel agent declare builder
 ```
 
-To let sessions reach a GitHub repository as a connected GitHub App, select its integration when you declare the project:
+Read the repositories a connected App can see and their current default branches:
+
+```sh
+kestrel integration repositories github
+kestrel integration repositories github --page 2 --per-page 30 --json
+```
+
+Select that integration when you declare the project's repository authority:
 
 ```sh
 kestrel project declare kestrel \

@@ -1167,6 +1167,67 @@ fn the_client_selects_an_integration_for_a_projects_repository() {
 }
 
 #[test]
+fn the_client_reads_repository_metadata_and_pagination_through_its_selected_integration() {
+    let kestrel = Kestrel::new();
+    let stub = GithubStub::start();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "info");
+    watching(&booted, &stub, "1h");
+    let page = serde_json::json!({
+        "total_count": 3,
+        "repositories": [{
+            "id": 1, "full_name": "jtmthf/kestrel", "default_branch": "trunk", "private": true,
+        }],
+    });
+    stub.script_answer(
+        "GET",
+        "/installation/repositories",
+        ScriptedResponse::ok(page.to_string()),
+    );
+    let args = [
+        "integration",
+        "repositories",
+        "hub",
+        "--page",
+        "2",
+        "--per-page",
+        "1",
+    ];
+    let finished = booted.client(&[&args[..], &["--json"]].concat());
+    assert!(finished.status.success(), "{}", finished.err);
+    let listed = finished.json();
+    assert_eq!(listed["repositories"][0]["default_branch"], "trunk");
+    assert_eq!(listed["repositories"][0]["watched"], true);
+    assert_eq!(listed["page"], 2);
+    assert_eq!(listed["total"], 3);
+    assert_eq!(listed["next_page"], 3);
+    assert!(
+        stub.requests()
+            .iter()
+            .any(|request| { request.url == "/installation/repositories?per_page=1&page=2" })
+    );
+    stub.script_answer(
+        "GET",
+        "/installation/repositories",
+        ScriptedResponse::ok(page.to_string()),
+    );
+    let shown = booted.run(&args);
+    assert!(
+        shown.contains("trunk") && shown.contains("page 3"),
+        "{shown}"
+    );
+    stub.script_answer(
+        "GET",
+        "/installation/repositories",
+        github_stub::rate_limited(),
+    );
+    let refused = booted.refused(&args);
+    assert!(
+        refused.contains("retry") || refused.contains("again"),
+        "{refused}"
+    );
+}
+
+#[test]
 fn the_client_retires_an_integration_only_on_an_explicit_choice() {
     let kestrel = Kestrel::new();
     let stub = GithubStub::start();

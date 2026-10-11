@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use serde::Deserialize;
 use url::Url;
 
 use crate::declined::{Again, Constraint, Next, Reason, Resource};
@@ -86,13 +85,7 @@ pub fn resolved(
     Ok(resolved)
 }
 
-/// Only this selects authority: neither a GitHub shorthand nor an Event ever does (ADR-0056).
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Selection {
-    pub repository: String,
-    pub integration: String,
-}
+pub use kestrel_operator_types::RepositoryIntegrationSelection as Selection;
 
 pub struct Selecting<'a> {
     pub operation: &'static str,
@@ -377,35 +370,34 @@ impl Declarable {
         let held = tx.projects().find(organization, name).await?;
         let mut integrations = Vec::with_capacity(self.selected.len());
         for checked in &self.selected {
-            if !self.holds(held.as_ref(), checked) {
-                if !checked.verified {
-                    return Err(Reason::StateConflict {
-                        operation: self.operation,
-                        resource: Resource::Project,
-                        reference: name.to_owned(),
-                        organization: Some(organization.name.clone()),
-                        state: "revised",
-                        holding_session: None,
-                        next: Next::inspect(Resource::Project, name),
-                        message: format!(
-                            "the project {name} changed while its repositories were being \
-                             checked; read it again and declare what it should be now"
-                        ),
-                    }
-                    .into());
+            if !self.holds(held.as_ref(), checked) && !checked.verified {
+                return Err(Reason::StateConflict {
+                    operation: self.operation,
+                    resource: Resource::Project,
+                    reference: name.to_owned(),
+                    organization: Some(organization.name.clone()),
+                    state: "revised",
+                    holding_session: None,
+                    next: Next::inspect(Resource::Project, name),
+                    message: format!(
+                        "the project {name} changed while its repositories were being \
+                         checked; read it again and declare what it should be now"
+                    ),
                 }
-                let current = tx.integrations().with_id(checked.integration.id).await?;
-                if current.revision != checked.integration.revision {
-                    return Err(integration::revised(
-                        &current,
-                        &organization.name,
-                        self.operation,
-                        checked.integration.revision,
-                        Next::inspect(Resource::Integration, current.name.clone()),
-                    )
-                    .into());
-                }
+                .into());
             }
+            let current = tx.integrations().with_id(checked.integration.id).await?;
+            if current.revision != checked.integration.revision {
+                return Err(integration::revised(
+                    &current,
+                    &organization.name,
+                    self.operation,
+                    checked.integration.revision,
+                    Next::inspect(Resource::Integration, current.name.clone()),
+                )
+                .into());
+            }
+            integration::lending(&current, &organization.name, self.operation)?;
             integrations.push(SelectedIntegration {
                 repository: checked.repository.clone(),
                 integration: checked.integration.id,
