@@ -7,9 +7,9 @@ use crate::compute::IdleHint;
 use crate::declined::Resource;
 use crate::domain::{
     Agent, ChangingOption, Checkout, Connected, Cost, Declared, Evidence, Exit, HeldMessage,
-    Interrupting, Organization, OrganizationId, Preparing, Project, Session, SessionCommand,
-    SessionId, SessionOption, SessionState, StartedBy, SubscriptionProfile, Turn, Usage, Workspace,
-    WorkspaceId, WorkspaceState,
+    Interrupting, Organization, OrganizationId, Preparing, Project, SelectedIntegration, Session,
+    SessionCommand, SessionId, SessionOption, SessionState, StartedBy, SubscriptionProfile, Turn,
+    Usage, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::fanout::Touched;
 use crate::instance::Observed;
@@ -194,6 +194,7 @@ impl<'a> Workspaces<'a> {
                         .branch
                         .map_or_else(|| format!("kestrel/{id}"), ToOwned::to_owned),
                 },
+                integrations: opening.project.integrations.clone(),
                 correlation: opening.correlation.map(ToOwned::to_owned),
                 state: WorkspaceState::Open,
                 opened_at,
@@ -248,13 +249,21 @@ impl<'a> Workspaces<'a> {
 
         for (position, url) in workspace.checkout.repositories.iter().enumerate() {
             sqlx::query(
-                "INSERT INTO workspace_repository (workspace_id, organization_id, position, url)
-                 VALUES (?, ?, ?, ?)",
+                "INSERT INTO workspace_repository
+                     (workspace_id, organization_id, position, url, integration_id)
+                 VALUES (?, ?, ?, ?, ?)",
             )
             .bind(workspace.id.to_string())
             .bind(workspace.organization.id.to_string())
             .bind(i64::try_from(position)?)
             .bind(url)
+            .bind(
+                workspace
+                    .integrations
+                    .iter()
+                    .find(|selected| &selected.repository == url)
+                    .map(|selected| selected.integration.to_string()),
+            )
             .execute(&mut *self.connection)
             .await
             .with_context(|| format!("fixing the repository {url} to the workspace {id}"))?;
@@ -2592,15 +2601,29 @@ async fn find(connection: &mut SqliteConnection, id: WorkspaceId) -> Result<Opti
         Some(id) => Some(profile::with_id(connection, id.parse()?).await?),
         None => None,
     };
-    let repositories = sqlx::query(
-        "SELECT url FROM workspace_repository WHERE workspace_id = ? ORDER BY position",
+    let fixed = sqlx::query(
+        "SELECT workspace_repository.url, workspace_repository.integration_id,
+                integration.name AS integration_name
+         FROM workspace_repository
+         LEFT JOIN integration ON integration.id = workspace_repository.integration_id
+         WHERE workspace_repository.workspace_id = ?
+         ORDER BY workspace_repository.position",
     )
     .bind(id.to_string())
     .fetch_all(&mut *connection)
-    .await?
-    .iter()
-    .map(|row| row.get("url"))
-    .collect();
+    .await?;
+    let repositories = fixed.iter().map(|row| row.get("url")).collect();
+    let integrations = fixed
+        .iter()
+        .filter_map(|row| {
+            let integration = row.get::<Option<String>, _>("integration_id")?;
+            Some(integration.parse().map(|integration| SelectedIntegration {
+                repository: row.get("url"),
+                integration,
+                name: row.get("integration_name"),
+            }))
+        })
+        .collect::<Result<_, _>>()?;
 
     Ok(Some(Workspace {
         id,
@@ -2614,6 +2637,7 @@ async fn find(connection: &mut SqliteConnection, id: WorkspaceId) -> Result<Opti
             base: row.get("base"),
             branch: row.get("branch"),
         },
+        integrations,
         correlation: row.get("correlation"),
         state: row.get::<String, _>("state").parse()?,
         opened_at: row.get::<String, _>("opened_at").parse()?,

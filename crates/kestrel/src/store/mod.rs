@@ -420,6 +420,7 @@ mod tests {
                 &organization,
                 "kestrel",
                 &["https://github.com/jtmthf/kestrel".to_owned()],
+                &[],
                 "main",
             )
             .await

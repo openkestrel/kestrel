@@ -29,8 +29,8 @@ use crate::capability::{self, Capability, Images};
 use crate::cron::Cron;
 use crate::declaration;
 use crate::declined::{
-    self as declined, Concerning, Consequence, Constraint, Declined, Locator, Reason, Resource,
-    Step,
+    self as declined, Again, Concerning, Consequence, Constraint, Declined, Locator, Reason,
+    Resource, Step,
 };
 use crate::domain::{
     self, Agent, Connection, Correlation, Declared, Direction, EventRecordId, Fires, Firing,
@@ -92,6 +92,8 @@ pub const INTEGRATION_RETIRE: &str =
     "/operator/organizations/{organization}/integrations/{integration}/retire";
 pub const INTEGRATION_PRIVATE_KEY: &str =
     "/operator/organizations/{organization}/integrations/{integration}/private-key";
+pub const INTEGRATION_REPOSITORIES: &str =
+    "/operator/organizations/{organization}/integrations/{integration}/repositories";
 pub const EVENT_REFUSAL: &str =
     "/operator/organizations/{organization}/integrations/{integration}/event-refusal";
 pub const EVENTS: &str = "/operator/organizations/{organization}/events";
@@ -377,6 +379,7 @@ pub fn router(
         .route(INTEGRATION_DISABLE, post(disable_integration))
         .route(INTEGRATION_ENABLE, post(enable_integration))
         .route(INTEGRATION_RETIRE, post(retire_integration))
+        .route(INTEGRATION_REPOSITORIES, get(integration_repositories))
         .route(
             INTEGRATION_PRIVATE_KEY,
             put(replace_integration_private_key),
@@ -504,6 +507,8 @@ struct OrganizationDeclaration {
 struct ProjectDeclaration {
     name: String,
     repositories: Vec<String>,
+    #[serde(default)]
+    integrations: Vec<repository::Selection>,
     branch: String,
 }
 
@@ -668,7 +673,19 @@ struct ProjectRecord {
     id: String,
     name: String,
     repositories: Vec<String>,
+    integrations: Vec<wire::SelectedIntegration>,
     branch: String,
+}
+
+fn selected(integrations: Vec<domain::SelectedIntegration>) -> Vec<wire::SelectedIntegration> {
+    integrations
+        .into_iter()
+        .map(|selected| wire::SelectedIntegration {
+            repository: selected.repository,
+            integration: selected.name,
+            integration_id: selected.integration.to_string().parse().expect("a uuid"),
+        })
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -690,6 +707,7 @@ struct WorkspaceRecord {
     opened_with: String,
     profile: Option<String>,
     checkout: domain::Checkout,
+    integrations: Vec<wire::SelectedIntegration>,
     instance: Option<String>,
     held: Option<String>,
     correlation: Option<String>,
@@ -1177,6 +1195,7 @@ impl From<Project> for ProjectRecord {
             id: project.id.to_string(),
             name: project.name,
             repositories: project.repositories,
+            integrations: selected(project.integrations),
             branch: project.branch,
         }
     }
@@ -1231,6 +1250,7 @@ impl WorkspaceRecord {
             opened_with: workspace.opened_with.name,
             profile: workspace.profile.map(|profile| profile.name),
             checkout: workspace.checkout,
+            integrations: selected(workspace.integrations),
             instance,
             held,
             correlation: workspace.correlation,
@@ -1410,7 +1430,13 @@ async fn start(
     plan: Result<Json<start::Plan>, JsonRejection>,
 ) -> Result<(StatusCode, Json<StartedRecord>), Refused> {
     let Json(plan) = plan?;
-    let started = start::start(&control_plane.store, &control_plane.images, &plan).await?;
+    let started = start::start(
+        &control_plane.store,
+        &control_plane.images,
+        &Github::unfenced()?,
+        &plan,
+    )
+    .await?;
 
     Ok((
         StatusCode::CREATED,
@@ -1429,19 +1455,37 @@ async fn start(
 }
 
 async fn resolve_repositories(
+    State(control_plane): State<ControlPlane>,
     request: Result<Json<wire::RepositoryResolutionRequest>, JsonRejection>,
 ) -> Result<Json<wire::RepositoryResolution>, Refused> {
+    const OPERATION: &str = "resolve_repositories";
     let Json(request) = request?;
     let purpose = match request.purpose.unwrap_or_default() {
         wire::RepositoryPurpose::Declaration => repository::Purpose::Declaration,
         wire::RepositoryPurpose::PublicSetup => repository::Purpose::PublicSetup,
     };
-    let resolved = repository::resolved(
-        "resolve_repositories",
-        "repositories",
-        &request.repositories,
+    let selections: Vec<repository::Selection> = request
+        .integrations
+        .unwrap_or_default()
+        .into_iter()
+        .map(|selection| repository::Selection {
+            repository: selection.repository,
+            integration: selection.integration,
+        })
+        .collect();
+    let resolved = repository::resolution(
+        &control_plane.store,
+        &repository::Selecting {
+            operation: OPERATION,
+            repositories_field: "repositories",
+            integrations_field: "integrations",
+            organization: request.organization.as_deref().unwrap_or_default(),
+            repositories: &request.repositories,
+            selections: &selections,
+        },
         purpose,
-    )?;
+    )
+    .await?;
     let warnings = match purpose {
         repository::Purpose::Declaration => Vec::new(),
         repository::Purpose::PublicSetup => vec![wire::RepositoryWarning {
@@ -1456,10 +1500,11 @@ async fn resolve_repositories(
     Ok(Json(wire::RepositoryResolution {
         repositories: resolved
             .into_iter()
-            .map(|resolved| wire::ResolvedRepository {
-                given: resolved.given,
-                address: resolved.address,
-                checkout_directory: resolved.directory,
+            .map(|bound| wire::ResolvedRepository {
+                given: bound.resolved.given,
+                address: bound.resolved.address,
+                checkout_directory: bound.resolved.directory,
+                integration: bound.integration.map(|integration| integration.name),
             })
             .collect(),
         warnings,
@@ -1510,8 +1555,12 @@ async fn declare_project(
 ) -> Result<Response, Refused> {
     let Json(declaration) = declaration?;
     named("declare_project", &declaration.name)?;
-    let repositories =
-        repository::declared("declare_project", "repositories", &declaration.repositories)?;
+    repository::resolved(
+        "declare_project",
+        "repositories",
+        &declaration.repositories,
+        repository::Purpose::Declaration,
+    )?;
     if declaration.branch.is_empty() {
         return Err(invalid_field(
             "declare_project",
@@ -1520,17 +1569,29 @@ async fn declare_project(
             "a project names the branch its work happens on",
         ));
     }
+    let declarable = repository::declarable(
+        &control_plane.store,
+        &Github::unfenced()?,
+        &repository::Declaring {
+            selecting: repository::Selecting {
+                operation: "declare_project",
+                repositories_field: "repositories",
+                integrations_field: "integrations",
+                organization: &organization,
+                repositories: &declaration.repositories,
+                selections: &declaration.integrations,
+            },
+            branch_field: "branch",
+            project: &declaration.name,
+            branch: &declaration.branch,
+        },
+    )
+    .await?;
 
     let mut tx = control_plane.store.begin().await?;
     let organization = tx.organizations().named(&organization).await?;
-    let declared = tx
-        .projects()
-        .declare(
-            &organization,
-            &declaration.name,
-            &repositories,
-            &declaration.branch,
-        )
+    let declared = declarable
+        .declare(&mut tx, &organization, &declaration.name)
         .await?;
     tx.commit().await?;
 
@@ -1634,6 +1695,7 @@ async fn declared_declaration(
     let applied = declaration::apply(
         &control_plane.store,
         &control_plane.images,
+        &Github::unfenced()?,
         &organization,
         &declaration,
         mode,
@@ -2249,6 +2311,46 @@ async fn change_integration(
     .await?;
 
     Ok(Json(integration_record(changed, &organization)))
+}
+
+#[derive(Deserialize)]
+struct RepositoriesPage {
+    page: Option<u32>,
+    per_page: Option<u32>,
+}
+
+async fn integration_repositories(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, name)): Path<(String, String)>,
+    Query(asked): Query<RepositoriesPage>,
+) -> Result<Json<wire::IntegrationRepositories>, Refused> {
+    let reached = integration::repositories(
+        &control_plane.store,
+        &Github::unfenced()?,
+        &organization,
+        &name,
+        asked.page,
+        asked.per_page,
+    )
+    .await?;
+
+    Ok(Json(wire::IntegrationRepositories {
+        next_page: reached.next_page.map(i64::from),
+        page: i64::from(reached.page),
+        total: i64::try_from(reached.installed.total_count).unwrap_or(i64::MAX),
+        repositories: reached
+            .installed
+            .repositories
+            .into_iter()
+            .map(|repository| wire::IntegrationRepository {
+                address: github::https_address(&repository.full_name),
+                watched: repository.full_name.eq_ignore_ascii_case(&reached.watched),
+                repository: repository.full_name,
+                default_branch: repository.default_branch,
+                private: repository.private,
+            })
+            .collect(),
+    }))
 }
 
 async fn disable_integration(
@@ -4704,6 +4806,7 @@ fn diagnosis(reason: Reason, field: Option<&'static str>) -> (StatusCode, wire::
             integration,
             organization,
             retry_after_seconds,
+            again,
             message,
         } => (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -4718,11 +4821,20 @@ fn diagnosis(reason: Reason, field: Option<&'static str>) -> (StatusCode, wire::
                     retry_after_seconds,
                     saved: None,
                 },
-                next_steps: vec![replace_private_key(
-                    organization,
-                    integration,
-                    retry_after_seconds,
-                )],
+                next_steps: vec![match again {
+                    Again::ReplacePrivateKey => {
+                        replace_private_key(organization, integration, retry_after_seconds)
+                    }
+                    Again::Read => {
+                        retry_read(operation, Some(Resource::Integration), retry_after_seconds)
+                    }
+                    Again::Request => wire::Action::RetryRequestAction(wire::RetryRequestAction {
+                        action: serde_json::json!("retry_request"),
+                        operation: operation.to_owned(),
+                        resource: Some(integration),
+                        retry_after_seconds,
+                    }),
+                }],
             }),
         ),
         Reason::ImageUnavailable {
@@ -5029,6 +5141,7 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("POST", INTEGRATION_DISABLE) => "disable_integration",
         ("POST", INTEGRATION_ENABLE) => "enable_integration",
         ("POST", INTEGRATION_RETIRE) => "retire_integration",
+        ("GET", INTEGRATION_REPOSITORIES) => "list_integration_repositories",
         ("PUT", INTEGRATION_PRIVATE_KEY) => "replace_integration_private_key",
         ("POST", GITHUB_APP) => "start_github_app",
         ("GET", integration::manifest::PAGE) => "github_app_setup",

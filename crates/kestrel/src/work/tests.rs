@@ -36,7 +36,7 @@ impl Fixture {
             .unwrap()
             .record;
         tx.projects()
-            .declare(&organization, "kestrel", &[], "main")
+            .declare(&organization, "kestrel", &[], &[], "main")
             .await
             .unwrap();
         tx.agents()
@@ -127,7 +127,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
         .unwrap()
         .record;
     tx.projects()
-        .declare(&organization, "kestrel", &[], "main")
+        .declare(&organization, "kestrel", &[], &[], "main")
         .await
         .unwrap();
     tx.agents()

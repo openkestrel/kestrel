@@ -272,7 +272,7 @@
       "post": {
         "operationId": "start",
         "summary": "Take a control plane from whatever it holds to a Session carrying a Brief, in one step.",
-        "description": "Declares the Organization, Project and Agent the plan names where they do not exist, holds the Provider Credentials it carries, opens a Workspace with the Brief, and enqueues its Session, all in one transaction: a refused plan leaves nothing behind. A start never changes a declaration that exists, and refuses one that would. The Agent's harness passes the same image capability check as declaring an Agent, before anything is written.",
+        "description": "Declares the Organization, Project and Agent the plan names where they do not exist, holds the Provider Credentials it carries, opens a Workspace with the Brief, and enqueues its Session, all in one transaction: a refused plan leaves nothing behind. A start never changes a declaration that exists, and refuses one that would. A Project it declares with selected Integrations passes the same App check as declaring one, before anything is written, and needs its Organization to exist already. The Agent's harness passes the same image capability check as declaring an Agent, before anything is written.",
         "requestBody": {
           "required": true,
           "content": {
@@ -291,6 +291,8 @@
             }
           },
           "400": { "$ref": "#/components/responses/Refused" },
+          "403": { "$ref": "#/components/responses/Refused" },
+          "404": { "$ref": "#/components/responses/Refused" },
           "409": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
           "503": { "$ref": "#/components/responses/Refused" }
@@ -301,7 +303,7 @@
       "post": {
         "operationId": "resolveRepositories",
         "summary": "Resolve repositories the way a declaration would, saving nothing.",
-        "description": "Checks each repository's syntax, expands `owner/repo` and `github.com/owner/repo` to their HTTPS `.git` address, and finds the directory each is checked out into, refusing a list two of which would share one. It contacts no source: a resolved repository is not one the Instance can reach or check out, and a local path names the Instance's filesystem.",
+        "description": "Checks each repository's syntax, expands `owner/repo` and `github.com/owner/repo` to their HTTPS `.git` address, and finds the directory each is checked out into, refusing a list two of which would share one. A repository given an Integration must be the one that Integration watches, and resolves to its HTTPS address whatever transport it was given by, since an App lends no SSH authority; the Integration must be an enabled GitHub one that carries outbound. An SSH address given no Integration is kept as it is, and nothing provisions it a credential. It contacts no source: a resolved repository is not one the Instance can reach or check out, and a local path names the Instance's filesystem.",
         "requestBody": {
           "required": true,
           "content": {
@@ -324,6 +326,15 @@
             }
           },
           "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
             "$ref": "#/components/responses/Refused"
           },
           "422": {
@@ -372,7 +383,7 @@
       "post": {
         "operationId": "declareProject",
         "summary": "Declare a Project.",
-        "description": "Desired state: a Project by this name that already exists keeps its identity and takes on the repositories and branch declared.",
+        "description": "Desired state: a Project by this name that already exists keeps its identity and takes on the repositories, selected Integrations and branch declared. Selecting an Integration for a repository, or changing that repository or the branch under a selection, first asks the selected App for the repository and the branch: an App GitHub does not accept, a repository it does not reach, a rate limit or an outage saves nothing and leaves the previous declaration, and a repository the App cannot read is never reported as one that does not exist. The Integration is read again in the saving transaction, so maintenance that landed meanwhile refuses with 409. A check that passed says the App reached the repository and branch then, never that an Instance will check them out. A Workspace already open keeps the Integrations it opened with.",
         "parameters": [
           {
             "name": "organization",
@@ -418,7 +429,13 @@
           "400": {
             "$ref": "#/components/responses/Refused"
           },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
           "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
             "$ref": "#/components/responses/Refused"
           },
           "422": {
@@ -554,7 +571,7 @@
       "post": {
         "operationId": "applyDeclaration",
         "summary": "Apply a Project, Agent and Trigger declaration together.",
-        "description": "The three records converge in one transaction. A Trigger declared here never fires for Events already retained. The Agent's harness passes the same image capability check as declaring an Agent and a preview, before anything is written.",
+        "description": "The three records converge in one transaction. A Trigger declared here never fires for Events already retained. A Project selecting Integrations passes the same App check as declaring one, before anything is written: a preview asks too, and an apply never relies on what a preview found. The Agent's harness passes the same image capability check as declaring an Agent and a preview, before anything is written.",
         "parameters": [
           {
             "name": "organization",
@@ -581,6 +598,7 @@
             }
           },
           "400": { "$ref": "#/components/responses/Refused" },
+          "403": { "$ref": "#/components/responses/Refused" },
           "404": { "$ref": "#/components/responses/Refused" },
           "409": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
@@ -618,6 +636,7 @@
             }
           },
           "400": { "$ref": "#/components/responses/Refused" },
+          "403": { "$ref": "#/components/responses/Refused" },
           "404": { "$ref": "#/components/responses/Refused" },
           "409": { "$ref": "#/components/responses/Refused" },
           "422": { "$ref": "#/components/responses/Refused" },
@@ -1927,6 +1946,84 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/integrations/{integration}/repositories": {
+      "get": {
+        "operationId": "listIntegrationRepositories",
+        "summary": "List the repositories a GitHub Integration's App installation reaches.",
+        "description": "Read from GitHub at each call, with each repository's default branch as GitHub names it. An installation that reaches none answers an empty page; a read GitHub refuses, limits or does not answer is a refusal, never an empty list or a guessed branch. The Integration must be an enabled GitHub one.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Counted from 1, the default.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "description": "30 by default, 100 at most.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page, in GitHub's order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationRepositories"
                 }
               }
             }
@@ -4200,6 +4297,17 @@
           },
           "purpose": {
             "$ref": "#/components/schemas/RepositoryPurpose"
+          },
+          "organization": {
+            "type": "string",
+            "description": "The Organization whose Integrations `integrations` names; required with it."
+          },
+          "integrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepositoryIntegrationSelection"
+            },
+            "description": "As a Project declaration selects them. Only a `declaration` takes any."
           }
         },
         "required": [
@@ -4248,12 +4356,17 @@
           "checkout_directory": {
             "type": "string",
             "description": "The directory under the Workspace the repository is checked out into."
+          },
+          "integration": {
+            "type": ["string", "null"],
+            "description": "The Integration selected for it, whose App a declaration would ask for the repository and branch before saving."
           }
         },
         "required": [
           "given",
           "address",
-          "checkout_directory"
+          "checkout_directory",
+          "integration"
         ]
       },
       "RepositoryWarning": {
@@ -4292,6 +4405,13 @@
             },
             "description": "The repositories the work happens against, in order: an http(s)://, ssh://, git:// or file:// URL, an scp-style `user@host:path`, a local path on the Instance beginning `/`, `./` or `../`, or `owner/repo` or `github.com/owner/repo`, which is held as its HTTPS `.git` address."
           },
+          "integrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepositoryIntegrationSelection"
+            },
+            "description": "The Integration each connected repository reaches GitHub as. Absent or empty selects none: neither a GitHub address nor an Event ever selects one. A repository named here is held as its HTTPS address whatever transport it was given by. Before a selection, its repository or the branch is saved new or changed, the selected App is asked for the repository and the branch."
+          },
           "branch": {
             "type": "string",
             "minLength": 1
@@ -4319,6 +4439,13 @@
               "type": "string"
             }
           },
+          "integrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SelectedIntegration"
+            },
+            "description": "The Integration each connected repository selects, for the Workspaces opened from now on."
+          },
           "branch": {
             "type": "string"
           }
@@ -4327,7 +4454,111 @@
           "id",
           "name",
           "repositories",
+          "integrations",
           "branch"
+        ]
+      },
+      "RepositoryIntegrationSelection": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "repository": {
+            "type": "string",
+            "description": "One of the declared repositories, as given there or as it resolves."
+          },
+          "integration": {
+            "type": "string",
+            "description": "The name of an enabled GitHub Integration in the Organization that carries outbound and watches this repository."
+          }
+        },
+        "required": [
+          "repository",
+          "integration"
+        ]
+      },
+      "SelectedIntegration": {
+        "type": "object",
+        "description": "Selected explicitly, and never replaced by another Integration when this one is disabled or retired.",
+        "properties": {
+          "repository": {
+            "type": "string",
+            "description": "The repository's address as the Project or Workspace holds it."
+          },
+          "integration": {
+            "type": "string",
+            "description": "The Integration's name as it reads now."
+          },
+          "integration_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "repository",
+          "integration",
+          "integration_id"
+        ]
+      },
+      "IntegrationRepositories": {
+        "type": "object",
+        "description": "One page of the repositories the Integration's App installation reaches, as GitHub answered this read.",
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationRepository"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How many the installation reaches across every page."
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "next_page": {
+            "type": ["integer", "null"],
+            "description": "The page to ask for next, or null after the last."
+          }
+        },
+        "required": [
+          "repositories",
+          "total",
+          "page",
+          "next_page"
+        ]
+      },
+      "IntegrationRepository": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string",
+            "description": "`owner/name`."
+          },
+          "address": {
+            "type": "string",
+            "description": "The HTTPS address a declaration selecting this Integration holds it by."
+          },
+          "default_branch": {
+            "type": "string",
+            "description": "As GitHub names it now; never a guess."
+          },
+          "private": {
+            "type": "boolean"
+          },
+          "watched": {
+            "type": "boolean",
+            "description": "Whether this is the one repository the Integration watches, and so the only one a Project can select it for."
+          }
+        },
+        "required": [
+          "repository",
+          "address",
+          "default_branch",
+          "private",
+          "watched"
         ]
       },
       "AgentDeclaration": {
@@ -5145,6 +5376,11 @@
           "opened_with": { "type": "string", "description": "The Agent its first Session runs unless that Session names another." },
           "profile": { "type": ["string", "null"] },
           "checkout": { "$ref": "#/components/schemas/Checkout" },
+          "integrations": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/SelectedIntegration" },
+            "description": "The Integration each of its repositories selected when it opened. Redeclaring its Project changes none, and one since disabled or retired still reads here."
+          },
           "instance": { "type": ["string", "null"], "description": "The Instance its Sessions execute on, while one is kept." },
           "held": { "type": ["string", "null"], "description": "Why its Instance is held for work that exists nowhere else, if it is." },
           "held_messages": { "type": "array", "description": "The messages the unfinished Session cannot take yet, in arrival order.", "items": { "$ref": "#/components/schemas/HeldMessage" } },
@@ -7222,6 +7458,7 @@
           { "$ref": "#/components/schemas/InspectHarnessImageAction" },
           { "$ref": "#/components/schemas/CheckConnectionAction" },
           { "$ref": "#/components/schemas/RetryReadAction" },
+          { "$ref": "#/components/schemas/RetryRequestAction" },
           { "$ref": "#/components/schemas/InspectOperationAction" }
         ]
       },
@@ -7452,6 +7689,16 @@
       "RetryReadAction": {
         "properties": {
           "action": { "const": "retry_read" },
+          "operation": { "type": "string" },
+          "resource": { "type": ["string", "null"] },
+          "retry_after_seconds": { "type": ["integer", "null"] }
+        },
+        "required": ["action", "operation", "resource", "retry_after_seconds"]
+      },
+      "RetryRequestAction": {
+        "description": "The write was refused before anything was saved, so sending the same request again is safe.",
+        "properties": {
+          "action": { "const": "retry_request" },
           "operation": { "type": "string" },
           "resource": { "type": ["string", "null"] },
           "retry_after_seconds": { "type": ["integer", "null"] }
