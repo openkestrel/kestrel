@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { type FormEvent, type ReactNode, useState } from "react";
-import { described, Field } from "#/components/field";
+import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import { described, Field, placement } from "#/components/field";
 import { ModelChoice } from "#/components/model-choice";
 import { Page, PageTitle } from "#/components/page";
-import { Diagnosis, NextSteps, Refusal, RetryFallback } from "#/components/refusal";
+import { Diagnosis, Refusal, RetryFallback } from "#/components/refusal";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { NativeSelect } from "#/components/ui/native-select";
@@ -22,7 +22,6 @@ import {
 } from "#/operator/agents";
 import type { Agent, AgentDeclaration } from "#/operator/generated";
 import { agentsQuery } from "#/operator/opening";
-import { diagnosisOf } from "#/operator/transport";
 
 type Editing = { declared: Agent | undefined };
 
@@ -57,7 +56,7 @@ export function AgentsSettings({ organization }: { organization: string }) {
 				{agents.isPending &&
 					(delayed ? (
 						<output data-agents-read="delayed" className="text-sm">
-							Still reading the Agents; the Operator has not answered yet.
+							Still reading the Agents; the control plane has not answered yet.
 						</output>
 					) : (
 						<Skeleton className="h-16 w-full" />
@@ -139,25 +138,22 @@ const FIELD_IDS: Record<string, string> = {
 	thought_level: "agent-thought-level",
 };
 
-function correct(field: string) {
-	document.getElementById(FIELD_IDS[field] ?? "")?.focus();
-}
-
-// The shared Agent inputs: what a harness may be comes from the catalogue, and a model from no offer.
 export function AgentInputs({
 	draft,
+	declared,
 	onChange,
 	placed,
 	repair,
 }: {
 	draft: AgentDraft;
+	declared: string;
 	onChange: (patch: Partial<AgentDraft>) => void;
 	placed: (field: string) => string | undefined;
 	repair: (field: string) => ReactNode;
 }) {
 	const harnesses = useQuery(harnessesQuery);
 	const delayed = useDelayed(harnesses.isPending);
-	const choices = harnessChoices(harnesses.data, draft.harness);
+	const choices = harnessChoices(harnesses.data, declared);
 	const chosen = harnesses.data?.find((harness) => harness.name === draft.harness);
 
 	return (
@@ -186,7 +182,7 @@ export function AgentInputs({
 				{harnesses.isPending && (
 					<output data-harnesses-read={delayed ? "delayed" : "reading"} className="text-xs">
 						{delayed
-							? "Still reading the harness catalogue; the Operator has not answered yet."
+							? "Still reading the harness catalogue; the control plane has not answered yet."
 							: "Reading the harness catalogue…"}
 					</output>
 				)}
@@ -251,18 +247,11 @@ function AgentForm({
 		},
 	});
 
-	const refused = saving.isError ? diagnosisOf(saving.error) : undefined;
-	const placed = (field: string): string | undefined =>
-		refused?.field === field ? refused.message : missing[field];
-	const at_the_top = refused !== undefined && !((refused.field ?? "") in FIELD_IDS);
-	const repair = (field: string) =>
-		refused?.field === field ? (
-			<NextSteps
-				steps={refused.next_steps.filter(
-					(step) => !(step.action === "correct_field" && step.field === field),
-				)}
-			/>
-		) : undefined;
+	const { placed, atTheTop, repair, correct } = placement(saving.error, missing, FIELD_IDS);
+
+	useEffect(() => {
+		document.getElementById(declared ? FIELD_IDS.harness : FIELD_IDS.name)?.focus();
+	}, [declared]);
 
 	const submit = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
@@ -270,6 +259,7 @@ function AgentForm({
 		if (draft.name.trim() === "") absent.name = "Name the Agent.";
 		if (draft.harness === "") absent.harness = "Choose a harness.";
 		setMissing(absent);
+		saving.reset();
 		if (Object.keys(absent).length > 0) return;
 		saving.mutate(agentDeclaration(draft));
 	};
@@ -280,7 +270,7 @@ function AgentForm({
 	return (
 		<form onSubmit={submit} aria-label={heading} className="grid gap-4 border p-4" data-agent-form>
 			<h2 className="font-semibold text-sm">{heading}</h2>
-			{at_the_top && <Refusal error={saving.error} correct={correct} />}
+			{atTheTop && <Refusal error={saving.error} correct={correct} />}
 
 			<Field
 				label="Name"
@@ -304,7 +294,13 @@ function AgentForm({
 				/>
 			</Field>
 
-			<AgentInputs draft={draft} onChange={change} placed={placed} repair={repair} />
+			<AgentInputs
+				draft={draft}
+				declared={declared?.harness ?? ""}
+				onChange={change}
+				placed={placed}
+				repair={repair}
+			/>
 
 			<Field
 				label="Mode"

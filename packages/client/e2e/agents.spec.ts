@@ -164,7 +164,7 @@ test("a slow then failed Agents read says so, keeps what was entered and reads a
 	await page.goto(SETTINGS);
 
 	await expect(page.locator('[data-agents-read="delayed"]')).toHaveText(
-		"Still reading the Agents; the Operator has not answered yet.",
+		"Still reading the Agents; the control plane has not answered yet.",
 	);
 	const failed = page.locator('[data-agents-read="failed"]');
 	// The read is tried again once before it is reported.
@@ -299,6 +299,40 @@ test("no declared Agent reads as empty, and the image decides which harness may 
 	await expect(form(page).locator('[data-diagnostic="unavailable"]')).toContainText(
 		"The image kestrel-env:main could not be inspected",
 	);
+});
+
+test("the harness an Agent declares stays choosable after another is tried, though the image lacks it", async ({
+	page,
+}) => {
+	await api.post(AGENTS, { data: { name: "carried", harness: "claude" } });
+	const image = { image: "kestrel-env:main", identity: "sha256:1", diagnostic: null };
+	await page.route("**/operator/harnesses", (route) =>
+		route.fulfill({
+			json: [
+				{
+					name: "opencode",
+					command: "opencode acp",
+					sign_in_methods: [],
+					availability: { ...image, state: "available" },
+				},
+				{
+					name: "claude",
+					command: "claude-agent-acp",
+					sign_in_methods: [],
+					availability: { ...image, state: "not_carried" },
+				},
+			],
+		}),
+	);
+	await page.goto(SETTINGS);
+	await page.getByRole("button", { name: "Edit carried" }).click();
+	const harness = form(page).getByLabel("Harness");
+	await expect(harness).toBeFocused();
+	await expect(harness).toHaveValue("claude");
+	await harness.selectOption("opencode");
+	await expect(harness.locator("option", { hasText: "claude" })).toBeEnabled();
+	await harness.selectOption("claude");
+	await expect(harness).toHaveValue("claude");
 });
 
 test("a failed catalogue read keeps the harness an Agent declares and reads again", async ({

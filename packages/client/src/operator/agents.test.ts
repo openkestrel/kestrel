@@ -59,15 +59,15 @@ describe("harnessChoices", () => {
 				"",
 			),
 		).toEqual([
-			{ name: "opencode", command: "opencode acp", selectable: true, note: null },
-			{ name: "claude", command: "claude acp", selectable: false, note: "not in the image" },
-			{ name: "codex", command: "codex acp", selectable: true, note: null },
+			{ name: "opencode", selectable: true, note: null },
+			{ name: "claude", selectable: false, note: "not in the image" },
+			{ name: "codex", selectable: true, note: null },
 		]);
 	});
 
 	it("claims nothing about a harness whose image could not be inspected", () => {
 		expect(harnessChoices([entry("claude", "unavailable")], "")).toEqual([
-			{ name: "claude", command: "claude acp", selectable: true, note: "image not inspected" },
+			{ name: "claude", selectable: true, note: "image not inspected" },
 		]);
 	});
 
@@ -75,7 +75,6 @@ describe("harnessChoices", () => {
 		expect(harnessChoices([entry("claude", "not_carried")], "claude")[0].selectable).toBe(true);
 		expect(harnessChoices([entry("claude", "available")], "house")).toContainEqual({
 			name: "house",
-			command: null,
 			selectable: true,
 			note: "not in the catalogue",
 		});
@@ -83,7 +82,7 @@ describe("harnessChoices", () => {
 
 	it("keeps an entered harness while the catalogue is unread, saying nothing about it", () => {
 		expect(harnessChoices(undefined, "claude")).toEqual([
-			{ name: "claude", command: null, selectable: true, note: null },
+			{ name: "claude", selectable: true, note: null },
 		]);
 	});
 });

@@ -16,6 +16,7 @@ import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import type { SessionOption } from "#/operator/generated";
 import {
+	HARNESS_DEFAULT,
 	offeredGroups,
 	offeredMatch,
 	offeredName,
@@ -25,15 +26,14 @@ import {
 
 type Described = { "aria-invalid"?: boolean; "aria-describedby"?: string };
 
-// Searches what a harness offered; with no offer there is only its default or an id taken at its word.
 export function ModelChoice({
 	id,
 	offered,
 	value,
 	onChange,
 	disabled = false,
-	fallback = "the harness's default",
-	...described
+	fallback = HARNESS_DEFAULT,
+	...aria
 }: {
 	id: string;
 	offered?: SessionOption;
@@ -57,7 +57,7 @@ export function ModelChoice({
 			onChange={onChange}
 			disabled={disabled}
 			fallback={fallback}
-			{...described}
+			{...aria}
 		/>
 	);
 }
@@ -90,13 +90,14 @@ function OfferedModels({
 }) {
 	const [open, setOpen] = useState(false);
 	const groups = offeredGroups(offered);
-	const current = groups.find((group) => group.values.some((one) => one.value === value));
+	const current = groups.find((group) => group.values.some((model) => model.value === value));
 
 	return (
 		<ModelSelector open={open} onOpenChange={setOpen}>
 			<ModelSelectorTrigger
 				id={id}
 				data-model-choice="offered"
+				aria-label={`${offered.name}: ${offeredName(offered, value)}`}
 				disabled={disabled}
 				render={<Button size="xs" type="button" variant="outline" />}
 			>
@@ -114,21 +115,21 @@ function OfferedModels({
 					<ModelSelectorEmpty>The harness offers no model matching that.</ModelSelectorEmpty>
 					{groups.map((group) => (
 						<ModelSelectorGroup key={group.group ?? ""} heading={group.name ?? undefined}>
-							{group.values.map((one) => (
+							{group.values.map((model) => (
 								<ModelSelectorItem
-									key={one.value}
-									value={one.value}
-									keywords={[one.name, group.name ?? ""]}
-									data-checked={one.value === value}
+									key={model.value}
+									value={model.value}
+									keywords={[model.name, group.name ?? ""]}
+									data-checked={model.value === value}
 									onSelect={() => {
 										setOpen(false);
-										if (one.value !== value) onChange(one.value);
+										if (model.value !== value) onChange(model.value);
 									}}
 								>
-									<Mark value={one.value} group={group.group} />
-									<ModelSelectorName>{one.name}</ModelSelectorName>
-									{one.description && (
-										<span className="truncate text-muted-foreground">{one.description}</span>
+									<Mark value={model.value} group={group.group} />
+									<ModelSelectorName>{model.name}</ModelSelectorName>
+									{model.description && (
+										<span className="truncate text-muted-foreground">{model.description}</span>
 									)}
 								</ModelSelectorItem>
 							))}
@@ -146,7 +147,7 @@ function ModelOverride({
 	onChange,
 	disabled,
 	fallback,
-	...described
+	...aria
 }: {
 	id: string;
 	value: string;
@@ -166,7 +167,7 @@ function ModelOverride({
 				autoComplete="off"
 				spellCheck={false}
 				onChange={(event) => onChange(event.target.value)}
-				{...described}
+				{...aria}
 			/>
 			<p className="flex items-start gap-1.5 text-muted-foreground text-xs" data-model-line>
 				{overriding && <Mark value={value.trim()} className="mt-0.5" />}

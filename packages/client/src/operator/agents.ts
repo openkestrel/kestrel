@@ -1,5 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import type { Agent, AgentDeclaration, HarnessCatalogueEntry } from "./generated";
+import { HARNESS_DEFAULT } from "./model-choice";
 import { operator } from "./queries";
 import { operatorPath } from "./transport";
 
@@ -60,7 +61,6 @@ export function agentDeclaration(draft: AgentDraft): AgentDeclaration {
 
 export type HarnessChoice = {
 	name: string;
-	command: string | null;
 	selectable: boolean;
 	note: string | null;
 };
@@ -77,9 +77,8 @@ export function harnessChoices(
 	catalogue: HarnessCatalogueEntry[] | undefined,
 	declared: string,
 ): HarnessChoice[] {
-	const choices = (catalogue ?? []).map(({ name, command, availability }) => ({
+	const choices = (catalogue ?? []).map(({ name, availability }) => ({
 		name,
-		command,
 		selectable: availability?.state !== "not_carried" || name === declared,
 		note: availability ? NOTES[availability.state] : null,
 	}));
@@ -88,7 +87,6 @@ export function harnessChoices(
 		...choices,
 		{
 			name: declared,
-			command: null,
 			selectable: true,
 			note: catalogue ? "not in the catalogue" : null,
 		},
@@ -97,7 +95,7 @@ export function harnessChoices(
 
 export function agentLine(agent: Agent): string {
 	const defaults = [
-		`model ${agent.model ?? "the harness's default"}`,
+		`model ${agent.model ?? HARNESS_DEFAULT}`,
 		agent.mode && `mode ${agent.mode}`,
 		agent.thought_level && `thought level ${agent.thought_level}`,
 	];

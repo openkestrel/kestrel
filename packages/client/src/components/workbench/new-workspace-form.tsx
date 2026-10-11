@@ -2,9 +2,9 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 import { type FormEvent, useState } from "react";
-import { described, Field } from "#/components/field";
+import { described, Field, placement } from "#/components/field";
 import { ModelChoice } from "#/components/model-choice";
-import { NextSteps, Refusal } from "#/components/refusal";
+import { Refusal } from "#/components/refusal";
 import { Button } from "#/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "#/components/ui/collapsible";
 import { Input } from "#/components/ui/input";
@@ -19,6 +19,7 @@ import {
 	type NewWorkspaceDraft,
 } from "#/lib/new-workspace-draft";
 import type { WorkspaceDeclaration } from "#/operator/generated";
+import { HARNESS_DEFAULT } from "#/operator/model-choice";
 import {
 	agentsQuery,
 	newWorkspaceDeclaration,
@@ -35,16 +36,6 @@ import { openingQueueLine } from "#/operator/queue-line";
 import { knownQueue } from "#/operator/queue-read";
 import { diagnosisOf } from "#/operator/transport";
 import { PaneHeading } from "./workbench";
-
-const PLACED_FIELDS = new Set([
-	"project",
-	"agent",
-	"profile",
-	"branch",
-	"model",
-	"brief",
-	"participant",
-]);
 
 const OPTION_FIELDS = new Set(["profile", "branch", "model"]);
 
@@ -104,18 +95,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 	});
 
 	const refused = opening.isError ? diagnosisOf(opening.error) : undefined;
-	const placed = (field: string): string | undefined =>
-		refused?.field === field ? refused.message : missing[field];
-	const at_the_top = refused !== undefined && !PLACED_FIELDS.has(refused.field ?? "");
-	// The error already stands at its field; the rest are repairs, such as declaring what is missing.
-	const repair = (field: string) =>
-		refused?.field === field ? (
-			<NextSteps
-				steps={refused.next_steps.filter(
-					(step) => !(step.action === "correct_field" && step.field === field),
-				)}
-			/>
-		) : undefined;
+	const { placed, atTheTop, repair, correct } = placement(opening.error, missing, FIELD_IDS);
 
 	if (draft === undefined || projects.isPending || agents.isPending || profiles.isPending) {
 		return (
@@ -158,6 +138,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 			absent.participant = "Your name is needed before sending.";
 		}
 		setMissing(absent);
+		opening.reset();
 		if (Object.keys(absent).length > 0) return;
 
 		opening.mutate(declaration);
@@ -167,7 +148,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 		<>
 			<PaneHeading level={1}>New Workspace</PaneHeading>
 			<form onSubmit={submit} className="grid gap-4 p-4">
-				{at_the_top && <Refusal error={opening.error} correct={correct} />}
+				{atTheTop && <Refusal error={opening.error} correct={correct} />}
 
 				<Field
 					label="Project"
@@ -249,7 +230,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 									id="new-workspace-model"
 									value={draft.model}
 									onChange={(model) => hold({ model })}
-									fallback={agent?.model ? `the Agent's ${agent.model}` : "the harness's default"}
+									fallback={agent?.model ? `the Agent's ${agent.model}` : HARNESS_DEFAULT}
 									aria-invalid={placed("model") !== undefined}
 									aria-describedby={described(
 										"new-workspace-model",
@@ -391,8 +372,4 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 			</form>
 		</>
 	);
-}
-
-function correct(field: string) {
-	document.getElementById(FIELD_IDS[field] ?? "")?.focus();
 }

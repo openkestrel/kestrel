@@ -1,6 +1,8 @@
 import { type Provider, PROVIDERS } from "#/assets/provider-marks";
 import type { ChangingOption, Session, SessionOption, SessionOptionValue } from "./generated";
 
+export const HARNESS_DEFAULT = "the harness's default";
+
 export type OfferedGroup = {
 	group: string | null;
 	name: string | null;

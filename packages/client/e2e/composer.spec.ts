@@ -732,6 +732,20 @@ test("the Model Selector searches what the harness offers, takes the keyboard an
 		[],
 	);
 
+	// Nothing the person did: the harness offers another model while the selector is open.
+	scripted.session = offering("anthropic/claude-sonnet-4-5", [
+		...OFFERED,
+		{
+			group: "late",
+			name: "Late",
+			values: [{ value: "late/arrival", name: "Late Arrival", description: null }],
+		},
+	]);
+	await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+	await expect(dialog.getByRole("group", { name: "Late" }).getByRole("option")).toHaveText([
+		"Late Arrival",
+	]);
+
 	await page.keyboard.type("nothing like it");
 	await expect(dialog).toContainText("The harness offers no model matching that.");
 	await dialog.getByRole("combobox").fill("opus");

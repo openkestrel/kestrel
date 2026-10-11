@@ -849,7 +849,7 @@ struct SessionRecord {
     sign_in_method: Option<String>,
     supplied: Vec<wire::SuppliedMaterial>,
     title: Option<String>,
-    options: Vec<SessionOptionRecord>,
+    options: Vec<wire::SessionOption>,
     changing_options: Vec<domain::ChangingOption>,
     commands: Vec<domain::SessionCommand>,
     interrupting: Option<domain::Interrupting>,
@@ -1098,44 +1098,49 @@ struct SessionReferenceRecord {
     name: String,
 }
 
-#[derive(Serialize)]
-struct SessionOptionRecord {
-    id: String,
-    name: String,
-    description: Option<String>,
-    category: Option<String>,
-    kind: &'static str,
-    current: serde_json::Value,
-    values: Vec<domain::SessionOptionValue>,
-    groups: Vec<domain::SessionOptionGroup>,
-    warns_cache: bool,
-}
-
-impl SessionOptionRecord {
-    // The contract carries both lists on every option, which the domain's boolean has none of.
-    fn shown(option: domain::SessionOption, harness: &str) -> Self {
-        let warns_cache = warns_cache(harness, option.category.as_deref());
-        let (kind, current, values, groups) = match option.kind {
-            domain::SessionOptionKind::Select {
-                current,
-                values,
-                groups,
-            } => ("select", current.into(), values, groups),
-            domain::SessionOptionKind::Boolean { current } => {
-                ("boolean", current.into(), Vec::new(), Vec::new())
-            }
-        };
-        Self {
-            id: option.id,
-            name: option.name,
-            description: option.description,
-            category: option.category,
-            kind,
+// The contract carries both lists on every option, which the domain's boolean has none of.
+fn shown_option(option: domain::SessionOption, harness: &str) -> wire::SessionOption {
+    let offered = |value: domain::SessionOptionValue| wire::SessionOptionValue {
+        value: value.value,
+        name: value.name,
+        description: value.description,
+    };
+    let warns_cache = warns_cache(harness, option.category.as_deref());
+    let (kind, current, values, groups) = match option.kind {
+        domain::SessionOptionKind::Select {
             current,
             values,
             groups,
-            warns_cache,
-        }
+        } => (
+            wire::SessionOptionKind::Select,
+            wire::SessionOptionCurrent::SelectedOptionValue(current),
+            values.into_iter().map(offered).collect(),
+            groups
+                .into_iter()
+                .map(|group| wire::SessionOptionGroup {
+                    group: group.group,
+                    name: group.name,
+                    values: group.values.into_iter().map(offered).collect(),
+                })
+                .collect(),
+        ),
+        domain::SessionOptionKind::Boolean { current } => (
+            wire::SessionOptionKind::Boolean,
+            wire::SessionOptionCurrent::ToggleOptionValue(current),
+            Vec::new(),
+            Vec::new(),
+        ),
+    };
+    wire::SessionOption {
+        id: option.id,
+        name: option.name,
+        description: option.description,
+        category: option.category,
+        kind,
+        current,
+        values,
+        groups,
+        warns_cache,
     }
 }
 
@@ -1314,7 +1319,7 @@ impl SessionRecord {
         let options = session
             .options
             .into_iter()
-            .map(|option| SessionOptionRecord::shown(option, &harness))
+            .map(|option| shown_option(option, &harness))
             .collect();
         Self {
             id: session.id.to_string(),
