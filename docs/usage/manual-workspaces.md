@@ -7,14 +7,14 @@ The [quick start](../../USAGE.md) creates the declarations and queues a session 
 An organization contains the projects, agents, credentials, and workspaces you manage together. A project names the repositories and base branch for new workspaces. An agent selects the harness and model used by a session.
 
 ```sh
-kestrel organization declare acme
+kestrel operator name Ada
 kestrel project declare kestrel \
   --repository https://github.com/openkestrel/kestrel \
   --branch main
 kestrel agent declare builder
 ```
 
-With one organization, the CLI selects it automatically. With more than one, set `--organization`, `KESTREL_ORGANIZATION`, or a committed `.kestrel/organization` file. `organization list`, `project list`, and `agent list` show the current declarations. Repeating a declaration leaves an unchanged record alone; project and agent declarations with the same name update that record in place.
+Naming the Operator declares an organization with the same name when none exists; `kestrel organization declare NAME` adds another. With one organization, the CLI selects it automatically. With more than one, set `--organization`, `KESTREL_ORGANIZATION`, or a committed `.kestrel/organization` file. `organization list`, `project list`, and `agent list` show the current declarations. Repeating a declaration leaves an unchanged record alone; project and agent declarations with the same name update that record in place.
 
 The default harness is OpenCode. `--harness codex` and `--harness claude` are also available when the environment image contains their ACP adapters; the supplied [`kestrel-dev` image](../../images/kestrel-dev/README.md) does. With no `--model`, the harness chooses its default. To change the model for future sessions:
 
@@ -31,10 +31,10 @@ An organization can limit live instances with `--max-live-instances N`. When tha
 ```sh
 kestrel workspace open --project kestrel --agent builder
 kestrel workspace show latest
-kestrel workspace post latest --as-participant operator "Explain the failing test and propose a fix"
+kestrel workspace post latest "Explain the failing test and propose a fix"
 ```
 
-Posting the first task queues a session. You can also run `kestrel session enqueue --workspace latest` explicitly; without a brief or message, the harness receives Kestrel's general context prompt rather than a specific task.
+The message is written under the Operator's name; `--as-participant NAME` writes it under another. Work you open with no `--profile` uses your own subscription profile when it holds a subscription for the agent's harness, and the organization's provider credentials otherwise. Posting the first task queues a session. You can also run `kestrel session enqueue --workspace latest` explicitly; without a brief or message, the harness receives Kestrel's general context prompt rather than a specific task.
 
 A workspace records its project's repositories at the time it opens. It normally uses a new `kestrel/<workspace id>` branch cut from the project's base branch. Supply `--branch` to work on an existing branch. The supervisor clones the repositories and checks out the branch before starting the harness. A failed checkout ends the session with the repository and branch in the error.
 
@@ -53,7 +53,7 @@ The CLI renders readable columns at a terminal and tab-delimited records when pi
 ## Continue the work
 
 ```sh
-kestrel workspace post latest --as-participant operator "Please add the missing test"
+kestrel workspace post latest "Please add the missing test"
 ```
 
 If a session is waiting, the message becomes its next turn. If it is working, the message waits in the transcript until the turn finishes. If no session is open, posting queues another session and supplies the earlier transcript as context. To use a different agent in a new conversation on the same checkout, run:

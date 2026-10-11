@@ -164,8 +164,9 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   [ADR-0048](../adr/0048-the-environment-image-carries-every-catalogued-harness.md),
   [ADR-0049](../adr/0049-an-install-has-one-operator-and-by-default-one-organization.md)):
   the sign-in catalogue and image capability labels are implemented, but the sign-in relay is not.
-  First-run setup still infers `kestrel start`'s Organization from the repository owner; the browser
-  has no Operator-naming setup and still asks for a browser-local Participant name.
+  The Operator's defaults apply at the boundary and in the CLI, but nothing marks initial setup
+  complete yet, and the browser has no Operator-naming setup and still asks for a browser-local
+  Participant name.
 
 - **Repository declaration validation** ([ADR-0057](../adr/0057-a-repository-declaration-is-not-a-successful-checkout.md)):
   declaration paths still save raw repository strings after list/branch and directory-collision checks.

@@ -125,7 +125,7 @@ async fn an_interrupt_records_who_asked_and_a_second_one_sends_nothing_more() {
 
     for (participant, because) in [
         ("builder", "is an Agent in this Organization"),
-        ("", "names its participant"),
+        ("", "cannot be empty"),
     ] {
         let refusal = kestrel
             .interrupt(session.id, participant)

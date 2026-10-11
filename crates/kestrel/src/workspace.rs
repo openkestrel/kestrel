@@ -170,12 +170,25 @@ async fn resolved<'a>(
         tx.projects().named(organization, open.project).await,
     )?;
     let agent = named("agent", tx.agents().named(organization, open.agent).await)?;
-    let profile = match open.profile {
-        Some(profile) => Some(named(
+    let (profile, sign_in_method) = match open.profile {
+        Some(profile) => (
+            Some(named(
+                "profile",
+                tx.profiles().named(organization, profile).await,
+            )?),
+            open.sign_in_method,
+        ),
+        None => named(
             "profile",
-            tx.profiles().named(organization, profile).await,
-        )?),
-        None => None,
+            operators_own(
+                tx,
+                "open_workspace",
+                organization,
+                &agent.harness,
+                open.sign_in_method,
+            )
+            .await,
+        )?,
     };
     if let Some(method) = open.sign_in_method {
         handoff::selected(
@@ -251,20 +264,57 @@ async fn resolved<'a>(
                 "a participant names the author of a brief, and this open carries none".to_owned(),
             ));
         }
-        (None, _) => None,
+        (None, Some(_)) => participant::operator(tx, organization, "open_workspace").await?,
+        (None, None) => None,
     };
 
     Ok(Resolved {
         project,
         agent,
         profile,
-        sign_in_method: open.sign_in_method,
+        sign_in_method,
         continues,
         branch: open.branch,
         declared: Declared::named(open.declared),
         brief: open.brief,
         participant,
     })
+}
+
+/// The Profile and Sign-in Method of work a person opened naming no Profile (ADR-0049).
+pub(crate) async fn operators_own<'a>(
+    tx: &mut Tx<'_>,
+    operation: &'static str,
+    organization: &Organization,
+    harness: &str,
+    sign_in_method: Option<&'a str>,
+) -> Result<(Option<SubscriptionProfile>, Option<&'a str>)> {
+    if sign_in_method.is_some_and(|method| handoff::held_by_the_organization(harness, method)) {
+        return Ok((None, sign_in_method));
+    }
+
+    let Some(own) = handoff::defaulted(tx, operation, organization, harness).await? else {
+        return Ok((None, sign_in_method));
+    };
+    let method = match (sign_in_method, own.method) {
+        (Some(named), _) => Some(named),
+        (None, Some(held)) => Some(
+            handoff::selected(
+                tx,
+                operation,
+                organization,
+                harness,
+                Some(&own.profile),
+                &held.id,
+            )
+            .await?
+            .id
+            .as_str(),
+        ),
+        (None, None) => None,
+    };
+
+    Ok((Some(own.profile), method))
 }
 
 pub(crate) fn named<T>(field: &'static str, named: Result<T>) -> Result<T> {
@@ -524,24 +574,32 @@ pub struct Posted {
 pub async fn post(
     store: &Store,
     id: WorkspaceId,
-    participant: &str,
+    participant: Option<&str>,
     message: &str,
 ) -> Result<Posted> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(id).await?;
-    let posted = post_in(&mut tx, &workspace, participant, message).await?;
+    let posted = post_in(&mut tx, &workspace, Poster::Person, participant, message).await?;
     tx.commit().await?;
 
     Ok(posted)
 }
 
+/// Whether a post may start a Session on the Operator's own subscription (ADR-0049).
+#[derive(Clone, Copy)]
+pub(crate) enum Poster {
+    Person,
+    Event,
+}
+
 pub(crate) async fn post_in(
     tx: &mut Tx<'_>,
     workspace: &Workspace,
-    participant: &str,
+    poster: Poster,
+    participant: Option<&str>,
     message: &str,
 ) -> Result<Posted> {
-    let participant = participant::accepted(
+    let participant = participant::named_or_operator(
         tx,
         &workspace.organization,
         participant,
@@ -549,12 +607,13 @@ pub(crate) async fn post_in(
     )
     .await?;
 
-    post_as(tx, workspace, &participant, message).await
+    post_as(tx, workspace, poster, &participant, message).await
 }
 
 pub(crate) async fn post_as(
     tx: &mut Tx<'_>,
     workspace: &Workspace,
+    poster: Poster,
     participant: &str,
     message: &str,
 ) -> Result<Posted> {
@@ -564,9 +623,27 @@ pub(crate) async fn post_as(
         PostDestination::Start => {
             ensure_joined(tx, workspace, participant).await?;
             said(tx, workspace, participant, message).await?;
+            let (workspace, sign_in_method) = match poster {
+                Poster::Person => {
+                    work::next_as_the_operator(
+                        tx,
+                        "post_to_workspace",
+                        workspace.clone(),
+                        None,
+                        None,
+                    )
+                    .await?
+                }
+                Poster::Event => (workspace.clone(), None),
+            };
             let session = tx
                 .workspaces()
-                .enqueue_session(workspace, None, Declared::default(), None)
+                .enqueue_session(
+                    &workspace,
+                    None,
+                    Declared::default(),
+                    sign_in_method.as_deref(),
+                )
                 .await?;
             Ok(Posted {
                 session: Some(session),
@@ -648,12 +725,12 @@ pub async fn edit_message(
     store: &Store,
     workspace: WorkspaceId,
     id: i64,
-    participant: &str,
+    participant: Option<&str>,
     message: &str,
 ) -> Result<HeldMessage> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(workspace).await?;
-    let participant = participant::accepted(
+    let participant = participant::named_or_operator(
         &mut tx,
         &workspace.organization,
         participant,
@@ -674,11 +751,11 @@ pub async fn withdraw_message(
     store: &Store,
     workspace: WorkspaceId,
     id: i64,
-    participant: &str,
+    participant: Option<&str>,
 ) -> Result<()> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(workspace).await?;
-    let participant = participant::accepted(
+    let participant = participant::named_or_operator(
         &mut tx,
         &workspace.organization,
         participant,

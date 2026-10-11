@@ -53,6 +53,13 @@ fn reached(shown: &Shown) -> Value {
     serde_json::from_str(record).expect("a record")
 }
 
+/// An install as naming its Operator leaves it: one Organization, `default`, holding nothing.
+async fn named(kestrel: Kestrel) -> Kestrel {
+    kestrel.name_operator("default").await;
+
+    kestrel
+}
+
 async fn declared(kestrel: &Kestrel) -> Vec<String> {
     let mut declared = Vec::new();
     for organization in kestrel.organizations().await {
@@ -84,12 +91,14 @@ async fn declared(kestrel: &Kestrel) -> Vec<String> {
 #[tokio::test]
 async fn one_command_takes_a_fresh_clone_and_an_empty_control_plane_to_a_session_carrying_its_brief()
  {
-    let kestrel = Kestrel::dispatching_to(
-        supervisor::binary(),
-        &scripted_agent::playing(Script::Echoes),
+    let kestrel = named(
+        Kestrel::dispatching_to(
+            supervisor::binary(),
+            &scripted_agent::playing(Script::Echoes),
+        )
+        .await,
     )
     .await;
-    assert!(kestrel.organizations().await.is_empty());
 
     let started = ran_by(
         &kestrel,
@@ -136,9 +145,11 @@ async fn one_command_takes_a_fresh_clone_and_an_empty_control_plane_to_a_session
         }
     );
     assert_eq!(
-        transcript[1].entry,
+        transcript[2].entry,
         Entry::Brief {
-            source: BriefSource::Operator { participant: None },
+            source: BriefSource::Operator {
+                participant: Some("default".to_owned()),
+            },
             brief: BRIEF.to_owned(),
         }
     );
@@ -155,7 +166,7 @@ async fn one_command_takes_a_fresh_clone_and_an_empty_control_plane_to_a_session
 
 #[tokio::test]
 async fn every_inferred_value_is_explained_before_anything_is_applied() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = named(Kestrel::boot().await).await;
 
     let started = ran_by(&kestrel, &["start", "--brief", BRIEF], in_a_fresh_clone()).await;
 
@@ -240,7 +251,7 @@ async fn flags_say_every_value_nothing_needs_inferring() {
 
 #[tokio::test]
 async fn with_no_terminal_and_no_clone_it_fails_naming_the_flags_and_declares_nothing() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = named(Kestrel::boot().await).await;
 
     let refused = ran_by(
         &kestrel,
@@ -253,7 +264,10 @@ async fn with_no_terminal_and_no_clone_it_fails_naming_the_flags_and_declares_no
         &refused,
         &["--repository", "--branch", "--credential", PROVIDER_KEY],
     );
-    assert!(kestrel.organizations().await.is_empty());
+    assert_eq!(
+        declared(&kestrel).await,
+        ["organization default", "workspaces 0"]
+    );
 
     kestrel.teardown().await;
 }
@@ -418,7 +432,10 @@ async fn on_a_terminal_confirming_once_applies_the_plan_the_noninteractive_start
         "--json",
     ];
     let invocation = in_a_fresh_clone().env(PROVIDER_KEY, A_PROVIDER_KEY);
-    let (interactive, noninteractive) = (Kestrel::boot().await, Kestrel::boot().await);
+    let (interactive, noninteractive) = (
+        named(Kestrel::boot().await).await,
+        named(Kestrel::boot().await).await,
+    );
 
     let confirmed = ran_on_a_terminal_by(&interactive, &args, invocation.clone(), "y\n").await;
     let applied = ran_by(&noninteractive, &args, invocation).await;
@@ -451,7 +468,7 @@ async fn on_a_terminal_confirming_once_applies_the_plan_the_noninteractive_start
 
 #[tokio::test]
 async fn on_a_terminal_the_plan_is_explained_and_taught_and_declining_it_changes_nothing() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = named(Kestrel::boot().await).await;
 
     let shown = ran_on_a_terminal_by(
         &kestrel,
@@ -462,7 +479,10 @@ async fn on_a_terminal_the_plan_is_explained_and_taught_and_declining_it_changes
     .await;
 
     assert!(shown.status.success(), "{}", shown.said);
-    assert!(kestrel.organizations().await.is_empty());
+    assert_eq!(
+        declared(&kestrel).await,
+        ["organization default", "workspaces 0"]
+    );
     let before: Vec<&str> = shown
         .lines()
         .into_iter()
@@ -488,7 +508,6 @@ async fn on_a_terminal_the_plan_is_explained_and_taught_and_declining_it_changes
         );
     }
     for taught in [
-        "declare the Organization default",
         &format!("declare the Project {}", repository::NAME),
         "declare the Agent opencode",
         "open a Workspace",
@@ -505,7 +524,7 @@ async fn on_a_terminal_the_plan_is_explained_and_taught_and_declining_it_changes
 
 #[tokio::test]
 async fn on_a_terminal_yes_applies_the_plan_without_asking() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = named(Kestrel::boot().await).await;
 
     let applied = ran_on_a_terminal_by(
         &kestrel,
@@ -524,7 +543,7 @@ async fn on_a_terminal_yes_applies_the_plan_without_asking() {
 
 #[tokio::test]
 async fn with_output_on_a_terminal_and_input_piped_nothing_is_asked() {
-    let kestrel = Kestrel::boot().await;
+    let kestrel = named(Kestrel::boot().await).await;
 
     let applied = ran_on_a_terminal_by(
         &kestrel,

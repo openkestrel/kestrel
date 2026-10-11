@@ -101,7 +101,8 @@ async fn receiving(store: &Store, event: &Event) -> Result<Received> {
         match crate::workspace::post_in(
             &mut tx,
             &workspace,
-            actor,
+            crate::workspace::Poster::Event,
+            Some(actor),
             data.message().unwrap_or_default(),
         )
         .await

@@ -408,7 +408,7 @@ async fn a_refused_post_raises_nothing() {
         .replace("{workspace}", &workspace.id.to_string());
     let response = reqwest::Client::new()
         .post(format!("{}{path}", kestrel.operator()))
-        .json(&json!({ "message": "too late" }))
+        .json(&json!({ "participant": " ", "message": "too late" }))
         .send()
         .await
         .expect("the operator boundary should answer");

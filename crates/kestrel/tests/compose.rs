@@ -519,7 +519,13 @@ async fn a_session_provisions_an_instance_and_releasing_it_destroys_it_through_t
         "the supervisor went with its session: {left}"
     );
 
-    stack.ran(&["instance", "release", &workspace]);
+    stack.ran(&[
+        "instance",
+        "release",
+        &workspace,
+        "--as-participant",
+        "operator",
+    ]);
     container.is_gone().await;
 }
 
@@ -591,6 +597,7 @@ fn the_commands_usage_documents_are_the_commands_that_work() {
 
     // An opened Session that never ran reported no checkout, so its instance holds the only
     // copy it might have: docs/usage/manual-workspaces.md releases it before sealing.
+    stack.ran(&["operator", "name", "Ada"]);
     stack.ran(&["instance", "release", "latest"]);
     stack.ran(&["workspace", "seal", "latest"]);
 

@@ -2628,17 +2628,13 @@ async fn a_post_names_its_participant_and_refuses_an_agents_name() {
     let messages = workspace_messages_at("acme", &workspace.id.to_string());
 
     for participant in [
-        Value::Null,
         json!("   "),
         json!("x".repeat(65)),
         json!("con\u{7}trol"),
         json!("builder"),
         json!("reviewer"),
     ] {
-        let mut body = json!({ "message": "hello" });
-        if !participant.is_null() {
-            body["participant"] = participant;
-        }
+        let body = json!({ "participant": participant, "message": "hello" });
 
         let (status, refusal) = declared(&kestrel, &messages, &body).await;
         assert_eq!(
@@ -2874,19 +2870,6 @@ async fn a_names_first_turn_joins_once_and_a_later_turn_does_not() {
     );
 
     kestrel.teardown().await;
-}
-
-#[test]
-fn the_published_document_requires_a_participant_on_a_post() {
-    let document = published();
-    let required = document["components"]["schemas"]["WorkspaceMessage"]["required"]
-        .as_array()
-        .expect("an array of required fields");
-
-    assert!(
-        required.iter().any(|field| field == "participant"),
-        "the document does not require a participant: {required:?}"
-    );
 }
 
 #[tokio::test]
@@ -6651,6 +6634,7 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::SIGN_IN_METHOD, "get"),
         (operator::OPERATOR, "get"),
         (operator::OPERATOR, "put"),
+        (operator::INSTALL, "get"),
         (operator::ORGANIZATIONS, "get"),
         (operator::ORGANIZATIONS, "post"),
         (operator::STARTS, "post"),

@@ -7,6 +7,7 @@ use crate::compute::IdleHint;
 use crate::declined::{Next, Reason, Resource, Step};
 use crate::domain::{Workspace, WorkspaceId, WorkspaceState};
 use crate::log::Entry;
+use crate::participant;
 use crate::store::workspace::Kept;
 use crate::store::{Store, Tx};
 use crate::workspace;
@@ -259,10 +260,17 @@ async fn judged(tx: &mut Tx<'_>, kept: Kept) -> Result<Option<Held>> {
 }
 
 /// The one way work that may exist nowhere else is ever discarded, so only a person calls it.
-pub async fn release(store: &Store, id: WorkspaceId, participant: &str) -> Result<String> {
+pub async fn release(store: &Store, id: WorkspaceId, participant: Option<&str>) -> Result<String> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(id).await?;
     workspace.accepts("release_instance", "release")?;
+    let participant = participant::named_or_operator(
+        &mut tx,
+        &workspace.organization,
+        participant,
+        "release_instance",
+    )
+    .await?;
 
     let Some(kept) = tx.workspaces().kept_instance(id).await? else {
         bail!(workspace::workspace_conflict(
@@ -292,7 +300,7 @@ pub async fn release(store: &Store, id: WorkspaceId, participant: &str) -> Resul
         .append(
             &workspace,
             Entry::InstanceReleased {
-                participant: participant.to_owned(),
+                participant,
                 instance: kept.instance.clone(),
                 unpublished: unpublished(
                     &workspace.checkout.repositories,

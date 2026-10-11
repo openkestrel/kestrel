@@ -27,6 +27,13 @@ impl<'a> Operators<'a> {
             .transpose()
     }
 
+    pub async fn initial_setup_complete(&mut self) -> Result<bool> {
+        Ok(sqlx::query("SELECT 1 FROM install WHERE singleton = 1")
+            .fetch_optional(&mut *self.connection)
+            .await?
+            .is_some())
+    }
+
     pub async fn name(&mut self, name: &str) -> Result<Declared<Operator>> {
         let existing = self.current().await?;
         let created = existing.is_none();

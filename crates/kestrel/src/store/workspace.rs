@@ -285,6 +285,27 @@ impl<'a> Workspaces<'a> {
         .transpose()
     }
 
+    /// Never replaces a Profile: one a Workspace names is fixed (ADR-0025).
+    pub async fn take_profile(
+        &mut self,
+        workspace: &Workspace,
+        profile: &SubscriptionProfile,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE workspace SET subscription_profile_id = ?
+             WHERE id = ? AND subscription_profile_id IS NULL",
+        )
+        .bind(profile.id.to_string())
+        .bind(workspace.id.to_string())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("naming the profile of the workspace {}", workspace.id))?;
+
+        self.touched.workspace(workspace);
+
+        Ok(())
+    }
+
     pub async fn seal(&mut self, workspace: &Workspace) -> Result<Timestamp> {
         let sealed_at = Timestamp::now();
 

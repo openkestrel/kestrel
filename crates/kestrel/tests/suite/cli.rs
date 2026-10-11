@@ -644,7 +644,16 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
     );
     assert_eq!(booted.run(&["instance", "list"]), "");
 
-    assert_eq!(booted.run(&["instance", "release", &workspace]), instance);
+    assert_eq!(
+        booted.run(&[
+            "instance",
+            "release",
+            &workspace,
+            "--as-participant",
+            "operator"
+        ]),
+        instance
+    );
 
     assert_eq!(
         booted.record(&["workspace", "show", &workspace, "--json"])["instance"],
@@ -658,13 +667,19 @@ fn an_instance_is_shown_on_its_workspace_and_released_on_the_record() {
     );
     assert!(
         booted
-            .refused(&["instance", "release", &workspace])
+            .refused(&[
+                "instance",
+                "release",
+                &workspace,
+                "--as-participant",
+                "operator"
+            ])
             .contains("no instance"),
     );
 }
 
 #[test]
-fn a_workspace_post_without_a_participant_is_a_usage_error() {
+fn a_workspace_post_without_a_participant_or_an_operator_says_how_to_name_one() {
     let kestrel = Kestrel::new();
     let booted = kestrel.boot();
     declared(&booted);
@@ -673,8 +688,8 @@ fn a_workspace_post_without_a_participant_is_a_usage_error() {
     let refused = booted.refused(&["workspace", "post", &workspace, "go"]);
 
     assert!(
-        refused.contains("--as-participant"),
-        "a post without a participant should be refused by usage: {refused}"
+        refused.contains("kestrel operator name <NAME>"),
+        "a post nobody signed does not say how to name the Operator: {refused}"
     );
 }
 

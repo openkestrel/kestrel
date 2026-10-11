@@ -57,15 +57,12 @@ impl<'a> Scoping<'a> {
     }
 
     pub async fn resolve(self) -> Result<Scope> {
+        let api = self.api;
         match self.derive().await? {
             Derived::Scope(scope) => Ok(scope),
-            Derived::Unnamed { existing } if existing.is_empty() => bail!(Failed::new(
-                Exit::Unresolved,
-                format!(
-                    "no Organization is in scope and none exists; declare one with \
-                     `{BINARY} organization declare default`"
-                )
-            )),
+            Derived::Unnamed { existing } if existing.is_empty() => {
+                Err(nothing_to_scope(api).await)
+            }
             Derived::Unnamed { existing } => {
                 let choices = existing
                     .iter()
@@ -113,6 +110,21 @@ impl<'a> Scoping<'a> {
         }
 
         Ok(Derived::Unnamed { existing })
+    }
+}
+
+/// Naming the Operator declares their Organization, so with neither the gap is the name.
+pub async fn nothing_to_scope(api: &ControlPlane) -> anyhow::Error {
+    match api.get(&["operator"]).await {
+        Ok(_) => Failed::new(
+            Exit::Unresolved,
+            format!(
+                "no Organization is in scope and none exists; declare one with \
+                 `{BINARY} organization declare default`"
+            ),
+        )
+        .into(),
+        Err(refused) => refused,
     }
 }
 

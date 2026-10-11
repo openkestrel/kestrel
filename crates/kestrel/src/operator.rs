@@ -61,6 +61,7 @@ use crate::{instance, pull_request, start, work, workspace};
 pub const ROOT: &str = "/";
 pub const HARNESSES: &str = "/operator/harnesses";
 pub const SIGN_IN_METHOD: &str = "/operator/harnesses/{harness}/sign-in-methods/{method}";
+pub const INSTALL: &str = "/operator/install";
 pub const OPERATOR: &str = "/operator/operator";
 pub const ORGANIZATIONS: &str = "/operator/organizations";
 pub const STARTS: &str = "/operator/starts";
@@ -348,6 +349,7 @@ pub fn router(
         .route(ROOT, get(move || std::future::ready(root.clone())))
         .route(HARNESSES, get(harnesses))
         .route(SIGN_IN_METHOD, get(sign_in_method))
+        .route(INSTALL, get(show_install))
         .route(OPERATOR, get(show_operator).put(name_operator))
         .route(ORGANIZATIONS, get(organizations).post(declare_organization))
         .route(STARTS, post(start))
@@ -588,7 +590,7 @@ impl SessionDeclaration {
 
 #[derive(Deserialize)]
 struct OptionChange {
-    participant: String,
+    participant: Option<String>,
     option: Option<String>,
     category: Option<String>,
     value: String,
@@ -651,12 +653,7 @@ struct AgentModel {
 
 #[derive(Deserialize)]
 struct Release {
-    #[serde(default = "default_operator_participant")]
-    participant: String,
-}
-
-fn default_operator_participant() -> String {
-    "operator".to_owned()
+    participant: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -3054,8 +3051,12 @@ async fn release_instance(
 ) -> Result<Json<ReleasedRecord>, Refused> {
     let Json(release) = release?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
-    let instance =
-        instance::release(&control_plane.store, workspace.id, &release.participant).await?;
+    let instance = instance::release(
+        &control_plane.store,
+        workspace.id,
+        release.participant.as_deref(),
+    )
+    .await?;
 
     Ok(Json(ReleasedRecord { instance }))
 }
@@ -3256,7 +3257,7 @@ async fn post_to_workspace(
     let posted = workspace::post(
         &control_plane.store,
         workspace.id,
-        message.participant.as_deref().unwrap_or_default(),
+        message.participant.as_deref(),
         &message.message,
     )
     .await?;
@@ -3281,7 +3282,7 @@ async fn edit_workspace_message(
         &control_plane.store,
         workspace.id,
         id,
-        edit.participant.as_deref().unwrap_or_default(),
+        edit.participant.as_deref(),
         &edit.message,
     )
     .await
@@ -3310,7 +3311,7 @@ async fn withdraw_workspace_message(
         &control_plane.store,
         workspace.id,
         id,
-        withdrawal.participant.as_deref().unwrap_or_default(),
+        withdrawal.participant.as_deref(),
     )
     .await
     .map_err(|error| {
@@ -3534,7 +3535,7 @@ async fn interrupt_session(
     let interrupting = work::interrupt(
         &control_plane.store,
         session.id,
-        interrupt.participant.as_deref().unwrap_or_default(),
+        interrupt.participant.as_deref(),
     )
     .await?;
 
@@ -3591,7 +3592,7 @@ async fn set_session_option(
         &control_plane.store,
         &organization,
         &session,
-        &change.participant,
+        change.participant.as_deref(),
         named,
         &change.value,
     )
@@ -4416,6 +4417,17 @@ impl From<domain::Operator> for wire::Operator {
     }
 }
 
+async fn show_install(
+    State(control_plane): State<ControlPlane>,
+) -> Result<Json<wire::Install>, Refused> {
+    Ok(Json(wire::Install {
+        initial_setup_complete: crate::operator_identity::initial_setup_complete(
+            &control_plane.store,
+        )
+        .await?,
+    }))
+}
+
 async fn show_operator(
     State(control_plane): State<ControlPlane>,
 ) -> Result<Json<wire::Operator>, Refused> {
@@ -4454,7 +4466,7 @@ fn diagnosis(reason: Reason, field: Option<&'static str>) -> (StatusCode, wire::
             },
             wire::Diagnostic::SetupGapDiagnostic(wire::SetupGapDiagnostic {
                 kind: serde_json::json!("setup_gap"),
-                message: "name the Operator to use their own Profile".to_owned(),
+                message: Reason::MissingOperator { operation }.to_string(),
                 field,
                 context: wire::SetupGapContext {
                     prerequisite: "operator".to_owned(),
@@ -4985,6 +4997,7 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("GET", ROOT) => "show_api_root",
         ("GET", HARNESSES) => "list_harnesses",
         ("GET", SIGN_IN_METHOD) => "show_sign_in_method",
+        ("GET", INSTALL) => "show_install",
         ("GET", OPERATOR) => "show_operator",
         ("PUT", OPERATOR) => "name_operator",
         ("GET", ORGANIZATIONS) => "list_organizations",
