@@ -95,7 +95,7 @@ jobs:
       - name: Test preparation and version refusals
         env:
           GIT_CONFIG_GLOBAL: /dev/null
-        run: mise exec -- python3 -m unittest discover -s scripts/tests -p test_release.py
+        run: mise exec -- python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
   workspace:
     name: workspace (rust)
