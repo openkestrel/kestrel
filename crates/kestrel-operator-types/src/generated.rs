@@ -1962,9 +1962,10 @@ impl<'de> Deserialize<'de> for QueueReason {
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct QueueReasonSubscriptionProfile {
+    pub diagnostic: Diagnostic,
     pub kind: serde_json::Value,
     pub profile: String,
-    ///The Working or Trailing Session holding the Profile when it belongs to this Organization; otherwise null.
+    ///The Session holding the Profile; null when a non-Session use holds it.
     pub session: Option<String>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
