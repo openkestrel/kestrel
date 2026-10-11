@@ -277,7 +277,6 @@ pub async fn saved(store: &Store, organization: &str) -> Result<Vec<SignIn>> {
     saved_in(&mut tx, &organization, profiles).await
 }
 
-/// The Organization's keys, and the subscriptions these Profiles hold.
 pub(crate) async fn saved_in(
     tx: &mut Tx<'_>,
     organization: &Organization,

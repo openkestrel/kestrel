@@ -65,10 +65,12 @@ relay started, nothing written, no image pulled.
   other model's does. A model never tested is no prerequisite.
 - **`gaps`** are Diagnostics in repair order, every one that could be established: the Operator
   (`operator`); no saved sign-in on a carried harness (`sign_in`), or the named harness the
-  image does not carry (`harness_in_image`); saved sign-ins that all need attention
+  image does not carry (`harness_in_image`, with no sign-in gap beside it); saved sign-ins that all need attention
   (`sign_in_attention`); no Project and no lending GitHub Integration (`repository`, offering
   `connect_github` and then `declare_project`, since a public repository needs no Integration);
-  no Project (`project`). `warnings` hold what does not block.
+  no Project (`project`). `warnings` hold what does not block, a disabled Integration that
+  would otherwise reach a repository among them. A harness outside the catalogue has no guided
+  sign-in to find saved or missing, so naming one raises no sign-in gap.
 - **`unavailable`** holds a failed image inspection and is never a gap: the harness is neither
   absent nor present. The outcome is `blocked` when a gap is known, `unavailable` when none is
   but an inspection failed.

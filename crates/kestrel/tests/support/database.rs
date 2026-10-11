@@ -95,7 +95,6 @@ impl<'a> Database<'a> {
         pool.close().await;
     }
 
-    /// What only a Session's harness, or evidence no producer raises yet, would record.
     pub async fn record_authentication(&self, revision: i64, state: &str) {
         let pool = self.pool().await;
         sqlx::query(
@@ -109,7 +108,6 @@ impl<'a> Database<'a> {
         pool.close().await;
     }
 
-    /// Nothing sets this yet: the shared start will, with its first Workspace and Session.
     pub async fn complete_initial_setup(&self) {
         self.execute(
             "INSERT INTO install (singleton, initial_setup_completed_at) VALUES (1, ?)",

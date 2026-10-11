@@ -4535,33 +4535,11 @@ async fn show_install(
     }))
 }
 
-#[derive(Deserialize)]
-struct ReadinessContext {
-    organization: Option<String>,
-    harness: Option<String>,
-    model: Option<String>,
-    profile: Option<String>,
-    sign_in_method: Option<String>,
-    project: Option<String>,
-}
-
 async fn show_readiness(
     State(control_plane): State<ControlPlane>,
-    Query(context): Query<ReadinessContext>,
+    Query(context): Query<start_readiness::Context>,
 ) -> Result<Json<wire::Readiness>, Refused> {
-    let read = start_readiness::read(
-        &control_plane.store,
-        &control_plane.images,
-        start_readiness::Context {
-            organization: context.organization,
-            harness: context.harness,
-            model: context.model,
-            profile: context.profile,
-            sign_in_method: context.sign_in_method,
-            project: context.project,
-        },
-    )
-    .await?;
+    let read = start_readiness::read(&control_plane.store, &control_plane.images, context).await?;
 
     Ok(Json(readiness(read, &control_plane.client)))
 }
@@ -4601,23 +4579,19 @@ fn readiness(read: start_readiness::Readiness, client: &url::Url) -> wire::Readi
         warnings: read
             .warnings
             .into_iter()
-            .map(|warning| {
-                let message = warning.message();
-                match warning {
-                    start_readiness::Warning::Unchecked(sign_in) => {
-                        let (locator, context) =
-                            held_sign_in("sign_in_unchecked", &sign_in, scoped);
-                        setup_gap(
-                            message,
-                            context,
-                            vec![inspect(locator, organization.clone())],
-                        )
-                    }
-                    start_readiness::Warning::NeedsAttention(attention) => {
-                        needs_attention(&attention, scoped)
-                    }
-                    start_readiness::Warning::NotLending(reason) => diagnosis(reason, None).1,
+            .map(|warning| match warning {
+                start_readiness::Warning::Unchecked(sign_in) => {
+                    let (locator, context) = held_sign_in("sign_in_unchecked", &sign_in, scoped);
+                    setup_gap(
+                        start_readiness::unchecked(&sign_in),
+                        context,
+                        vec![inspect(locator, organization.clone())],
+                    )
                 }
+                start_readiness::Warning::NeedsAttention(attention) => {
+                    needs_attention(&attention, scoped)
+                }
+                start_readiness::Warning::NotLending(reason) => diagnosis(reason, None).1,
             })
             .collect(),
         unavailable: read
@@ -4661,11 +4635,16 @@ fn readiness_gap(gap: start_readiness::Gap, organization: Option<&str>) -> wire:
         start_readiness::Gap::NeedsAttention(attention) => {
             needs_attention(&attention, organization)
         }
-        start_readiness::Gap::NoSignIn { harness, method } => setup_gap(
+        start_readiness::Gap::NoSignIn {
+            harness,
+            method,
+            image,
+        } => setup_gap(
             message,
             wire::SetupGapContext {
                 harness: harness.clone(),
                 method: method.clone(),
+                image,
                 ..context("sign_in", None)
             },
             vec![wire::Action::SignInAction(wire::SignInAction {

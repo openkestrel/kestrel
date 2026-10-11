@@ -1,5 +1,5 @@
-//! Whether work can start, from what is already saved. Reading it writes nothing, asks no
-//! provider, starts no relay and never pulls an image (ADR-0052).
+//! Reading whether work can start writes nothing, asks no provider, starts no relay and never
+//! pulls an image (ADR-0052).
 
 use std::collections::BTreeSet;
 
@@ -11,10 +11,11 @@ use crate::integration;
 use crate::sign_in::{self, Holding, SignIn, State, UseResult, handoff};
 use crate::store::{Store, Tx};
 use anyhow::Result;
+use serde::Deserialize;
 
 pub const OPERATION: &str = "show_readiness";
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct Context {
     pub organization: Option<String>,
     pub harness: Option<String>,
@@ -38,6 +39,8 @@ pub enum Gap {
     NoSignIn {
         harness: Option<String>,
         method: Option<String>,
+        /// The inspected image whose harnesses were the only ones looked at.
+        image: Option<String>,
     },
     NeedsAttention(Attention),
     NoRepository,
@@ -48,7 +51,6 @@ pub enum Gap {
 pub enum Warning {
     Unchecked(SignIn),
     NeedsAttention(Attention),
-    /// A selected Integration that no longer lends its repository authority.
     NotLending(Reason),
 }
 
@@ -127,6 +129,7 @@ pub async fn read(store: &Store, images: &Images, context: Context) -> Result<Re
     let mut sign_ins = Vec::new();
     let mut projects = Vec::new();
     let mut lending = Vec::new();
+    let mut paused = Vec::new();
     if let Some(organization) = &organization {
         let mut holding = sign_in::operator_profiles(&mut tx, organization).await?;
         if let Some(named) = &context.profile {
@@ -146,8 +149,14 @@ pub async fn read(store: &Store, images: &Images, context: Context) -> Result<Re
         sign_ins = sign_in::saved_in(&mut tx, organization, holding).await?;
         projects = tx.projects().all(organization).await?;
         for integration in tx.integrations().all(organization).await? {
-            if integration::lending(&integration, &organization.name, OPERATION).is_ok() {
-                lending.push(integration.name);
+            match refusal(
+                integration::lending(&integration, &organization.name, OPERATION).map(|_| ()),
+            )? {
+                Ok(()) => lending.push(integration.name),
+                Err(refused @ Reason::StateConflict { .. }) if !integration.retired() => {
+                    paused.push(Warning::NotLending(refused));
+                }
+                Err(_) => {}
             }
         }
     }
@@ -174,11 +183,12 @@ pub async fn read(store: &Store, images: &Images, context: Context) -> Result<Re
             }
         }
         _ if projects.is_empty() => {
-            gaps.push(if lending.is_empty() {
-                Gap::NoRepository
+            if lending.is_empty() {
+                gaps.push(Gap::NoRepository);
+                warnings.extend(paused);
             } else {
-                Gap::NoProject
-            });
+                gaps.push(Gap::NoProject);
+            }
             None
         }
         _ => (projects.len() == 1).then(|| projects[0].clone()),
@@ -361,6 +371,7 @@ impl Paths<'_> {
                     && matches!(*not_carried, Reason::HarnessNotCarried { .. })
                 {
                     evaluated.gaps.push(Gap::Refused(*not_carried));
+                    return self.warned_of_the_rest(evaluated, &[]);
                 }
                 if !catalogue::harnesses().iter().any(|row| row.name == harness) {
                     // No guided method exists to find saved or missing.
@@ -397,6 +408,10 @@ impl Paths<'_> {
                 evaluated.gaps.push(Gap::NoSignIn {
                     harness: self.context.harness.clone(),
                     method: self.context.sign_in_method.clone(),
+                    image: match (self.capability, &self.context.harness) {
+                        (Capability::Inspected { image, .. }, None) => Some(image.clone()),
+                        _ => None,
+                    },
                 });
             }
             return self.warned_of_the_rest(evaluated, &[]);
@@ -428,7 +443,6 @@ impl Paths<'_> {
         if let [only] = usable.as_slice() {
             evaluated.sign_in = Some((*only).clone());
         }
-        // Readiness resting only on material nothing has checked says so.
         if usable
             .iter()
             .all(|one| one.authentication.state == State::Unchecked)
@@ -466,9 +480,7 @@ impl Paths<'_> {
         }
     }
 
-    /// What a start on this harness would be handed. With the harness named and no method, that
-    /// is what an open naming none takes (ADR-0049); otherwise every alternative saved. Several
-    /// of the Operator's Profiles holding its subscription select none of them.
+    /// `by_default` is what an open naming no method takes (ADR-0049), not every alternative.
     fn chosen(&self, harness: &str, by_default: bool) -> (Vec<&SignIn>, Option<Gap>) {
         let method = self.context.sign_in_method.as_deref();
         let of = || {
@@ -600,42 +612,45 @@ impl Gap {
             Gap::NoSignIn {
                 harness: Some(harness),
                 method: Some(method),
+                ..
             } => format!("no {method} sign-in for the harness {harness} is saved{within}"),
             Gap::NoSignIn {
                 harness: Some(harness),
                 method: None,
+                ..
             } => format!("the harness {harness} is not signed in{within}"),
             Gap::NoSignIn {
                 harness: None,
                 method: Some(method),
+                ..
             } => format!("no {method} sign-in is saved{within}"),
             Gap::NoSignIn {
                 harness: None,
                 method: None,
+                image: Some(image),
+            } => format!("no harness the image {image} carries is signed in{within}"),
+            Gap::NoSignIn {
+                harness: None,
+                method: None,
+                image: None,
             } => format!("no harness is signed in{within}"),
             Gap::NeedsAttention(attention) => attention.message(),
             Gap::NoRepository => format!(
-                "no repository is available{within}: it declares no Project, and no GitHub \
-                 Integration reaches one"
+                "no repository is available{within}: it declares no project, and no github \
+                 integration reaches one"
             ),
             Gap::NoProject => {
-                format!("no Project is declared{within}; choose a repository for the first one")
+                format!("no project is declared{within}; choose a repository for the first one")
             }
         }
     }
 }
 
-impl Warning {
-    pub fn message(&self) -> String {
-        match self {
-            Warning::Unchecked(sign_in) => format!(
-                "{}, the {} sign-in this rests on, has not been checked",
-                sign_in.method.name, sign_in.harness
-            ),
-            Warning::NeedsAttention(attention) => attention.message(),
-            Warning::NotLending(reason) => reason.to_string(),
-        }
-    }
+pub fn unchecked(sign_in: &SignIn) -> String {
+    format!(
+        "{}, the {} sign-in this rests on, has not been checked",
+        sign_in.method.name, sign_in.harness
+    )
 }
 
 #[cfg(test)]
@@ -738,7 +753,8 @@ mod tests {
                 found.gaps.as_slice(),
                 [Gap::NoSignIn {
                     harness: None,
-                    method: None
+                    method: None,
+                    image: Some(_),
                 }]
             ),
             "{:?}",

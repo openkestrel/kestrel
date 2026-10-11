@@ -191,6 +191,13 @@ async fn a_lending_github_integration_leaves_only_the_project_to_choose() {
     let disabled = read(&kestrel, "").await;
     assert_eq!(prerequisites(&disabled["gaps"]), ["repository"]);
     assert_eq!(disabled["saved"]["github_integrations"], json!([]));
+    let paused = disabled["warnings"]
+        .as_array()
+        .expect("warnings")
+        .iter()
+        .find(|warning| warning["context"]["resource"] == "integration")
+        .expect("the disabled Integration's warning");
+    assert_eq!(actions(paused), ["inspect_resource", "enable_integration"]);
     kestrel.teardown().await;
 }
 
@@ -543,7 +550,7 @@ async fn a_correction_keeps_the_connection_and_the_organization() {
 
     exited(&finished, 78);
     assert!(
-        finished.out[0].starts_with("Not ready: no Project is declared in the organization ada"),
+        finished.out[0].starts_with("Not ready: no project is declared in the organization ada"),
         "{:?}",
         finished.out
     );
@@ -609,6 +616,23 @@ async fn an_inspection_outage_is_unavailable_and_exits_5() {
     );
     assert_eq!(finished.out[1], "Client: http://localhost:7719");
     assert!(!finished.err.contains("does not carry"), "{}", finished.err);
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_inspection_outage_behind_a_gap_is_still_said() {
+    let kestrel = Kestrel::boot_inspecting("kestrel-env:no-such-readiness-image").await;
+
+    let finished = ran_by(&kestrel, &[], Invocation::default()).await;
+
+    exited(&finished, 78);
+    assert!(
+        finished
+            .err
+            .contains("warning: the image kestrel-env:no-such-readiness-image"),
+        "{}",
+        finished.err
+    );
     kestrel.teardown().await;
 }
 

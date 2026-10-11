@@ -37,7 +37,7 @@ pub async fn show(api: &ControlPlane, scoping: Scoping<'_>, invocation: &Invocat
     if invocation.json {
         writeln!(out, "{answer}")?;
     } else {
-        let decorated = out.is_terminal() && undecorated_by_request().is_none();
+        let decorated = out.is_terminal() && !undecorated_by_request();
         write!(out, "{}", summary(&read, invocation, named, decorated))?;
     }
     out.flush()?;
@@ -45,7 +45,12 @@ pub async fn show(api: &ControlPlane, scoping: Scoping<'_>, invocation: &Invocat
 
     if !invocation.json {
         let mut err = std::io::stderr().lock();
-        for warning in &read.warnings {
+        // A failed inspection behind a gap would otherwise surface only once the gap is fixed.
+        let behind = (read.outcome == wire::ReadinessOutcome::Blocked)
+            .then_some(&read.unavailable)
+            .into_iter()
+            .flatten();
+        for warning in read.warnings.iter().chain(behind) {
             writeln!(err, "warning: {}", diagnostic::inline(warning, invocation))?;
         }
     }
@@ -66,10 +71,8 @@ pub async fn show(api: &ControlPlane, scoping: Scoping<'_>, invocation: &Invocat
     }
 }
 
-fn undecorated_by_request() -> Option<String> {
-    std::env::var("NO_COLOR")
-        .ok()
-        .filter(|value| !value.is_empty())
+fn undecorated_by_request() -> bool {
+    std::env::var("NO_COLOR").is_ok_and(|value| !value.is_empty())
 }
 
 fn summary(
