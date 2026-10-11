@@ -3,7 +3,8 @@
 ### Issue tracker
 
 Issues are tracked in GitHub (`openkestrel/kestrel`). Fetch one with
-`gh issue view <number> --repo openkestrel/kestrel --comments`; the rest is in `docs/agents/issue-tracker.md`.
+`gh issue view <number> --repo openkestrel/kestrel --json title,body,labels,comments`; the rest is
+in `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
@@ -16,23 +17,37 @@ Single-context layout (root `GLOSSARY.md` + `docs/adr/`). See `docs/agents/domai
 ### Architecture
 
 `docs/architecture/README.md` maps processes, crates, ports, trust boundaries, and the ADRs the code
-has not caught up to, and routes to one page per area: Sessions, the link, Triggers, the data
-model, the operator boundary and Client, and conventions. Read the map, then the page for the area
-you are changing.
+has not caught up to. Read the map, then the page in `docs/architecture/` for what you are changing:
+
+- queueing, claiming or ending work: `sessions.md`
+- what the supervisor and control plane say to each other: `link.md`
+- Events, matching, follow-ups, posts: `triggers.md`
+- the schema or a query: `data-model.md`
+- any operator endpoint, its errors or a declaration: `operator-boundary.md`
+- the Operator, readiness, sign-ins, the harness catalogue: `operator-setup.md`
+- a Session or Workspace read, a stream, live work: `operator-reads.md`
+- a `kestrel` command or the browser Client: `client.md`
+- transactions, errors, tests, in every change: `conventions.md`
 
 ## Code
 
 ### Checks
 
-CI is the full gate: it runs fmt, clippy, the build and every test on every pull request
-(`.github/workflows/ci.yml`). Locally, run the **narrowest check** that answers the question
-you have right now, and only when you have one. This machine's CPU and memory are shared with
+CI is the required gate: it selects checks by changed area
+(`.github/workflows/ci.yml`); the development image's expensive self-check runs separately
+(`.github/workflows/development-image.yml`). Locally, run the **narrowest check** that answers the
+question you have right now, and only when you have one. This machine's CPU and memory are shared with
 other agents, so each local cargo run has a real cost.
 
 - Compiles? `cargo clippy -p <crate> --all-targets -- -D warnings`, CI's lint scoped to one
   crate; it type-checks without codegen, as `cargo check` does.
-- Changed `openapi/*.json`? The Client's types are generated from it:
-  `cd packages/client && bun install && bun run typecheck`.
+- Changed `openapi/*.json`? Three consumers are generated from it. Regenerate the Rust types with
+  `mise run generate-check`, the task CI's own step runs; it writes the files and exits 1 until
+  what it wrote is committed. Lint the CLI that matches on them exhaustively with
+  `cargo clippy -p kestrel-client --all-targets -- -D warnings`, and typecheck the browser Client: `cd packages/client && bun install && bun run typecheck`.
+  Adding or changing an Operator endpoint? See
+  [the contract-change workflow](docs/architecture/operator-change-workflow.md) for its route
+  inventory and focused contract checks.
 - Behaves? One test target, filtered to the test:
   `cargo test -p kestrel --test suite <module>::<name>`. The ordinary control-plane tests are one
   binary, `crates/kestrel/tests/suite/`, a module per area (`work`, `operator`, …); a heavy
@@ -42,11 +57,21 @@ other agents, so each local cargo run has a real cost.
 - Batch edits before checking; one check after a coherent change, never one per line.
 - Before pushing, `cargo fmt --all`. Leave the workspace suite and the `#[ignore]`d
   suites to CI. CI runs only on a pull request, so finish by pushing the branch and opening one;
-  then read what failed with `gh pr checks` and `gh run view --log-failed`.
+  then read what failed with `gh pr checks` and `gh run view --log-failed`. A branch that conflicts
+  with `main` gets no `pull_request` run at all, so `gh pr checks` shows no `gate` row; `gate`
+  appearing is the sign the run started, and merging `main` and pushing until it does is the way
+  there.
+  For completed failed-job logs while the run is still active, or logs rejected for terminal escape
+  sequences, see [CI diagnosis](docs/agents/ci-diagnosis.md).
 - Documentation, skill and agent-guidance changes need no local check.
 
-Where a skill says "the full test suite" or "the project's automated checks", in this repo
-that means pushing and reading CI.
+Where a skill asks for a full-suite run ("the full test suite", "the project's automated checks",
+or a passing run as PR evidence), in this repo that means pushing and reading CI; the narrow local
+checks above still answer a single behaviour or type question. For implementation reviews, capture
+the branch's starting commit before editing and pass it as the fixed point to code-review, unless
+the user supplies another baseline. The test seams documented in
+[conventions](docs/architecture/conventions.md#tests) are pre-agreed; confirm a new seam before
+writing tests against it.
 
 ### Debug info
 
@@ -68,16 +93,5 @@ directly until the project is released.
 
 ### Comments
 
-**The default is no comment.** Write one only where a reader would otherwise get it wrong:
-a trap, a rejected alternative, a constraint an ADR imposes, a consequence that is invisible
-at the call site. One sentence. Prefer a better name to a comment explaining a worse one.
-
-Delete on sight:
-
-- Restatements of the code, including doc comments that paraphrase the signature below them.
-- Roadmap narration (`At 0.1 it starts and waits; the link arrives in 0.1/04`). The issue
-  tracker holds the plan; the code holds what is true now.
-- Module docs that repeat the module's name.
-
-Ten comments in a codebase is a reasonable number. Assume a comment is unnecessary and make
-it argue for itself.
+Write a comment only where a reader would otherwise get it wrong, in one sentence. Older code
+carries more than that and is not the model. Review holds the diff to `CODING_STANDARDS.md`.

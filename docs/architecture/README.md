@@ -10,7 +10,11 @@ each area has its own page.
 | [Link](link.md) | anything the supervisor and control plane say to each other |
 | [Triggers](triggers.md) | Event ingest, matching, correlation, readiness, follow-ups, posts |
 | [Data model](data-model.md) | the schema, or a query against it |
-| [Operator boundary and Client](operator-and-client.md) | an operator endpoint or a `kestrel` command |
+| [Operator boundary](operator-boundary.md) | any operator endpoint: the listener, errors and exits, references, declarations |
+| [Operator setup and sign-ins](operator-setup.md) | the Operator, readiness, defaults, the harness catalogue, sign-ins, image capabilities |
+| [Operator reads and streams](operator-reads.md) | a Session or Workspace read, the Transcript stream, change notices, live work |
+| [Operator change workflow](operator-change-workflow.md) | the operator contract: what moves together when an endpoint is added or changed |
+| [Clients](client.md) | a `kestrel` command or the browser Client |
 | [Conventions](conventions.md) | anything: transactions, errors, sweeps, tests |
 
 ## Reading the ADRs
