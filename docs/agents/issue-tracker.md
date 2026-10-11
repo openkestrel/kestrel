@@ -5,7 +5,7 @@ Issues and specs for this repo live as GitHub issues in **openkestrel/kestrel**.
 ## Conventions
 
 - **Create an issue**: `gh issue create --repo openkestrel/kestrel --title "..." --body "..."`. Use a heredoc for multi-line bodies.
-- **Read an issue**: `gh issue view <number> --repo openkestrel/kestrel --comments`, filtering comments by `jq` and also fetching labels.
+- **Read an issue**: `gh issue view <number> --repo openkestrel/kestrel --json title,body,labels,comments`. `--comments` prints nothing for an issue that has none.
 - **List issues**: `gh issue list --repo openkestrel/kestrel --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
 - **Comment on an issue**: `gh issue comment <number> --repo openkestrel/kestrel --body "..."`
 - **Apply / remove labels**: `gh issue edit <number> --repo openkestrel/kestrel --add-label "..."` / `--remove-label "..."`
@@ -119,7 +119,7 @@ as a **stack** with one PR per ticket:
 
 ## When a skill says "fetch the relevant ticket"
 
-Run `gh issue view <number> --comments`.
+Run `gh issue view <number> --repo openkestrel/kestrel --json title,body,labels,comments`.
 
 ## Wayfinding operations
 

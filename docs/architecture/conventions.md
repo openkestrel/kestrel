@@ -1,6 +1,6 @@
 # Conventions
 
-Patterns the code relies on that no single file states. Comment style is in `AGENTS.md`.
+Patterns the code relies on that no single file states. Comment style is in `CODING_STANDARDS.md`.
 
 ## Transactions
 
@@ -37,7 +37,7 @@ Patterns the code relies on that no single file states. Comment style is in `AGE
 
 - `anyhow` throughout. Refuse with `declined::Reason` (wrapped in `declined::Concerning` when it is
   about a request field), and with `declined::Declined` only where a producer is not typed yet
-  ([Operator boundary](operator-and-client.md#errors)). Never match a refusal's message.
+  ([Operator boundary](operator-boundary.md#errors)). Never match a refusal's message.
 - Messages are sentences a person reads: say what happened and to what, in `GLOSSARY.md`'s terms.
 
 ## Abstraction
