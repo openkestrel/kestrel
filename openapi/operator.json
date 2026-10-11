@@ -177,6 +177,27 @@
         }
       }
     },
+    "/operator/install": {
+      "get": {
+        "operationId": "showInstall",
+        "summary": "Read what is true of the install whatever is declared in it.",
+        "responses": {
+          "200": {
+            "description": "Install",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Install"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
     "/operator/organizations": {
       "get": {
         "operationId": "listOrganizations",
@@ -4955,7 +4976,7 @@
       "InstanceRelease": {
         "type": "object",
         "properties": {
-          "participant": { "type": "string", "default": "operator" }
+          "participant": { "type": ["string", "null"], "description": "The person releasing it, by the participant name rule. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one." }
         }
       },
       "ReleasedInstance": {
@@ -4970,7 +4991,7 @@
         "properties": {
           "project": { "type": "string", "minLength": 1 },
           "agent": { "type": "string", "minLength": 1 },
-          "profile": { "type": ["string", "null"] },
+          "profile": { "type": ["string", "null"], "description": "The Subscription Profile its Sessions use. Omitted, the Operator's own Profile holding a subscription for the Agent's harness, whose one held subscription is then the selected `sign_in_method`; with none, the Organization's Provider Credentials. Several such Profiles are a 409 `several_operator_profiles`, never a choice. A Profile named here is never replaced." },
           "sign_in_method": { "type": ["string", "null"], "description": "The catalogued Sign-in Method the first Session's harness is handed, by id: one its harness offers, saved in the Organization or in the Profile named here. Selecting one withholds the harness's other catalogued sign-ins, so a refusal never falls back to another. Omitted, everything the Organization and the Profile hold is handed over." },
           "branch": {
             "type": ["string", "null"],
@@ -4998,7 +5019,7 @@
           },
           "participant": {
             "type": ["string", "null"],
-            "description": "The name the Brief is written under. Omitted, its source is the operator and no one joins."
+            "description": "The name the Brief is written under. Omitted, the install's Operator; with none named, its source is the operator and no one joins."
           },
           "depends_on": {
             "type": ["array", "null"],
@@ -5013,21 +5034,20 @@
         "properties": {
           "participant": {
             "type": "string",
-            "description": "The person posting, by declared name. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization."
+            "description": "The person posting, by declared name. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one."
           },
           "message": { "type": "string" }
         },
-        "required": ["participant", "message"]
+        "required": ["message"]
       },
       "WorkspaceMessageWithdrawal": {
         "type": "object",
         "properties": {
           "participant": {
             "type": "string",
-            "description": "The person who wrote the message, by declared name. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization."
+            "description": "The person who wrote the message, by declared name. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one."
           }
-        },
-        "required": ["participant"]
+        }
       },
       "HeldMessage": {
         "type": "object",
@@ -5173,12 +5193,12 @@
         "description": "One option a person changes on a Session: exactly one of `option` (the id the harness reported) or `category` (model, mode or thought_level), and the value to set.",
         "type": "object",
         "properties": {
-          "participant": { "type": "string", "minLength": 1, "description": "The person making the change, by the participant name rule." },
+          "participant": { "type": ["string", "null"], "minLength": 1, "description": "The person making the change, by the participant name rule. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one." },
           "option": { "type": ["string", "null"], "description": "The harness option's id. Exactly one of option or category." },
           "category": { "type": ["string", "null"], "description": "One of model, mode or thought_level. Exactly one of option or category." },
           "value": { "type": "string", "minLength": 1 }
         },
-        "required": ["participant", "value"]
+        "required": ["value"]
       },
       "ChangingOption": {
         "description": "An option change a person asked for while a Session is live, held until the harness answers it (ADR-0041).",
@@ -5194,7 +5214,7 @@
       "SessionDeclaration": {
         "type": "object",
         "properties": {
-          "agent": { "type": ["string", "null"], "description": "Omitted, the Agent of the Workspace's latest Session." },
+          "agent": { "type": ["string", "null"], "description": "Omitted, the Agent of the Workspace's latest Session. A Workspace a person opened with no Subscription Profile takes the Operator's own for this Agent's harness as an open does; one an Event opened never does." },
           "sign_in_method": { "type": ["string", "null"], "description": "The catalogued Sign-in Method this Session's harness is handed, checked as on opening a Workspace. Omitted, the latest Session's while the harness is the same; only naming one switches credentials." },
           "model": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." },
           "mode": { "type": ["string", "null"], "description": "Omitted, whatever the Agent names." },
@@ -5434,10 +5454,9 @@
         "properties": {
           "participant": {
             "type": "string",
-            "description": "The person asking. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization."
+            "description": "The person asking. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one."
           }
-        },
-        "required": ["participant"]
+        }
       },
       "Exit": {
         "oneOf": [
@@ -5490,6 +5509,18 @@
         "required": [
           "variable",
           "set_at"
+        ]
+      },
+      "Install": {
+        "type": "object",
+        "properties": {
+          "initial_setup_complete": {
+            "type": "boolean",
+            "description": "Whether the first confirmed start has committed its Workspace and Session. Durable, and independent of current readiness, of the Operator's name and of what remains to declare: naming the Operator, saving a sign-in, opening a Workspace or enqueueing a Session never sets it, and no later failure clears it."
+          }
+        },
+        "required": [
+          "initial_setup_complete"
         ]
       },
       "Operator": {

@@ -76,6 +76,56 @@ pub(crate) async fn selected(
     Ok(offered)
 }
 
+/// The Operator's own Profile and the one subscription in it this work is handed (ADR-0049).
+pub(crate) struct Defaulted {
+    pub profile: SubscriptionProfile,
+    /// None when the Profile holds several of the harness's subscriptions: none is picked for it.
+    pub method: Option<&'static SignInMethod>,
+}
+
+/// For work a person opened naming no Profile: the Operator's Profile holding a subscription for
+/// `harness`, or none, which leaves the Organization's credentials. A free-text owner's Profile
+/// is never chosen, and neither is one of several.
+pub(crate) async fn defaulted(
+    tx: &mut Tx<'_>,
+    operation: &'static str,
+    organization: &Organization,
+    harness: &str,
+) -> Result<Option<Defaulted>> {
+    let owned = super::operator_profiles(tx, organization).await?;
+    let mut holding = super::holding_a_subscription(tx, &owned, harness).await?;
+    if holding.len() > 1 {
+        let among: Vec<SubscriptionProfile> =
+            holding.into_iter().map(|(profile, _)| profile).collect();
+        let message = format!(
+            "the Operator owns several Subscription Profiles in {} holding a {harness} \
+             subscription ({}); name the one this work uses",
+            organization.name,
+            super::names(&among)
+        );
+        bail!(super::several_operator_profiles(
+            operation,
+            organization,
+            &among,
+            message
+        ));
+    }
+
+    Ok(holding.pop().map(|(profile, mut methods)| Defaulted {
+        profile,
+        method: (methods.len() == 1).then(|| methods.remove(0)),
+    }))
+}
+
+/// A key the Organization holds needs no Profile, so naming one leaves the Operator's out.
+pub(crate) fn held_by_the_organization(harness: &str, method: &str) -> bool {
+    catalogue::harnesses()
+        .iter()
+        .filter(|row| row.name == harness)
+        .flat_map(|row| &row.sign_in_methods)
+        .any(|offered| offered.id == method && !held_in_profile(offered))
+}
+
 fn concerning_the_method(error: anyhow::Error, harness: &str) -> anyhow::Error {
     match error.downcast::<Reason>() {
         Ok(Reason::InvalidField {

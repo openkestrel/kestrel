@@ -1341,6 +1341,13 @@ impl Kestrel {
             .expect("the trigger should enable")
     }
 
+    /// Declares an Organization of the same name when none exists, as naming does.
+    pub async fn name_operator(&self, name: &str) {
+        kestrel::operator_identity::name(&self.store, name)
+            .await
+            .expect("the operator should be named");
+    }
+
     pub async fn hold_provider_credential(
         &self,
         organization: &Organization,
@@ -1527,7 +1534,7 @@ impl Kestrel {
     }
 
     pub async fn try_release_instance(&self, workspace: WorkspaceId) -> anyhow::Result<String> {
-        instance::release(&self.store, workspace, "operator").await
+        instance::release(&self.store, workspace, Some("operator")).await
     }
 
     pub async fn continuations(&self, id: WorkspaceId) -> Vec<WorkspaceId> {
@@ -1650,7 +1657,7 @@ impl Kestrel {
         participant: &str,
         message: &str,
     ) -> workspace::Posted {
-        workspace::post(&self.store, id, participant, message)
+        workspace::post(&self.store, id, Some(participant), message)
             .await
             .expect("the message should post")
     }
@@ -1668,7 +1675,7 @@ impl Kestrel {
         participant: &str,
         text: &str,
     ) -> anyhow::Result<HeldMessage> {
-        workspace::edit_message(&self.store, id, message, participant, text).await
+        workspace::edit_message(&self.store, id, message, Some(participant), text).await
     }
 
     pub async fn withdraw_message(
@@ -1677,7 +1684,7 @@ impl Kestrel {
         message: i64,
         participant: &str,
     ) -> anyhow::Result<()> {
-        workspace::withdraw_message(&self.store, id, message, participant).await
+        workspace::withdraw_message(&self.store, id, message, Some(participant)).await
     }
 
     pub async fn record_commands(&self, session: &Session, commands: &[SessionCommand]) {
@@ -2221,7 +2228,7 @@ impl Kestrel {
         session: SessionId,
         participant: &str,
     ) -> anyhow::Result<Session> {
-        work::interrupt(&self.store, session, participant).await
+        work::interrupt(&self.store, session, Some(participant)).await
     }
 
     pub async fn report_interrupted(&self, session: &Session, trailing: bool) {

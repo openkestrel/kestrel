@@ -127,16 +127,24 @@ pub async fn start(store: &Store, images: &Images, plan: &Plan) -> Result<Starte
         )
         .await?;
 
+    let (profile, sign_in_method) = workspace::operators_own(
+        &mut tx,
+        "start",
+        &organization.record,
+        &agent.record.harness,
+        None,
+    )
+    .await?;
     let resolved = workspace::Resolved {
         project: project.record.clone(),
         agent: agent.record.clone(),
-        profile: None,
-        sign_in_method: None,
+        profile,
+        sign_in_method,
         continues: None,
         branch: None,
         declared: Declared::default(),
         brief: Some(plan.brief.as_str()),
-        participant: None,
+        participant: workspace::operator_author(&mut tx, &organization.record, "start").await?,
     };
     let (workspace, session) =
         workspace::opened_in(&mut tx, &organization.record, &resolved).await?;

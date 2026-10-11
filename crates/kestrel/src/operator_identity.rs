@@ -19,6 +19,15 @@ pub async fn current(store: &Store) -> Result<Operator> {
         })
 }
 
+pub async fn initial_setup_complete(store: &Store) -> Result<bool> {
+    store
+        .read()
+        .await?
+        .operators()
+        .initial_setup_complete()
+        .await
+}
+
 pub async fn name(store: &Store, name: &str) -> Result<Declared<Operator>> {
     let name = name.trim();
     if name.is_empty() {

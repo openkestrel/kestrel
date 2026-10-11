@@ -58,7 +58,7 @@ docker compose --env-file compose.source.env up -d
 
 ## Create the GitHub App
 
-After creating an organization (for example with `kestrel start`), run:
+After creating an organization (for example with `kestrel operator name`), run:
 
 ```sh
 kestrel integration create-github-app origin --repository OWNER/REPOSITORY
@@ -76,14 +76,22 @@ A refused or interrupted code exchange cannot be replayed. Start a new flow if i
 
 ## Start work in a repository
 
-Run this from a clone of the repository you want the agent to work on:
+Name yourself once. This records the install's Operator and, on a new install, declares one organization with the same name:
+
+```sh
+kestrel operator name Ada
+```
+
+Messages and briefs you write are recorded under that name unless a command passes `--as-participant`. Renaming later (`kestrel operator name NAME` again) changes what is written from then on and keeps your subscription profiles.
+
+Then run this from a clone of the repository you want the agent to work on:
 
 ```sh
 ANTHROPIC_API_KEY=… kestrel start --credential ANTHROPIC_API_KEY \
   --brief "Make the README explain what this project does"
 ```
 
-`start` uses the clone's origin for the repository and project name, chooses the branch from the project or clone, and uses the sole existing agent or the default OpenCode harness. It prints the values it selected and their sources before applying them. At a terminal it asks once for confirmation; use `--yes` for an unattended run. If it cannot determine a required value, it names the flag to supply. You can set `--organization`, `--project`, `--repository`, `--branch`, `--agent`, `--harness`, and `--model` explicitly.
+`start` works in your one organization, uses the clone's origin for the repository and project name, chooses the branch from the project or clone, and uses the sole existing agent or the default OpenCode harness. It prints the values it selected and their sources before applying them. At a terminal it asks once for confirmation; use `--yes` for an unattended run. If it cannot determine a required value, it names the flag to supply. You can set `--organization`, `--project`, `--repository`, `--branch`, `--agent`, `--harness`, and `--model` explicitly.
 
 `--credential` names an environment variable in your shell. Kestrel stores its value for the organization and supplies it to the harness when a session starts. The value does not go into the command line. The `start` command creates any missing declarations, opens a workspace, and queues its first session together. It does not silently replace an existing project or agent with different settings.
 
@@ -104,7 +112,7 @@ A workspace keeps its checkout on its own branch, normally `kestrel/<workspace i
 To give the agent another turn, post a message:
 
 ```sh
-kestrel workspace post latest --as-participant operator "Please add a test for the failure case"
+kestrel workspace post latest "Please add a test for the failure case"
 ```
 
 A waiting session receives it in the same conversation. If no session is open, Kestrel starts a new one and supplies the workspace transcript as context. You can also start a fresh conversation with a specific agent:

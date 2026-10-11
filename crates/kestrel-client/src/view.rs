@@ -17,6 +17,7 @@ impl View {
     }
 }
 
+pub const OPERATOR: View = View::Detail(&["id", "name"]);
 pub const ORGANIZATIONS: View = View::Rows(&["id", "name", "max_live_instances"]);
 pub const PROJECTS: View = View::Rows(&["id", "name", "branch", "repositories"]);
 pub const AGENTS: View = View::Rows(&["id", "name", "harness", "model"]);

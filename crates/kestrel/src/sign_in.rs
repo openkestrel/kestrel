@@ -463,7 +463,7 @@ async fn revision(tx: &mut Tx<'_>, destination: &Destination) -> Result<Option<i
     }
 }
 
-async fn operator_profiles(
+pub(crate) async fn operator_profiles(
     tx: &mut Tx<'_>,
     organization: &Organization,
 ) -> Result<Vec<SubscriptionProfile>> {
@@ -510,42 +510,80 @@ async fn operator_profile(
         0 => Ok(None),
         1 => Ok(owned.pop()),
         _ => {
-            let subscriptions = catalogue::harnesses()
-                .iter()
-                .filter(|row| row.name == harness)
-                .flat_map(|row| &row.sign_in_methods)
-                .filter(|method| method.ownership == SignInMethodOwnership::Operator)
-                .map(filled)
-                .collect::<Result<Vec<_>>>()?;
-            let mut holding = Vec::new();
-            for profile in &owned {
-                let held = tx.profiles().held(profile).await?;
-                if held.iter().any(|held| subscriptions.contains(&held.entry)) {
-                    holding.push(profile.clone());
-                }
-            }
+            let mut holding = holding_a_subscription(tx, &owned, harness).await?;
             if holding.len() == 1 {
-                return Ok(holding.pop());
+                return Ok(holding.pop().map(|(profile, _)| profile));
             }
 
-            let names: Vec<&str> = owned.iter().map(|profile| profile.name.as_str()).collect();
-            bail!(Reason::StateConflict {
-                operation: SAVE,
-                resource: Resource::SubscriptionProfile,
-                reference: owned[0].name.clone(),
-                organization: Some(organization.name.clone()),
-                state: "several_operator_profiles",
-                holding_session: None,
-                next: Next::inspect(Resource::SubscriptionProfile, owned[0].name.clone()),
-                message: format!(
+            bail!(several_operator_profiles(
+                SAVE,
+                organization,
+                &owned,
+                format!(
                     "{} owns several Subscription Profiles in {} ({}), and none alone holds a \
                      {harness} subscription to replace; hold it in one by name instead",
                     operator.name,
                     organization.name,
-                    names.join(", ")
+                    names(&owned)
                 ),
-            });
+            ));
         }
+    }
+}
+
+/// Each Profile with the subscriptions the catalogue says `harness` signs in with, among what it
+/// holds; a Profile holding none is left out.
+pub(crate) async fn holding_a_subscription(
+    tx: &mut Tx<'_>,
+    profiles: &[SubscriptionProfile],
+    harness: &str,
+) -> Result<Vec<(SubscriptionProfile, Vec<&'static SignInMethod>)>> {
+    let subscriptions = catalogue::harnesses()
+        .iter()
+        .filter(|row| row.name == harness)
+        .flat_map(|row| &row.sign_in_methods)
+        .filter(|method| method.ownership == SignInMethodOwnership::Operator)
+        .map(|method| Ok((method, filled(method)?)))
+        .collect::<Result<Vec<_>>>()?;
+    let mut holding = Vec::new();
+    for profile in profiles {
+        let held = tx.profiles().held(profile).await?;
+        let methods: Vec<&'static SignInMethod> = subscriptions
+            .iter()
+            .filter(|(_, entry)| held.iter().any(|held| held.entry == *entry))
+            .map(|(method, _)| *method)
+            .collect();
+        if !methods.is_empty() {
+            holding.push((profile.clone(), methods));
+        }
+    }
+
+    Ok(holding)
+}
+
+pub(crate) fn names(profiles: &[SubscriptionProfile]) -> String {
+    profiles
+        .iter()
+        .map(|profile| profile.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+pub(crate) fn several_operator_profiles(
+    operation: &'static str,
+    organization: &Organization,
+    among: &[SubscriptionProfile],
+    message: String,
+) -> Reason {
+    Reason::StateConflict {
+        operation,
+        resource: Resource::SubscriptionProfile,
+        reference: among[0].name.clone(),
+        organization: Some(organization.name.clone()),
+        state: "several_operator_profiles",
+        holding_session: None,
+        next: Next::inspect(Resource::SubscriptionProfile, among[0].name.clone()),
+        message,
     }
 }
 

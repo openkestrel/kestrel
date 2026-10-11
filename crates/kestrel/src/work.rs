@@ -8,7 +8,7 @@ use tracing::{debug, info};
 use crate::declined::{Constraint, Next, Reason, Resource};
 use crate::domain::{
     ChangingOption, Declared, Evidence, Exit, HeldMessage, Organization, Session, SessionCommand,
-    SessionId, SessionOption, SessionState, Turn, Usage, Workspace, WorkspaceId,
+    SessionId, SessionOption, SessionState, StartedBy, Turn, Usage, Workspace, WorkspaceId,
 };
 use crate::instance::Observed;
 use crate::integration::post;
@@ -263,14 +263,41 @@ pub async fn enqueue_selecting(
         Some(named) => Some(tx.agents().named(&workspace.organization, named).await?),
         None => None,
     };
-    if let Some(method) = sign_in_method {
-        let harness = match &named {
-            Some(named) => named.harness.clone(),
-            None => match tx.workspaces().latest_session(&workspace).await? {
-                Some(latest) => latest.agent.harness,
-                None => workspace.opened_with.harness.clone(),
+    let latest = tx.workspaces().latest_session(&workspace).await?;
+    let harness = match (&named, &latest) {
+        (Some(named), _) => named.harness.clone(),
+        (None, Some(latest)) => latest.agent.harness.clone(),
+        (None, None) => workspace.opened_with.harness.clone(),
+    };
+    let continued = sign_in_method.or(latest
+        .as_ref()
+        .filter(|latest| latest.agent.harness == harness)
+        .and_then(|latest| latest.sign_in_method.as_deref()));
+    // A Trigger's work uses only the Profile its declaration names (ADR-0049).
+    let opened_by_an_event = matches!(workspace.started_by, Some(StartedBy::Event(_)));
+    let (workspace, sign_in_method) = if workspace.profile.is_none() && !opened_by_an_event {
+        let (profile, method) = workspace::operators_own(
+            &mut tx,
+            "enqueue_session",
+            &workspace.organization,
+            &harness,
+            continued,
+        )
+        .await?;
+        if let Some(profile) = &profile {
+            tx.workspaces().take_profile(&workspace, profile).await?;
+        }
+        (
+            Workspace {
+                profile,
+                ..workspace
             },
-        };
+            sign_in_method.or(method.filter(|_| continued.is_none())),
+        )
+    } else {
+        (workspace, sign_in_method)
+    };
+    if let Some(method) = sign_in_method {
         handoff::selected(
             &mut tx,
             "enqueue_session",
@@ -405,14 +432,15 @@ pub async fn set_option(
     store: &Store,
     organization: &str,
     reference: &str,
-    participant: &str,
+    participant: Option<&str>,
     named: Named<'_>,
     value: &str,
 ) -> Result<OptionSet> {
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
     let participant =
-        participant::accepted(&mut tx, &organization, participant, "set_session_option").await?;
+        participant::named_or_operator(&mut tx, &organization, participant, "set_session_option")
+            .await?;
     let session = tx
         .workspaces()
         .resolved_session(&organization, reference)
@@ -1109,12 +1137,13 @@ pub async fn turns(store: &Store, session: SessionId) -> Result<Vec<Turn>> {
 }
 
 /// Anyone who can post can interrupt; a second request while one is pending sends nothing more.
-pub async fn interrupt(store: &Store, id: SessionId, participant: &str) -> Result<Session> {
+pub async fn interrupt(store: &Store, id: SessionId, participant: Option<&str>) -> Result<Session> {
     let mut tx = store.begin().await?;
     let session = tx.workspaces().session(id).await?;
     let organization = tx.organizations().by_id(session.organization).await?;
     let participant =
-        participant::accepted(&mut tx, &organization, participant, "interrupt_session").await?;
+        participant::named_or_operator(&mut tx, &organization, participant, "interrupt_session")
+            .await?;
 
     match session.state {
         SessionState::Working => {}

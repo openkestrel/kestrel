@@ -170,12 +170,25 @@ async fn resolved<'a>(
         tx.projects().named(organization, open.project).await,
     )?;
     let agent = named("agent", tx.agents().named(organization, open.agent).await)?;
-    let profile = match open.profile {
-        Some(profile) => Some(named(
+    let (profile, sign_in_method) = match open.profile {
+        Some(profile) => (
+            Some(named(
+                "profile",
+                tx.profiles().named(organization, profile).await,
+            )?),
+            open.sign_in_method,
+        ),
+        None => named(
             "profile",
-            tx.profiles().named(organization, profile).await,
-        )?),
-        None => None,
+            operators_own(
+                tx,
+                "open_workspace",
+                organization,
+                &agent.harness,
+                open.sign_in_method,
+            )
+            .await,
+        )?,
     };
     if let Some(method) = open.sign_in_method {
         handoff::selected(
@@ -251,20 +264,58 @@ async fn resolved<'a>(
                 "a participant names the author of a brief, and this open carries none".to_owned(),
             ));
         }
-        (None, _) => None,
+        (None, Some(_)) => operator_author(tx, organization, "open_workspace").await?,
+        (None, None) => None,
     };
 
     Ok(Resolved {
         project,
         agent,
         profile,
-        sign_in_method: open.sign_in_method,
+        sign_in_method,
         continues,
         branch: open.branch,
         declared: Declared::named(open.declared),
         brief: open.brief,
         participant,
     })
+}
+
+/// The Profile and Sign-in Method of work a person opened naming no Profile (ADR-0049).
+pub(crate) async fn operators_own<'a>(
+    tx: &mut Tx<'_>,
+    operation: &'static str,
+    organization: &Organization,
+    harness: &str,
+    sign_in_method: Option<&'a str>,
+) -> Result<(Option<SubscriptionProfile>, Option<&'a str>)> {
+    if sign_in_method.is_some_and(|method| handoff::held_by_the_organization(harness, method)) {
+        return Ok((None, sign_in_method));
+    }
+
+    Ok(
+        match handoff::defaulted(tx, operation, organization, harness).await? {
+            Some(own) => (
+                Some(own.profile),
+                sign_in_method.or(own.method.map(|method| method.id.as_str())),
+            ),
+            None => (None, sign_in_method),
+        },
+    )
+}
+
+/// A Brief nobody signed is the Operator's; before one is named it stays unsigned.
+pub(crate) async fn operator_author(
+    tx: &mut Tx<'_>,
+    organization: &Organization,
+    operation: &'static str,
+) -> Result<Option<String>> {
+    match tx.operators().current().await? {
+        Some(operator) => Ok(Some(
+            participant::accepted(tx, organization, &operator.name, operation).await?,
+        )),
+        None => Ok(None),
+    }
 }
 
 pub(crate) fn named<T>(field: &'static str, named: Result<T>) -> Result<T> {
@@ -524,7 +575,7 @@ pub struct Posted {
 pub async fn post(
     store: &Store,
     id: WorkspaceId,
-    participant: &str,
+    participant: Option<&str>,
     message: &str,
 ) -> Result<Posted> {
     let mut tx = store.begin().await?;
@@ -538,10 +589,10 @@ pub async fn post(
 pub(crate) async fn post_in(
     tx: &mut Tx<'_>,
     workspace: &Workspace,
-    participant: &str,
+    participant: Option<&str>,
     message: &str,
 ) -> Result<Posted> {
-    let participant = participant::accepted(
+    let participant = participant::named_or_operator(
         tx,
         &workspace.organization,
         participant,
@@ -648,12 +699,12 @@ pub async fn edit_message(
     store: &Store,
     workspace: WorkspaceId,
     id: i64,
-    participant: &str,
+    participant: Option<&str>,
     message: &str,
 ) -> Result<HeldMessage> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(workspace).await?;
-    let participant = participant::accepted(
+    let participant = participant::named_or_operator(
         &mut tx,
         &workspace.organization,
         participant,
@@ -674,11 +725,11 @@ pub async fn withdraw_message(
     store: &Store,
     workspace: WorkspaceId,
     id: i64,
-    participant: &str,
+    participant: Option<&str>,
 ) -> Result<()> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(workspace).await?;
-    let participant = participant::accepted(
+    let participant = participant::named_or_operator(
         &mut tx,
         &workspace.organization,
         participant,

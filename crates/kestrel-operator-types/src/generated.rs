@@ -11312,10 +11312,20 @@ pub struct FileText {
     pub path: String,
     pub text: String,
 }
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Install {
+    ///Whether the first confirmed start has committed its Workspace and Session. Durable, and independent of current readiness, of the Operator's name and of what remains to declare: naming the Operator, saving a sign-in, opening a Workspace or enqueueing a Session never sets it, and no later failure clears it.
+    pub initial_setup_complete: bool,
+}
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct InstanceRelease {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub participant: Option<String>,
+    ///The person releasing it, by the participant name rule. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "tri_state_serde::deserialize"
+    )]
+    pub participant: Option<Option<String>>,
 }
 ///A replacement for the private key a GitHub Integration signs as its App with. The App, installation and repository it is checked against are the Integration's own and cannot be named.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -11390,25 +11400,30 @@ pub struct OptionChange {
         deserialize_with = "tri_state_serde::deserialize"
     )]
     pub option: Option<Option<String>>,
-    ///The person making the change, by the participant name rule.
+    ///The person making the change, by the participant name rule. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one.
     ///Constraint: minLength=1
-    pub participant: String,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "tri_state_serde::deserialize"
+    )]
+    pub participant: Option<Option<String>>,
     ///Constraint: minLength=1
     pub value: String,
 }
 impl OptionChange {
     /// Construct this request with every required wire field.
-    pub fn new(participant: String, value: String) -> Self {
+    pub fn new(value: String) -> Self {
         Self {
-            participant,
             value,
             category: None,
             option: None,
+            participant: None,
         }
     }
     /// Start a dependency-free builder with every required wire field.
-    pub fn builder(participant: String, value: String) -> OptionChangeBuilder {
-        OptionChangeBuilder::new(participant, value)
+    pub fn builder(value: String) -> OptionChangeBuilder {
+        OptionChangeBuilder::new(value)
     }
 }
 /// Dependency-free builder for [`#struct_name`].
@@ -11419,9 +11434,9 @@ pub struct OptionChangeBuilder {
 }
 impl OptionChangeBuilder {
     /// Start a builder with every required wire field.
-    pub fn new(participant: String, value: String) -> Self {
+    pub fn new(value: String) -> Self {
         Self {
-            value: OptionChange::new(participant, value),
+            value: OptionChange::new(value),
         }
     }
     #[doc = concat!(
@@ -11466,6 +11481,28 @@ impl OptionChangeBuilder {
     #[must_use]
     pub fn option_absent(mut self) -> Self {
         self.value.option = None;
+        self
+    }
+    #[doc = concat!(
+        "Set the optional nullable `", "participant", "` request field to a value."
+    )]
+    #[must_use]
+    pub fn participant(mut self, participant: String) -> Self {
+        self.value.participant = Some(Some(participant));
+        self
+    }
+    #[doc = concat!(
+        "Set the optional nullable `", "participant", "` request field to JSON null."
+    )]
+    #[must_use]
+    pub fn participant_null(mut self) -> Self {
+        self.value.participant = Some(None);
+        self
+    }
+    #[doc = concat!("Omit the optional nullable `", "participant", "` request field.")]
+    #[must_use]
+    pub fn participant_absent(mut self) -> Self {
+        self.value.participant = None;
         self
     }
     /// Finish building the request model.
@@ -11554,7 +11591,7 @@ pub struct ReleasedInstance {
 }
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct SessionDeclaration {
-    ///Omitted, the Agent of the Workspace's latest Session.
+    ///Omitted, the Agent of the Workspace's latest Session. A Workspace a person opened with no Subscription Profile takes the Operator's own for this Agent's harness as an open does; one an Event opened never does.
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
@@ -11597,10 +11634,11 @@ pub struct SessionDeclaration {
     )]
     pub thought_level: Option<Option<String>>,
 }
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct SessionInterrupt {
-    ///The person asking. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization.
-    pub participant: String,
+    ///The person asking. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub participant: Option<String>,
 }
 ///Never answered back, logged or kept in a diagnostic.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -11944,13 +11982,14 @@ pub struct WorkspaceDeclaration {
         deserialize_with = "tri_state_serde::deserialize"
     )]
     pub model: Option<Option<String>>,
-    ///The name the Brief is written under. Omitted, its source is the operator and no one joins.
+    ///The name the Brief is written under. Omitted, the install's Operator; with none named, its source is the operator and no one joins.
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
         deserialize_with = "tri_state_serde::deserialize"
     )]
     pub participant: Option<Option<String>>,
+    ///The Subscription Profile its Sessions use. Omitted, the Operator's own Profile holding a subscription for the Agent's harness, whose one held subscription is then the selected `sign_in_method`; with none, the Organization's Provider Credentials. Several such Profiles are a 409 `several_operator_profiles`, never a choice. A Profile named here is never replaced.
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
@@ -12240,11 +12279,50 @@ impl WorkspaceDeclarationBuilder {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WorkspaceMessage {
     pub message: String,
-    ///The person posting, by declared name. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization.
-    pub participant: String,
+    ///The person posting, by declared name. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub participant: Option<String>,
 }
-#[derive(Debug, Clone, Deserialize, Serialize)]
+impl WorkspaceMessage {
+    /// Construct this request with every required wire field.
+    pub fn new(message: String) -> Self {
+        Self {
+            message,
+            participant: None,
+        }
+    }
+    /// Start a dependency-free builder with every required wire field.
+    pub fn builder(message: String) -> WorkspaceMessageBuilder {
+        WorkspaceMessageBuilder::new(message)
+    }
+}
+/// Dependency-free builder for [`#struct_name`].
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct WorkspaceMessageBuilder {
+    value: WorkspaceMessage,
+}
+impl WorkspaceMessageBuilder {
+    /// Start a builder with every required wire field.
+    pub fn new(message: String) -> Self {
+        Self {
+            value: WorkspaceMessage::new(message),
+        }
+    }
+    #[doc = concat!("Set the optional `", "participant", "` request field.")]
+    #[must_use]
+    pub fn participant(mut self, participant: String) -> Self {
+        self.value.participant = Some(participant);
+        self
+    }
+    /// Finish building the request model.
+    pub fn build(self) -> WorkspaceMessage {
+        self.value
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct WorkspaceMessageWithdrawal {
-    ///The person who wrote the message, by declared name. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization.
-    pub participant: String,
+    ///The person who wrote the message, by declared name. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub participant: Option<String>,
 }

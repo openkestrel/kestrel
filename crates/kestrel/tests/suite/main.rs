@@ -32,6 +32,7 @@ mod observation;
 mod on_open_workspace;
 mod one_supervisor;
 mod operator;
+mod operator_defaults;
 mod options;
 mod outcome;
 mod ports;

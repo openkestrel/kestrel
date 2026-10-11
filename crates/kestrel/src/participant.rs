@@ -61,3 +61,23 @@ pub async fn accepted(
 
     Ok(name.to_owned())
 }
+
+/// A write that names nobody is the Operator's (ADR-0049); a name given is never replaced.
+pub async fn named_or_operator(
+    tx: &mut Tx<'_>,
+    organization: &Organization,
+    name: Option<&str>,
+    operation: &'static str,
+) -> Result<String> {
+    match name {
+        Some(name) => accepted(tx, organization, name, operation).await,
+        None => {
+            let operator = tx
+                .operators()
+                .current()
+                .await?
+                .ok_or_else(|| Reason::MissingOperator { operation }.concerning(FIELD))?;
+            accepted(tx, organization, &operator.name, operation).await
+        }
+    }
+}
