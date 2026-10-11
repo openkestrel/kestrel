@@ -8316,7 +8316,8 @@
         "required": [
           "kind",
           "profile",
-          "session"
+          "session",
+          "diagnostic"
         ]
       },
       "QueueReasonInstanceArchiving": {

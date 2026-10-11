@@ -39,10 +39,7 @@ export function reasonText(reason: QueueReason): string {
 		case "dependencies":
 			return `waiting on ${list(reason.sessions)}`;
 		case "subscription_profile":
-			return (
-				reason.diagnostic?.message ??
-				`${reason.session ?? "a Session in another Organization"} holds the ${reason.profile} profile`
-			);
+			return reason.diagnostic.message;
 		case "instance_archiving":
 			return `archiving ${reason.instance} to make room`;
 		case "live_instance_limit":

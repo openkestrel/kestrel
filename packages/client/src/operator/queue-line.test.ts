@@ -181,7 +181,33 @@ describe("the line a Workspace shows for its queued Session", () => {
 					agent: "builder",
 					reasons: [
 						{ kind: "dependencies", sessions: ["quick-thistle", "quick-thistle", "calm-heron"] },
-						{ kind: "subscription_profile", profile: "jack", session: "quick-thistle" },
+						{
+							kind: "subscription_profile",
+							profile: "jack",
+							session: "quick-thistle",
+							diagnostic: {
+								kind: "state_conflict",
+								field: null,
+								message:
+									"the rotating sign-in in the subscription profile jack is in use by the session quick-thistle",
+								context: {
+									operation: "use_sign_in",
+									resource: "subscription_profile",
+									reference: "jack",
+									organization: "acme",
+									state: "credential_in_use",
+									holding_session: "quick-thistle",
+								},
+								next_steps: [
+									{
+										action: "inspect_resource",
+										resource: "session",
+										reference: "quick-thistle",
+										organization: "acme",
+									},
+								],
+							},
+						},
 						{ kind: "ahead", sessions: ["calm-heron", "agile-robin"], elsewhere: 0 },
 					],
 					enqueued_at: "2026-09-30T10:00:00Z",
@@ -189,7 +215,7 @@ describe("the line a Workspace shows for its queued Session", () => {
 			],
 		});
 		expect(sessionQueueLine(queue, workspace)).toBe(
-			"Waiting on quick-thistle and calm-heron; quick-thistle holds the jack profile; behind agile-robin.",
+			"Waiting on quick-thistle and calm-heron; the rotating sign-in in the subscription profile jack is in use by the session quick-thistle; behind agile-robin.",
 		);
 	});
 

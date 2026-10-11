@@ -16,6 +16,15 @@ pub enum Holder {
     CredentialUse(String),
 }
 
+impl Holder {
+    pub(crate) fn session(&self) -> Option<&str> {
+        match self {
+            Self::Session { session, .. } => Some(session),
+            Self::CredentialUse(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Busy {
     pub profile: String,

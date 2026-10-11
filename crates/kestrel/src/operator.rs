@@ -2976,12 +2976,7 @@ impl From<scheduling::Reason> for ReasonRecord {
             scheduling::Reason::Dependencies(sessions) => Self::Dependencies { sessions },
             scheduling::Reason::SubscriptionProfile(busy) => {
                 let profile = busy.profile.clone();
-                let session = match &busy.holder {
-                    crate::sign_in::credential_use::Holder::Session { session, .. } => {
-                        Some(session.clone())
-                    }
-                    crate::sign_in::credential_use::Holder::CredentialUse(_) => None,
-                };
+                let session = busy.holder.session().map(str::to_owned);
                 let (_, diagnostic) = diagnosis(Reason::SignInBusy(busy), None);
                 Self::SubscriptionProfile {
                     profile,
@@ -4643,10 +4638,7 @@ fn diagnosis(reason: Reason, field: Option<&'static str>) -> (StatusCode, wire::
         } => invalid_value(operation, field, constraint, allowed, message),
         Reason::SignInBusy(busy) => {
             let message = busy.to_string();
-            let holding_session = match busy.holder {
-                crate::sign_in::credential_use::Holder::Session { session, .. } => Some(session),
-                crate::sign_in::credential_use::Holder::CredentialUse(_) => None,
-            };
+            let holding_session = busy.holder.session().map(str::to_owned);
             diagnosis(
                 Reason::StateConflict {
                     operation: crate::sign_in::credential_use::ACQUIRE,

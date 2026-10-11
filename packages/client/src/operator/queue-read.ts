@@ -37,7 +37,7 @@ export function queuedSessions(queue: Queue): QueuedSession[] {
 		position: row.position,
 		reasons: reasonsText(row.reasons),
 		diagnostics: row.reasons.flatMap((reason) =>
-			reason.kind === "subscription_profile" && reason.diagnostic ? [reason.diagnostic] : [],
+			reason.kind === "subscription_profile" ? [reason.diagnostic] : [],
 		),
 	}));
 }
