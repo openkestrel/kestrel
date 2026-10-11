@@ -1141,6 +1141,12 @@ pub struct StartPlanCredentialsItem {
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RepositoryResolutionRequest {
+    ///As a Project declaration selects them. Only a `declaration` takes any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integrations: Option<Vec<RepositoryIntegrationSelection>>,
+    ///The Organization whose Integrations `integrations` names; required with it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purpose: Option<RepositoryPurpose>,
     pub repositories: Vec<String>,
@@ -1150,6 +1156,8 @@ impl RepositoryResolutionRequest {
     pub fn new(repositories: Vec<String>) -> Self {
         Self {
             repositories,
+            integrations: None,
+            organization: None,
             purpose: None,
         }
     }
@@ -1170,6 +1178,18 @@ impl RepositoryResolutionRequestBuilder {
         Self {
             value: RepositoryResolutionRequest::new(repositories),
         }
+    }
+    #[doc = concat!("Set the optional `", "integrations", "` request field.")]
+    #[must_use]
+    pub fn integrations(mut self, integrations: Vec<RepositoryIntegrationSelection>) -> Self {
+        self.value.integrations = Some(integrations);
+        self
+    }
+    #[doc = concat!("Set the optional `", "organization", "` request field.")]
+    #[must_use]
+    pub fn organization(mut self, organization: String) -> Self {
+        self.value.organization = Some(organization);
+        self
     }
     #[doc = concat!("Set the optional `", "purpose", "` request field.")]
     #[must_use]
@@ -1221,6 +1241,8 @@ pub struct ResolvedRepository {
     ///The directory under the Workspace the repository is checked out into.
     pub checkout_directory: String,
     pub given: String,
+    ///The Integration selected for it, whose App a declaration would ask for the repository and branch before saving.
+    pub integration: Option<String>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RepositoryWarning {
@@ -1407,6 +1429,9 @@ pub struct WorkspaceListed {
     pub id: uuid::Uuid,
     ///The Instance its Sessions execute on, while one is kept.
     pub instance: Option<String>,
+    ///The Integration each of its repositories selected when it opened. Redeclaring its Project changes none, and one since disabled or retired still reads here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integrations: Option<Vec<SelectedIntegration>>,
     pub last_active_at: String,
     ///Constraint: pattern=`^[a-z]+-[a-z]+-[a-z]{8}$`
     pub name: String,
@@ -1442,6 +1467,9 @@ pub struct Workspace {
     pub id: uuid::Uuid,
     ///The Instance its Sessions execute on, while one is kept.
     pub instance: Option<String>,
+    ///The Integration each of its repositories selected when it opened. Redeclaring its Project changes none, and one since disabled or retired still reads here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integrations: Option<Vec<SelectedIntegration>>,
     pub last_active_at: String,
     ///Constraint: pattern=`^[a-z]+-[a-z]+-[a-z]{8}$`
     pub name: String,
@@ -2460,8 +2488,19 @@ pub type ListProjectsResponse = Vec<Project>;
 pub struct Project {
     pub branch: String,
     pub id: uuid::Uuid,
+    ///The Integration each connected repository selects, for the Workspaces opened from now on.
+    pub integrations: Vec<SelectedIntegration>,
     pub name: String,
     pub repositories: Vec<String>,
+}
+///Selected explicitly, and never replaced by another Integration when this one is disabled or retired.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SelectedIntegration {
+    ///The Integration's name as it reads now.
+    pub integration: String,
+    pub integration_id: uuid::Uuid,
+    ///The repository's address as the Project or Workspace holds it.
+    pub repository: String,
 }
 pub type ListOrganizationsResponse = Vec<Organization>;
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -2490,6 +2529,30 @@ pub struct Agent {
     pub model: Option<String>,
     pub name: String,
     pub thought_level: Option<String>,
+}
+///One page of the repositories the Integration's App installation reaches, as GitHub answered this read.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IntegrationRepositories {
+    ///The page to ask for next, or null after the last.
+    pub next_page: Option<i64>,
+    ///Constraint: minimum=1
+    pub page: i64,
+    pub repositories: Vec<IntegrationRepository>,
+    ///How many the installation reaches across every page.
+    ///Constraint: minimum=0
+    pub total: i64,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IntegrationRepository {
+    ///The HTTPS address a declaration selecting this Integration holds it by.
+    pub address: String,
+    ///As GitHub names it now; never a guess.
+    pub default_branch: String,
+    pub private: bool,
+    ///`owner/name`.
+    pub repository: String,
+    ///Whether this is the one repository the Integration watches, and so the only one a Project can select it for.
+    pub watched: bool,
 }
 ///A registration, by the kind of external system it connects to.
 #[derive(Debug, Clone)]
@@ -8498,11 +8561,64 @@ pub type CronTriggerCondition = serde_json::Value;
 pub struct ProjectDeclaration {
     ///Constraint: minLength=1
     pub branch: String,
+    ///The Integration each connected repository reaches GitHub as. Absent or empty selects none: neither a GitHub address nor an Event ever selects one. A repository named here is held as its HTTPS address whatever transport it was given by. Before a selection, its repository or the branch is saved new or changed, the selected App is asked for the repository and the branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integrations: Option<Vec<RepositoryIntegrationSelection>>,
     ///Constraint: minLength=1
     pub name: String,
     ///The repositories the work happens against, in order: an http(s)://, ssh://, git:// or file:// URL, an scp-style `user@host:path`, a local path on the Instance beginning `/`, `./` or `../`, or `owner/repo` or `github.com/owner/repo`, which is held as its HTTPS `.git` address.
     ///Constraint: minItems=1
     pub repositories: Vec<String>,
+}
+impl ProjectDeclaration {
+    /// Construct this request with every required wire field.
+    pub fn new(branch: String, name: String, repositories: Vec<String>) -> Self {
+        Self {
+            branch,
+            name,
+            repositories,
+            integrations: None,
+        }
+    }
+    /// Start a dependency-free builder with every required wire field.
+    pub fn builder(
+        branch: String,
+        name: String,
+        repositories: Vec<String>,
+    ) -> ProjectDeclarationBuilder {
+        ProjectDeclarationBuilder::new(branch, name, repositories)
+    }
+}
+/// Dependency-free builder for [`#struct_name`].
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct ProjectDeclarationBuilder {
+    value: ProjectDeclaration,
+}
+impl ProjectDeclarationBuilder {
+    /// Start a builder with every required wire field.
+    pub fn new(branch: String, name: String, repositories: Vec<String>) -> Self {
+        Self {
+            value: ProjectDeclaration::new(branch, name, repositories),
+        }
+    }
+    #[doc = concat!("Set the optional `", "integrations", "` request field.")]
+    #[must_use]
+    pub fn integrations(mut self, integrations: Vec<RepositoryIntegrationSelection>) -> Self {
+        self.value.integrations = Some(integrations);
+        self
+    }
+    /// Finish building the request model.
+    pub fn build(self) -> ProjectDeclaration {
+        self.value
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RepositoryIntegrationSelection {
+    ///The name of an enabled GitHub Integration in the Organization that carries outbound and watches this repository.
+    pub integration: String,
+    ///One of the declared repositories, as given there or as it resolves.
+    pub repository: String,
 }
 #[derive(Debug, Clone)]
 pub struct DeclarationDocumentTrigger {
@@ -10395,6 +10511,7 @@ pub enum Action {
     InspectHarnessImageAction(InspectHarnessImageAction),
     CheckConnectionAction(CheckConnectionAction),
     RetryReadAction(RetryReadAction),
+    RetryRequestAction(RetryRequestAction),
     InspectOperationAction(InspectOperationAction),
 }
 impl Serialize for Action {
@@ -10431,6 +10548,7 @@ impl Serialize for Action {
             }
             Self::CheckConnectionAction(value) => serde::Serialize::serialize(value, serializer),
             Self::RetryReadAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::RetryRequestAction(value) => serde::Serialize::serialize(value, serializer),
             Self::InspectOperationAction(value) => serde::Serialize::serialize(value, serializer),
         }
     }
@@ -11032,6 +11150,31 @@ impl<'de> Deserialize<'de> for Action {
         }
         if input.as_object().is_some_and(|object| {
             true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"retry_request\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<RetryRequestAction>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::RetryRequestAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::RetryRequestAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
                 value.is_null() || matches!(value.to_string().as_str(), "\"inspect_operation\"")
             })
         }) {
@@ -11098,6 +11241,14 @@ pub struct SetProviderCredentialAction {
     ///The credential's variable. Its value is always collected privately and never serialized here.
     pub name: String,
     pub organization: String,
+}
+///The write was refused before anything was saved, so sending the same request again is safe.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RetryRequestAction {
+    pub action: serde_json::Value,
+    pub operation: String,
+    pub resource: Option<String>,
+    pub retry_after_seconds: Option<i64>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RetryReadAction {

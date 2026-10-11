@@ -52,6 +52,12 @@ impl Existing {
                         .iter()
                         .filter_map(|repository| repository.as_str().map(str::to_owned))
                         .collect(),
+                    integrations: records(&record["integrations"], |selected| {
+                        Some(json!({
+                            "repository": selected["repository"].as_str()?,
+                            "integration": selected["integration"].as_str()?,
+                        }))
+                    }),
                     branch: record["branch"].as_str()?.to_owned(),
                 })
             }),
@@ -81,6 +87,8 @@ fn records<T>(records: &Value, read: impl Fn(&Value) -> Option<T>) -> Vec<T> {
 pub struct Project {
     pub name: String,
     pub repositories: Vec<String>,
+    /// As declared, and sent back unchanged: a start selects none of its own.
+    pub integrations: Vec<Value>,
     pub branch: String,
 }
 
@@ -124,6 +132,7 @@ pub struct Explained<'a> {
 pub struct Plan {
     pub organization: Inferred<String>,
     pub repositories: Inferred<Vec<String>>,
+    integrations: Vec<Value>,
     pub project: Inferred<String>,
     pub branch: Inferred<String>,
     pub agent: Inferred<String>,
@@ -294,6 +303,12 @@ pub fn plan(
             .find(|declared| declared.name == project.value)
     });
 
+    let integrations = named
+        .zip(repositories.as_ref())
+        .filter(|(named, repositories)| named.repositories == repositories.value)
+        .map(|(named, _)| named.integrations.clone())
+        .unwrap_or_default();
+
     let branch = match (given.branch, named) {
         (Some(branch), _) => Some(flagged(branch, "--branch")),
         (None, Some(named)) => Some(inferred(
@@ -399,6 +414,7 @@ pub fn plan(
         (Some(repositories), Some(project), Some(branch)) if missing.is_empty() => Ok(Plan {
             organization,
             repositories,
+            integrations,
             project,
             branch,
             agent,
@@ -543,6 +559,7 @@ impl Plan {
             "project": {
                 "name": self.project.value,
                 "repositories": self.repositories.value,
+                "integrations": self.integrations,
                 "branch": self.branch.value,
             },
             "agent": {
@@ -759,6 +776,10 @@ mod tests {
                 projects: vec![Project {
                     name: "widgets-main".to_owned(),
                     repositories: vec!["https://github.com/acme/widgets.git".to_owned()],
+                    integrations: vec![json!({
+                        "repository": "https://github.com/acme/widgets.git",
+                        "integration": "github",
+                    })],
                     branch: "trunk".to_owned(),
                 }],
                 ..Existing::default()
@@ -767,6 +788,36 @@ mod tests {
 
         assert_eq!(plan.project.value, "widgets-main");
         assert_eq!(plan.branch.value, "trunk");
+        assert_eq!(
+            plan.body("go", &[])["project"]["integrations"],
+            json!([{
+                "repository": "https://github.com/acme/widgets.git",
+                "integration": "github",
+            }])
+        );
+    }
+
+    #[test]
+    fn repositories_given_against_a_declared_project_bring_none_of_its_integrations() {
+        let mut declared = widgets_declared_against("https://github.com/acme/other");
+        declared.integrations = vec![json!({
+            "repository": "https://github.com/acme/other",
+            "integration": "github",
+        })];
+        let plan = planned(
+            Given {
+                project: Some("widgets".to_owned()),
+                repositories: vec!["https://github.com/acme/widgets.git".to_owned()],
+                ..Given::default()
+            },
+            &LocalClone::default(),
+            &Existing {
+                projects: vec![declared],
+                ..Existing::default()
+            },
+        );
+
+        assert_eq!(plan.body("go", &[])["project"]["integrations"], json!([]));
     }
 
     #[test]
@@ -857,6 +908,7 @@ mod tests {
         Project {
             name: "widgets".to_owned(),
             repositories: vec![repository.to_owned()],
+            integrations: Vec::new(),
             branch: "main".to_owned(),
         }
     }

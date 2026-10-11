@@ -14,6 +14,17 @@ kestrel project declare kestrel \
 kestrel agent declare builder
 ```
 
+To let sessions reach a GitHub repository as a connected GitHub App, select its integration when you declare the project:
+
+```sh
+kestrel project declare kestrel \
+  --repository openkestrel/kestrel \
+  --integration github \
+  --branch main
+```
+
+Beside several repositories, write `--integration REPOSITORY=NAME` for each one you connect. Kestrel asks the App for the repository and the branch before it saves the project, and saves nothing if GitHub refuses or does not answer. A selected repository is stored by its HTTPS address even when you give an SSH one. That check covers the App's access only; a session's checkout can still fail in its instance. A workspace keeps the integrations its project selected when it opened, so changing the project affects new workspaces only. In a declaration file, the same selection is `integrations: [{ repository, integration }]` under `project`.
+
 With one organization, the CLI selects it automatically. With more than one, set `--organization`, `KESTREL_ORGANIZATION`, or a committed `.kestrel/organization` file. `organization list`, `project list`, and `agent list` show the current declarations. Repeating a declaration leaves an unchanged record alone; project and agent declarations with the same name update that record in place.
 
 The default harness is OpenCode. `--harness codex` and `--harness claude` are also available when the environment image contains their ACP adapters; the supplied [`kestrel-dev` image](../../images/kestrel-dev/README.md) does. With no `--model`, the harness chooses its default. To change the model for future sessions:

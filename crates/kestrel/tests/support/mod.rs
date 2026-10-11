@@ -652,7 +652,7 @@ impl Kestrel {
         let mut tx = self.store.begin().await.expect("a transaction");
         let project = tx
             .projects()
-            .declare(organization, name, repositories, branch)
+            .declare(organization, name, repositories, &[], branch)
             .await
             .expect("the project should declare")
             .record;

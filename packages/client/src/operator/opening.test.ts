@@ -13,6 +13,7 @@ const a_project: Project = {
 	id: "01a0a2d8-baf8-7c02-99fa-7280f174c14a",
 	name: "kestrel",
 	repositories: ["https://github.com/openkestrel/kestrel", "https://github.com/openkestrel/env"],
+	integrations: [],
 	branch: "main",
 };
 

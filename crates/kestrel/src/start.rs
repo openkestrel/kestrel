@@ -5,8 +5,9 @@ use crate::capability::Images;
 use crate::declaration;
 use crate::declined::Declined;
 use crate::domain::{Declared, Session, Workspace};
+use crate::integration::github::Github;
 use crate::provider;
-use crate::repository;
+use crate::repository::{self, Declaring, Selecting};
 use crate::sign_in::{Authentication, Source};
 use crate::store::{Declared as DeclaredRecord, Store};
 use crate::workspace;
@@ -45,11 +46,34 @@ pub struct Settled {
 
 /// A start only adds declarations and refuses one that would change, because the operator asked
 /// for work rather than a redeclaration.
-pub async fn start(store: &Store, images: &Images, plan: &Plan) -> Result<Started> {
-    let repositories = checked(plan)?;
+pub async fn start(
+    store: &Store,
+    images: &Images,
+    github: &Github,
+    plan: &Plan,
+) -> Result<Started> {
+    checked(plan)?;
     images
         .admit(&plan.agent.harness, "start", "agent.harness")
         .await?;
+    let declarable = repository::declarable(
+        store,
+        github,
+        &Declaring {
+            selecting: Selecting {
+                operation: "start",
+                repositories_field: "project.repositories",
+                integrations_field: "project.integrations",
+                organization: &plan.organization,
+                repositories: &plan.project.repositories,
+                selections: &plan.project.integrations,
+            },
+            branch_field: "project.branch",
+            project: &plan.project.name,
+            branch: &plan.project.branch,
+        },
+    )
+    .await?;
     let declared = plan.agent.declared();
 
     let mut tx = store.begin().await?;
@@ -76,25 +100,31 @@ pub async fn start(store: &Store, images: &Images, plan: &Plan) -> Result<Starte
         .projects()
         .find(&organization.record, &plan.project.name)
         .await?;
-    if let Some(found) = found
-        .filter(|found| found.repositories != repositories || found.branch != plan.project.branch)
-    {
+    if let Some(found) = found.filter(|found| !declarable.describes(found)) {
+        let selecting = if found.integrations.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " as {}",
+                found
+                    .integrations
+                    .iter()
+                    .map(|selected| selected.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
         return Err(Declined::Taken(format!(
-            "the project {} is declared against {} on {}, and a start changes no declaration",
+            "the project {} is declared against {}{selecting} on {}, and a start changes no \
+             declaration",
             found.name,
             found.repositories.join(", "),
             found.branch
         ))
         .into());
     }
-    let project = tx
-        .projects()
-        .declare(
-            &organization.record,
-            &plan.project.name,
-            &repositories,
-            &plan.project.branch,
-        )
+    let project = declarable
+        .declare(&mut tx, &organization.record, &plan.project.name)
         .await?;
 
     let found = tx
@@ -160,7 +190,7 @@ pub async fn start(store: &Store, images: &Images, plan: &Plan) -> Result<Starte
     })
 }
 
-fn checked(plan: &Plan) -> Result<Vec<String>> {
+fn checked(plan: &Plan) -> Result<()> {
     for credential in &plan.credentials {
         provider::holdable("start", &credential.variable, &credential.secret)?;
     }
@@ -171,8 +201,12 @@ fn checked(plan: &Plan) -> Result<Vec<String>> {
     {
         return unacceptable("a start names its organization, project and agent");
     }
-    let repositories =
-        repository::declared("start", "project.repositories", &plan.project.repositories)?;
+    repository::resolved(
+        "start",
+        "project.repositories",
+        &plan.project.repositories,
+        repository::Purpose::Declaration,
+    )?;
     if plan.project.branch.is_empty() {
         return unacceptable("a project names the branch its work happens on");
     }
@@ -183,5 +217,5 @@ fn checked(plan: &Plan) -> Result<Vec<String>> {
         return unacceptable("a start carries a brief");
     }
 
-    Ok(repositories)
+    Ok(())
 }

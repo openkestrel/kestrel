@@ -3,6 +3,7 @@ mod support;
 
 mod acp;
 mod agent_choice;
+mod authority;
 mod blocked;
 mod busy;
 mod capacity;

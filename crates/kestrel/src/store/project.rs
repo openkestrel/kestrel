@@ -4,7 +4,7 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
 use crate::declined::{Reason, Resource};
-use crate::domain::{Organization, Project, ProjectId};
+use crate::domain::{Organization, Project, ProjectId, SelectedIntegration};
 use crate::store::Declared;
 
 pub struct Projects<'a> {
@@ -21,6 +21,7 @@ impl<'a> Projects<'a> {
         organization: &Organization,
         name: &str,
         repositories: &[String],
+        integrations: &[SelectedIntegration],
         branch: &str,
     ) -> Result<Declared<Project>> {
         let found = self.find(organization, name).await?;
@@ -31,6 +32,7 @@ impl<'a> Projects<'a> {
             organization: organization.id,
             name: name.to_owned(),
             repositories: repositories.to_vec(),
+            integrations: integrations.to_vec(),
             branch: branch.to_owned(),
         };
 
@@ -51,7 +53,9 @@ impl<'a> Projects<'a> {
                 .with_context(|| format!("declaring the project {name}"))?;
             }
             Some(found)
-                if found.repositories == project.repositories && found.branch == project.branch =>
+                if found.repositories == project.repositories
+                    && found.branch == project.branch
+                    && SelectedIntegration::same(&found.integrations, &project.integrations) =>
             {
                 return Ok(Declared {
                     record: found,
@@ -75,13 +79,21 @@ impl<'a> Projects<'a> {
 
         for (position, url) in project.repositories.iter().enumerate() {
             sqlx::query(
-                "INSERT INTO project_repository (project_id, organization_id, position, url)
-                 VALUES (?, ?, ?, ?)",
+                "INSERT INTO project_repository
+                     (project_id, organization_id, position, url, integration_id)
+                 VALUES (?, ?, ?, ?, ?)",
             )
             .bind(project.id.to_string())
             .bind(project.organization.to_string())
             .bind(i64::try_from(position)?)
             .bind(url)
+            .bind(
+                project
+                    .integrations
+                    .iter()
+                    .find(|selected| &selected.repository == url)
+                    .map(|selected| selected.integration.to_string()),
+            )
             .execute(&mut *self.connection)
             .await
             .with_context(|| format!("naming the repository {url} in the project {name}"))?;
@@ -135,9 +147,11 @@ impl<'a> Projects<'a> {
 
     pub async fn all(&mut self, organization: &Organization) -> Result<Vec<Project>> {
         let rows = sqlx::query(
-            "SELECT project.id, project.name, project.branch, project_repository.url
+            "SELECT project.id, project.name, project.branch, project_repository.url,
+                    project_repository.integration_id, integration.name AS integration_name
              FROM project
              LEFT JOIN project_repository ON project_repository.project_id = project.id
+             LEFT JOIN integration ON integration.id = project_repository.integration_id
              WHERE project.organization_id = ?
              ORDER BY project.name, project_repository.position",
         )
@@ -155,9 +169,11 @@ pub(crate) async fn with_id(
     id: ProjectId,
 ) -> Result<Project> {
     let rows = sqlx::query(
-        "SELECT project.id, project.name, project.branch, project_repository.url
+        "SELECT project.id, project.name, project.branch, project_repository.url,
+                project_repository.integration_id, integration.name AS integration_name
          FROM project
          LEFT JOIN project_repository ON project_repository.project_id = project.id
+         LEFT JOIN integration ON integration.id = project_repository.integration_id
          WHERE project.organization_id = ? AND project.id = ?
          ORDER BY project_repository.position",
     )
@@ -182,15 +198,22 @@ fn projects(rows: &[SqliteRow], organization: &Organization) -> Result<Vec<Proje
                 organization: organization.id,
                 name: row.get("name"),
                 repositories: Vec::new(),
+                integrations: Vec::new(),
                 branch: row.get("branch"),
             });
         }
         if let Some(url) = row.get::<Option<String>, _>("url") {
-            projects
+            let project = projects
                 .last_mut()
-                .expect("the project this repository belongs to was just pushed")
-                .repositories
-                .push(url);
+                .expect("the project this repository belongs to was just pushed");
+            if let Some(integration) = row.get::<Option<String>, _>("integration_id") {
+                project.integrations.push(SelectedIntegration {
+                    repository: url.clone(),
+                    integration: integration.parse()?,
+                    name: row.get("integration_name"),
+                });
+            }
+            project.repositories.push(url);
         }
     }
 

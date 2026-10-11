@@ -105,6 +105,10 @@ pub enum Constraint {
     Immutable,
     RsaPrivateKey,
     AcceptedByApp,
+    DeclaredRepository,
+    WatchedByIntegration,
+    BranchInRepository,
+    DeclarationPurpose,
 }
 
 impl Constraint {
@@ -132,6 +136,10 @@ impl Constraint {
             Constraint::Immutable => "immutable",
             Constraint::RsaPrivateKey => "rsa_private_key",
             Constraint::AcceptedByApp => "accepted_by_app",
+            Constraint::DeclaredRepository => "declared_repository",
+            Constraint::WatchedByIntegration => "watched_by_integration",
+            Constraint::BranchInRepository => "branch_in_repository",
+            Constraint::DeclarationPurpose => "declaration_purpose",
         }
     }
 }
@@ -163,6 +171,14 @@ pub enum Step {
     ReplacePrivateKey {
         integration: String,
     },
+}
+
+/// What asking GitHub again takes, when it did not answer and nothing was saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Again {
+    ReplacePrivateKey,
+    Read,
+    Request,
 }
 
 /// Inspection comes first by construction; every other step is one a person chooses.
@@ -271,6 +287,7 @@ pub enum Reason {
         integration: String,
         organization: String,
         retry_after_seconds: Option<i64>,
+        again: Again,
         message: String,
     },
     /// Never a claim that the harness is absent: nothing established whether it is.

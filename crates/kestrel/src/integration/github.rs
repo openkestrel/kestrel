@@ -9,6 +9,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Response, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::declined::Declined;
 use crate::domain::{GithubConnection, Integration, IntegrationId, Occurrence};
@@ -77,6 +78,20 @@ pub struct Listed {
     pub delivered_at: Timestamp,
     pub installation_id: Option<i64>,
     pub repository_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Installed {
+    pub total_count: u64,
+    pub repositories: Vec<InstalledRepository>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InstalledRepository {
+    pub id: i64,
+    pub full_name: String,
+    pub default_branch: String,
+    pub private: bool,
 }
 
 pub struct Listing {
@@ -307,33 +322,27 @@ impl Github {
         connection: &GithubConnection,
         replacement: &App,
     ) -> Result<(), Unproven> {
+        self.reached(connection, replacement).await.map(|_| ())
+    }
+
+    /// An installation token that has just read the repository the connection names.
+    async fn reached(&self, connection: &GithubConnection, app: &App) -> Result<String, Unproven> {
         #[derive(Deserialize)]
         struct Named {
             id: i64,
         }
 
-        app_jwt(replacement).map_err(|_| Unproven::Unreadable)?;
-        let api = connection.api.trim_end_matches('/');
-        let minted: MintedToken = proven(
-            self.as_app(
-                reqwest::Method::POST,
-                replacement,
-                &format!(
-                    "{api}/app/installations/{}/access_tokens",
-                    replacement.installation
-                ),
-            )
-            .map_err(Unproven::Unanswered)?,
-            "an installation token",
-            Unproven::Installation,
-        )
-        .await?;
+        let token = self.installation_token(&connection.api, app).await?;
         let named: Named = proven(
-            self.client
-                .get(format!("{api}/repos/{}", connection.repository))
-                .header("accept", "application/vnd.github+json")
-                .header("x-github-api-version", VERSION)
-                .bearer_auth(minted.token),
+            self.with_token(
+                reqwest::Method::GET,
+                &token,
+                &format!(
+                    "{}/repos/{}",
+                    connection.api.trim_end_matches('/'),
+                    connection.repository
+                ),
+            ),
             &connection.repository,
             Unproven::Repository,
         )
@@ -342,7 +351,110 @@ impl Github {
             return Err(Unproven::Repository);
         }
 
-        Ok(())
+        Ok(token)
+    }
+
+    /// Whether `branch` is there. A repository the installation cannot read is `Unproven`, never
+    /// absent: a private repository answers a stranger the way a missing one does (ADR-0057).
+    pub async fn reaches(
+        &self,
+        connection: &GithubConnection,
+        branch: &str,
+    ) -> Result<bool, Unproven> {
+        let token = self.reached(connection, &connection.credential).await?;
+        let asked_for = format!("the branch {branch} of {}", connection.repository);
+        let mut url = Url::parse(&format!(
+            "{}/repos/{}/branches",
+            connection.api.trim_end_matches('/'),
+            connection.repository
+        ))
+        .map_err(|error| Unproven::Unanswered(anyhow!("{asked_for} has no address: {error}")))?;
+        url.path_segments_mut()
+            .map_err(|()| Unproven::Unanswered(anyhow!("{asked_for} has no address")))?
+            .extend(branch.split('/'));
+        let response = self
+            .with_token(reqwest::Method::GET, &token, url.as_str())
+            .send()
+            .await
+            .map_err(|error| {
+                Unproven::Unanswered(anyhow!(
+                    "github could not be asked for {asked_for}: {error}"
+                ))
+            })?;
+        let status = response.status();
+        if let Some(until) = rate_limited(status, response.headers()) {
+            return Err(Unproven::RateLimited { until });
+        }
+
+        match status {
+            StatusCode::NOT_FOUND => Ok(false),
+            StatusCode::UNAUTHORIZED => Err(Unproven::Rejected),
+            status if status.is_client_error() => Err(Unproven::Repository),
+            status if !status.is_success() => Err(Unproven::Unanswered(anyhow!(
+                "github answered {status} for {asked_for}"
+            ))),
+            _ => Ok(true),
+        }
+    }
+
+    /// One page of what the installation reaches, as GitHub says it now.
+    pub async fn installed_repositories(
+        &self,
+        connection: &GithubConnection,
+        page: u32,
+        per_page: u32,
+    ) -> Result<Installed, Unproven> {
+        let token = self
+            .installation_token(&connection.api, &connection.credential)
+            .await?;
+
+        proven(
+            self.with_token(
+                reqwest::Method::GET,
+                &token,
+                &format!(
+                    "{}/installation/repositories?per_page={per_page}&page={page}",
+                    connection.api.trim_end_matches('/')
+                ),
+            ),
+            "the installation's repositories",
+            Unproven::Installation,
+        )
+        .await
+    }
+
+    async fn installation_token(&self, api: &str, app: &App) -> Result<String, Unproven> {
+        app_jwt(app).map_err(|_| Unproven::Unreadable)?;
+        let minted: MintedToken = proven(
+            self.as_app(
+                reqwest::Method::POST,
+                app,
+                &format!(
+                    "{}/app/installations/{}/access_tokens",
+                    api.trim_end_matches('/'),
+                    app.installation
+                ),
+            )
+            .map_err(Unproven::Unanswered)?,
+            "an installation token",
+            Unproven::Installation,
+        )
+        .await?;
+
+        Ok(minted.token)
+    }
+
+    fn with_token(
+        &self,
+        method: reqwest::Method,
+        token: &str,
+        url: &str,
+    ) -> reqwest::RequestBuilder {
+        self.client
+            .request(method, url)
+            .header("accept", "application/vnd.github+json")
+            .header("x-github-api-version", VERSION)
+            .bearer_auth(token)
     }
 
     /// What GitHub calls the App's own identity: its bot account's login, `<slug>[bot]`,
@@ -1121,6 +1233,10 @@ pub fn repository(repository: &str) -> Result<String> {
     }
 
     Ok(format!("{owner}/{name}"))
+}
+
+pub fn https_address(repository: &str) -> String {
+    format!("https://github.com/{repository}.git")
 }
 
 pub fn names(url: &str, repository: &str) -> bool {

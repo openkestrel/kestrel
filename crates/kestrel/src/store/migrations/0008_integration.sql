@@ -50,6 +50,10 @@ CREATE TABLE integration (
 
 CREATE INDEX integration_poll_due ON integration (poll_due_at) WHERE poll_due_at IS NOT NULL;
 
+ALTER TABLE project_repository ADD COLUMN integration_id TEXT REFERENCES integration (id);
+-- Copied from the Project when the Workspace opens and never rewritten (ADR-0056).
+ALTER TABLE workspace_repository ADD COLUMN integration_id TEXT REFERENCES integration (id);
+
 CREATE TABLE event (
     record_id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL REFERENCES organization (id),
