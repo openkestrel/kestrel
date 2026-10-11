@@ -131,6 +131,7 @@ pub async fn start(store: &Store, images: &Images, plan: &Plan) -> Result<Starte
         project: project.record.clone(),
         agent: agent.record.clone(),
         profile: None,
+        sign_in_method: None,
         continues: None,
         branch: None,
         declared: Declared::default(),

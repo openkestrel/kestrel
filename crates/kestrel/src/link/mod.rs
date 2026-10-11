@@ -23,9 +23,8 @@ use crate::domain::{Checkout, Session, SessionId, SessionState, Workspace};
 use crate::fanout::Touched;
 use crate::link::credential::Secret;
 use crate::log::{Cursor, Unreadable, Window};
-use crate::profile;
-use crate::provider;
 use crate::role::serve;
+use crate::sign_in::handoff;
 use crate::store::workspace::Linked;
 use crate::store::{self, Store, Tx};
 use crate::work::{self, ReportRefused, Reported};
@@ -370,25 +369,12 @@ async fn credentials(
 ) -> Result<Json<Credentials>, Refused> {
     let (linked, _) = authenticated(&control_plane, &headers, &instance).await?;
     let session = carried(&control_plane, &linked, &asking.session).await?;
-    let mut variables = provider::reaching(&control_plane.store, session.organization).await?;
-    let mut files = BTreeMap::new();
-    if let Some(named) = workspace::show(&control_plane.store, session.workspace)
-        .await?
-        .profile
-    {
-        let contents = profile::contents(&control_plane.store, &named).await?;
-        variables.extend(contents.variables);
-        files = contents.files;
-    }
-    info!(
-        session = %session.id,
-        instance = linked.instance,
-        variables = variables.keys().cloned().collect::<Vec<_>>().join(", "),
-        files = files.keys().cloned().collect::<Vec<_>>().join(", "),
-        "an instance took the credentials its session needs"
-    );
+    let handed = handoff::hand_off(&control_plane.store, &session).await?;
 
-    Ok(Json(Credentials { variables, files }))
+    Ok(Json(Credentials {
+        variables: handed.variables,
+        files: handed.files,
+    }))
 }
 
 async fn refresh_credentials(
@@ -408,7 +394,7 @@ async fn refresh_credentials(
             "this session's workspace names no subscription profile to refresh".to_owned(),
         ));
     };
-    let taken = profile::refresh(&control_plane.store, &named, &refreshed.files).await?;
+    let taken = handoff::refresh(&control_plane.store, &session, &named, &refreshed.files).await?;
     info!(
         session = %session.id,
         profile = %named.name,

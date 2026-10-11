@@ -16,6 +16,7 @@ use crate::link;
 use crate::live_work::{RunningTool, RunningUnit};
 use crate::log::{ClosingReason, Completion, Entry, Message, PlanEntry, ToolStatus};
 use crate::participant;
+use crate::sign_in::handoff;
 use crate::store::workspace::Taken;
 use crate::store::{Store, Tx};
 use crate::workspace;
@@ -226,6 +227,17 @@ pub async fn enqueue(
     declared: Declared,
     depends_on: &[String],
 ) -> Result<Session> {
+    enqueue_selecting(store, workspace, agent, declared, None, depends_on).await
+}
+
+pub async fn enqueue_selecting(
+    store: &Store,
+    workspace: WorkspaceId,
+    agent: Option<&str>,
+    declared: Declared,
+    sign_in_method: Option<&str>,
+    depends_on: &[String],
+) -> Result<Session> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(workspace).await?;
     workspace.accepts("enqueue_session", "session")?;
@@ -251,9 +263,27 @@ pub async fn enqueue(
         Some(named) => Some(tx.agents().named(&workspace.organization, named).await?),
         None => None,
     };
+    if let Some(method) = sign_in_method {
+        let harness = match &named {
+            Some(named) => named.harness.clone(),
+            None => match tx.workspaces().latest_session(&workspace).await? {
+                Some(latest) => latest.agent.harness,
+                None => workspace.opened_with.harness.clone(),
+            },
+        };
+        handoff::selected(
+            &mut tx,
+            "enqueue_session",
+            &workspace.organization,
+            &harness,
+            workspace.profile.as_ref(),
+            method,
+        )
+        .await?;
+    }
     let session = tx
         .workspaces()
-        .enqueue_session(&workspace, named.as_ref(), declared)
+        .enqueue_session(&workspace, named.as_ref(), declared, sign_in_method)
         .await?;
     let session = record_dependencies(&mut tx, session, &blockers).await?;
     tx.commit().await?;
@@ -908,6 +938,7 @@ async fn reported(
                     .record_active(session.organization, session.workspace, Timestamp::now())
                     .await?;
                 record_usage(tx, session, usage.as_ref()).await?;
+                handoff::worked(tx, session).await?;
                 prompt_pending(tx, session).await?;
             }
             info!(session = %session.id, "a supervisor reported its agent answered a turn");
@@ -966,6 +997,9 @@ async fn reported(
             if let Some(evidence) = evidence
                 && failed.as_ref() == Some(&stands)
             {
+                if matches!(evidence, Evidence::AuthenticationRequired { .. }) {
+                    handoff::refused(tx, session).await?;
+                }
                 tx.workspaces()
                     .record_failure_evidence(session, &evidence.bounded())
                     .await?;
@@ -1335,7 +1369,7 @@ async fn continue_pending(tx: &mut Tx<'_>, workspace: WorkspaceId) -> Result<Opt
 
     Ok(Some(
         tx.workspaces()
-            .enqueue_session(&workspace, None, Declared::default())
+            .enqueue_session(&workspace, None, Declared::default(), None)
             .await?,
     ))
 }

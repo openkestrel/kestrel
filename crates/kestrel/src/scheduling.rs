@@ -192,10 +192,14 @@ async fn evaluate(
         _ => Request::None,
     };
     let profile_held = !matches!(request, Request::None | Request::Provision)
-        && tx
+        && (tx
             .workspaces()
             .holds_profile(&candidate.session, serialized)
-            .await?;
+            .await?
+            || tx
+                .sign_ins()
+                .lent_to_another(&candidate.session, serialized)
+                .await?);
     let admission = if candidate.session.state == SessionState::Queued {
         Some(instance::admission(tx, &candidate.workspace).await?)
     } else {
@@ -355,6 +359,14 @@ pub async fn snapshot(store: &Store, name: &str) -> Result<Snapshot> {
                 .push(Reason::SubscriptionProfile {
                     profile,
                     session: holder,
+                });
+        }
+        for (session, profile) in tx.sign_ins().lent(&organization, serialized).await? {
+            held.entry(session)
+                .or_default()
+                .push(Reason::SubscriptionProfile {
+                    profile,
+                    session: None,
                 });
         }
     }

@@ -275,6 +275,8 @@ mod tests {
             exit: None,
             outcome_message: None,
             evidence: None,
+            sign_in_method: None,
+            supplied: Vec::new(),
             instance: None,
             supervisor: None,
             worked_model: None,

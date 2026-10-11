@@ -20,6 +20,8 @@ function session(overrides: Partial<Session> = {}): Session {
 		mode: null,
 		thought_level: null,
 		worked_model: null,
+		sign_in_method: null,
+		supplied: [],
 		title: null,
 		options: [],
 		commands: [],

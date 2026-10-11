@@ -77,6 +77,33 @@ harness offering it, with its revision, `authentication` evidence and `model_use
 that harness. The ten-second deadline and provider addresses are injected through
 `Listening::checking_sign_ins_with`, which the test support points at a stub.
 
+### Selecting a sign-in and what a Session used
+
+Opening a Workspace and enqueueing a Session take an optional `sign_in_method`
+(`sign_in/handoff.rs`). It must be a method the Session's harness offers whose material is saved
+where the work will look: the Organization for a key, the Profile the Workspace names for a
+subscription. A method of another harness, or a subscription with no Profile named, is a 422; one
+with nothing saved is a 409 `sign_in_not_saved`. The Operator's Profile never stands in for a
+Profile the Workspace names. A Session enqueued without one continues with the latest Session's
+while the harness is the same, so only naming a method switches credentials.
+
+A Session read carries `sign_in_method` and `supplied`: each variable or file its harness was
+last spawned with, by revision and never by value, with whether that revision is still held.
+`refreshed_from` on a saved sign-in is the revision a harness's own refresh advanced.
+
+An `authentication_failed` diagnostic names the sign-in in `context.attribution`:
+
+| Attribution | When | Effect |
+| --- | --- | --- |
+| `established` | A method was selected and handed over from where it is held, or one catalogued sign-in was all the harness was handed | The context carries the method, where it is held, the revision and whether it is `current`. Only a current revision's `authentication` evidence becomes `authentication_failed`, from source `session`. |
+| `uncertain` | No method was selected and the harness was handed more than one variable or file, catalogued or not | Nothing is marked; `candidates` lists the catalogued ones and the first step is inspection. |
+| `unattributed` | It was handed none kestrel catalogues | Nothing is marked. |
+
+No evidence a supervisor carries establishes expiry or coverage, so `expired` and `covered` stay
+null. A Turn answered on an established current revision records `model_use` `worked` for the
+model it ran on; a refusal records `authentication_failed` for that model alone, and leaves the
+revision's `provider_check` as it was. Neither rewrites another model's result.
+
 ### Image capabilities
 
 `capability.rs` resolves the configured image reference again on every read, through

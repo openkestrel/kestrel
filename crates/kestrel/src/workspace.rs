@@ -9,6 +9,7 @@ use crate::domain::{
 use crate::instance;
 use crate::log::{BriefSource, Cursor, Entry, Message, Page, Unreadable, Window};
 use crate::participant;
+use crate::sign_in::handoff;
 use crate::store::workspace::{Opening, PendingSession, Unfinished};
 use crate::store::{Store, Tx};
 use crate::work;
@@ -21,6 +22,7 @@ pub struct Open<'a> {
     pub project: &'a str,
     pub agent: &'a str,
     pub profile: Option<&'a str>,
+    pub sign_in_method: Option<&'a str>,
     pub branch: Option<&'a str>,
     pub continues: Option<&'a str>,
     pub declared: Declared,
@@ -33,6 +35,7 @@ pub(crate) struct Resolved<'a> {
     pub project: Project,
     pub agent: Agent,
     pub profile: Option<SubscriptionProfile>,
+    pub sign_in_method: Option<&'a str>,
     pub continues: Option<Workspace>,
     pub branch: Option<&'a str>,
     pub declared: Declared,
@@ -76,6 +79,7 @@ pub async fn open_without_a_session(
             project,
             agent,
             profile,
+            sign_in_method: None,
             branch,
             continues,
             declared: Declared::default(),
@@ -145,7 +149,12 @@ pub(crate) async fn opened_in(
     }
     let session = tx
         .workspaces()
-        .enqueue_session(&workspace, Some(&resolved.agent), resolved.declared.clone())
+        .enqueue_session(
+            &workspace,
+            Some(&resolved.agent),
+            resolved.declared.clone(),
+            resolved.sign_in_method,
+        )
         .await?;
 
     Ok((workspace, session))
@@ -168,6 +177,17 @@ async fn resolved<'a>(
         )?),
         None => None,
     };
+    if let Some(method) = open.sign_in_method {
+        handoff::selected(
+            tx,
+            "open_workspace",
+            organization,
+            &agent.harness,
+            profile.as_ref(),
+            method,
+        )
+        .await?;
+    }
     let continues = match open.continues {
         Some(reference) => Some(named(
             "continues",
@@ -238,6 +258,7 @@ async fn resolved<'a>(
         project,
         agent,
         profile,
+        sign_in_method: open.sign_in_method,
         continues,
         branch: open.branch,
         declared: Declared::named(open.declared),
@@ -545,7 +566,7 @@ pub(crate) async fn post_as(
             said(tx, workspace, participant, message).await?;
             let session = tx
                 .workspaces()
-                .enqueue_session(workspace, None, Declared::default())
+                .enqueue_session(workspace, None, Declared::default(), None)
                 .await?;
             Ok(Posted {
                 session: Some(session),
@@ -817,7 +838,7 @@ pub(crate) async fn briefed(
         .await?;
 
     tx.workspaces()
-        .enqueue_session(workspace, Some(&pending.agent), pending.declared)
+        .enqueue_session(workspace, Some(&pending.agent), pending.declared, None)
         .await
 }
 
@@ -915,6 +936,8 @@ mod tests {
             exit: None,
             outcome_message: None,
             evidence: None,
+            sign_in_method: None,
+            supplied: Vec::new(),
             instance: None,
             supervisor: None,
             worked_model: None,

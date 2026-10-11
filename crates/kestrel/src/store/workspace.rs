@@ -37,7 +37,23 @@ macro_rules! sessions_where {
                            FROM session_dependency AS d
                            JOIN session AS b ON b.id = d.blocker_id
                            WHERE d.session_id = session.id
-                           ORDER BY b.enqueued_at, b.id) AS b) AS depends_on",
+                           ORDER BY b.enqueued_at, b.id) AS b) AS depends_on,
+                    sign_in_method,
+                    (SELECT json_group_array(json_object(
+                                'profile', m.profile, 'kind', m.kind, 'name', m.name,
+                                'revision', m.revision, 'current', json(m.current),
+                                'handed_at', m.handed_at))
+                     FROM (SELECT (SELECT name FROM subscription_profile WHERE id = m.profile_id)
+                                      AS profile,
+                                  m.kind, m.name, m.revision, m.handed_at,
+                                  CASE WHEN EXISTS (SELECT 1 FROM provider_credential AS c
+                                                    WHERE c.revision = m.revision)
+                                         OR EXISTS (SELECT 1 FROM subscription_profile_entry AS e
+                                                    WHERE e.revision = m.revision)
+                                       THEN 'true' ELSE 'false' END AS current
+                           FROM session_material AS m
+                           WHERE m.session_id = session.id
+                           ORDER BY m.kind, m.name) AS m) AS supplied",
             $columns,
             "
              FROM session
@@ -602,35 +618,48 @@ impl<'a> Workspaces<'a> {
         Ok(Some(read(&mut *self.connection, id).await?))
     }
 
-    /// The latest Session's Agent as that Session froze it, so continuing work never moves onto a
-    /// redeclared harness or model.
-    async fn latest_agent(&mut self, workspace: &Workspace) -> Result<Agent> {
+    /// Its Agent is as that Session froze it, so continuing work never moves onto a redeclared
+    /// harness or model.
+    pub(crate) async fn latest_session(
+        &mut self,
+        workspace: &Workspace,
+    ) -> Result<Option<Session>> {
         let latest = sqlx::query(sessions_where!(
             "workspace_id = ? ORDER BY enqueued_at DESC, id DESC LIMIT 1"
         ))
         .bind(workspace.id.to_string())
         .fetch_optional(&mut *self.connection)
         .await
-        .with_context(|| format!("reading the latest agent of the workspace {}", workspace.id))?;
+        .with_context(|| {
+            format!(
+                "reading the latest session of the workspace {}",
+                workspace.id
+            )
+        })?;
 
-        match latest {
-            Some(row) => Ok(session(&row)?.agent),
-            None => Ok(workspace.opened_with.clone()),
-        }
+        latest.as_ref().map(session).transpose()
     }
 
-    /// No `agent` continues with the latest Session's; `declared` is resolved over the Agent's,
-    /// category by category.
+    /// No `agent` or `sign_in_method` continues with the latest Session's, the method only while
+    /// the harness is the same; `declared` is resolved over the Agent's, category by category.
     pub async fn enqueue_session(
         &mut self,
         workspace: &Workspace,
         agent: Option<&Agent>,
         declared: Declared,
+        sign_in_method: Option<&str>,
     ) -> Result<Session> {
-        let agent = match agent {
-            Some(agent) => agent.clone(),
-            None => self.latest_agent(workspace).await?,
+        let latest = self.latest_session(workspace).await?;
+        let agent = match (agent, &latest) {
+            (Some(agent), _) => agent.clone(),
+            (None, Some(latest)) => latest.agent.clone(),
+            (None, None) => workspace.opened_with.clone(),
         };
+        let sign_in_method = sign_in_method.map(str::to_owned).or_else(|| {
+            latest
+                .filter(|latest| latest.agent.harness == agent.harness)
+                .and_then(|latest| latest.sign_in_method)
+        });
         let session = loop {
             let session = Session {
                 id: SessionId::generate(),
@@ -646,6 +675,8 @@ impl<'a> Workspaces<'a> {
                 exit: None,
                 outcome_message: None,
                 evidence: None,
+                sign_in_method: sign_in_method.clone(),
+                supplied: Vec::new(),
                 instance: None,
                 supervisor: None,
                 worked_model: None,
@@ -666,8 +697,8 @@ impl<'a> Workspaces<'a> {
             let inserted = sqlx::query(
                 "INSERT INTO session
                      (id, name, organization_id, workspace_id, agent_id, harness, model, mode,
-                      thought_level, state, enqueued_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      thought_level, sign_in_method, state, enqueued_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT (organization_id, name) DO NOTHING",
             )
             .bind(session.id.to_string())
@@ -679,6 +710,7 @@ impl<'a> Workspaces<'a> {
             .bind(&session.agent.declared.model)
             .bind(&session.agent.declared.mode)
             .bind(&session.agent.declared.thought_level)
+            .bind(&session.sign_in_method)
             .bind(session.state.as_str())
             .bind(due(session.enqueued_at))
             .execute(&mut *self.connection)
@@ -2622,6 +2654,8 @@ fn session(row: &SqliteRow) -> Result<Session> {
             .map(|evidence| serde_json::from_str(&evidence))
             .transpose()
             .context("reading the session's exit evidence")?,
+        sign_in_method: row.get("sign_in_method"),
+        supplied: read_json(row, "supplied")?,
         instance: row.get("instance"),
         supervisor: row.get("supervisor"),
         worked_model: row.get("worked_model"),
