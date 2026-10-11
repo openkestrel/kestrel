@@ -97,3 +97,10 @@ ever live, so an unreachable stream never reads as an empty Transcript. Every qu
 one read (`src/components/workbench/queue-read.tsx`) that says when it is slow, and on failure
 names the error, offers a retry and keeps the last known queue. About five tabs fit HTTP/1.1's six connections per origin; nothing detects a
 sixth. Browser sign-in progress polls its state read rather than opening a second stream.
+
+`/setup` names the Operator through the shared producer, then shows saved prerequisites and the
+readiness read’s typed gaps, warnings and failed inspections in Questionnaire. The root route resumes
+unfinished setup, preserving an explicitly selected Organization when several exist. The durable
+install completion read controls onboarding independently of current readiness; a completed install’s
+setup route offers contextual repairs. Naming and continuing through saved prerequisites never set
+completion. Geist and Geist Mono are bundled once in the root stylesheet for every route.

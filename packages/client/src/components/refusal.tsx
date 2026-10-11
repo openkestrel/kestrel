@@ -63,7 +63,7 @@ export function RetryFallback({
 	);
 }
 
-export function Diagnosis({ diagnostic }: { diagnostic: Diagnostic }) {
+export function Diagnosis({ diagnostic, ...repairs }: { diagnostic: Diagnostic } & Repairs) {
 	return (
 		<section
 			aria-label="Why it failed"
@@ -72,7 +72,7 @@ export function Diagnosis({ diagnostic }: { diagnostic: Diagnostic }) {
 		>
 			<p className="font-medium text-destructive">{diagnostic.message}</p>
 			<Facts facts={factsOf(diagnostic)} />
-			<NextSteps steps={diagnostic.next_steps} />
+			<NextSteps steps={diagnostic.next_steps} {...repairs} />
 		</section>
 	);
 }
