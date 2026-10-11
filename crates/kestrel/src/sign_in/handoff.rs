@@ -76,16 +76,13 @@ pub(crate) async fn selected(
     Ok(offered)
 }
 
-/// The Operator's own Profile and the one subscription in it this work is handed (ADR-0049).
 pub(crate) struct Defaulted {
     pub profile: SubscriptionProfile,
     /// None when the Profile holds several of the harness's subscriptions: none is picked for it.
     pub method: Option<&'static SignInMethod>,
 }
 
-/// For work a person opened naming no Profile: the Operator's Profile holding a subscription for
-/// `harness`, or none, which leaves the Organization's credentials. A free-text owner's Profile
-/// is never chosen, and neither is one of several.
+/// A free-text owner's Profile is never chosen, and neither is one of several (ADR-0049).
 pub(crate) async fn defaulted(
     tx: &mut Tx<'_>,
     operation: &'static str,

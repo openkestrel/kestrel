@@ -124,7 +124,7 @@ pub async fn nothing_to_scope(api: &ControlPlane) -> anyhow::Error {
             ),
         )
         .into(),
-        Err(unnamed) => unnamed,
+        Err(refused) => refused,
     }
 }
 

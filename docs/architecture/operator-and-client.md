@@ -57,9 +57,12 @@ What a write from a Client leaves unnamed is the Operator's
   method selected. Several such Profiles are a 409 `several_operator_profiles`. No such Profile
   leaves the Organization's Provider Credentials, as does naming an Organization-held method. A
   Profile with a free-text owner is never chosen, whatever the text.
-- An enqueue applies this only to a Workspace that names no Profile and that no Event opened, and
-  the Workspace then keeps the Profile it took. A Session continuing the latest one's method
-  keeps it. A Trigger's Sessions use only the Profile its declaration names.
+- An enqueue, and a person's post that starts the next Session, apply this only to a Workspace
+  that names no Profile and that no Event opened (`work::next_as_the_operator`), and the
+  Workspace then keeps the Profile it took. A Session continuing the latest one's method keeps
+  it. A Trigger's Sessions, and a Session an Event's post starts, never take it.
+- The Operator's name is held to the participant rule's shape when it is given, so it can always
+  be written; an Agent of the same name in an Organization still refuses the default there.
 
 Profile declaration defaults an omitted `owner` to the current Operator, or refuses 409 with the
 same setup gap. Reads expose `owner_operator` beside `owner`; Operator-owned Profiles show the

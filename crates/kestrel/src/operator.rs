@@ -4432,7 +4432,7 @@ fn diagnosis(reason: Reason, field: Option<&'static str>) -> (StatusCode, wire::
             },
             wire::Diagnostic::SetupGapDiagnostic(wire::SetupGapDiagnostic {
                 kind: serde_json::json!("setup_gap"),
-                message: "this install has no Operator yet; name one, and what a Client leaves unnamed is theirs".to_owned(),
+                message: Reason::MissingOperator { operation }.to_string(),
                 field,
                 context: wire::SetupGapContext {
                     prerequisite: "operator".to_owned(),

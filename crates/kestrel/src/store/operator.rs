@@ -27,7 +27,6 @@ impl<'a> Operators<'a> {
             .transpose()
     }
 
-    /// A row is the first confirmed start having committed; nothing else writes one.
     pub async fn initial_setup_complete(&mut self) -> Result<bool> {
         Ok(sqlx::query("SELECT 1 FROM install WHERE singleton = 1")
             .fetch_optional(&mut *self.connection)

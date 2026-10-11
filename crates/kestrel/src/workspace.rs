@@ -264,7 +264,7 @@ async fn resolved<'a>(
                 "a participant names the author of a brief, and this open carries none".to_owned(),
             ));
         }
-        (None, Some(_)) => operator_author(tx, organization, "open_workspace").await?,
+        (None, Some(_)) => participant::operator(tx, organization, "open_workspace").await?,
         (None, None) => None,
     };
 
@@ -293,29 +293,28 @@ pub(crate) async fn operators_own<'a>(
         return Ok((None, sign_in_method));
     }
 
-    Ok(
-        match handoff::defaulted(tx, operation, organization, harness).await? {
-            Some(own) => (
-                Some(own.profile),
-                sign_in_method.or(own.method.map(|method| method.id.as_str())),
-            ),
-            None => (None, sign_in_method),
-        },
-    )
-}
+    let Some(own) = handoff::defaulted(tx, operation, organization, harness).await? else {
+        return Ok((None, sign_in_method));
+    };
+    let method = match (sign_in_method, own.method) {
+        (Some(named), _) => Some(named),
+        (None, Some(held)) => Some(
+            handoff::selected(
+                tx,
+                operation,
+                organization,
+                harness,
+                Some(&own.profile),
+                &held.id,
+            )
+            .await?
+            .id
+            .as_str(),
+        ),
+        (None, None) => None,
+    };
 
-/// A Brief nobody signed is the Operator's; before one is named it stays unsigned.
-pub(crate) async fn operator_author(
-    tx: &mut Tx<'_>,
-    organization: &Organization,
-    operation: &'static str,
-) -> Result<Option<String>> {
-    match tx.operators().current().await? {
-        Some(operator) => Ok(Some(
-            participant::accepted(tx, organization, &operator.name, operation).await?,
-        )),
-        None => Ok(None),
-    }
+    Ok((Some(own.profile), method))
 }
 
 pub(crate) fn named<T>(field: &'static str, named: Result<T>) -> Result<T> {
@@ -580,15 +579,23 @@ pub async fn post(
 ) -> Result<Posted> {
     let mut tx = store.begin().await?;
     let workspace = tx.workspaces().get(id).await?;
-    let posted = post_in(&mut tx, &workspace, participant, message).await?;
+    let posted = post_in(&mut tx, &workspace, Poster::Person, participant, message).await?;
     tx.commit().await?;
 
     Ok(posted)
 }
 
+/// Whether a post may start a Session on the Operator's own subscription (ADR-0049).
+#[derive(Clone, Copy)]
+pub(crate) enum Poster {
+    Person,
+    Event,
+}
+
 pub(crate) async fn post_in(
     tx: &mut Tx<'_>,
     workspace: &Workspace,
+    poster: Poster,
     participant: Option<&str>,
     message: &str,
 ) -> Result<Posted> {
@@ -600,12 +607,13 @@ pub(crate) async fn post_in(
     )
     .await?;
 
-    post_as(tx, workspace, &participant, message).await
+    post_as(tx, workspace, poster, &participant, message).await
 }
 
 pub(crate) async fn post_as(
     tx: &mut Tx<'_>,
     workspace: &Workspace,
+    poster: Poster,
     participant: &str,
     message: &str,
 ) -> Result<Posted> {
@@ -615,9 +623,27 @@ pub(crate) async fn post_as(
         PostDestination::Start => {
             ensure_joined(tx, workspace, participant).await?;
             said(tx, workspace, participant, message).await?;
+            let (workspace, sign_in_method) = match poster {
+                Poster::Person => {
+                    work::next_as_the_operator(
+                        tx,
+                        "post_to_workspace",
+                        workspace.clone(),
+                        None,
+                        None,
+                    )
+                    .await?
+                }
+                Poster::Event => (workspace.clone(), None),
+            };
             let session = tx
                 .workspaces()
-                .enqueue_session(workspace, None, Declared::default(), None)
+                .enqueue_session(
+                    &workspace,
+                    None,
+                    Declared::default(),
+                    sign_in_method.as_deref(),
+                )
                 .await?;
             Ok(Posted {
                 session: Some(session),

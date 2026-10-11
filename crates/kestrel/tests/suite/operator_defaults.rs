@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use jiff::SignedDuration;
-use kestrel::domain::Schedule;
+use kestrel::domain::{Schedule, Session};
 use kestrel::log::Entry;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::support::client::{Finished, Invocation, ran_by};
 use crate::support::fixture::Fixture;
 use crate::support::link_client::Link;
-use crate::support::{Kestrel, repository, templates};
+use crate::support::{Kestrel, OnTheLink, repository, templates};
 
 const ORGANIZATION: &str = "/operator/organizations/acme";
 
@@ -222,7 +222,8 @@ async fn declare_a_profile(kestrel: &Kestrel, declaration: Value) {
     assert_eq!(held.status, StatusCode::OK, "{:#}", held.body);
 }
 
-async fn handed(kestrel: &Kestrel) -> Vec<String> {
+/// The queued Session on an Instance's link, and the variables its harness is handed.
+async fn handed(kestrel: &Kestrel) -> (Session, OnTheLink, Vec<String>) {
     let session = kestrel.claim_session().await.expect("a session to claim");
     let on = kestrel.on_the_link(&session).await;
     kestrel.start_on_the_link(&session).await;
@@ -231,13 +232,14 @@ async fn handed(kestrel: &Kestrel) -> Vec<String> {
         .await;
     assert_eq!(response.status(), StatusCode::OK);
     let handed: Value = response.json().await.expect("credentials");
-
-    handed["variables"]
+    let variables = handed["variables"]
         .as_object()
         .expect("named values")
         .keys()
         .cloned()
-        .collect()
+        .collect();
+
+    (session, on, variables)
 }
 
 #[tokio::test]
@@ -254,8 +256,9 @@ async fn work_the_operator_opens_takes_their_own_subscription_and_keeps_it_throu
         opened.body["session"]["sign_in_method"],
         "claude-setup-token"
     );
+    let (_, _, variables) = handed(&kestrel).await;
     assert_eq!(
-        handed(&kestrel).await,
+        variables,
         [SUBSCRIPTION],
         "the Organization's key would let a refused subscription fall back"
     );
@@ -624,6 +627,131 @@ async fn a_start_works_in_the_operators_organization_whoever_owns_the_repository
         .map(|organization| organization.name)
         .collect();
     assert_eq!(organizations, ["ada"]);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_operator_is_named_only_what_a_participant_could_be_written_as() {
+    let kestrel = Kestrel::boot().await;
+
+    for unwritable in ["x".repeat(65), "con\u{7}trol".to_owned()] {
+        let refused = put(
+            &kestrel,
+            "/operator/operator",
+            json!({ "name": unwritable }),
+        )
+        .await;
+        assert_eq!(
+            refused.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{:#}",
+            refused.body
+        );
+        assert_eq!(refused.body["field"], "name");
+    }
+    let unnamed =
+        sent(reqwest::Client::new().get(format!("{}/operator/operator", kestrel.operator()))).await;
+    assert_eq!(unnamed.status, StatusCode::NOT_FOUND);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_subscription_a_session_found_broken_is_not_replaced_by_the_organizations_key() {
+    let kestrel = acme("claude").await;
+    name_the_operator(&kestrel, "ada").await;
+    save_the_subscription(&kestrel).await;
+    hold_the_organizations_key(&kestrel).await;
+
+    let opened = open(&kestrel, json!({})).await;
+    assert_eq!(opened.status, StatusCode::CREATED, "{:#}", opened.body);
+    let (session, on, _) = handed(&kestrel).await;
+    let refused = Link::to(&kestrel.link())
+        .report_body(
+            &on.instance,
+            Some(&on.credential),
+            &json!({
+                "kind": "finished",
+                "session": session.id,
+                "seq": 1,
+                "exit": {"status": "failed", "because": "the agent would not open a session"},
+                "evidence": {
+                    "kind": "authentication_required",
+                    "code": -32000,
+                    "methods": [],
+                    "method": null,
+                },
+            }),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::ACCEPTED);
+    let saved = get(&kestrel, &format!("{ORGANIZATION}/sign-ins")).await;
+    let subscription = saved
+        .as_array()
+        .expect("saved sign-ins")
+        .iter()
+        .find(|saved| saved["method"] == "claude-setup-token")
+        .expect("the subscription");
+    assert_eq!(
+        subscription["authentication"]["state"],
+        "authentication_failed"
+    );
+
+    let next = open(&kestrel, json!({})).await;
+    assert_eq!(next.status, StatusCode::CREATED, "{:#}", next.body);
+    assert_eq!(next.body["workspace"]["profile"], "ada");
+    assert_eq!(next.body["session"]["sign_in_method"], "claude-setup-token");
+    let (_, _, variables) = handed(&kestrel).await;
+    assert_eq!(variables, [SUBSCRIPTION]);
+
+    let changed = open(&kestrel, json!({ "sign_in_method": "anthropic-api-key" })).await;
+    assert_eq!(changed.status, StatusCode::CREATED, "{:#}", changed.body);
+    assert_eq!(
+        changed.body["workspace"]["profile"],
+        Value::Null,
+        "naming the Organization's key still took the Operator's Profile"
+    );
+    assert_eq!(
+        changed.body["session"]["sign_in_method"],
+        "anthropic-api-key"
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_post_that_starts_the_next_session_takes_the_subscription_saved_since() {
+    let kestrel = acme("claude").await;
+    name_the_operator(&kestrel, "ada").await;
+    let opened = open(&kestrel, json!({})).await;
+    let workspace = format!(
+        "{ORGANIZATION}/workspaces/{}",
+        opened.body["workspace"]["id"].as_str().expect("an id")
+    );
+    kestrel
+        .stop_session(
+            opened.body["session"]["id"]
+                .as_str()
+                .expect("an id")
+                .parse()
+                .expect("a session id"),
+        )
+        .await;
+
+    save_the_subscription(&kestrel).await;
+    let posted = post(
+        &kestrel,
+        &format!("{workspace}/messages"),
+        json!({ "message": "carry on" }),
+    )
+    .await;
+    assert_eq!(posted.status, StatusCode::OK, "{:#}", posted.body);
+    assert_eq!(
+        posted.body["session"]["sign_in_method"],
+        "claude-setup-token"
+    );
+    assert_eq!(get(&kestrel, &workspace).await["profile"], "ada");
 
     kestrel.teardown().await;
 }

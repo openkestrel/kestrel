@@ -1,7 +1,8 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 
-use crate::declined::{Constraint, Reason};
+use crate::declined::Reason;
 use crate::domain::Operator;
+use crate::participant;
 use crate::store::{Declared, Store};
 
 pub async fn current(store: &Store) -> Result<Operator> {
@@ -29,16 +30,7 @@ pub async fn initial_setup_complete(store: &Store) -> Result<bool> {
 }
 
 pub async fn name(store: &Store, name: &str) -> Result<Declared<Operator>> {
-    let name = name.trim();
-    if name.is_empty() {
-        bail!(Reason::InvalidField {
-            field: "name",
-            operation: "name_operator",
-            constraint: Constraint::NonEmpty,
-            allowed: None,
-            message: "the Operator needs a name".to_owned(),
-        });
-    }
+    let name = participant::writable(name, "name", "name_operator")?;
     let mut tx = store.begin().await?;
     let declared = tx.operators().name(name).await?;
     if declared.created && tx.organizations().all().await?.is_empty() {

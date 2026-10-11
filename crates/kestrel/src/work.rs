@@ -7,8 +7,9 @@ use tracing::{debug, info};
 
 use crate::declined::{Constraint, Next, Reason, Resource};
 use crate::domain::{
-    ChangingOption, Declared, Evidence, Exit, HeldMessage, Organization, Session, SessionCommand,
-    SessionId, SessionOption, SessionState, StartedBy, Turn, Usage, Workspace, WorkspaceId,
+    Agent, ChangingOption, Declared, Evidence, Exit, HeldMessage, Organization, Session,
+    SessionCommand, SessionId, SessionOption, SessionState, StartedBy, Turn, Usage, Workspace,
+    WorkspaceId,
 };
 use crate::instance::Observed;
 use crate::integration::post;
@@ -263,9 +264,41 @@ pub async fn enqueue_selecting(
         Some(named) => Some(tx.agents().named(&workspace.organization, named).await?),
         None => None,
     };
+    let (workspace, sign_in_method) = next_as_the_operator(
+        &mut tx,
+        "enqueue_session",
+        workspace,
+        named.as_ref(),
+        sign_in_method,
+    )
+    .await?;
+    let session = tx
+        .workspaces()
+        .enqueue_session(
+            &workspace,
+            named.as_ref(),
+            declared,
+            sign_in_method.as_deref(),
+        )
+        .await?;
+    let session = record_dependencies(&mut tx, session, &blockers).await?;
+    tx.commit().await?;
+
+    Ok(session)
+}
+
+/// The Workspace and Sign-in Method a person's next Session in it runs with: a method named is
+/// checked, and a Workspace naming no Profile takes the Operator's own (ADR-0049).
+pub(crate) async fn next_as_the_operator(
+    tx: &mut Tx<'_>,
+    operation: &'static str,
+    workspace: Workspace,
+    agent: Option<&Agent>,
+    sign_in_method: Option<&str>,
+) -> Result<(Workspace, Option<String>)> {
     let latest = tx.workspaces().latest_session(&workspace).await?;
-    let harness = match (&named, &latest) {
-        (Some(named), _) => named.harness.clone(),
+    let harness = match (agent, &latest) {
+        (Some(agent), _) => agent.harness.clone(),
         (None, Some(latest)) => latest.agent.harness.clone(),
         (None, None) => workspace.opened_with.harness.clone(),
     };
@@ -273,17 +306,14 @@ pub async fn enqueue_selecting(
         .as_ref()
         .filter(|latest| latest.agent.harness == harness)
         .and_then(|latest| latest.sign_in_method.as_deref()));
-    // A Trigger's work uses only the Profile its declaration names (ADR-0049).
+    // A Trigger's work uses only the Profile its declaration names.
     let opened_by_an_event = matches!(workspace.started_by, Some(StartedBy::Event(_)));
-    let (workspace, sign_in_method) = if workspace.profile.is_none() && !opened_by_an_event {
-        let (profile, method) = workspace::operators_own(
-            &mut tx,
-            "enqueue_session",
-            &workspace.organization,
-            &harness,
-            continued,
-        )
-        .await?;
+    let (workspace, own) = if workspace.profile.is_some() || opened_by_an_event {
+        (workspace, None)
+    } else {
+        let (profile, own) =
+            workspace::operators_own(tx, operation, &workspace.organization, &harness, continued)
+                .await?;
         if let Some(profile) = &profile {
             tx.workspaces().take_profile(&workspace, profile).await?;
         }
@@ -292,15 +322,14 @@ pub async fn enqueue_selecting(
                 profile,
                 ..workspace
             },
-            sign_in_method.or(method.filter(|_| continued.is_none())),
+            // What the latest Session selected is the store's to carry on, as before.
+            own.filter(|_| continued.is_none()),
         )
-    } else {
-        (workspace, sign_in_method)
     };
     if let Some(method) = sign_in_method {
         handoff::selected(
-            &mut tx,
-            "enqueue_session",
+            tx,
+            operation,
             &workspace.organization,
             &harness,
             workspace.profile.as_ref(),
@@ -308,14 +337,8 @@ pub async fn enqueue_selecting(
         )
         .await?;
     }
-    let session = tx
-        .workspaces()
-        .enqueue_session(&workspace, named.as_ref(), declared, sign_in_method)
-        .await?;
-    let session = record_dependencies(&mut tx, session, &blockers).await?;
-    tx.commit().await?;
 
-    Ok(session)
+    Ok((workspace, sign_in_method.or(own).map(str::to_owned)))
 }
 
 /// Resolved before the dependent is enqueued, so `latest` never names the dependent itself.

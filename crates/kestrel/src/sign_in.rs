@@ -531,8 +531,6 @@ async fn operator_profile(
     }
 }
 
-/// Each Profile with the subscriptions the catalogue says `harness` signs in with, among what it
-/// holds; a Profile holding none is left out.
 pub(crate) async fn holding_a_subscription(
     tx: &mut Tx<'_>,
     profiles: &[SubscriptionProfile],

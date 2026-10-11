@@ -5,6 +5,7 @@ use crate::capability::Images;
 use crate::declaration;
 use crate::declined::Declined;
 use crate::domain::{Declared, Session, Workspace};
+use crate::participant;
 use crate::provider;
 use crate::repository;
 use crate::sign_in::{Authentication, Source};
@@ -144,7 +145,7 @@ pub async fn start(store: &Store, images: &Images, plan: &Plan) -> Result<Starte
         branch: None,
         declared: Declared::default(),
         brief: Some(plan.brief.as_str()),
-        participant: workspace::operator_author(&mut tx, &organization.record, "start").await?,
+        participant: participant::operator(&mut tx, &organization.record, "start").await?,
     };
     let (workspace, session) =
         workspace::opened_in(&mut tx, &organization.record, &resolved).await?;
