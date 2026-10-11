@@ -120,9 +120,11 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Check generated operator types
-        run: |
-          cargo run --locked -p kestrel-operator-types --bin generate --features generate
-          git diff --exit-code -- crates/kestrel-operator-types/src packages/client/src/operator/sse.gen.ts
+        env:
+          # This job installs only rust and nextest; without this, `mise run` would install every
+          # other tool in mise.toml.
+          MISE_AUTO_INSTALL: "false"
+        run: mise run generate-check
 
       - name: Lint
         run: cargo clippy --locked --workspace --all-targets --features kestrel-operator-types/generate -- -D warnings
