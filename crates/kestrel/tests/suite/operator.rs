@@ -1607,20 +1607,6 @@ async fn the_operator_documents_trigger_answers_and_refusals() {
     assert_eq!(status, StatusCode::OK);
     let (status, _) = declared(&kestrel, &format!("{path}/enable"), &json!({})).await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _) = declared(
-        &kestrel,
-        &triggers,
-        &json!({
-            "name": "broken",
-            "filter": { "exact": { "type": "x" } },
-            "every": "1h",
-            "brief": "x",
-            "project": "kestrel",
-            "agent": "builder",
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
     kestrel.teardown().await;
 }
@@ -1711,33 +1697,6 @@ async fn a_trigger_declared_on_a_cron_prints_its_expression_and_zone() {
         declare(&["--cron", "0 9 * * *"]),
     ] {
         failed(&client(&kestrel, &refused).await);
-    }
-
-    let triggers = triggers_of("acme");
-    for body in [
-        json!({ "cron": "0 9 * * *", "every": "1h" }),
-        json!({ "cron": "0 9 * * *", "zone": "UTC", "filter": { "exact": { "type": "x" } } }),
-        json!({ "cron": "0 9 * * *" }),
-        json!({ "every": "1h", "zone": "UTC" }),
-        json!({ "cron": "0 9 * * *", "zone": "Mars/Olympus_Mons" }),
-        json!({ "cron": "* * * * *", "zone": "UTC" }),
-    ] {
-        let mut declaration = json!({
-            "name": "broken",
-            "brief": "x",
-            "project": "kestrel",
-            "agent": "builder",
-        });
-        declaration
-            .as_object_mut()
-            .expect("a declaration is an object")
-            .extend(body.as_object().expect("a body is an object").clone());
-        let (status, refusal) = declared(&kestrel, &triggers, &declaration).await;
-        assert_eq!(
-            status,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "{body}: {refusal}"
-        );
     }
 
     kestrel.teardown().await;
@@ -3046,7 +3005,21 @@ async fn a_start_that_would_change_a_declaration_leaves_nothing_behind() {
     start["credentials"] = json!([{ "variable": "ANTHROPIC_API_KEY", "secret": "sk-ant" }]);
     let (status, refused) = declared(&kestrel, operator::STARTS, &start).await;
 
-    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(refused["kind"], "invalid_field", "{refused}");
+    assert_eq!(refused["field"], "agent.harness", "{refused}");
+    assert_eq!(refused["context"]["constraint"], "immutable", "{refused}");
+    assert_eq!(
+        refused["message"],
+        "the agent builder is declared on the harness claude with the model its harness's \
+         default, and a start changes no declaration",
+        "{refused}"
+    );
+    let next = &refused["next_steps"][0];
+    assert_eq!(next["action"], "correct_field", "{refused}");
+    assert_eq!(next["operation"], "start", "{refused}");
+    assert_eq!(next["field"], "agent.harness", "{refused}");
+    assert_eq!(next["constraint"], "immutable", "{refused}");
     assert!(listed_nothing(&kestrel, &credentials_of("acme")).await);
     assert!(
         refused["message"]
@@ -3226,36 +3199,9 @@ async fn a_missing_reference_offers_the_declaration_that_repairs_it() {
 }
 
 #[tokio::test]
-async fn an_invalid_declaration_field_is_typed_and_offers_a_correction() {
+async fn a_subscription_profile_with_no_owner_names_the_person_it_belongs_to() {
     let kestrel = Kestrel::boot().await;
     kestrel.declare_organization("acme").await;
-
-    let (status, refusal) = declared(
-        &kestrel,
-        &projects_of("acme"),
-        &json!({ "name": "kestrel", "repositories": [], "branch": "main" }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
-    assert_eq!(refusal["kind"], "invalid_field");
-    assert_eq!(refusal["field"], "repositories");
-    assert_eq!(refusal["context"]["field"], "repositories");
-    assert_eq!(refusal["context"]["constraint"], "non_empty");
-    let next = &refusal["next_steps"][0];
-    assert_eq!(next["action"], "correct_field");
-    assert_eq!(next["operation"], "declare_project");
-    assert_eq!(next["field"], "repositories");
-    assert_eq!(next["constraint"], "non_empty");
-
-    let (status, refusal) = declared(
-        &kestrel,
-        &agents_of("acme"),
-        &json!({ "name": "builder", "harness": "" }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
-    assert_eq!(refusal["kind"], "invalid_field");
-    assert_eq!(refusal["field"], "harness");
 
     let (status, refusal) = declared(
         &kestrel,
@@ -3263,9 +3209,15 @@ async fn an_invalid_declaration_field_is_typed_and_offers_a_correction() {
         &json!({ "name": "jack", "owner": "" }),
     )
     .await;
+
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
-    assert_eq!(refusal["kind"], "invalid_field");
-    assert_eq!(refusal["field"], "owner");
+    assert_eq!(refusal["kind"], "invalid_field", "{refusal}");
+    assert_eq!(refusal["field"], "owner", "{refusal}");
+    assert_eq!(refusal["context"]["constraint"], "non_empty", "{refusal}");
+    assert_eq!(
+        refusal["message"], "a subscription profile belongs to a person, and none was named",
+        "{refusal}"
+    );
 
     kestrel.teardown().await;
 }
@@ -3300,50 +3252,242 @@ async fn a_subscription_profile_that_belongs_to_someone_else_is_a_typed_state_co
     kestrel.teardown().await;
 }
 
+/// The one Declaration module answers every route: the refusal is typed with the constraint it
+/// broke, says the one sentence, names the field under the route's prefix and stamps the
+/// route's operation on the correction it offers.
+async fn refused_through_the_module(kestrel: &Kestrel, path: &str, body: &Value) -> Value {
+    let (status, refusal) = declared(kestrel, path, body).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert_eq!(refusal["kind"], "invalid_field", "{refusal}");
+    refusal
+}
+
+fn says_the_field(refusal: &Value, field: &str, constraint: &str, message: &str, operation: &str) {
+    assert_eq!(refusal["field"], field, "{refusal}");
+    assert_eq!(refusal["context"]["field"], field, "{refusal}");
+    assert_eq!(refusal["context"]["constraint"], constraint, "{refusal}");
+    assert_eq!(refusal["message"], message, "{refusal}");
+    let next = &refusal["next_steps"][0];
+    assert_eq!(next["action"], "correct_field", "{refusal}");
+    assert_eq!(next["operation"], operation, "{refusal}");
+    assert_eq!(next["field"], field, "{refusal}");
+    assert_eq!(next["constraint"], constraint, "{refusal}");
+}
+
 #[tokio::test]
-async fn an_invalid_declaration_document_names_its_field_and_an_untyped_one_falls_back() {
+async fn declare_project_reaches_the_declaration_module() {
     let kestrel = Kestrel::boot().await;
     kestrel.declare_organization("acme").await;
-    let document = |repositories: Value, brief: &str| {
-        json!({
-            "project": { "name": "kestrel", "repositories": repositories, "branch": "main" },
+
+    let refusal = refused_through_the_module(
+        &kestrel,
+        &projects_of("acme"),
+        &json!({
+            "name": "",
+            "repositories": ["https://github.com/jtmthf/kestrel"],
+            "branch": "main",
+        }),
+    )
+    .await;
+
+    says_the_field(
+        &refusal,
+        "name",
+        "non_empty",
+        "a declaration names each record",
+        "declare_project",
+    );
+    assert!(listed_nothing(&kestrel, &projects_of("acme")).await);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn declare_agent_reaches_the_declaration_module() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+
+    let refusal = refused_through_the_module(
+        &kestrel,
+        &agents_of("acme"),
+        &json!({ "name": "builder", "harness": "" }),
+    )
+    .await;
+
+    says_the_field(
+        &refusal,
+        "harness",
+        "non_empty",
+        "an agent names the harness that drives it",
+        "declare_agent",
+    );
+    assert!(listed_nothing(&kestrel, &agents_of("acme")).await);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn declare_trigger_reaches_the_declaration_module() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+
+    let refusal = refused_through_the_module(
+        &kestrel,
+        &triggers_of("acme"),
+        &json!({
+            "name": "ready",
+            "filter": { "exact": { "type": "com.github.issues.labeled" } },
+            "every": "1h",
+            "brief": "Work on {{ event.type }}",
+            "project": "kestrel",
+            "agent": "builder",
+        }),
+    )
+    .await;
+
+    says_the_field(
+        &refusal,
+        "filter",
+        "well_formed",
+        "a trigger declares a filter, an interval or a cron expression, and only one",
+        "declare_trigger",
+    );
+    assert!(listed_nothing(&kestrel, &triggers_of("acme")).await);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn apply_declaration_reaches_the_declaration_module() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+
+    let refusal = refused_through_the_module(
+        &kestrel,
+        &declaration_of("acme"),
+        &json!({
+            "project": { "name": "", "repositories": ["https://github.com/jtmthf/kestrel"], "branch": "main" },
             "agent": { "name": "builder", "harness": "opencode" },
             "trigger": {
                 "name": "ready",
                 "filter": { "exact": { "type": "com.github.issues.labeled" } },
-                "brief": brief,
+                "brief": "Work on {{ event.data.issue.title }}",
                 "project": "kestrel",
                 "agent": "builder",
             },
-        })
-    };
+        }),
+    )
+    .await;
 
-    let (status, refusal) = declared(
+    says_the_field(
+        &refusal,
+        "project.name",
+        "non_empty",
+        "a declaration names each record",
+        "apply_declaration",
+    );
+    assert!(listed_nothing(&kestrel, &projects_of("acme")).await);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn preview_declaration_reaches_the_declaration_module() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+
+    let refusal = refused_through_the_module(
         &kestrel,
         &declaration_preview_of("acme"),
-        &document(json!([]), "Work on {{ event.data.issue.title }}"),
+        &json!({
+            "project": { "name": "kestrel", "repositories": ["https://github.com/jtmthf/kestrel"], "branch": "main" },
+            "agent": { "name": "builder", "harness": "opencode" },
+            "trigger": {
+                "name": "ready",
+                "filter": { "exact": { "type": "com.github.issues.labeled" } },
+                "brief": "Work on {{ event.data.issue.title }}",
+                "project": "elsewhere",
+                "agent": "builder",
+            },
+        }),
     )
     .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
-    assert_eq!(refusal["kind"], "invalid_field");
-    assert_eq!(refusal["field"], "project.repositories");
-    assert_eq!(refusal["context"]["constraint"], "non_empty");
-    let next = &refusal["next_steps"][0];
-    assert_eq!(next["action"], "correct_field");
-    assert_eq!(next["operation"], "preview_declaration");
 
-    let (status, refusal) = declared(
+    says_the_field(
+        &refusal,
+        "trigger.project",
+        "matches_declared",
+        "the trigger names project elsewhere, not the declared project kestrel",
+        "preview_declaration",
+    );
+    assert!(listed_nothing(&kestrel, &projects_of("acme")).await);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn apply_triggers_reaches_the_declaration_module() {
+    applied_triggers_reach_the_declaration_module(
+        "apply_triggers",
+        &operator::APPLIED_TRIGGERS.replace("{organization}", "acme"),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn preview_applied_triggers_reaches_the_declaration_module() {
+    applied_triggers_reach_the_declaration_module(
+        "preview_applied_triggers",
+        &operator::APPLIED_TRIGGERS_PREVIEW.replace("{organization}", "acme"),
+    )
+    .await
+}
+
+async fn applied_triggers_reach_the_declaration_module(operation: &str, path: &str) {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+
+    let refusal = refused_through_the_module(
         &kestrel,
-        &declaration_of("acme"),
-        &document(
-            json!(["https://github.com/jtmthf/kestrel"]),
-            "{{ event.data",
-        ),
+        path,
+        &json!({ "triggers": { "nightly": {
+            "filter": { "bogus": { "type": "example" } },
+            "brief": "Tidy up",
+            "project": "kestrel",
+            "agent": "builder",
+        } } }),
     )
     .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
-    assert!(refusal.get("kind").is_none(), "{refusal}");
-    assert!(refusal["message"].is_string(), "{refusal}");
+
+    says_the_field(
+        &refusal,
+        "filter",
+        "well_formed",
+        "the trigger nightly: a trigger filter: bogus is not a filter kestrel knows: use exact, \
+         prefix, suffix, all, any or not",
+        operation,
+    );
+    assert!(listed_nothing(&kestrel, &triggers_of("acme")).await);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn start_reaches_the_declaration_module() {
+    let kestrel = Kestrel::boot().await;
+
+    let mut start = a_start("acme", "opencode", "Fix the flaky test");
+    start["project"]["branch"] = json!("");
+    let refusal = refused_through_the_module(&kestrel, operator::STARTS, &start).await;
+
+    says_the_field(
+        &refusal,
+        "project.branch",
+        "non_empty",
+        "a project names the branch its work happens on",
+        "start",
+    );
+    assert!(listed(&kestrel, operator::ORGANIZATIONS).await.is_empty());
 
     kestrel.teardown().await;
 }
@@ -3387,7 +3531,7 @@ async fn a_client_declaring_into_no_such_organization_is_refused() {
 }
 
 #[tokio::test]
-async fn a_declaration_that_describes_nothing_declarable_is_refused() {
+async fn an_organizations_declaration_that_names_nothing_is_refused() {
     let kestrel = Kestrel::boot().await;
     declared(
         &kestrel,
@@ -3396,6 +3540,7 @@ async fn a_declaration_that_describes_nothing_declarable_is_refused() {
     )
     .await;
 
+    // The boundary's own schema decides these, before any declaration is read.
     let (malformed, _) = declared(
         &kestrel,
         operator::ORGANIZATIONS,
@@ -3403,42 +3548,9 @@ async fn a_declaration_that_describes_nothing_declarable_is_refused() {
     )
     .await;
     let (unnamed, _) = declared(&kestrel, operator::ORGANIZATIONS, &json!({ "name": "" })).await;
-    let (nowhere, refusal) = declared(
-        &kestrel,
-        &projects_of("acme"),
-        &json!({ "name": "kestrel", "repositories": [], "branch": "main" }),
-    )
-    .await;
-    let (clashing, clash) = declared(
-        &kestrel,
-        &projects_of("acme"),
-        &json!({
-            "name": "kestrel",
-            "repositories": ["https://github.com/acme/api.git", "https://github.com/team/api"],
-            "branch": "main",
-        }),
-    )
-    .await;
 
     assert_eq!(malformed, StatusCode::BAD_REQUEST);
     assert_eq!(unnamed, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(nowhere, StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(
-        refusal["message"]
-            .as_str()
-            .expect("a message")
-            .contains("repository"),
-        "{refusal}"
-    );
-    assert_eq!(clashing, StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(
-        clash["message"]
-            .as_str()
-            .expect("a message")
-            .contains("checked out into api"),
-        "{clash}"
-    );
-    assert!(listed(&kestrel, &projects_of("acme")).await.is_empty());
 
     kestrel.teardown().await;
 }

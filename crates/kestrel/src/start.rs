@@ -3,12 +3,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::capability::Images;
 use crate::declaration;
-use crate::declined::Declined;
+use crate::declined::Constraint;
 use crate::domain::{Declared, Session, Workspace};
 use crate::integration::github::Github;
 use crate::participant;
 use crate::provider;
-use crate::repository::{self, Declaring, Selecting};
 use crate::sign_in::{Authentication, Source};
 use crate::store::{Declared as DeclaredRecord, Store};
 use crate::workspace;
@@ -53,29 +52,41 @@ pub async fn start(
     github: &Github,
     plan: &Plan,
 ) -> Result<Started> {
-    checked(plan)?;
-    images
-        .admit(&plan.agent.harness, "start", "agent.harness")
-        .await?;
-    let declarable = repository::declarable(
-        store,
-        github,
-        &Declaring {
-            selecting: Selecting {
-                operation: "start",
-                repositories_field: "project.repositories",
-                integrations_field: "project.integrations",
-                organization: &plan.organization,
-                repositories: &plan.project.repositories,
-                selections: &plan.project.integrations,
-            },
-            branch_field: "project.branch",
-            project: &plan.project.name,
-            branch: &plan.project.branch,
-        },
-    )
-    .await?;
+    for credential in &plan.credentials {
+        provider::holdable("start", &credential.variable, &credential.secret)?;
+    }
+    if plan.organization.is_empty() {
+        return Err(declaration::scoped(
+            declaration::Prefix::Root,
+            "start",
+            declaration::invalid(
+                "organization",
+                Constraint::NonEmpty,
+                "a start names its organization, project and agent",
+            ),
+        ));
+    }
+    let project =
+        declaration::check_project(store, github, &plan.organization, &plan.project, "start")
+            .await
+            .map_err(|error| declaration::scoped(declaration::Prefix::Project, "start", error))?;
     let declared = plan.agent.declared();
+    let agent = declaration::check_agent(
+        images,
+        &plan.agent.name,
+        &plan.agent.harness,
+        &declared,
+        "start",
+    )
+    .await
+    .map_err(|error| declaration::scoped(declaration::Prefix::Agent, "start", error))?;
+    if plan.brief.trim().is_empty() {
+        return Err(declaration::scoped(
+            declaration::Prefix::Root,
+            "start",
+            declaration::invalid("brief", Constraint::NonEmpty, "a start carries a brief"),
+        ));
+    }
 
     let mut tx = store.begin().await?;
     // Redeclaring an Organization would clear the live Instance limit it may carry.
@@ -97,66 +108,22 @@ pub async fn start(
             .await?;
     }
 
-    let found = tx
-        .projects()
-        .find(&organization.record, &plan.project.name)
-        .await?;
-    if let Some(found) = found.filter(|found| !declarable.describes(found)) {
-        let selecting = if found.integrations.is_empty() {
-            String::new()
-        } else {
-            format!(
-                " as {}",
-                found
-                    .integrations
-                    .iter()
-                    .map(|selected| selected.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        };
-        return Err(Declined::Taken(format!(
-            "the project {} is declared against {}{selecting} on {}, and a start changes no \
-             declaration",
-            found.name,
-            found.repositories.join(", "),
-            found.branch
-        ))
-        .into());
-    }
-    let project = declarable
-        .declare(&mut tx, &organization.record, &plan.project.name)
-        .await?;
-
-    let found = tx
-        .agents()
-        .find(&organization.record, &plan.agent.name)
-        .await?;
-    if let Some(found) =
-        found.filter(|found| found.harness != plan.agent.harness || found.declared != declared)
-    {
-        return Err(Declined::Taken(format!(
-            "the agent {} is declared on the harness {} with the model {}, and a start changes \
-             no declaration",
-            found.name,
-            found.harness,
-            found
-                .declared
-                .model
-                .as_deref()
-                .unwrap_or("its harness's default")
-        ))
-        .into());
-    }
-    let agent = tx
-        .agents()
-        .declare(
-            &organization.record,
-            &plan.agent.name,
-            &plan.agent.harness,
-            &declared,
-        )
-        .await?;
+    let (project, _) = declaration::place_project(
+        &mut tx,
+        &organization.record,
+        &project,
+        declaration::OnExisting::Refuse,
+    )
+    .await
+    .map_err(|error| declaration::scoped(declaration::Prefix::Project, "start", error))?;
+    let (agent, _) = declaration::place_agent(
+        &mut tx,
+        &organization.record,
+        &agent,
+        declaration::OnExisting::Refuse,
+    )
+    .await
+    .map_err(|error| declaration::scoped(declaration::Prefix::Agent, "start", error))?;
 
     let (profile, sign_in_method) = workspace::operators_own(
         &mut tx,
@@ -197,34 +164,4 @@ pub async fn start(
         workspace,
         session,
     })
-}
-
-fn checked(plan: &Plan) -> Result<()> {
-    for credential in &plan.credentials {
-        provider::holdable("start", &credential.variable, &credential.secret)?;
-    }
-    let unacceptable = |why: &str| Err(Declined::Unacceptable(why.to_owned()).into());
-    if [&plan.organization, &plan.project.name, &plan.agent.name]
-        .iter()
-        .any(|name| name.is_empty())
-    {
-        return unacceptable("a start names its organization, project and agent");
-    }
-    repository::resolved(
-        "start",
-        "project.repositories",
-        &plan.project.repositories,
-        repository::Purpose::Declaration,
-    )?;
-    if plan.project.branch.is_empty() {
-        return unacceptable("a project names the branch its work happens on");
-    }
-    if plan.agent.harness.is_empty() {
-        return unacceptable("an agent names the harness that drives it");
-    }
-    if plan.brief.trim().is_empty() {
-        return unacceptable("a start carries a brief");
-    }
-
-    Ok(())
 }

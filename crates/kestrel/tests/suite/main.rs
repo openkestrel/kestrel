@@ -12,6 +12,7 @@ mod cli;
 mod continuity;
 mod credential;
 mod debuginfo;
+mod declaration;
 mod deliberate;
 mod events;
 mod exit_codes;

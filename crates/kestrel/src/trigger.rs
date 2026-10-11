@@ -8,10 +8,11 @@ use jiff::{SignedDuration, Timestamp};
 
 pub mod apply;
 
+use crate::declaration;
 use crate::domain::{
     Agent, CorrelationMiss, Declared, DisableReason, Event, EventRecordId, Fires, Firing,
-    FiringBudget, Integration, Occurrence, OnOpenWorkspace, Organization, Schedule, SessionId,
-    StartedBy, Templates, Trigger, TriggerId, TriggerState, Workspace, WorkspaceId,
+    FiringBudget, Integration, Occurrence, OnOpenWorkspace, Organization, SessionId, StartedBy,
+    Templates, Trigger, TriggerId, TriggerState, Workspace, WorkspaceId,
 };
 use crate::integration::github::{self, EventData, Github};
 use crate::integration::out_of_use;
@@ -157,128 +158,29 @@ pub struct Tested {
 }
 
 pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trigger> {
-    if let Fires::Scheduled(schedule) = declaration.fires {
-        let budget = FiringBudget::default();
-        let allowed = budget.window / i32::try_from(budget.limit.get())?;
-        let fastest = schedule.fastest();
-        if fastest < allowed {
-            let pace = match schedule {
-                Schedule::Every(_) => format!("every {fastest:#}"),
-                Schedule::Cron(_) => format!("as often as every {fastest:#}"),
-            };
-            bail!(
-                "a trigger firing {pace} would exhaust its budget of {} firings in {:#}: \
-                 fire at most every {allowed:#}",
-                budget.limit,
-                budget.window
-            );
-        }
-    }
-
+    declaration::check_budget(declaration.fires)?;
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(declaration.organization).await?;
-    let project = tx
-        .projects()
-        .named(&organization, declaration.project)
-        .await?;
-    let agent = tx.agents().named(&organization, declaration.agent).await?;
-    let allows = allowed(&mut tx, &organization, declaration.allows).await?;
-    let profile = match declaration.profile {
-        Some(profile) => Some(tx.profiles().named(&organization, profile).await?),
-        None => None,
-    };
-    let existing = tx
-        .triggers()
-        .all(&organization)
-        .await?
-        .into_iter()
-        .find(|trigger| trigger.name == declaration.name);
-    let trigger = match existing {
-        Some(trigger)
-            if same_declaration(
-                &trigger,
-                declaration.fires,
-                declaration.templates,
-                &project,
-                &agent,
-                declaration.declared,
-                &allows,
-                profile.as_ref(),
-                false,
-            ) =>
-        {
-            trigger
-        }
-        Some(trigger) => {
-            tx.triggers()
-                .redeclare(
-                    &trigger,
-                    declaration.fires,
-                    declaration.templates,
-                    &project,
-                    &agent,
-                    declaration.declared,
-                    &allows,
-                    profile.as_ref(),
-                    false,
-                )
-                .await?
-        }
-        None => {
-            tx.triggers()
-                .declare(
-                    &organization,
-                    declaration.name,
-                    declaration.fires,
-                    declaration.templates,
-                    &project,
-                    &agent,
-                    declaration.declared,
-                    &allows,
-                    profile.as_ref(),
-                    false,
-                )
-                .await?
-        }
-    };
+    let checked = declaration::CheckedTrigger::new(declaration::TriggerProposal {
+        name: declaration.name.to_owned(),
+        fires: declaration.fires.clone(),
+        templates: declaration.templates.clone(),
+        project: declaration.project.to_owned(),
+        agent: declaration.agent.to_owned(),
+        declared: declaration.declared.clone(),
+        allows: declaration.allows.to_vec(),
+        profile: declaration.profile.map(str::to_owned),
+    });
+    let placed = declaration::place_trigger(
+        &mut tx,
+        &organization,
+        &checked,
+        declaration::Provenance::Flags,
+    )
+    .await?;
     tx.commit().await?;
 
-    Ok(trigger)
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "a trigger is what it is declared with"
-)]
-fn same_declaration(
-    trigger: &Trigger,
-    fires: &Fires,
-    templates: &Templates,
-    project: &crate::domain::Project,
-    agent: &Agent,
-    declared: &Declared,
-    allows: &[Agent],
-    profile: Option<&crate::domain::SubscriptionProfile>,
-    applied: bool,
-) -> bool {
-    let names = |agents: &[Agent]| {
-        let mut names = agents
-            .iter()
-            .map(|agent| agent.name.clone())
-            .collect::<Vec<_>>();
-        names.sort_unstable();
-        names.dedup();
-        names
-    };
-
-    trigger.fires == *fires
-        && trigger.templates == *templates
-        && trigger.project.id == project.id
-        && trigger.agent.id == agent.id
-        && trigger.declared == *declared
-        && names(&trigger.allows) == names(allows)
-        && trigger.profile.as_ref().map(|profile| profile.id) == profile.map(|profile| profile.id)
-        && trigger.applied == applied
+    Ok(placed.trigger)
 }
 
 pub(crate) async fn allowed(

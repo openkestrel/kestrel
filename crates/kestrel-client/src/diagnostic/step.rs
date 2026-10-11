@@ -41,9 +41,11 @@ impl Input {
     }
 }
 
-/// The CLI's bindings for an action's fixed input vocabulary; a name is positional.
+/// The CLI's bindings for an action's fixed input vocabulary; a name is positional. A
+/// declaration refusal prefixes its record (`project.branch`); the flag is the leaf.
 fn flag_for(input: &str) -> Option<String> {
-    match input {
+    let leaf = input.split('.').next_back().unwrap_or(input);
+    match leaf {
         "name" => None,
         "repositories" | "repository" => Some("--repository".to_owned()),
         other => Some(format!("--{}", other.replace('_', "-"))),
@@ -516,6 +518,7 @@ fn corrected(action: &wire::CorrectFieldAction, invocation: &Invocation) -> Step
     if let Some(allowed) = &action.allowed_values {
         says.push_str(&format!("; one of {}", allowed.join(", ")));
     }
+    let leaf = action.field.split('.').next_back().unwrap_or(&action.field);
     let Some(flag) = flag_for(&action.field) else {
         return Step::said(says);
     };
@@ -530,7 +533,10 @@ fn corrected(action: &wire::CorrectFieldAction, invocation: &Invocation) -> Step
             continue;
         }
         if !found {
-            command.push(Word::Asked(Input::named(&action.field)));
+            command.push(Word::Asked(Input {
+                name: leaf.to_owned(),
+                flag: Some(flag.clone()),
+            }));
             found = true;
         }
     }
@@ -684,6 +690,42 @@ mod tests {
             "{said}"
         );
         assert!(said.contains("calm-heron"), "{said}");
+    }
+
+    #[test]
+    fn a_prefixed_field_corrects_its_leaf_by_flag() {
+        let invalid = diagnostic(json!({
+            "kind": "invalid_field",
+            "message": "a project names the branch its work happens on",
+            "field": "project.branch",
+            "context": {
+                "field": "project.branch",
+                "constraint": "non_empty",
+                "allowed_values": null,
+            },
+            "next_steps": [{
+                "action": "correct_field",
+                "operation": "start",
+                "resource": null,
+                "field": "project.branch",
+                "constraint": "non_empty",
+                "allowed_values": null,
+            }],
+        }));
+        let invocation = Invocation {
+            args: ["start", "--organization", "acme", "--branch", "main"]
+                .map(str::to_owned)
+                .to_vec(),
+            ..invocation()
+        };
+
+        let said = rendered(&invalid, &invocation, false);
+
+        assert!(said.contains("correct project.branch: non_empty"), "{said}");
+        assert!(
+            said.contains("kestrel start --organization acme --branch <BRANCH>\n"),
+            "{said}"
+        );
     }
 
     #[test]
