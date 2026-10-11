@@ -422,9 +422,10 @@ headings. Each command's `--json` returns the operator response.
   key GitHub rejects is a 409 `credentials_rejected` offering the key's replacement; an
   installation or repository the App does not reach is a 409 that never says the repository does
   not exist; a rate limit or an outage is a 503 offering `retry_request`, since nothing was
-  saved. The second runs inside the saving transaction: a selection that was checked is saved
-  only if its Integration is still at the revision read, and one skipped as unchanged only if
-  the Project still holds it, so maintenance or a redeclaration that landed meanwhile is a 409.
+  saved. The second runs inside the saving transaction: every selected Integration must still
+  be usable and at the revision read, including unchanged bindings. A selection skipped as
+  unchanged also requires the Project to still hold it, so maintenance or a redeclaration that
+  landed meanwhile is a 409.
   A preview makes the same check and an apply makes its own. A passed check says the App reached
   the repository and branch then; checkout success is still only the supervisor's to report.
 - A Project and a Workspace read carry `integrations: [{repository, integration,
@@ -434,6 +435,8 @@ headings. Each command's `--json` returns the operator response.
   Integration's installation reaches from GitHub at each call, with each default branch and
   whether it is the one the Integration `watched`. A read GitHub refuses or does not answer is
   the same typed refusal, offering `retry_read`, never an empty page or a guessed branch.
+  `kestrel integration repositories NAME --page N --per-page N` reads the same page; `--json`
+  keeps its total, current page and next page alongside the repository metadata.
 
 ## The Client
 

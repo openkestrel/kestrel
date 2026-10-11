@@ -321,6 +321,14 @@ enum IntegrationCommand {
     List,
     /// Show an Integration: its state, revision, directions and why it is out of use
     Show { name: String },
+    /// Read one page of repositories the Integration's App can see, with their default branches
+    Repositories {
+        name: String,
+        #[arg(long, default_value_t = 1)]
+        page: u32,
+        #[arg(long, default_value_t = 30)]
+        per_page: u32,
+    },
     /// Change an Integration's name, directions or poll interval; what it connects to is fixed
     Change {
         name: String,
@@ -1133,12 +1141,10 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
             branch,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            let declaration = json!({
-                "name": name,
-                "integrations": selections(&repositories, &integrations)?,
-                "repositories": repositories,
-                "branch": branch,
-            });
+            let integrations = selections(&repositories, &integrations)?;
+            let declaration = wire::ProjectDeclaration::builder(branch, name, repositories)
+                .integrations(integrations)
+                .build();
             show(
                 &presentation,
                 &view::DECLARED,
@@ -1400,6 +1406,55 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                 api.get(&["organizations", &organization, "integrations", &name])
                     .await?,
             )?;
+        }
+        Command::Integration(IntegrationCommand::Repositories {
+            name,
+            page,
+            per_page,
+        }) => {
+            let organization = scoping.resolve().await?.organization;
+            let page = page.to_string();
+            let per_page = per_page.to_string();
+            let repositories: wire::IntegrationRepositories = serde_json::from_value(
+                api.get_where(
+                    &[
+                        "organizations",
+                        &organization,
+                        "integrations",
+                        &name,
+                        "repositories",
+                    ],
+                    &[("page", &page), ("per_page", &per_page)],
+                )
+                .await?,
+            )?;
+            let mut out = std::io::stdout().lock();
+            if matches!(presentation, Presentation::Json) {
+                writeln!(out, "{}", serde_json::to_value(repositories)?)?;
+            } else {
+                for repository in repositories.repositories {
+                    writeln!(
+                        out,
+                        "{}\t{}\t{}\t{}\t{}",
+                        repository.repository,
+                        repository.address,
+                        repository.default_branch,
+                        if repository.private {
+                            "private"
+                        } else {
+                            "public"
+                        },
+                        if repository.watched {
+                            "watched"
+                        } else {
+                            "not watched"
+                        },
+                    )?;
+                }
+                if let Some(next) = repositories.next_page {
+                    writeln!(out, "next page {next} (--page {next})")?;
+                }
+            }
         }
         Command::Integration(IntegrationCommand::Change {
             name,
@@ -2266,7 +2321,7 @@ async fn started(
     } else {
         (json!([]), json!([]), json!([]))
     };
-    let existing = start::Existing::read(declared, &projects, &agents, &credentials);
+    let existing = start::Existing::read(declared, &projects, &agents, &credentials)?;
     let names_a_project = start.project.as_ref().is_some_and(|name| {
         existing
             .projects
@@ -2359,14 +2414,21 @@ async fn started(
     )
 }
 
-fn selections(repositories: &[String], integrations: &[String]) -> Result<Vec<Value>> {
+fn selections(
+    repositories: &[String],
+    integrations: &[String],
+) -> Result<Vec<wire::RepositoryIntegrationSelection>> {
     integrations
         .iter()
         .map(|given| match (given.rsplit_once('='), repositories) {
-            (Some((repository, integration)), _) => {
-                Ok(json!({ "repository": repository, "integration": integration }))
-            }
-            (None, [repository]) => Ok(json!({ "repository": repository, "integration": given })),
+            (Some((repository, integration)), _) => Ok(wire::RepositoryIntegrationSelection {
+                repository: repository.to_owned(),
+                integration: integration.to_owned(),
+            }),
+            (None, [repository]) => Ok(wire::RepositoryIntegrationSelection {
+                repository: repository.clone(),
+                integration: given.clone(),
+            }),
             (None, _) => bail!(Failed::new(
                 Exit::Usage,
                 format!(

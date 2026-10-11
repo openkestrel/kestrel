@@ -412,6 +412,46 @@ async fn maintenance_that_lands_while_github_is_asked_refuses_the_declaration() 
 }
 
 #[tokio::test]
+async fn an_unchanged_binding_is_fenced_while_another_repository_is_checked() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    connected(&kestrel, &stub).await;
+    connect(&kestrel, &stub, "tools", "jtmthf/tools").await;
+    has_branch(&stub, "main");
+    let (_, saved) = declare(&kestrel, &selecting(REPOSITORY, "main", "github")).await;
+    stub.script_answer(
+        "GET",
+        "/repos/jtmthf/tools/branches/main",
+        ScriptedResponse::ok(json!({ "name": "main" }).to_string()).after(Duration::from_secs(1)),
+    );
+    let declaration = json!({
+        "name": "web",
+        "repositories": [REPOSITORY, "jtmthf/tools"],
+        "integrations": [
+            { "repository": REPOSITORY, "integration": "github" },
+            { "repository": "jtmthf/tools", "integration": "tools" },
+        ],
+        "branch": "main",
+    });
+    let ((status, refusal), _) = tokio::join!(declare(&kestrel, &declaration), async {
+        while !stub
+            .requests()
+            .iter()
+            .any(|request| request.url.ends_with("/repos/jtmthf/tools/branches/main"))
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        kestrel.disable_integration("acme", "github").await
+    });
+
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["context"]["state"], "revised");
+    assert_eq!(refusal["context"]["reference"], "github");
+    assert_eq!(projects(&kestrel).await, json!([saved]));
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_declaration_that_changes_nothing_under_a_selection_asks_github_nothing() {
     let stub = GithubStub::start();
     let kestrel = Kestrel::boot().await;
@@ -636,6 +676,35 @@ fn installed(total: usize, repositories: &[(&str, &str, bool)]) -> ScriptedRespo
 }
 
 #[tokio::test]
+async fn a_selected_integration_resolves_supported_github_ssh_addresses() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    connected(&kestrel, &stub).await;
+    let before = asked(&stub);
+    for address in [
+        "ssh://git@github.com:22/jtmthf/kestrel.git",
+        "ssh://github.com/jtmthf/kestrel.git",
+        "github.com:jtmthf/kestrel.git",
+    ] {
+        let (status, resolution) = posted(
+            &kestrel,
+            operator::REPOSITORY_RESOLUTIONS,
+            &json!({
+                "organization": "acme",
+                "repositories": [address],
+                "integrations": [{ "repository": address, "integration": "github" }],
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{address}: {resolution}");
+        assert_eq!(resolution["repositories"][0]["address"], HTTPS);
+        assert_eq!(resolution["repositories"][0]["integration"], "github");
+    }
+    assert_eq!(asked(&stub), before);
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn an_integrations_repositories_are_read_from_github_a_page_at_a_time() {
     const LISTED: &str = "/installation/repositories";
     let stub = GithubStub::start();
@@ -739,5 +808,76 @@ async fn a_repository_read_github_does_not_answer_is_a_refusal_never_an_empty_li
     assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
     assert_eq!(refusal["context"]["state"], "disabled");
 
+    kestrel.teardown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_successful_app_check_does_not_hide_an_instances_checkout_failure() {
+    let stub = GithubStub::start();
+    let environment = support::environment::Environment::executing(&format!(
+        "export GIT_CONFIG_COUNT=1\n\
+         export GIT_CONFIG_KEY_0='url.{}.insteadOf'\n\
+         export GIT_CONFIG_VALUE_0='{HTTPS}'\n\
+         exec '{}'",
+        support::repository::url(),
+        support::supervisor::binary().display(),
+    ));
+    let kestrel = Kestrel::dispatching(environment.path()).await;
+    connected(&kestrel, &stub).await;
+    let (status, credential) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        &of(operator::CREDENTIAL).replace("{variable}", support::PROVIDER_KEY),
+        Some(&json!({ "secret": support::A_PROVIDER_KEY })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{credential}");
+    let branch = "a-branch-nobody-cut";
+    has_branch(&stub, branch);
+    let (status, saved) = declare(&kestrel, &selecting(REPOSITORY, branch, "github")).await;
+    assert_eq!(status, StatusCode::CREATED, "{saved}");
+    let (status, agent) = posted(
+        &kestrel,
+        &of(operator::AGENTS),
+        &json!({
+            "name": "builder", "harness": "opencode",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{agent}");
+    let (status, opened) = posted(
+        &kestrel,
+        &of(operator::WORKSPACES),
+        &json!({
+            "project": "web", "agent": "builder", "brief": "go",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let session = opened["session"]["id"].as_str().expect("a session");
+    let path = of(operator::SESSION).replace("{session}", session);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let ended = loop {
+        let (status, read) = got(&kestrel, &path).await;
+        assert_eq!(status, StatusCode::OK, "{read}");
+        if read["state"] == "ended" {
+            break read;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "checkout never ended: {read}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(ended["exit"]["status"], "failed", "{ended}");
+    let failure = ended["exit"]["because"].as_str().expect("a failure");
+    assert!(
+        failure.contains(HTTPS) && failure.contains("could not be checked out"),
+        "{failure}"
+    );
+    assert!(failure.contains(branch), "{failure}");
+    assert_eq!(ended["started_at"], Value::Null);
+    assert_eq!(projects(&kestrel).await, json!([saved]));
     kestrel.teardown().await;
 }

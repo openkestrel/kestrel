@@ -504,15 +504,6 @@ struct OrganizationDeclaration {
 }
 
 #[derive(Deserialize)]
-struct ProjectDeclaration {
-    name: String,
-    repositories: Vec<String>,
-    #[serde(default)]
-    integrations: Vec<repository::Selection>,
-    branch: String,
-}
-
-#[derive(Deserialize)]
 struct AgentDeclaration {
     name: String,
     harness: String,
@@ -1464,15 +1455,7 @@ async fn resolve_repositories(
         wire::RepositoryPurpose::Declaration => repository::Purpose::Declaration,
         wire::RepositoryPurpose::PublicSetup => repository::Purpose::PublicSetup,
     };
-    let selections: Vec<repository::Selection> = request
-        .integrations
-        .unwrap_or_default()
-        .into_iter()
-        .map(|selection| repository::Selection {
-            repository: selection.repository,
-            integration: selection.integration,
-        })
-        .collect();
+    let selections = request.integrations.unwrap_or_default();
     let resolved = repository::resolution(
         &control_plane.store,
         &repository::Selecting {
@@ -1551,7 +1534,7 @@ async fn projects(
 async fn declare_project(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    declaration: Result<Json<ProjectDeclaration>, JsonRejection>,
+    declaration: Result<Json<wire::ProjectDeclaration>, JsonRejection>,
 ) -> Result<Response, Refused> {
     let Json(declaration) = declaration?;
     named("declare_project", &declaration.name)?;
@@ -1579,7 +1562,7 @@ async fn declare_project(
                 integrations_field: "integrations",
                 organization: &organization,
                 repositories: &declaration.repositories,
-                selections: &declaration.integrations,
+                selections: declaration.integrations.as_deref().unwrap_or_default(),
             },
             branch_field: "branch",
             project: &declaration.name,

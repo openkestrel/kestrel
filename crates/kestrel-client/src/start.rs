@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::{Value, json};
+use anyhow::Result;
+use kestrel_operator_types as wire;
+use serde_json::Value;
 
 use crate::scope::{Scope, Source};
 
@@ -40,26 +42,26 @@ impl Existing {
         projects: &Value,
         agents: &Value,
         credentials: &Value,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let projects: wire::ListProjectsResponse = serde_json::from_value(projects.clone())?;
+        Ok(Self {
             organization_declared,
-            projects: records(projects, |record| {
-                Some(Project {
-                    name: record["name"].as_str()?.to_owned(),
-                    repositories: record["repositories"]
-                        .as_array()?
-                        .iter()
-                        .filter_map(|repository| repository.as_str().map(str::to_owned))
+            projects: projects
+                .into_iter()
+                .map(|record| Project {
+                    name: record.name,
+                    repositories: record.repositories,
+                    integrations: record
+                        .integrations
+                        .into_iter()
+                        .map(|selected| wire::RepositoryIntegrationSelection {
+                            repository: selected.repository,
+                            integration: selected.integration,
+                        })
                         .collect(),
-                    integrations: records(&record["integrations"], |selected| {
-                        Some(json!({
-                            "repository": selected["repository"].as_str()?,
-                            "integration": selected["integration"].as_str()?,
-                        }))
-                    }),
-                    branch: record["branch"].as_str()?.to_owned(),
+                    branch: record.branch,
                 })
-            }),
+                .collect(),
             agents: records(agents, |record| {
                 Some(Agent {
                     name: record["name"].as_str()?.to_owned(),
@@ -70,7 +72,7 @@ impl Existing {
             credentials: records(credentials, |record| {
                 record["variable"].as_str().map(str::to_owned)
             }),
-        }
+        })
     }
 }
 
@@ -87,7 +89,7 @@ pub struct Project {
     pub name: String,
     pub repositories: Vec<String>,
     /// As declared, and sent back unchanged: a start selects none of its own.
-    pub integrations: Vec<Value>,
+    pub integrations: Vec<wire::RepositoryIntegrationSelection>,
     pub branch: String,
 }
 
@@ -131,7 +133,7 @@ pub struct Explained<'a> {
 pub struct Plan {
     pub organization: Inferred<String>,
     pub repositories: Inferred<Vec<String>>,
-    integrations: Vec<Value>,
+    integrations: Vec<wire::RepositoryIntegrationSelection>,
     pub project: Inferred<String>,
     pub branch: Inferred<String>,
     pub agent: Inferred<String>,
@@ -539,26 +541,33 @@ impl Plan {
     }
 
     /// Only what was given is sent: what the Organization already holds stays where it is.
-    pub fn body(&self, brief: &str, secrets: &[(String, String)]) -> Value {
-        json!({
-            "organization": self.organization.value,
-            "project": {
-                "name": self.project.value,
-                "repositories": self.repositories.value,
-                "integrations": self.integrations,
-                "branch": self.branch.value,
-            },
-            "agent": {
-                "name": self.agent.value,
-                "harness": self.harness.value,
-                "model": self.model.value,
-            },
-            "brief": brief,
-            "credentials": secrets
+    pub fn body(&self, brief: &str, secrets: &[(String, String)]) -> wire::StartPlan {
+        let mut agent =
+            wire::AgentDeclaration::new(self.harness.value.clone(), self.agent.value.clone());
+        agent.model = Some(self.model.value.clone());
+        let project = wire::ProjectDeclaration::builder(
+            self.branch.value.clone(),
+            self.project.value.clone(),
+            self.repositories.value.clone(),
+        )
+        .integrations(self.integrations.clone())
+        .build();
+        wire::StartPlan::builder(
+            agent,
+            brief.to_owned(),
+            self.organization.value.clone(),
+            project,
+        )
+        .credentials(
+            secrets
                 .iter()
-                .map(|(variable, secret)| json!({ "variable": variable, "secret": secret }))
-                .collect::<Vec<_>>(),
-        })
+                .map(|(variable, secret)| wire::StartPlanCredentialsItem {
+                    variable: variable.clone(),
+                    secret: secret.clone(),
+                })
+                .collect(),
+        )
+        .build()
     }
 }
 
@@ -597,6 +606,7 @@ fn repository_name(url: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn a_clone(origin: &str) -> LocalClone {
         LocalClone {
@@ -700,8 +710,8 @@ mod tests {
             assert_eq!(row.because, format!("given as {}", row.flag));
         }
         let body = plan.body("go", &[]);
-        assert_eq!(body["agent"]["model"], "opus");
-        assert_eq!(body["project"]["branch"], "develop");
+        assert_eq!(body.agent.model, Some(Some("opus".to_owned())));
+        assert_eq!(body.project.branch, "develop");
     }
 
     #[test]
@@ -713,10 +723,10 @@ mod tests {
                 projects: vec![Project {
                     name: "widgets-main".to_owned(),
                     repositories: vec!["https://github.com/acme/widgets.git".to_owned()],
-                    integrations: vec![json!({
-                        "repository": "https://github.com/acme/widgets.git",
-                        "integration": "github",
-                    })],
+                    integrations: vec![wire::RepositoryIntegrationSelection {
+                        repository: "https://github.com/acme/widgets.git".to_owned(),
+                        integration: "github".to_owned(),
+                    }],
                     branch: "trunk".to_owned(),
                 }],
                 ..Existing::default()
@@ -726,7 +736,7 @@ mod tests {
         assert_eq!(plan.project.value, "widgets-main");
         assert_eq!(plan.branch.value, "trunk");
         assert_eq!(
-            plan.body("go", &[])["project"]["integrations"],
+            serde_json::to_value(plan.body("go", &[]).project.integrations).unwrap(),
             json!([{
                 "repository": "https://github.com/acme/widgets.git",
                 "integration": "github",
@@ -737,10 +747,10 @@ mod tests {
     #[test]
     fn repositories_given_against_a_declared_project_bring_none_of_its_integrations() {
         let mut declared = widgets_declared_against("https://github.com/acme/other");
-        declared.integrations = vec![json!({
-            "repository": "https://github.com/acme/other",
-            "integration": "github",
-        })];
+        declared.integrations = vec![wire::RepositoryIntegrationSelection {
+            repository: "https://github.com/acme/other".to_owned(),
+            integration: "github".to_owned(),
+        }];
         let plan = planned(
             Given {
                 project: Some("widgets".to_owned()),
@@ -754,7 +764,10 @@ mod tests {
             },
         );
 
-        assert_eq!(plan.body("go", &[])["project"]["integrations"], json!([]));
+        assert_eq!(
+            serde_json::to_value(plan.body("go", &[]).project.integrations).unwrap(),
+            json!([])
+        );
     }
 
     #[test]
