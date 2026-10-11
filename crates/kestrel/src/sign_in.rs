@@ -272,12 +272,23 @@ pub async fn save(
 pub async fn saved(store: &Store, organization: &str) -> Result<Vec<SignIn>> {
     let mut tx = store.read().await?;
     let organization = tx.organizations().named(organization).await?;
+    let profiles = operator_profiles(&mut tx, &organization).await?;
+
+    saved_in(&mut tx, &organization, profiles).await
+}
+
+/// The Organization's keys, and the subscriptions these Profiles hold.
+pub(crate) async fn saved_in(
+    tx: &mut Tx<'_>,
+    organization: &Organization,
+    holding: Vec<SubscriptionProfile>,
+) -> Result<Vec<SignIn>> {
     let credentials = tx
         .organizations()
         .provider_credentials_held(organization.id)
         .await?;
     let mut profiles = Vec::new();
-    for profile in operator_profiles(&mut tx, &organization).await? {
+    for profile in holding {
         let held = tx.profiles().held(&profile).await?;
         profiles.push((profile, held));
     }

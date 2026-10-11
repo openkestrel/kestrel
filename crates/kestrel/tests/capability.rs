@@ -368,6 +368,21 @@ async fn availability_follows_the_label_of_whatever_image_the_tag_names_now() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
     refused_as_not_carried(&refusal, &reference, "claude");
+
+    let readiness = read(
+        &kestrel,
+        "/operator/readiness?organization=acme&harness=claude",
+    )
+    .await;
+    assert_eq!(readiness["outcome"], "blocked");
+    let not_carried = readiness["gaps"]
+        .as_array()
+        .expect("gaps")
+        .iter()
+        .find(|gap| gap["context"]["prerequisite"] == "harness_in_image")
+        .expect("the selected harness's gap");
+    refused_as_not_carried(not_carried, &reference, "claude");
+    assert_eq!(readiness["unavailable"], json!([]));
 }
 
 #[tokio::test]
@@ -402,6 +417,16 @@ async fn an_image_gone_since_a_positive_read_is_unavailable_and_never_pulled() {
     let (status, refusal) = posted(&kestrel, "/operator/starts", plan("acme", "opencode")).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     refused_as_unavailable(&refusal, &reference);
+    let readiness = read(&kestrel, "/operator/readiness?harness=opencode").await;
+    refused_as_unavailable(&readiness["unavailable"][0], &reference);
+    assert!(
+        readiness["gaps"]
+            .as_array()
+            .expect("gaps")
+            .iter()
+            .all(|gap| gap["context"]["prerequisite"] != "harness_in_image"),
+        "{readiness:#}"
+    );
 
     assert_ne!(
         docker::ran(&["image", "inspect", &reference]).code,

@@ -123,7 +123,7 @@ pub(crate) fn held_by_the_organization(harness: &str, method: &str) -> bool {
         .any(|offered| offered.id == method && !held_in_profile(offered))
 }
 
-fn concerning_the_method(error: anyhow::Error, harness: &str) -> anyhow::Error {
+pub(crate) fn concerning_the_method(error: anyhow::Error, harness: &str) -> anyhow::Error {
     match error.downcast::<Reason>() {
         Ok(Reason::InvalidField {
             operation,

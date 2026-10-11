@@ -4,6 +4,7 @@ mod diagnostic;
 mod exit;
 mod files;
 mod output;
+mod readiness;
 mod scope;
 mod shell;
 mod sse;
@@ -40,13 +41,13 @@ const ORGANIZATION_VARIABLE: &str = "KESTREL_ORGANIZATION";
 #[command(
     name = BINARY,
     version,
-    about = "Reach a kestrel control plane over its operator boundary.",
+    about = "Reach a kestrel control plane over its operator boundary. With no command, say whether work can start and what is missing when it cannot.",
     after_help = "Exit codes: `kestrel exit-codes` lists each one, what it means, and when to branch on it.",
     disable_help_subcommand = true
 )]
 struct Client {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 
     /// The control plane's operator boundary
     #[arg(
@@ -1025,14 +1026,14 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
     if named
         .as_ref()
         .is_some_and(|scope| matches!(scope.source, Source::Flag))
-        && !client.command.scoped()
+        && !client.command.as_ref().is_none_or(Command::scoped)
     {
         bail!(Failed::new(
             Exit::Usage,
             "--organization scopes nothing here; this command names its record directly"
         ));
     }
-    if let Command::ExitCodes = client.command {
+    if let Some(Command::ExitCodes) = client.command {
         let catalog = Exit::ALL.map(Exit::record);
         return show(
             &presentation,
@@ -1055,7 +1056,10 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
     let api = ControlPlane::at(control_plane.clone(), &invocation.operation);
     let scoping = Scoping::new(&api, named);
 
-    match client.command {
+    let Some(command) = client.command else {
+        return readiness::show(&api, scoping, invocation).await;
+    };
+    match command {
         Command::Start(start) => {
             started(&api, &presentation, scoping, start).await?;
         }

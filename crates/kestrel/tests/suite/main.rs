@@ -41,6 +41,7 @@ mod presence;
 mod presentation;
 mod profile;
 mod pull_request;
+mod readiness;
 mod replies;
 mod restart;
 mod roles;
