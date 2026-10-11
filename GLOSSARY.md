@@ -329,6 +329,12 @@ _Avoid_: online, watchers, viewers
 
 ### Governance
 
+**Declaration**:
+A statement a human reviewed that names a project, an agent, a trigger or an environment and what
+it is to be. It is where authority is named: an event supplies data to what a declaration set up,
+and never amends one. Declaring a name again states what that record should now be.
+_Avoid_: config, definition, manifest, spec
+
 **Policy**:
 The standing rule set that resolves an attempted operation to one of four dispositions: allow, deny,
 judge, or human. Judge refers the operation to a model that decides against stated criteria; human

@@ -6,6 +6,7 @@ use crate::declaration;
 use crate::declined::Declined;
 use crate::domain::{Declared, Session, Workspace};
 use crate::integration::github::Github;
+use crate::participant;
 use crate::provider;
 use crate::repository::{self, Declaring, Selecting};
 use crate::sign_in::{Authentication, Source};
@@ -157,16 +158,24 @@ pub async fn start(
         )
         .await?;
 
+    let (profile, sign_in_method) = workspace::operators_own(
+        &mut tx,
+        "start",
+        &organization.record,
+        &agent.record.harness,
+        None,
+    )
+    .await?;
     let resolved = workspace::Resolved {
         project: project.record.clone(),
         agent: agent.record.clone(),
-        profile: None,
-        sign_in_method: None,
+        profile,
+        sign_in_method,
         continues: None,
         branch: None,
         declared: Declared::default(),
         brief: Some(plan.brief.as_str()),
-        participant: None,
+        participant: participant::operator(&mut tx, &organization.record, "start").await?,
     };
     let (workspace, session) =
         workspace::opened_in(&mut tx, &organization.record, &resolved).await?;

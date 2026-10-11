@@ -278,7 +278,11 @@ pub fn steps(diagnostic: &wire::Diagnostic, invocation: &Invocation, wrote: bool
 fn step(action: &wire::Action, invocation: &Invocation, wrote: bool) -> Step {
     use wire::Action as A;
     match action {
-        A::NameOperatorAction(_) => Step::said("name the Operator, then try again"),
+        A::NameOperatorAction(a) => {
+            let mut command = given(&["operator", "name"]);
+            command.extend(held_or_asked(None, a.name.as_deref(), "name", &a.missing));
+            Step::run("name the Operator", command, None)
+        }
         A::DeclareOrganizationAction(a) => {
             let mut command = given(&["organization", "declare"]);
             command.extend(held_or_asked(None, a.name.as_deref(), "name", &a.missing));

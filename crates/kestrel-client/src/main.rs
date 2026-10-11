@@ -85,6 +85,10 @@ enum Command {
     Start(Start),
     /// Preview and apply one Project, Agent and Trigger declaration document
     Apply(Apply),
+    /// Name and show the Operator: the person who runs this install, and the default author of
+    /// anything a command leaves unnamed
+    #[command(subcommand)]
+    Operator(OperatorCommand),
     /// Declare and list Organizations
     #[command(subcommand)]
     Organization(OrganizationCommand),
@@ -125,6 +129,17 @@ enum Command {
     Status,
     /// Print every exit code, what it means, and when a script should branch on it
     ExitCodes,
+}
+
+#[derive(Debug, Subcommand)]
+enum OperatorCommand {
+    /// Name the Operator, or rename them; their Subscription Profiles stay theirs
+    Name {
+        /// The name written on what they author from here on
+        name: String,
+    },
+    /// Show the Operator
+    Show,
 }
 
 #[derive(Debug, Args)]
@@ -187,7 +202,7 @@ impl Command {
             | Command::Instance(_)
             | Command::Queue
             | Command::Status => true,
-            Command::Organization(_) | Command::ExitCodes => false,
+            Command::Operator(_) | Command::Organization(_) | Command::ExitCodes => false,
             Command::Event(event) => match event {
                 EventCommand::List { .. } => true,
                 EventCommand::Show { .. } => false,
@@ -641,9 +656,9 @@ enum InstanceCommand {
         /// The Workspace whose Instance it is, by generated name, identifier, any unambiguous
         /// prefix of its identifier, or `latest`
         workspace: String,
-        /// The participant releasing it
-        #[arg(long, default_value = "operator")]
-        as_participant: String,
+        /// The participant releasing it. Without it, the Operator
+        #[arg(long)]
+        as_participant: Option<String>,
     },
 }
 
@@ -683,7 +698,7 @@ enum WorkspaceCommand {
         /// The thought level the first Session runs at. Without it, the Agent's
         #[arg(long)]
         thought_level: Option<String>,
-        /// The name the Brief is written under. Without it, it is the operator's
+        /// The name the Brief is written under. Without it, the Operator's
         #[arg(long)]
         as_participant: Option<String>,
         /// A Session it waits on until that one ends successfully, by generated name,
@@ -795,9 +810,9 @@ Examples:
         /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
         /// `latest`
         workspace: String,
-        /// The participant saying the message
+        /// The participant saying the message. Without it, the Operator
         #[arg(long)]
-        as_participant: String,
+        as_participant: Option<String>,
         /// What the participant says
         message: String,
     },
@@ -841,9 +856,9 @@ enum MessageCommand {
         workspace: String,
         /// The id the post answered with
         id: i64,
-        /// The participant that wrote the message, and only that one
+        /// The participant that wrote the message, and only that one. Without it, the Operator
         #[arg(long)]
-        as_participant: String,
+        as_participant: Option<String>,
         /// What the message now says
         message: String,
     },
@@ -854,9 +869,9 @@ enum MessageCommand {
         workspace: String,
         /// The id the post answered with
         id: i64,
-        /// The participant that wrote the message, and only that one
+        /// The participant that wrote the message, and only that one. Without it, the Operator
         #[arg(long)]
-        as_participant: String,
+        as_participant: Option<String>,
     },
 }
 
@@ -909,9 +924,9 @@ enum SessionCommand {
         /// Its generated name, its identifier, any unambiguous prefix of its identifier, or
         /// `latest`
         session: String,
-        /// The participant asking
+        /// The participant asking. Without it, the Operator
         #[arg(long)]
-        as_participant: String,
+        as_participant: Option<String>,
     },
     /// End a Session: it succeeds between turns, and fails mid-turn or before it started
     Stop {
@@ -937,9 +952,9 @@ enum SessionOptionCommand {
         option: String,
         /// The value to set, as the harness offers it
         value: String,
-        /// The person making the change
+        /// The person making the change. Without it, the Operator
         #[arg(long)]
-        as_participant: String,
+        as_participant: Option<String>,
     },
 }
 
@@ -1069,6 +1084,20 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                 )
                 .await?;
             }
+        }
+        Command::Operator(OperatorCommand::Name { name }) => {
+            show(
+                &presentation,
+                &view::OPERATOR,
+                &api.put(&["operator"], &json!({ "name": name })).await?,
+            )?;
+        }
+        Command::Operator(OperatorCommand::Show) => {
+            show(
+                &presentation,
+                &view::OPERATOR,
+                &api.get(&["operator"]).await?,
+            )?;
         }
         Command::Organization(OrganizationCommand::Declare {
             name,
@@ -2219,10 +2248,13 @@ async fn started(
         start::LocalClone::of(&std::env::current_dir().context("reading the working directory")?);
     let (named, existing) = match scoping.derive().await? {
         Derived::Scope(scope) => (Some(scope), Vec::new()),
+        Derived::Unnamed { existing } if existing.is_empty() => {
+            return Err(scope::nothing_to_scope(api).await);
+        }
         Derived::Unnamed { existing } => (None, existing),
     };
     let organization =
-        start::organization(named, &existing, &clone).map_err(|missing| incomplete(&[missing]))?;
+        start::organization(named, &existing).map_err(|missing| incomplete(&[missing]))?;
 
     let declared = names(&api.get(&["organizations"]).await?).contains(&organization.value);
     let (projects, agents, credentials) = if declared {

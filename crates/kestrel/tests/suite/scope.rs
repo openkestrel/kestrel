@@ -197,12 +197,12 @@ async fn every_scoped_listing_refuses_to_guess_between_two_organizations() {
 }
 
 #[tokio::test]
-async fn no_organization_at_all_names_the_command_that_makes_one() {
+async fn no_organization_and_no_operator_names_the_command_that_makes_both() {
     let kestrel = Kestrel::boot().await;
 
     let listed = ran_by(&kestrel, &["project", "list"], Invocation::default()).await;
 
-    refused(&listed, &["organization declare"]);
+    refused(&listed, &["kestrel operator name"]);
     kestrel.teardown().await;
 }
 

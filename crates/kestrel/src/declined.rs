@@ -311,7 +311,9 @@ impl Reason {
 impl fmt::Display for Reason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
-            Reason::MissingOperator { .. } => "name the Operator before using their Profile",
+            Reason::MissingOperator { .. } => {
+                "this install has no Operator yet; name one, and what a Client leaves unnamed is theirs"
+            }
             Reason::MissingReference { message, .. }
             | Reason::AmbiguousReference { message, .. }
             | Reason::InvalidField { message, .. }

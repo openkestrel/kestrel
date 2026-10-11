@@ -5,6 +5,11 @@ CREATE TABLE operator (
     declared_at TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE install (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    initial_setup_completed_at TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE organization (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,

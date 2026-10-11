@@ -162,7 +162,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     )
     .await
     .unwrap();
-    let first_queued = workspace::post(&store, first.id, "operator", "start please")
+    let first_queued = workspace::post(&store, first.id, Some("operator"), "start please")
         .await
         .unwrap()
         .session
@@ -210,7 +210,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     assert_eq!(settled.state, SessionState::Waiting);
     assert_eq!(settled.usage, Some(usage()));
 
-    let second_queued = workspace::post(&store, second.id, "operator", "start please")
+    let second_queued = workspace::post(&store, second.id, Some("operator"), "start please")
         .await
         .unwrap()
         .session
@@ -221,7 +221,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     };
     assert_eq!(second_session.id, second_queued.id);
 
-    workspace::post(&store, first.id, "operator", "continue")
+    workspace::post(&store, first.id, Some("operator"), "continue")
         .await
         .unwrap();
     assert!(
@@ -248,7 +248,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     )
     .await
     .unwrap();
-    let alex_queued = workspace::post(&store, alex.id, "operator", "start please")
+    let alex_queued = workspace::post(&store, alex.id, Some("operator"), "start please")
         .await
         .unwrap()
         .session
@@ -288,7 +288,7 @@ async fn a_waiting_codex_session_yields_its_profile_and_resumes_when_free() {
     )
     .await
     .unwrap();
-    workspace::post(&store, alex.id, "operator", "continue")
+    workspace::post(&store, alex.id, Some("operator"), "continue")
         .await
         .unwrap();
     match dispatch(&store, 2, &["codex".to_owned()]).await.unwrap() {
@@ -668,7 +668,7 @@ async fn what_a_harness_writes_to_stderr_never_waits_for_the_write_lock() {
 async fn a_failed_append_rolls_back_the_session_change_and_report_acceptance() {
     let fixture = Fixture::new().await;
     complete(&fixture.store, &fixture.session).await.unwrap();
-    crate::instance::release(&fixture.store, fixture.session.workspace, "operator")
+    crate::instance::release(&fixture.store, fixture.session.workspace, Some("operator"))
         .await
         .unwrap();
     workspace::seal(&fixture.store, fixture.session.workspace)

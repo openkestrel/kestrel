@@ -12,6 +12,7 @@ const USAGE: i32 = 2;
 const UNRESOLVED: i32 = 3;
 const REJECTED: i32 = 4;
 const UNAVAILABLE: i32 = 5;
+const NOT_READY: i32 = 78;
 
 fn exited(finished: &Finished, code: i32) {
     assert_eq!(
@@ -150,17 +151,13 @@ fn guessed_workspace_and_session_verbs_explain_the_domain_verbs_without_running_
 }
 
 #[tokio::test]
-async fn no_organization_in_scope_is_unresolved() {
+async fn nothing_to_scope_before_an_operator_is_named_is_not_ready() {
     let kestrel = Kestrel::boot().await;
 
     let finished = ran_by(&kestrel, &["project", "list"], Invocation::default()).await;
 
-    exited(&finished, UNRESOLVED);
-    assert!(
-        finished
-            .err
-            .contains("kestrel organization declare default")
-    );
+    exited(&finished, NOT_READY);
+    assert!(finished.err.contains("kestrel operator name <NAME>"));
     kestrel.teardown().await;
 }
 

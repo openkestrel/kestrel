@@ -5,7 +5,6 @@ use serde_json::{Value, json};
 
 use crate::scope::{Scope, Source};
 
-const DEFAULT_ORGANIZATION: &str = "default";
 const DEFAULT_HARNESS: &str = "opencode";
 
 #[derive(Default)]
@@ -184,15 +183,14 @@ impl LocalClone {
     }
 }
 
-/// Only while no Organization exists is one named for the clone: with one, it is the scope,
-/// and with several, guessing would land work in an Organization nobody named (ADR-0016).
+/// A repository's owner never names an Organization: with one it is the scope, and with several,
+/// guessing would land work in an Organization nobody named (ADR-0016, ADR-0049).
 pub fn organization(
     named: Option<Scope>,
     existing: &[String],
-    clone: &LocalClone,
 ) -> Result<Inferred<String>, Missing> {
-    if let Some(scope) = named {
-        return Ok(match &scope.source {
+    match named {
+        Some(scope) => Ok(match &scope.source {
             Source::Flag => flagged(scope.organization, "--organization"),
             Source::Environment => flagged(scope.organization, crate::ORGANIZATION_VARIABLE),
             Source::Binding(binding) => {
@@ -200,25 +198,13 @@ pub fn organization(
                 inferred(scope.organization, because)
             }
             Source::OnlyOrganization => inferred(scope.organization, "the only Organization"),
-        });
-    }
-    match existing {
-        [] => Ok(match clone.origin.as_deref() {
-            Some(origin) => match owner_and_name(origin).0 {
-                Some(owner) => inferred(owner.to_owned(), format!("the owner of origin {origin}")),
-                None => inferred(
-                    DEFAULT_ORGANIZATION.to_owned(),
-                    format!("none exists, and origin {origin} names no owner"),
-                ),
-            },
-            None => inferred(DEFAULT_ORGANIZATION.to_owned(), "none exists yet"),
         }),
-        several => Err(Missing {
+        None => Err(Missing {
             flag: "--organization",
             because: format!(
                 "{} Organizations exist, and none is in scope: {}",
-                several.len(),
-                several.join(", ")
+                existing.len(),
+                existing.join(", ")
             ),
         }),
     }
@@ -283,7 +269,7 @@ pub fn plan(
             format!("already declares {}", repositories.value.join(", ")),
         )),
         (None, None, Some(repositories)) => {
-            let name = owner_and_name(&repositories.value[0]).1;
+            let name = repository_name(&repositories.value[0]);
             if projects.iter().any(|declared| declared.name == name) {
                 missing.push(Missing {
                     flag: "--project",
@@ -601,27 +587,11 @@ pub fn secrets(
     }
 }
 
-/// A repository on this machine has no owner: its parent directory owns nothing.
-fn owner_and_name(url: &str) -> (Option<&str>, &str) {
+fn repository_name(url: &str) -> &str {
     let trimmed = url.trim_end_matches('/');
     let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
-    let hosted = match trimmed.split_once("://") {
-        Some(("file", _)) => None,
-        Some((_, rest)) => Some(rest.split_once('/').map_or("", |(_, path)| path)),
-        None => trimmed
-            .split_once(':')
-            .filter(|(host, _)| !host.is_empty() && !host.contains('/'))
-            .map(|(_, path)| path),
-    };
-    let name = trimmed.rsplit('/').next().unwrap_or(trimmed);
 
-    let owner = hosted.and_then(|path| {
-        let mut segments = path.rsplit('/').filter(|segment| !segment.is_empty());
-        segments.next();
-        segments.next()
-    });
-
-    (owner, name)
+    trimmed.rsplit('/').next().unwrap_or(trimmed)
 }
 
 #[cfg(test)]
@@ -638,7 +608,7 @@ mod tests {
     }
 
     fn acme() -> Inferred<String> {
-        inferred("acme".to_owned(), "the owner of origin")
+        inferred("acme".to_owned(), "the only Organization")
     }
 
     fn planned(given: Given, clone: &LocalClone, existing: &Existing) -> Plan {
@@ -648,55 +618,22 @@ mod tests {
     }
 
     #[test]
-    fn an_owner_is_read_from_every_hosted_spelling_and_never_from_a_path() {
-        for (url, owner, name) in [
-            (
-                "https://github.com/acme/widgets.git",
-                Some("acme"),
-                "widgets",
-            ),
-            ("https://github.com/acme/widgets/", Some("acme"), "widgets"),
-            ("git@github.com:acme/widgets.git", Some("acme"), "widgets"),
-            (
-                "ssh://git@host:22/group/acme/widgets",
-                Some("acme"),
-                "widgets",
-            ),
-            ("file:///srv/git/widgets", None, "widgets"),
-            ("/srv/git/widgets.git", None, "widgets"),
+    fn a_repository_is_named_the_same_from_every_spelling() {
+        for url in [
+            "https://github.com/acme/widgets.git",
+            "https://github.com/acme/widgets/",
+            "git@github.com:acme/widgets.git",
+            "ssh://git@host:22/group/acme/widgets",
+            "file:///srv/git/widgets",
+            "/srv/git/widgets.git",
         ] {
-            assert_eq!(owner_and_name(url), (owner, name), "{url}");
+            assert_eq!(repository_name(url), "widgets", "{url}");
         }
     }
 
     #[test]
-    fn with_no_organization_one_is_named_for_origins_owner() {
-        let named = organization(None, &[], &a_clone("https://github.com/acme/widgets.git"));
-
-        assert_eq!(
-            named,
-            Ok(inferred(
-                "acme".to_owned(),
-                "the owner of origin https://github.com/acme/widgets.git"
-            ))
-        );
-    }
-
-    #[test]
-    fn with_no_organization_and_no_owner_the_default_is_named() {
-        let named =
-            organization(None, &[], &a_clone("file:///srv/git/widgets")).expect("an organization");
-
-        assert_eq!(named.value, "default");
-    }
-
-    #[test]
     fn with_several_organizations_and_none_named_the_flag_is_missing() {
-        let named = organization(
-            None,
-            &["acme".to_owned(), "globex".to_owned()],
-            &a_clone("https://github.com/acme/widgets.git"),
-        );
+        let named = organization(None, &["acme".to_owned(), "globex".to_owned()]);
 
         assert_eq!(named.map_err(|missing| missing.flag), Err("--organization"));
     }
@@ -717,7 +654,7 @@ mod tests {
         assert_eq!(
             explained,
             [
-                ("organization", "acme".to_owned(), "the owner of origin"),
+                ("organization", "acme".to_owned(), "the only Organization"),
                 ("project", "widgets".to_owned(), "named for its repository"),
                 (
                     "repository",

@@ -205,6 +205,10 @@ fn supplied<'a>(session: &'a Value, name: &str) -> &'a Value {
 async fn a_method_is_checked_against_its_harness_and_what_holds_it_before_work_is_accepted() {
     let stub = ProviderStub::start();
     let kestrel = booted(&stub, "claude").await;
+    let no_profile = open(&kestrel, json!({ "sign_in_method": "claude-setup-token" })).await;
+    assert!(no_profile.status.is_client_error());
+    assert_eq!(no_profile.body["kind"], "invalid_field");
+    assert_eq!(no_profile.body["field"], "sign_in_method");
     save(&kestrel, "claude", "claude-setup-token", CLAUDE_TOKEN).await;
 
     let another_harnesses = open(
@@ -215,11 +219,6 @@ async fn a_method_is_checked_against_its_harness_and_what_holds_it_before_work_i
     assert!(another_harnesses.status.is_client_error());
     assert_eq!(another_harnesses.body["kind"], "invalid_field");
     assert_eq!(another_harnesses.body["field"], "sign_in_method");
-
-    let no_profile = open(&kestrel, json!({ "sign_in_method": "claude-setup-token" })).await;
-    assert!(no_profile.status.is_client_error());
-    assert_eq!(no_profile.body["kind"], "invalid_field");
-    assert_eq!(no_profile.body["field"], "sign_in_method");
 
     let never_saved = open(
         &kestrel,

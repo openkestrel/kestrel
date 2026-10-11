@@ -34,6 +34,36 @@ routes.
 changing its ID. First creation declares an Organization with that name only when none exists,
 in the same transaction; naming does not complete initial setup.
 
+`GET /operator/install` answers `{ initial_setup_complete }` whether or not an Operator is named.
+It is a row in `install`, false on a new install and independent of readiness and of what is
+declared. Nothing sets it yet: naming, a saved sign-in, an open and an enqueue never do, and the
+shared start will with its first committed Workspace and Session.
+
+### Operator defaults
+
+What a write from a Client leaves unnamed is the Operator's
+([ADR-0049](../adr/0049-an-install-has-one-operator-and-by-default-one-organization.md)):
+
+- **Participant.** A post, a Held Message edit or withdrawal, an interrupt, an option change and
+  an Instance release with no `participant` are written under the Operator's current name
+  (`participant::named_or_operator`); with none named they are a 409 `setup_gap` on `participant`.
+  An open's or a start's Brief is the Operator's when one is named and unsigned otherwise. A name
+  given is never replaced, and a rename changes only what is written next.
+- **Subscription Profile.** An open, a start or an enqueue naming no Profile takes the Operator's
+  own Profile that holds a subscription the catalogue offers the Session's harness
+  (`sign_in::handoff::defaulted`), and selects that subscription as the Session's
+  `sign_in_method`, so the Organization's key for the same harness is withheld and never answers a
+  refused subscription. A Profile holding several of the harness's subscriptions is taken with no
+  method selected. Several such Profiles are a 409 `several_operator_profiles`. No such Profile
+  leaves the Organization's Provider Credentials, as does naming an Organization-held method. A
+  Profile with a free-text owner is never chosen, whatever the text.
+- An enqueue, and a person's post that starts the next Session, apply this only to a Workspace
+  that names no Profile and that no Event opened (`work::next_as_the_operator`), and the
+  Workspace then keeps the Profile it took. A Session continuing the latest one's method keeps
+  it. A Trigger's Sessions, and a Session an Event's post starts, never take it.
+- The Operator's name is held to the participant rule's shape when it is given, so it can always
+  be written; an Agent of the same name in an Organization still refuses the default there.
+
 Profile declaration defaults an omitted `owner` to the current Operator, or refuses 409 with the
 same setup gap. Reads expose `owner_operator` beside `owner`; Operator-owned Profiles show the
 current Operator label and keep their identity and material on rename. An explicit free-text
@@ -81,10 +111,10 @@ that harness. The ten-second deadline and provider addresses are injected throug
 
 Opening a Workspace and enqueueing a Session take an optional `sign_in_method`
 (`sign_in/handoff.rs`). It must be a method the Session's harness offers whose material is saved
-where the work will look: the Organization for a key, the Profile the Workspace names for a
-subscription. A method of another harness, or a subscription with no Profile named, is a 422; one
-with nothing saved is a 409 `sign_in_not_saved`. The Operator's Profile never stands in for a
-Profile the Workspace names. A Session enqueued without one continues with the latest Session's
+where the work will look: the Organization for a key, the Workspace's Profile for a
+subscription. A method of another harness, or a subscription with no Profile named and none of
+the Operator's holding it, is a 422; one with nothing saved is a 409 `sign_in_not_saved`. The
+Operator's Profile never stands in for a Profile the Workspace names. A Session enqueued without one continues with the latest Session's
 while the harness is the same, so only naming a method switches credentials.
 
 A Session read carries `sign_in_method` and `supplied`: each variable or file its harness was
@@ -411,7 +441,11 @@ headings. Each command's `--json` returns the operator response.
 - **Scope is derived, never stored** ([ADR-0016](../adr/0016-scope-is-derived-never-switched.md),
   `scope.rs`): `--organization`, then `KESTREL_ORGANIZATION`, then a `.kestrel/organization` file
   found walking up from the working directory, then the only Organization that exists. Several
-  Organizations and no binding is an error that lists them.
+  Organizations and no binding is an error that lists them; none at all and no Operator is the
+  control plane's naming gap, exit 78, whose step is `kestrel operator name`.
+- **The Operator**: `kestrel operator name NAME` names or renames them and `operator show` reads
+  them. Every `--as-participant` is optional and sent only when given; the Client supplies no
+  name of its own.
 - **Output** (`output.rs`, `view.rs`): most commands declare a `View` of dotted paths into the
   answer. Live work inspection follows git-style prose even when piped. For commands with a
   `View`, a terminal gets aligned columns and a pipe gets delimited rows. `--json` is a flag on
@@ -436,8 +470,9 @@ headings. Each command's `--json` returns the operator response.
   refused or lost write is never sent again: once an invocation has sent a write, a retry is
   described, not offered to run. A Session's own `diagnostic` is part of
   `session show`'s successful output.
-- `kestrel start` (`start.rs`) infers an Organization, Project and Agent from the local clone and
-  explains every inferred value on stderr before changing anything.
+- `kestrel start` (`start.rs`) infers a Project and Agent from the local clone and explains every
+  inferred value on stderr before changing anything. Its Organization is the scope's: a
+  repository's owner never names one, and only an explicit `--organization` declares one.
 
 ## The browser Client
 
