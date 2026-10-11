@@ -31,7 +31,7 @@ export function WorkspacesPane({
 			<div className="border-b px-3 py-2 empty:hidden">
 				<QueueReadNotice {...queueReading} compact />
 			</div>
-			<div className="p-2">
+			<div className="grid gap-2 p-2">
 				<Link
 					to="/organizations/$organization/new"
 					params={{ organization }}
@@ -39,6 +39,9 @@ export function WorkspacesPane({
 				>
 					<Plus aria-hidden />
 					New Workspace
+				</Link>
+				<Link to="/setup" search={{ organization }} className="px-2 text-xs underline">
+					Setup and readiness
 				</Link>
 			</div>
 			<nav aria-label="Workspaces" className="min-h-0 flex-1 overflow-y-auto p-2">

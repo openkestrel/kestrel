@@ -121,6 +121,9 @@ test("a missing asset is not found, where a Client route is the page", async ({ 
 });
 
 test("the only Organization opens without being chosen", async ({ page }) => {
+	await page.route("**/operator/install", (route) =>
+		route.fulfill({ json: { initial_setup_complete: true } }),
+	);
 	await page.goto("/");
 
 	await expect(page).toHaveURL(/\/organizations\/acme$/);
