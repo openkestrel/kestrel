@@ -1117,6 +1117,56 @@ fn watching(kestrel: &Booted, stub: &GithubStub, interval: &str) {
 }
 
 #[test]
+fn the_client_selects_an_integration_for_a_projects_repository() {
+    const DECLARE: [&str; 9] = [
+        "project",
+        "declare",
+        "web",
+        "--repository",
+        "git@github.com:jtmthf/kestrel.git",
+        "--integration",
+        "hub",
+        "--branch",
+        "main",
+    ];
+    let kestrel = Kestrel::new();
+    let stub = GithubStub::start();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "info");
+    watching(&booted, &stub, "1h");
+
+    let refused = booted.refused(&DECLARE);
+    assert!(refused.contains("has no branch main"), "{refused}");
+    assert!(booted.records(&["project", "list", "--json"]).is_empty());
+
+    stub.script_answer(
+        "GET",
+        "/branches/main",
+        ScriptedResponse::ok(r#"{"name":"main"}"#),
+    );
+    let declared = booted.record(&[&DECLARE[..], &["--json"]].concat());
+    assert_eq!(
+        declared["repositories"],
+        serde_json::json!(["https://github.com/jtmthf/kestrel.git"])
+    );
+    assert_eq!(declared["integrations"][0]["integration"], "hub");
+
+    let unpaired = booted.refused(&[
+        "project",
+        "declare",
+        "two",
+        "--repository",
+        "jtmthf/kestrel",
+        "--repository",
+        "jtmthf/other",
+        "--integration",
+        "hub",
+        "--branch",
+        "main",
+    ]);
+    assert!(unpaired.contains("REPOSITORY=hub"), "{unpaired}");
+}
+
+#[test]
 fn the_client_retires_an_integration_only_on_an_explicit_choice() {
     let kestrel = Kestrel::new();
     let stub = GithubStub::start();

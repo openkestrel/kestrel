@@ -8,13 +8,13 @@ use anyhow::{Context as _, Result, bail};
 use jiff::{SignedDuration, Timestamp};
 use tracing::warn;
 
-use crate::declined::{Constraint, Declined, Next, Reason, Resource, Step};
+use crate::declined::{Again, Constraint, Declined, Next, Reason, Resource, Step};
 use crate::domain::{
     Connection, Direction, Event, EventRecordId, GithubConnection, Integration, IntegrationKind,
     IntegrationState, Occurrence,
 };
 use crate::integration::credential::App;
-use crate::integration::github::{Github, Refused, Unproven};
+use crate::integration::github::{Github, Installed, Refused, Unproven};
 use crate::store::Store;
 use crate::store::integration::Recorded;
 
@@ -320,7 +320,7 @@ async fn maintained(
     Ok(maintained)
 }
 
-fn revised(
+pub fn revised(
     read: &Integration,
     organization: &str,
     operation: &'static str,
@@ -448,6 +448,7 @@ fn unproven_replacement(
         integration: read.name.clone(),
         organization: organization.to_owned(),
         retry_after_seconds,
+        again: Again::ReplacePrivateKey,
         message,
     };
 
@@ -496,6 +497,189 @@ fn unproven_replacement(
             unavailable(
                 None,
                 format!("github did not answer, so the replacement was not checked; {KEPT}"),
+            )
+        }
+    }
+}
+
+/// What lends a repository its authority: an enabled GitHub App that carries outbound, which is
+/// what a checkout, a push and a pull request are (ADR-0056).
+pub fn lending<'a>(
+    integration: &'a Integration,
+    organization: &str,
+    operation: &'static str,
+) -> Result<&'a GithubConnection> {
+    let connection = reading(integration, organization, operation)?;
+    if !integration.carries(Direction::Outbound) {
+        bail!(Reason::StateConflict {
+            operation,
+            resource: Resource::Integration,
+            reference: integration.name.clone(),
+            organization: Some(organization.to_owned()),
+            state: "outbound_not_carried",
+            holding_session: None,
+            next: Next::inspect(Resource::Integration, integration.name.clone()),
+            message: format!(
+                "the integration {} carries nothing outbound, so it lends a repository no \
+                 authority; change what it carries to include outbound",
+                integration.name
+            ),
+        });
+    }
+
+    Ok(connection)
+}
+
+fn reading<'a>(
+    integration: &'a Integration,
+    organization: &str,
+    operation: &'static str,
+) -> Result<&'a GithubConnection> {
+    let Connection::Github(connection) = &integration.connection else {
+        bail!(Reason::Forbidden {
+            operation,
+            resource: Resource::Integration,
+            reference: integration.name.clone(),
+            organization: Some(organization.to_owned()),
+            constraint: "github_app",
+            next: Next::inspect(Resource::Integration, integration.name.clone()),
+            message: format!(
+                "the integration {} is a generic webhook, which reaches no repository",
+                integration.name
+            ),
+        });
+    };
+    if !integration.enabled() {
+        bail!(out_of_use(integration, organization, operation));
+    }
+
+    Ok(connection)
+}
+
+pub struct Reached {
+    pub watched: String,
+    pub page: u32,
+    pub next_page: Option<u32>,
+    pub installed: Installed,
+}
+
+pub const REPOSITORIES_PER_PAGE: u32 = 30;
+const REPOSITORIES_PER_PAGE_AT_MOST: u32 = 100;
+
+pub async fn repositories(
+    store: &Store,
+    github: &Github,
+    organization: &str,
+    name: &str,
+    page: Option<u32>,
+    per_page: Option<u32>,
+) -> Result<Reached> {
+    const OPERATION: &str = "list_integration_repositories";
+    let counted = |field, value: Option<u32>, otherwise| match value {
+        Some(0) => Err(anyhow::Error::from(Reason::InvalidField {
+            field,
+            operation: OPERATION,
+            constraint: Constraint::Positive,
+            allowed: None,
+            message: format!("{field} counts from 1"),
+        })),
+        value => Ok(value.unwrap_or(otherwise)),
+    };
+    let page = counted("page", page, 1)?;
+    let per_page =
+        counted("per_page", per_page, REPOSITORIES_PER_PAGE)?.min(REPOSITORIES_PER_PAGE_AT_MOST);
+    let read = integration(store, organization, name).await?;
+    let connection = reading(&read, organization, OPERATION)?;
+    let installed = github
+        .installed_repositories(connection, page, per_page)
+        .await
+        .map_err(|unproven| unreached(&read, organization, OPERATION, unproven, Again::Read))?;
+
+    Ok(Reached {
+        watched: connection.repository.clone(),
+        page,
+        next_page: (u64::from(page) * u64::from(per_page) < installed.total_count)
+            .then(|| page + 1),
+        installed,
+    })
+}
+
+/// Nothing here establishes that a repository does not exist (ADR-0057).
+pub fn unreached(
+    integration: &Integration,
+    organization: &str,
+    operation: &'static str,
+    unproven: Unproven,
+    again: Again,
+) -> Reason {
+    let inspect = || Next::inspect(Resource::Integration, integration.name.clone());
+    let conflict = |state, next, message: String| Reason::StateConflict {
+        operation,
+        resource: Resource::Integration,
+        reference: integration.name.clone(),
+        organization: Some(organization.to_owned()),
+        state,
+        holding_session: None,
+        next,
+        message,
+    };
+    let unavailable = |retry_after_seconds, message: String| Reason::GithubUnavailable {
+        operation,
+        integration: integration.name.clone(),
+        organization: organization.to_owned(),
+        retry_after_seconds,
+        again,
+        message,
+    };
+    let repository = integration.github().map_or_else(
+        |_| "its repository".to_owned(),
+        |github| github.repository.clone(),
+    );
+
+    match unproven {
+        Unproven::Unreadable | Unproven::Rejected => conflict(
+            "credentials_rejected",
+            inspect().then(Step::ReplacePrivateKey {
+                integration: integration.name.clone(),
+            }),
+            format!(
+                "github does not accept the private key the integration {} signs with; replace \
+                 it, then try again",
+                integration.name
+            ),
+        ),
+        Unproven::Installation => conflict(
+            "installation_unreachable",
+            inspect(),
+            format!(
+                "the App's installation does not answer for the integration {}; restore it on \
+                 GitHub, then try again",
+                integration.name
+            ),
+        ),
+        Unproven::Repository => conflict(
+            "repository_unreachable",
+            inspect(),
+            format!(
+                "the integration {} does not reach {repository} through its App's installation, \
+                 which does not establish whether the repository exists; give the installation \
+                 access to it on GitHub, then try again",
+                integration.name
+            ),
+        ),
+        Unproven::RateLimited { until } => unavailable(
+            Some(until.duration_since(Timestamp::now()).as_secs().max(0)),
+            format!("github is rate limiting until {until}, so {repository} was not checked"),
+        ),
+        Unproven::Unanswered(error) => {
+            warn!(
+                integration = integration.name,
+                because = %error,
+                "github could not be read through an integration"
+            );
+            unavailable(
+                None,
+                format!("github did not answer, so {repository} was not checked"),
             )
         }
     }

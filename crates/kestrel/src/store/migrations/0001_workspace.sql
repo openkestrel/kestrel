@@ -31,6 +31,7 @@ CREATE TABLE project_repository (
     organization_id TEXT NOT NULL REFERENCES organization (id),
     position INTEGER NOT NULL,
     url TEXT NOT NULL,
+    integration_id TEXT REFERENCES integration (id),
     PRIMARY KEY (project_id, position)
 ) STRICT;
 
@@ -68,6 +69,8 @@ CREATE TABLE workspace_repository (
     organization_id TEXT NOT NULL REFERENCES organization (id),
     position INTEGER NOT NULL,
     url TEXT NOT NULL,
+    -- Copied from the Project when the Workspace opens and never rewritten (ADR-0056).
+    integration_id TEXT REFERENCES integration (id),
     PRIMARY KEY (workspace_id, position)
 ) STRICT;
 

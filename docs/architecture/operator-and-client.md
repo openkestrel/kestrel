@@ -176,7 +176,8 @@ offers `retry_read`; on a write it offers `inspect_operation` with `uncertain: t
 unanswered write may have landed and is never replayed. A busy database carries the same delay in
 `Retry-After` and `retry_after_seconds`. A private-key replacement GitHub could not check is the
 exception: it is refused before anything is written, so its 503 (`service: github`) offers the
-replacement again, after `retry_after_seconds` when GitHub named a wait.
+replacement again, after `retry_after_seconds` when GitHub named a wait. A declaration whose
+selected App could not be asked is refused the same way and offers `retry_request`.
 
 `declined::Declined` remains for producers no ticket has typed yet (Integration registration,
 the GitHub App flow, starts, Trigger declaration and supervisor-relayed read refusals); they answer
@@ -407,6 +408,32 @@ headings. Each command's `--json` returns the operator response.
   `POST /operator/repository-resolutions` exposes the resolver to Clients without declaring
   anything. `kestrel start` calls it before planning, so it matches Projects by resolved address.
   `purpose: public_setup` accepts HTTPS addresses only and warns that no App-backed push follows.
+- A Project declaration selects an Integration per repository with `integrations:
+  [{repository, integration}]`; nothing else selects one, neither a GitHub address nor an Event
+  ([ADR-0056](../adr/0056-an-integration-keeps-its-identity-through-maintenance.md)). The
+  Integration must be an enabled GitHub one that carries outbound and watches that repository
+  (`integration::lending`), and the repository is held as HTTPS whatever transport it was given
+  by. An SSH address with no selection is kept and promised no credential. The resolution route
+  takes the same `integrations` with an `organization` and shows the result, asking GitHub nothing.
+- Declaring is two steps, `repository::declarable` then `Declarable::declare`, on all three
+  paths. The first runs outside any transaction: for each selection whose binding, repository
+  or branch the Project does not already hold, it mints a token as the selected App and reads
+  the repository and the branch. A branch GitHub says is absent is a 422 on the branch field; a
+  key GitHub rejects is a 409 `credentials_rejected` offering the key's replacement; an
+  installation or repository the App does not reach is a 409 that never says the repository does
+  not exist; a rate limit or an outage is a 503 offering `retry_request`, since nothing was
+  saved. The second runs inside the saving transaction: a selection that was checked is saved
+  only if its Integration is still at the revision read, and one skipped as unchanged only if
+  the Project still holds it, so maintenance or a redeclaration that landed meanwhile is a 409.
+  A preview makes the same check and an apply makes its own. A passed check says the App reached
+  the repository and branch then; checkout success is still only the supervisor's to report.
+- A Project and a Workspace read carry `integrations: [{repository, integration,
+  integration_id}]`. A Workspace copies its Project's when it opens and keeps them through a
+  rebinding, a disable and a retirement; nothing substitutes another Integration.
+- `GET …/integrations/{integration}/repositories?page&per_page` reads the repositories the
+  Integration's installation reaches from GitHub at each call, with each default branch and
+  whether it is the one the Integration `watched`. A read GitHub refuses or does not answer is
+  the same typed refusal, offering `retry_read`, never an empty page or a guessed branch.
 
 ## The Client
 

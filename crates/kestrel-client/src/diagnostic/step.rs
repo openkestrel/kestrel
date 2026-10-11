@@ -470,6 +470,23 @@ fn step(action: &wire::Action, invocation: &Invocation, wrote: bool) -> Step {
                 )
             }
         }
+        A::RetryRequestAction(a) => Step {
+            repeated: true,
+            ..Step::run(
+                match a.retry_after_seconds {
+                    Some(seconds) => {
+                        format!("nothing was saved; send it again after {seconds} seconds")
+                    }
+                    None => "nothing was saved; send it again".to_owned(),
+                },
+                invocation
+                    .args
+                    .iter()
+                    .map(|arg| Word::Given(arg.clone()))
+                    .collect(),
+                None,
+            )
+        },
         A::InspectOperationAction(a) if a.uncertain => Step::said(format!(
             "{} may already have taken effect; look before running it again",
             a.operation

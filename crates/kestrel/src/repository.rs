@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use serde::Deserialize;
 use url::Url;
 
-use crate::declined::{Constraint, Reason};
+use crate::declined::{Again, Constraint, Next, Reason, Resource};
+use crate::domain::{Integration, Organization, Project, SelectedIntegration};
+use crate::integration::{self, github, github::Github};
+use crate::store::{Declared, Store, Tx};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolved {
@@ -82,17 +86,343 @@ pub fn resolved(
     Ok(resolved)
 }
 
-pub fn declared(
+/// Only this selects authority: neither a GitHub shorthand nor an Event ever does (ADR-0056).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Selection {
+    pub repository: String,
+    pub integration: String,
+}
+
+pub struct Selecting<'a> {
+    pub operation: &'static str,
+    pub repositories_field: &'static str,
+    pub integrations_field: &'static str,
+    pub organization: &'a str,
+    pub repositories: &'a [String],
+    pub selections: &'a [Selection],
+}
+
+pub struct Declaring<'a> {
+    pub selecting: Selecting<'a>,
+    pub branch_field: &'static str,
+    pub project: &'a str,
+    pub branch: &'a str,
+}
+
+pub struct Bound {
+    pub resolved: Resolved,
+    pub integration: Option<Integration>,
+}
+
+pub async fn resolution(
+    store: &Store,
+    selecting: &Selecting<'_>,
+    purpose: Purpose,
+) -> Result<Vec<Bound>> {
+    let refused = |field, constraint, message: &str| Reason::InvalidField {
+        field,
+        operation: selecting.operation,
+        constraint,
+        allowed: None,
+        message: message.to_owned(),
+    };
+    if selecting.selections.is_empty() {
+        return Ok(resolved(
+            selecting.operation,
+            selecting.repositories_field,
+            selecting.repositories,
+            purpose,
+        )?
+        .into_iter()
+        .map(|resolved| Bound {
+            resolved,
+            integration: None,
+        })
+        .collect());
+    }
+    if purpose == Purpose::PublicSetup {
+        return Err(refused(
+            selecting.integrations_field,
+            Constraint::DeclarationPurpose,
+            "public-repository setup selects no integration; resolve a declaration to select one",
+        )
+        .into());
+    }
+    if selecting.organization.is_empty() {
+        return Err(refused(
+            "organization",
+            Constraint::NonEmpty,
+            "an integration is selected within an organization; name it",
+        )
+        .into());
+    }
+
+    bound(store, selecting).await
+}
+
+/// Asks GitHub nothing: which Integration each repository selects, and the HTTPS address a
+/// selected one is checked out by, since an App lends no SSH authority (ADR-0057).
+pub async fn bound(store: &Store, selecting: &Selecting<'_>) -> Result<Vec<Bound>> {
+    let mut bound: Vec<Bound> = resolved(
+        selecting.operation,
+        selecting.repositories_field,
+        selecting.repositories,
+        Purpose::Declaration,
+    )?
+    .into_iter()
+    .map(|resolved| Bound {
+        resolved,
+        integration: None,
+    })
+    .collect();
+    if selecting.selections.is_empty() {
+        return Ok(bound);
+    }
+
+    let refused = |constraint: Constraint, message: String| Reason::InvalidField {
+        field: selecting.integrations_field,
+        operation: selecting.operation,
+        constraint,
+        allowed: None,
+        message,
+    };
+    let mut tx = store.read().await?;
+    let organization = tx.organizations().named(selecting.organization).await?;
+    for selection in selecting.selections {
+        let named = address(&selection.repository)
+            .map_err(|why| refused(Constraint::GitRepository, why))?;
+        let Some(repository) = bound.iter_mut().find(|bound| {
+            bound.resolved.given == selection.repository || bound.resolved.address == named
+        }) else {
+            return Err(refused(
+                Constraint::DeclaredRepository,
+                format!(
+                    "{} is given the integration {}, and the project does not declare it",
+                    selection.repository, selection.integration
+                ),
+            )
+            .into());
+        };
+        if repository.integration.is_some() {
+            return Err(refused(
+                Constraint::DeclaredRepository,
+                format!("{} is given an integration twice", selection.repository),
+            )
+            .into());
+        }
+        let integration = tx
+            .integrations()
+            .named(&organization, &selection.integration)
+            .await?;
+        let connection =
+            integration::lending(&integration, &organization.name, selecting.operation)?;
+        let Some(names) = github::named_repository(&repository.resolved.address)
+            .filter(|names| names.eq_ignore_ascii_case(&connection.repository))
+        else {
+            return Err(refused(
+                Constraint::WatchedByIntegration,
+                format!(
+                    "the integration {} watches {}, which {} does not name",
+                    integration.name, connection.repository, selection.repository
+                ),
+            )
+            .into());
+        };
+        if !repository
+            .resolved
+            .address
+            .get(..8)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+        {
+            repository.resolved.address = github::https_address(&names);
+        }
+        repository.integration = Some(integration);
+    }
+
+    Ok(bound)
+}
+
+struct Checked {
+    repository: String,
+    integration: Integration,
+    /// False when the Project already held this binding on this branch as it was read.
+    verified: bool,
+}
+
+pub struct Declarable {
     operation: &'static str,
-    field: &'static str,
-    repositories: &[String],
-) -> Result<Vec<String>> {
-    Ok(
-        resolved(operation, field, repositories, Purpose::Declaration)?
-            .into_iter()
-            .map(|resolved| resolved.address)
-            .collect(),
-    )
+    repositories: Vec<String>,
+    branch: String,
+    selected: Vec<Checked>,
+}
+
+/// GitHub's answer says the App reaches the repository and branch now, never that an Instance
+/// will check them out (ADR-0057).
+pub async fn declarable(
+    store: &Store,
+    github: &Github,
+    declaring: &Declaring<'_>,
+) -> Result<Declarable> {
+    let Selecting {
+        operation,
+        organization,
+        ..
+    } = declaring.selecting;
+    let bound = bound(store, &declaring.selecting).await?;
+    let repositories = bound
+        .iter()
+        .map(|bound| bound.resolved.address.clone())
+        .collect();
+    let mut declarable = Declarable {
+        operation,
+        repositories,
+        branch: declaring.branch.to_owned(),
+        selected: Vec::new(),
+    };
+    if bound.iter().all(|bound| bound.integration.is_none()) {
+        return Ok(declarable);
+    }
+
+    let held = {
+        let mut tx = store.read().await?;
+        let organization = tx.organizations().named(organization).await?;
+        tx.projects().find(&organization, declaring.project).await?
+    };
+    for bound in bound {
+        let Some(integration) = bound.integration else {
+            continue;
+        };
+        let mut checked = Checked {
+            repository: bound.resolved.address,
+            integration,
+            verified: false,
+        };
+        if !declarable.holds(held.as_ref(), &checked) {
+            let connection = checked.integration.github()?;
+            match github.reaches(connection, declaring.branch).await {
+                Ok(true) => checked.verified = true,
+                Ok(false) => {
+                    return Err(Reason::InvalidField {
+                        field: declaring.branch_field,
+                        operation,
+                        constraint: Constraint::BranchInRepository,
+                        allowed: None,
+                        message: format!(
+                            "{} has no branch {} that the integration {} can see",
+                            connection.repository, declaring.branch, checked.integration.name
+                        ),
+                    }
+                    .into());
+                }
+                Err(unproven) => {
+                    return Err(integration::unreached(
+                        &checked.integration,
+                        organization,
+                        operation,
+                        unproven,
+                        Again::Request,
+                    )
+                    .into());
+                }
+            }
+        }
+        declarable.selected.push(checked);
+    }
+
+    Ok(declarable)
+}
+
+impl Declarable {
+    pub fn repositories(&self) -> &[String] {
+        &self.repositories
+    }
+
+    pub fn selected(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.selected.iter().map(|checked| {
+            (
+                checked.repository.as_str(),
+                checked.integration.name.as_str(),
+            )
+        })
+    }
+
+    pub fn describes(&self, project: &Project) -> bool {
+        project.repositories == self.repositories
+            && project.branch == self.branch
+            && project.integrations.len() == self.selected.len()
+            && self
+                .selected
+                .iter()
+                .all(|checked| self.holds(Some(project), checked))
+    }
+
+    fn holds(&self, project: Option<&Project>, checked: &Checked) -> bool {
+        project.is_some_and(|project| {
+            project.branch == self.branch
+                && project.integrations.iter().any(|selected| {
+                    selected.repository == checked.repository
+                        && selected.integration == checked.integration.id
+                })
+        })
+    }
+
+    /// Whatever was checked is saved only if nothing it was checked against has moved since.
+    pub async fn declare(
+        &self,
+        tx: &mut Tx<'_>,
+        organization: &Organization,
+        name: &str,
+    ) -> Result<Declared<Project>> {
+        let held = tx.projects().find(organization, name).await?;
+        let mut integrations = Vec::with_capacity(self.selected.len());
+        for checked in &self.selected {
+            if !self.holds(held.as_ref(), checked) {
+                if !checked.verified {
+                    return Err(Reason::StateConflict {
+                        operation: self.operation,
+                        resource: Resource::Project,
+                        reference: name.to_owned(),
+                        organization: Some(organization.name.clone()),
+                        state: "revised",
+                        holding_session: None,
+                        next: Next::inspect(Resource::Project, name),
+                        message: format!(
+                            "the project {name} changed while its repositories were being \
+                             checked; read it again and declare what it should be now"
+                        ),
+                    }
+                    .into());
+                }
+                let current = tx.integrations().with_id(checked.integration.id).await?;
+                if current.revision != checked.integration.revision {
+                    return Err(integration::revised(
+                        &current,
+                        &organization.name,
+                        self.operation,
+                        checked.integration.revision,
+                        Next::inspect(Resource::Integration, current.name.clone()),
+                    )
+                    .into());
+                }
+            }
+            integrations.push(SelectedIntegration {
+                repository: checked.repository.clone(),
+                integration: checked.integration.id,
+                name: checked.integration.name.clone(),
+            });
+        }
+
+        tx.projects()
+            .declare(
+                organization,
+                name,
+                &self.repositories,
+                &integrations,
+                &self.branch,
+            )
+            .await
+    }
 }
 
 fn address(given: &str) -> Result<String, String> {

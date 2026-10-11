@@ -71,7 +71,29 @@ pub struct Project {
     pub organization: OrganizationId,
     pub name: String,
     pub repositories: Vec<String>,
+    pub integrations: Vec<SelectedIntegration>,
     pub branch: String,
+}
+
+/// `name` is the Integration's as it reads now; `integration` is what was selected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedIntegration {
+    pub repository: String,
+    pub integration: IntegrationId,
+    pub name: String,
+}
+
+impl SelectedIntegration {
+    pub fn same(selected: &[Self], other: &[Self]) -> bool {
+        let key = |selected: &[Self]| -> std::collections::HashSet<(String, IntegrationId)> {
+            selected
+                .iter()
+                .map(|selected| (selected.repository.clone(), selected.integration))
+                .collect()
+        };
+
+        key(selected) == key(other)
+    }
 }
 
 /// Each a Harness value id; a category named none for is the Harness's own default (ADR-0041).
@@ -757,6 +779,8 @@ pub struct Workspace {
     pub opened_with: Agent,
     pub profile: Option<SubscriptionProfile>,
     pub checkout: Checkout,
+    /// Fixed when it opened: rebinding its Project moves no Workspace already on it (ADR-0056).
+    pub integrations: Vec<SelectedIntegration>,
     pub correlation: Option<String>,
     pub state: WorkspaceState,
     pub opened_at: Timestamp,

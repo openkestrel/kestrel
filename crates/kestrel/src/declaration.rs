@@ -5,7 +5,8 @@ use crate::capability::Images;
 use crate::declined::{Constraint, Reason};
 use crate::domain::{Correlation, Declared, Fires, Templates, Trigger};
 use crate::filter::Filter;
-use crate::repository;
+use crate::integration::github::Github;
+use crate::repository::{self, Declarable, Declaring, Selecting};
 use crate::store::Store;
 use crate::template::Template;
 use crate::trigger::allowed;
@@ -23,6 +24,8 @@ pub struct Document {
 pub struct Project {
     pub name: String,
     pub repositories: Vec<String>,
+    #[serde(default)]
+    pub integrations: Vec<repository::Selection>,
     pub branch: String,
 }
 
@@ -140,16 +143,35 @@ struct Compared {
 pub async fn apply(
     store: &Store,
     images: &Images,
+    github: &Github,
     organization: &str,
     document: &Document,
     mode: ApplyMode,
 ) -> Result<Applied> {
     let operation = mode.operation();
-    let repositories = check_document(document, operation)?;
+    check_document(document, operation)?;
     let parsed = parse_trigger(&document.trigger)?;
     images
         .admit(&document.agent.harness, operation, "agent.harness")
         .await?;
+    let declarable = repository::declarable(
+        store,
+        github,
+        &Declaring {
+            selecting: Selecting {
+                operation,
+                repositories_field: "project.repositories",
+                integrations_field: "project.integrations",
+                organization,
+                repositories: &document.project.repositories,
+                selections: &document.project.integrations,
+            },
+            branch_field: "project.branch",
+            project: &document.project.name,
+            branch: &document.project.branch,
+        },
+    )
+    .await?;
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
 
@@ -161,7 +183,7 @@ pub async fn apply(
             .iter()
             .find(|project| project.name == document.project.name),
         &document.project,
-        &repositories,
+        &declarable,
     );
     let agent_change = agent_change(
         agents
@@ -197,14 +219,8 @@ pub async fn apply(
         },
     ];
 
-    let project = tx
-        .projects()
-        .declare(
-            &organization,
-            &document.project.name,
-            &repositories,
-            &document.project.branch,
-        )
+    let project = declarable
+        .declare(&mut tx, &organization, &document.project.name)
         .await?
         .record;
     let agent = tx
@@ -278,7 +294,7 @@ pub async fn apply(
     })
 }
 
-fn check_document(document: &Document, operation: &'static str) -> Result<Vec<String>> {
+fn check_document(document: &Document, operation: &'static str) -> Result<()> {
     let invalid = |field: &'static str, constraint: Constraint, message: String| {
         Err(Reason::InvalidField {
             field,
@@ -303,10 +319,11 @@ fn check_document(document: &Document, operation: &'static str) -> Result<Vec<St
             );
         }
     }
-    let repositories = repository::declared(
+    repository::resolved(
         operation,
         "project.repositories",
         &document.project.repositories,
+        repository::Purpose::Declaration,
     )?;
     if document.project.branch.is_empty() {
         return invalid(
@@ -342,7 +359,7 @@ fn check_document(document: &Document, operation: &'static str) -> Result<Vec<St
             ),
         );
     }
-    Ok(repositories)
+    Ok(())
 }
 
 fn parse_trigger(declaration: &TriggerDeclaration) -> Result<ParsedTrigger> {
@@ -374,16 +391,36 @@ fn parse_trigger(declaration: &TriggerDeclaration) -> Result<ParsedTrigger> {
 fn project_change(
     project: Option<&crate::domain::Project>,
     declaration: &Project,
-    repositories: &[String],
+    declarable: &Declarable,
 ) -> Compared {
+    let selected = |selected: Vec<(&str, &str)>| {
+        (!selected.is_empty()).then(|| {
+            selected
+                .iter()
+                .map(|(repository, integration)| format!("{repository} as {integration}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+    };
     let becomes = vec![
-        ("repositories", Some(repositories.join("\n"))),
+        ("repositories", Some(declarable.repositories().join("\n"))),
+        ("integrations", selected(declarable.selected().collect())),
         ("branch", Some(declaration.branch.clone())),
     ];
     compared(
         project.map(|project| {
             vec![
                 ("repositories", Some(project.repositories.join("\n"))),
+                (
+                    "integrations",
+                    selected(
+                        project
+                            .integrations
+                            .iter()
+                            .map(|selected| (selected.repository.as_str(), selected.name.as_str()))
+                            .collect(),
+                    ),
+                ),
                 ("branch", Some(project.branch.clone())),
             ]
         }),

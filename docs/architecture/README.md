@@ -168,17 +168,12 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   complete yet, and the browser has no Operator-naming setup and still asks for a browser-local
   Participant name.
 
-- **Repository declaration validation** ([ADR-0057](../adr/0057-a-repository-declaration-is-not-a-successful-checkout.md)):
-  declaration paths still save raw repository strings after list/branch and directory-collision checks.
-  Shared syntax validation, GitHub shorthand expansion, selected-App access/branch checks and
-  Integration-backed HTTPS resolution remain to build.
-
 - **Integration maintenance** ([ADR-0056](../adr/0056-an-integration-keeps-its-identity-through-maintenance.md)):
   name, directions and interval change, disable/enable pause and resume use, a validated App
   private key replaces the last, and retirement ends it for good, all under revision fences.
-  Webhook-secret rotation is not built. Projects do not select an Integration explicitly and
-  Workspaces do not fix that authority at open, so no queued Session yet waits on an Integration
-  that retirement could block.
+  Webhook-secret rotation is not built. A Project selects an Integration per repository and a
+  Workspace fixes that selection at open, but nothing hands a Session a token from it yet, so no
+  queued Session waits on an Integration that retirement could block.
 
 - **Release preparation and acceptance** ([ADR-0053](../adr/0053-a-tag-prepares-a-release-acceptance-publishes-it.md)):
   tag publishing still races Conformance, covers only two images on amd64, and has no draft-release

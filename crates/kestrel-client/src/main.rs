@@ -599,6 +599,10 @@ enum ProjectCommand {
         /// A repository the work happens against; repeat for many
         #[arg(long = "repository", value_name = "URL", required = true)]
         repositories: Vec<String>,
+        /// The Integration a repository reaches GitHub as, checked against GitHub before the
+        /// Project is saved; `REPOSITORY=NAME`, or `NAME` alone beside one repository
+        #[arg(long = "integration", value_name = "[REPOSITORY=]NAME")]
+        integrations: Vec<String>,
         /// The branch the work happens on
         #[arg(long)]
         branch: String,
@@ -1125,11 +1129,13 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
         Command::Project(ProjectCommand::Declare {
             name,
             repositories,
+            integrations,
             branch,
         }) => {
             let organization = scoping.resolve().await?.organization;
             let declaration = json!({
                 "name": name,
+                "integrations": selections(&repositories, &integrations)?,
                 "repositories": repositories,
                 "branch": branch,
             });
@@ -2351,6 +2357,25 @@ async fn started(
             "session_id": started["session"]["id"],
         }),
     )
+}
+
+fn selections(repositories: &[String], integrations: &[String]) -> Result<Vec<Value>> {
+    integrations
+        .iter()
+        .map(|given| match (given.rsplit_once('='), repositories) {
+            (Some((repository, integration)), _) => {
+                Ok(json!({ "repository": repository, "integration": integration }))
+            }
+            (None, [repository]) => Ok(json!({ "repository": repository, "integration": given })),
+            (None, _) => bail!(Failed::new(
+                Exit::Usage,
+                format!(
+                    "--integration {given} names no repository; beside several, give it as \
+                     REPOSITORY={given}"
+                )
+            )),
+        })
+        .collect()
 }
 
 async fn resolved(api: &ControlPlane, repositories: Vec<String>) -> Result<Vec<String>> {

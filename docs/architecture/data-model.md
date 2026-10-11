@@ -63,7 +63,7 @@ erDiagram
 | --- | --- | --- |
 | `operator` | The install's person | One stable ID and a renameable label; naming authenticates nobody. |
 | `organization` | The boundary | `max_live_instances` caps Instances across its Workspaces. |
-| `project`, `project_repository` | Repositories and default branch | Ordered by `position`; the first is where ACP sessions are rooted. |
+| `project`, `project_repository` | Repositories and default branch | Ordered by `position`; the first is where ACP sessions are rooted. `integration_id` is the Integration the repository selects, or null. |
 | `agent` | Harness and optional model | A null `model` means the harness default. |
 | `provider_credential` | Organization secrets by variable name | `sealed` is encrypted with `kestrel.key`. |
 | `subscription_profile`, `…_entry` | A person's harness login | `owner_operator` fixes Operator ownership separately from free-text ownership. Entries are `variable` or `file`, sealed to the Profile ID. |
@@ -75,7 +75,7 @@ erDiagram
 | `event` | Every recorded CloudEvent | `integration_id` null for minted Events. |
 | `trigger`, `trigger_agent` | The rule and its allowed Agents | Exactly one of `filter`, `every_ms`, `cron`. `due_at` is set only for schedules. |
 | `firing` | One Trigger × one Event | `outcome` ∈ opened, fed, ignored, held, canceled, failed; `CHECK`s tie `workspace_id`, `failure` and `considered_at` to it. |
-| `workspace`, `workspace_repository` | The durable place | Checkout fixed at open (`base`, `branch`, repositories). `instance`, `observed` (last git report) and `last_active_at` are current values. |
+| `workspace`, `workspace_repository` | The durable place | Checkout fixed at open (`base`, `branch`, repositories, and each repository's `integration_id` copied from the Project). `instance`, `observed` (last git report) and `last_active_at` are current values. |
 | `transcript_entry` | The Transcript | `(workspace_id, seq)`; indexed by Workspace, kind and seq. `session_id` attributes entries; `body` is a JSON `log::Entry` tagged by `type`. |
 | `transcript_payload` | Transcript body fields over 64 KiB | Stored atomically with the entry; `(workspace_id, seq, field)` owns each payload. Strings are UTF-8 bytes and other values compact JSON; retention deletes payloads atomically with expiry. |
 | `session` | One harness execution | State, lease, the Instance and supervisor it ran on, the pending interrupt's participant and time, exit, usage, models, `reports_taken`. |

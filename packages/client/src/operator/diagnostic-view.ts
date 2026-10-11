@@ -195,6 +195,15 @@ export function stepOf(action: Action, origin: string): Step {
 				...(action.retry_after_seconds !== null && { waitSeconds: action.retry_after_seconds }),
 				retry: true,
 			};
+		case "retry_request":
+			return {
+				kind: "guidance",
+				label: "Send it again",
+				detail:
+					action.retry_after_seconds === null
+						? "Nothing was saved."
+						: `Nothing was saved. Wait ${action.retry_after_seconds} seconds first.`,
+			};
 		case "inspect_operation":
 			return {
 				kind: "reread",
