@@ -1435,7 +1435,10 @@ impl Kestrel {
         profile: &str,
         holder: &str,
     ) -> anyhow::Result<CredentialUse> {
-        credential_use::acquire(&self.store, "acme", profile, SERIALIZED, holder).await
+        let mut tx = self.store.begin().await?;
+        let held = credential_use::acquire(&mut tx, "acme", profile, SERIALIZED, holder).await?;
+        tx.commit().await?;
+        Ok(held)
     }
 
     pub async fn release_credential_use(&self, held: &CredentialUse) {

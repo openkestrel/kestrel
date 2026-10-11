@@ -144,7 +144,11 @@ slot frees. The first Turn competes by when the Brief was written against held i
 Sessions, and the serialized-Profile rule applies to it then, not at dispatch.
 
 A Profile's login can also be lent to something that is not a Session
-(`sign_in/credential_use.rs`). `acquire` refuses with a 409
+(`sign_in/credential_use.rs`). Scheduling checks custody without reserving material;
+`acquire` rechecks and holds inside the caller's single-writer transaction, so a lost race
+returns the same holder-aware `SignInBusy` reason. The operator maps it to the existing
+state-conflict diagnostic, which queue readers in both Clients render with its repairs.
+`acquire` refuses with a 409
 `credential_in_use` while a Session occupies that Profile on a serialized harness or another
 holder has it, and never queues; a Session on that Profile and harness is passed over until
 `release`, which the holder calls only after handing back whatever its harness refreshed.

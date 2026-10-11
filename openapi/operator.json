@@ -8301,6 +8301,7 @@
           "kind": {
             "const": "subscription_profile"
           },
+          "diagnostic": { "$ref": "#/components/schemas/Diagnostic" },
           "profile": {
             "type": "string"
           },
@@ -8309,7 +8310,7 @@
               "string",
               "null"
             ],
-            "description": "The Working or Trailing Session holding the Profile when it belongs to this Organization; otherwise null."
+            "description": "The Session holding the Profile; null when a non-Session use holds it."
           }
         },
         "required": [

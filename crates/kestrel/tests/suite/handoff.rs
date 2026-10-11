@@ -624,11 +624,9 @@ async fn a_login_a_session_holds_is_refused_to_a_test_and_a_test_holds_sessions_
     assert!(
         matches!(
             conflict,
-            kestrel::declined::Reason::StateConflict {
-                state: "credential_in_use",
-                holding_session: Some(holding),
-                ..
-            } if *holding == working.id.to_string()
+            kestrel::declined::Reason::SignInBusy(busy)
+                if matches!(&busy.holder, kestrel::sign_in::credential_use::Holder::Session { session, .. }
+                    if *session == working.name)
         ),
         "{conflict:?}"
     );
