@@ -63,21 +63,7 @@ impl<'a> Scoping<'a> {
             Derived::Unnamed { existing } if existing.is_empty() => {
                 Err(nothing_to_scope(api).await)
             }
-            Derived::Unnamed { existing } => {
-                let choices = existing
-                    .iter()
-                    .map(|name| format!("`{BINARY} status --organization {}`", quoted(name)))
-                    .collect::<Vec<_>>()
-                    .join(" or ");
-                bail!(Failed::new(
-                    Exit::Unresolved,
-                    format!(
-                        "no Organization is in scope and {} exist: {}; inspect the intended scope with {choices}, then pass its --organization flag",
-                        existing.len(),
-                        existing.join(", ")
-                    )
-                ));
-            }
+            Derived::Unnamed { existing } => bail!(several(&existing)),
         }
     }
 
@@ -111,6 +97,22 @@ impl<'a> Scoping<'a> {
 
         Ok(Derived::Unnamed { existing })
     }
+}
+
+pub fn several(existing: &[String]) -> Failed {
+    let choices = existing
+        .iter()
+        .map(|name| format!("`{BINARY} status --organization {}`", quoted(name)))
+        .collect::<Vec<_>>()
+        .join(" or ");
+    Failed::new(
+        Exit::Unresolved,
+        format!(
+            "no Organization is in scope and {} exist: {}; inspect the intended scope with {choices}, then pass its --organization flag",
+            existing.len(),
+            existing.join(", ")
+        ),
+    )
 }
 
 /// Naming the Operator declares their Organization, so with neither the gap is the name.

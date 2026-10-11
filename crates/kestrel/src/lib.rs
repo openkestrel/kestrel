@@ -34,6 +34,7 @@ pub mod scheduling;
 pub mod shutdown;
 pub mod sign_in;
 pub mod start;
+pub mod start_readiness;
 pub mod store;
 pub mod stream;
 pub mod telemetry;

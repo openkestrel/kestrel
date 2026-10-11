@@ -387,6 +387,9 @@ fn step(action: &wire::Action, invocation: &Invocation, wrote: bool) -> Step {
                 Some(a.organization.clone()),
             )
         }
+        A::ConnectGithubAction(_) => Step::said(
+            "connect a repository through a GitHub App, which is what lets a Session push",
+        ),
         A::EnableIntegrationAction(a) => Step::run(
             format!("enable the Integration {}", a.integration),
             given(&["integration", "enable", &a.integration]),
@@ -496,7 +499,7 @@ fn step(action: &wire::Action, invocation: &Invocation, wrote: bool) -> Step {
         A::InspectOperationAction(_) => {
             let mut command: Vec<Word> = invocation
                 .operation
-                .split(' ')
+                .split_whitespace()
                 .map(|word| Word::Given(word.to_owned()))
                 .collect();
             command.push(Word::Given("--help".to_owned()));

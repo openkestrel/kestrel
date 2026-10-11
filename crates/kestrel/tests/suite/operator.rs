@@ -6750,6 +6750,7 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::OPERATOR, "get"),
         (operator::OPERATOR, "put"),
         (operator::INSTALL, "get"),
+        (operator::READINESS, "get"),
         (operator::ORGANIZATIONS, "get"),
         (operator::ORGANIZATIONS, "post"),
         (operator::STARTS, "post"),

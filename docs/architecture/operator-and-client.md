@@ -39,6 +39,42 @@ It is a row in `install`, false on a new install and independent of readiness an
 declared. Nothing sets it yet: naming, a saved sign-in, an open and an enqueue never do, and the
 shared start will with its first committed Workspace and Session.
 
+### Readiness
+
+`GET /operator/readiness` answers 200 whatever it finds (`start_readiness.rs`,
+[ADR-0052](../adr/0052-a-refusal-carries-its-next-steps.md)): `outcome` is `ready`, `blocked` or
+`unavailable`, beside the Organization read, the configured Client URL, `initial_setup_complete`,
+the `selected` path, its one `sign_in` when exactly one is established, and what is already
+`saved` (the Operator, the saved sign-ins, the GitHub Integrations that lend authority now, the
+Projects). It reads Store and inspects the image, and nothing else: no provider is asked, no
+relay started, nothing written, no image pulled.
+
+- **Scope.** `organization` is the one named or the only one; several and none named is a 404
+  `ambiguous_reference`, and one that does not exist a 404. `harness`, `model`, `profile`,
+  `sign_in_method` and `project` narrow the path; a method no harness offers is a 422. A named
+  Profile or Project that is not declared is a gap, the producer's own `missing_reference`.
+- **Any path, or the chosen one.** With no harness named every saved sign-in of a harness the
+  image carries is an alternative, so one usable path is ready and broken material elsewhere is
+  a warning. With a harness named and no method the path is what an open naming none takes: the
+  Operator's own Profile's subscription with the Organization's key withheld, and several such
+  Profiles are the `several_operator_profiles` conflict rather than a choice. `selected` names a
+  value only where it was given or exactly one remains.
+- **Evidence.** A revision whose `authentication` is `authentication_failed`, `expired` or
+  `not_covered` needs attention; `unchecked` is usable, and warns when every usable sign-in is
+  unchecked. With a `model` named, that model's `model_use` on the revision counts too, and no
+  other model's does. A model never tested is no prerequisite.
+- **`gaps`** are Diagnostics in repair order, every one that could be established: the Operator
+  (`operator`); no saved sign-in on a carried harness (`sign_in`), or the named harness the
+  image does not carry (`harness_in_image`, with no sign-in gap beside it); saved sign-ins that all need attention
+  (`sign_in_attention`); no Project and no lending GitHub Integration (`repository`, offering
+  `connect_github` and then `declare_project`, since a public repository needs no Integration);
+  no Project (`project`). `warnings` hold what does not block, a disabled Integration that
+  would otherwise reach a repository among them. A harness outside the catalogue has no guided
+  sign-in to find saved or missing, so naming one raises no sign-in gap.
+- **`unavailable`** holds a failed image inspection and is never a gap: the harness is neither
+  absent nor present. The outcome is `blocked` when a gap is known, `unavailable` when none is
+  but an inspection failed.
+
 ### Operator defaults
 
 What a write from a Client leaves unnamed is the Operator's
@@ -446,6 +482,12 @@ headings. Each command's `--json` returns the operator response.
   found walking up from the working directory, then the only Organization that exists. Several
   Organizations and no binding is an error that lists them; none at all and no Operator is the
   control plane's naming gap, exit 78, whose step is `kestrel operator name`.
+- **Bare `kestrel`** (`readiness.rs`) reads readiness for the derived scope and prints it to
+  stdout: `Ready` and the established path, or `Not ready:` and the first gap, then the Client
+  URL. It exits 0 when ready, 78 when blocked and 5 when unavailable. The first gap goes to
+  stderr as any Diagnostic does, with its steps, and each warning follows `warning:`. `--json`
+  writes the whole read to stdout. Only the heading is coloured, on a terminal with `NO_COLOR`
+  unset. Several Organizations and none in scope is exit 3 before anything is read.
 - **The Operator**: `kestrel operator name NAME` names or renames them and `operator show` reads
   them. Every `--as-participant` is optional and sent only when given; the Client supplies no
   name of its own.
