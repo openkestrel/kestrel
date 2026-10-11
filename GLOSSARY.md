@@ -77,7 +77,8 @@ _Avoid_: settling, backgrounded, busy
 Work a harness's adapter declares it runs apart from any tool call, a background task or a
 subagent, open from its start until the adapter settles it. An open one keeps its session trailing,
 and an interrupt leaves it running. It is not the completed unit a transcript entry records, and
-it adds no entry of its own.
+its normal settlement adds no entry of its own. Forced closure when its session is stopped or its
+supervisor is lost records it as interrupted or unresolved, respectively.
 _Avoid_: unit (alone), job, background process
 
 **Unbriefed**:
