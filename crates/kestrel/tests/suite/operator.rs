@@ -6683,6 +6683,7 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::INTEGRATION, "patch"),
         (operator::INTEGRATION_DISABLE, "post"),
         (operator::INTEGRATION_ENABLE, "post"),
+        (operator::INTEGRATION_RETIRE, "post"),
         (operator::INTEGRATION_PRIVATE_KEY, "put"),
         (operator::EVENT_REFUSAL, "delete"),
         (operator::EVENTS, "get"),
