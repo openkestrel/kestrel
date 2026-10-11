@@ -47,6 +47,7 @@ use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use kestrel::agent;
+use kestrel::capability::Images;
 use kestrel::compute::{Docker, Driver, LocalExec};
 use kestrel::domain::{
     Agent, Correlation, CorrelationMiss, Declared, Direction, Event, EventRecordId, Exit, Fires,
@@ -459,6 +460,33 @@ impl Kestrel {
             None,
             kestrel::presence::LEASE,
             Providers::at(providers, providers, PROVIDER_DEADLINE),
+            client_url(),
+            Images::default(),
+        )
+        .await
+    }
+
+    pub async fn boot_with_the_client_at(client: &str) -> Self {
+        Self::boot_serving(client.parse().expect("a Client URL"), Images::default()).await
+    }
+
+    /// Dispatches nothing, so the image is only ever inspected.
+    pub async fn boot_inspecting(image: &str) -> Self {
+        Self::boot_serving(client_url(), Images::inspecting(image)).await
+    }
+
+    async fn boot_serving(client: url::Url, images: Images) -> Self {
+        Self::boot_checking(
+            TempDir::new().expect("a temporary data directory"),
+            Listen {
+                link: LOOPBACK,
+                operator: LOOPBACK,
+            },
+            None,
+            kestrel::presence::LEASE,
+            no_provider(),
+            client,
+            images,
         )
         .await
     }
@@ -469,7 +497,16 @@ impl Kestrel {
         environment: Option<Provisions>,
         follow_lease: Duration,
     ) -> Self {
-        Self::boot_checking(data_dir, listen, environment, follow_lease, no_provider()).await
+        Self::boot_checking(
+            data_dir,
+            listen,
+            environment,
+            follow_lease,
+            no_provider(),
+            client_url(),
+            Images::default(),
+        )
+        .await
     }
 
     async fn boot_checking(
@@ -478,15 +515,18 @@ impl Kestrel {
         environment: Option<Provisions>,
         follow_lease: Duration,
         providers: Providers,
+        client: url::Url,
+        images: Images,
     ) -> Self {
         let store = Store::open(data_dir.path())
             .await
             .expect("the control plane should boot against a fresh data directory");
         let shutdown = CancellationToken::new();
-        let all_in_one = kestrel::role::bind(store.clone(), listen, client_url(), follow_lease)
+        let all_in_one = kestrel::role::bind(store.clone(), listen, client, follow_lease)
             .await
             .expect("the control plane should bind its link")
-            .checking_sign_ins_with(providers);
+            .checking_sign_ins_with(providers)
+            .inspecting(images);
         let bound = all_in_one.bound();
         let address = bound.link;
         let dispatch = environment.clone().map(|provisions| Dispatch {

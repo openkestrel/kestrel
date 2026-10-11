@@ -95,6 +95,27 @@ impl<'a> Database<'a> {
         pool.close().await;
     }
 
+    pub async fn record_authentication(&self, revision: i64, state: &str) {
+        let pool = self.pool().await;
+        sqlx::query(
+            "UPDATE authentication_evidence SET state = ?, source = 'session' WHERE revision = ?",
+        )
+        .bind(state)
+        .bind(revision)
+        .execute(&pool)
+        .await
+        .expect("the authentication evidence should be recorded");
+        pool.close().await;
+    }
+
+    pub async fn complete_initial_setup(&self) {
+        self.execute(
+            "INSERT INTO install (singleton, initial_setup_completed_at) VALUES (1, ?)",
+            &["2026-01-01T00:00:00Z"],
+        )
+        .await;
+    }
+
     pub async fn backdate_transcript(&self, workspace: WorkspaceId, at: Timestamp) {
         self.execute(
             "UPDATE transcript_entry SET appended_at = ? WHERE workspace_id = ?",

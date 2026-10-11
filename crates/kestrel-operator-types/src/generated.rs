@@ -1287,6 +1287,83 @@ pub struct FileStat {
     ///Constraint: minimum=0
     pub removed: Option<i64>,
 }
+///Whether work can start in an Organization, read at this request. Ready means a usable path exists, not that every saved sign-in works.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Readiness {
+    ///The browser Client's configured URL, never one derived from this API's port.
+    pub client_url: String,
+    ///Every blocking prerequisite that could be established, in the order to repair them: the Operator, a usable sign-in on a harness the image carries, a selected sign-in needing attention, a repository, a Project. Each names its scope in `context` and its repair in `next_steps`.
+    pub gaps: Vec<Diagnostic>,
+    ///As `Install` reads it: durable, and independent of `outcome`.
+    pub initial_setup_complete: bool,
+    ///The Organization read: the one named, or the only one. Null when none exists.
+    pub organization: Option<String>,
+    ///`blocked` when `gaps` holds a prerequisite known to be missing. `unavailable` when none is known missing but an inspection in `unavailable` failed, so readiness could not be established. `ready` otherwise.
+    pub outcome: ReadinessOutcome,
+    pub saved: ReadinessSaved,
+    pub selected: ReadinessSelection,
+    ///The saved sign-in the selected path would use, when exactly one is established. Never its material.
+    pub sign_in: Option<SavedSignIn>,
+    ///Inspections that failed. Nothing is claimed about what one would have established: a harness is never absent, nor present, because its image could not be inspected.
+    pub unavailable: Vec<Diagnostic>,
+    ///What does not block the path: selected material nothing has checked, and broken material the path does not use.
+    pub warnings: Vec<Diagnostic>,
+}
+///The path read: each value as it was named, or as it resolved when exactly one choice exists. Null where nothing was named and several remain, because none is chosen for the reader.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReadinessSelection {
+    pub harness: Option<String>,
+    pub model: Option<String>,
+    pub profile: Option<String>,
+    pub project: Option<String>,
+    pub sign_in_method: Option<String>,
+}
+///The prerequisites already saved, whether or not the selected path uses them.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReadinessSaved {
+    ///The names of the GitHub Integrations that lend a repository authority now: enabled, and carrying outbound.
+    pub github_integrations: Vec<String>,
+    pub operator: Option<Operator>,
+    ///The names of the Projects declared.
+    pub projects: Vec<String>,
+    ///Every catalogued sign-in saved where this path would look, as the sign-ins read lists them.
+    pub sign_ins: Vec<SavedSignIn>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Operator {
+    pub id: uuid::Uuid,
+    pub name: String,
+}
+///`blocked` when `gaps` holds a prerequisite known to be missing. `unavailable` when none is known missing but an inspection in `unavailable` failed, so readiness could not be established. `ready` otherwise.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum ReadinessOutcome {
+    #[default]
+    #[serde(rename = "ready")]
+    Ready,
+    #[serde(rename = "blocked")]
+    Blocked,
+    #[serde(rename = "unavailable")]
+    Unavailable,
+}
+impl ReadinessOutcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Blocked => "blocked",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+impl ::std::fmt::Display for ReadinessOutcome {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for ReadinessOutcome {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Queue {
     pub active_work: ActiveWork,
@@ -10504,6 +10581,7 @@ pub enum Action {
     StopSessionAction(StopSessionAction),
     EnqueueSessionAction(EnqueueSessionAction),
     EnableIntegrationAction(EnableIntegrationAction),
+    ConnectGithubAction(ConnectGithubAction),
     ReplaceIntegrationPrivateKeyAction(ReplaceIntegrationPrivateKeyAction),
     ReleaseInstanceAction(ReleaseInstanceAction),
     CorrectFieldAction(CorrectFieldAction),
@@ -10537,6 +10615,7 @@ impl Serialize for Action {
             Self::StopSessionAction(value) => serde::Serialize::serialize(value, serializer),
             Self::EnqueueSessionAction(value) => serde::Serialize::serialize(value, serializer),
             Self::EnableIntegrationAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::ConnectGithubAction(value) => serde::Serialize::serialize(value, serializer),
             Self::ReplaceIntegrationPrivateKeyAction(value) => {
                 serde::Serialize::serialize(value, serializer)
             }
@@ -10951,6 +11030,31 @@ impl<'de> Deserialize<'de> for Action {
                     Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
                         equivalent_matches += 1;
                         equivalent.get_or_insert(Self::EnableIntegrationAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"connect_github\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<ConnectGithubAction>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::ConnectGithubAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::ConnectGithubAction(candidate));
                     }
                     _ => {}
                 }
@@ -11459,6 +11563,13 @@ impl AsRef<str> for Resource {
         self.as_str()
     }
 }
+///Connect a repository through a GitHub App, which is what lends a Session the authority to push.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConnectGithubAction {
+    pub action: serde_json::Value,
+    ///Null when no Organization exists yet.
+    pub organization: Option<String>,
+}
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CheckConnectionAction {
     pub action: serde_json::Value,
@@ -11547,11 +11658,6 @@ pub struct IntegrationRetirement {
     ///The revision the retirement was decided against.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<i64>,
-}
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Operator {
-    pub id: uuid::Uuid,
-    pub name: String,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OperatorDeclaration {

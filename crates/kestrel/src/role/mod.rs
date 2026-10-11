@@ -45,6 +45,13 @@ impl AllInOne {
         self
     }
 
+    /// Dispatching through a driver inspects that driver's image instead.
+    #[must_use]
+    pub fn inspecting(mut self, images: Images) -> Self {
+        self.listening = self.listening.inspecting(images);
+        self
+    }
+
     pub async fn run(
         self,
         dispatch: Option<work::Dispatch>,

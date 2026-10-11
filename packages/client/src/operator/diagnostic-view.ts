@@ -378,6 +378,13 @@ export function stepOf(action: Action, origin: string): Step {
 					origin,
 				),
 			};
+		case "connect_github":
+			return {
+				kind: "guidance",
+				label: "Connect a repository through a GitHub App",
+				detail:
+					"A GitHub App is what lets a Session push; a public repository can be declared without one.",
+			};
 		case "sign_in":
 			return {
 				kind: "guidance",
