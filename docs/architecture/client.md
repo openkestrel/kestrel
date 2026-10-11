@@ -104,3 +104,15 @@ unfinished setup, preserving an explicitly selected Organization when several ex
 install completion read controls onboarding independently of current readiness; a completed install’s
 setup route offers contextual repairs. Naming and continuing through saved prerequisites never set
 completion. Geist and Geist Mono are bundled once in the root stylesheet for every route.
+
+`/organizations/$organization/settings/agents` lists, declares and edits Agents through the shared
+Agent declaration, which is the Agent's whole desired state: an edit sends back every default the
+Agent holds, and its name is its identity. The harness catalogue and its image availability decide
+which harness may be chosen; one the image is known to lack is withheld, and one whose image could
+not be inspected is not. A slow, failed or empty read each says which it is, and a failed read or
+refused save keeps what was entered. `src/components/model-choice.tsx` is the one model choice. Given
+a live Session's ACP-offered model option it is the AI Elements Model Selector, searching and grouping
+exactly what the harness offered, disabled outside a phase that takes option writes and while a
+change is pending. Given none, as in Agent settings and the new-Workspace form, it is the harness's
+default or a model id taken at its word; it never lists models nobody offered. Provider marks are
+bundled in `src/assets/provider-marks` and decorate text that stands without them.

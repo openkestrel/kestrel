@@ -40,9 +40,18 @@ export function WorkspacesPane({
 					<Plus aria-hidden />
 					New Workspace
 				</Link>
-				<Link to="/setup" search={{ organization }} className="px-2 text-xs underline">
-					Setup and readiness
-				</Link>
+				<div className="flex flex-wrap gap-x-3 gap-y-1 px-2 text-xs">
+					<Link to="/setup" search={{ organization }} className="underline">
+						Setup and readiness
+					</Link>
+					<Link
+						to="/organizations/$organization/settings/agents"
+						params={{ organization }}
+						className="underline"
+					>
+						Agents
+					</Link>
+				</div>
 			</div>
 			<nav aria-label="Workspaces" className="min-h-0 flex-1 overflow-y-auto p-2">
 				{workspaces.isPending ? (

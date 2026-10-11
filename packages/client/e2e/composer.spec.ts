@@ -216,6 +216,15 @@ function modeOption(warns_cache: boolean) {
 	});
 }
 
+function modelChoice(page: Page) {
+	return page.locator('[data-option="model"] [data-model-choice="offered"]');
+}
+
+async function choosingModel(page: Page, name: string): Promise<void> {
+	await modelChoice(page).click();
+	await page.getByRole("dialog").getByRole("option", { name }).click();
+}
+
 type Answer = { status: number; body: unknown };
 
 function conflict(message: string, state: string, field: string | null = null) {
@@ -603,11 +612,9 @@ test("an option change warns about the cache before it is confirmed", async ({ p
 	await identified(page.context(), "jack");
 	await visiting(page, workspace);
 
-	await expect(page.locator('[data-option="model"] [data-option-current]')).toHaveText(
-		"scripted-mini",
-	);
+	await expect(modelChoice(page)).toHaveText("scripted-mini");
 	await expect(page.locator("[data-session-usage]")).toContainText("1,200 of 200,000 tokens");
-	await page.locator('[data-option="model"] [data-option-value="scripted-max"]').click();
+	await choosingModel(page, "scripted-max");
 
 	const confirm = page.locator("[data-option-confirm]");
 	await expect(confirm).toContainText("1,200 tokens");
@@ -646,9 +653,7 @@ test("an option change warns about the cache before it is confirmed", async ({ p
 		options: [option()],
 	});
 	await page.reload();
-	await expect(
-		page.locator('[data-option="model"] [data-option-value="scripted-max"]'),
-	).toBeDisabled();
+	await expect(modelChoice(page)).toBeDisabled();
 	await expect(page.locator("[data-option-note]")).toHaveCount(0);
 
 	scripted.session = sessionRead({
@@ -659,10 +664,145 @@ test("an option change warns about the cache before it is confirmed", async ({ p
 		body: conflict("the session is working", "working"),
 	};
 	await page.reload();
-	await page.locator('[data-option="model"] [data-option-value="scripted-max"]').click();
+	await choosingModel(page, "scripted-max");
 
 	const refusal = page.getByRole("alert").filter({ hasText: "the session is working" });
 	await expect(refusal).toContainText("working");
+});
+
+const OFFERED = [
+	{
+		group: "anthropic",
+		name: "Anthropic",
+		values: [
+			{ value: "anthropic/claude-sonnet-4-5", name: "Claude Sonnet 4.5", description: null },
+			{ value: "anthropic/claude-opus-4-5", name: "Claude Opus 4.5", description: "slower" },
+		],
+	},
+	{
+		group: "house",
+		name: "House",
+		values: [{ value: "house/small", name: "House Small", description: null }],
+	},
+];
+
+test("the Model Selector searches what the harness offers, takes the keyboard and follows the harness", async ({
+	page,
+	request,
+	baseURL,
+}) => {
+	const workspace = await opened(request);
+	const scripted = new Scripted(workspace);
+	const offering = (current: string, groups = OFFERED) =>
+		sessionRead({
+			options: [option({ current, values: [], groups, warns_cache: false })],
+		});
+	scripted.session = offering("anthropic/claude-sonnet-4-5");
+	scripted.option = { status: 202, body: scripted.session };
+	const elsewhere: string[] = [];
+	page.on("request", (sent) => {
+		if (!sent.url().startsWith(baseURL ?? "")) elsewhere.push(sent.url());
+	});
+	await scripted.install(page);
+	await identified(page.context(), "jack");
+	await visiting(page, workspace);
+
+	await expect(modelChoice(page)).toHaveText("Claude Sonnet 4.5");
+	await expect(modelChoice(page).locator("img")).toHaveJSProperty("complete", true);
+	expect(
+		await modelChoice(page)
+			.locator("img")
+			.evaluate((mark: HTMLImageElement) => mark.naturalWidth),
+	).toBeGreaterThan(0);
+
+	await modelChoice(page).focus();
+	await page.keyboard.press("Enter");
+	const dialog = page.getByRole("dialog", { name: "Choose a model the harness offers" });
+	await expect(dialog.getByRole("combobox")).toBeFocused();
+	await expect(dialog.getByRole("option")).toHaveText([
+		"Claude Sonnet 4.5",
+		"Claude Opus 4.5slower",
+		"House Small",
+	]);
+	await expect(dialog.getByRole("group", { name: "Anthropic" }).getByRole("option")).toHaveCount(2);
+	await expect(dialog.getByRole("option", { name: "House Small" }).locator("img")).toHaveCount(0);
+
+	const { violations } = await new AxeBuilder({ page }).analyze();
+	expect(violations.filter(({ impact }) => impact === "serious" || impact === "critical")).toEqual(
+		[],
+	);
+
+	await page.keyboard.type("nothing like it");
+	await expect(dialog).toContainText("The harness offers no model matching that.");
+	await dialog.getByRole("combobox").fill("opus");
+	await expect(dialog.getByRole("option")).toHaveText(["Claude Opus 4.5slower"]);
+
+	scripted.session = offering("anthropic/claude-opus-4-5", [
+		...OFFERED,
+		{
+			group: "openai",
+			name: "OpenAI",
+			values: [{ value: "openai/gpt-5.4", name: "GPT-5.4", description: null }],
+		},
+	]);
+	await page.keyboard.press("Enter");
+	await expect(dialog).toHaveCount(0);
+	expect(scripted.requests).toContainEqual({
+		method: "POST",
+		path: `/operator/organizations/${ORGANIZATION}/sessions/${SESSION_ID}/options`,
+		body: { participant: "jack", category: "model", value: "anthropic/claude-opus-4-5" },
+	});
+
+	await expect(modelChoice(page)).toHaveText("Claude Opus 4.5");
+	await modelChoice(page).click();
+	await expect(dialog.getByRole("group", { name: "OpenAI" }).getByRole("option")).toHaveText([
+		"GPT-5.4",
+	]);
+	await expect(dialog.getByRole("option", { name: "Claude Opus 4.5" })).toHaveAttribute(
+		"data-checked",
+		"true",
+	);
+	await page.keyboard.press("Escape");
+	await expect(dialog).toHaveCount(0);
+	expect(scripted.requests.filter((sent) => sent.path.endsWith("/options"))).toHaveLength(1);
+	expect(elsewhere).toEqual([]);
+});
+
+test("a refused model change stays explained beside the model the harness still runs", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request);
+	const scripted = new Scripted(workspace);
+	scripted.session = sessionRead({ options: [option({ warns_cache: false })] });
+	scripted.option = {
+		status: 409,
+		body: conflict("the harness refused scripted-max", "waiting", "value"),
+	};
+	await scripted.install(page);
+	await identified(page.context(), "jack");
+	await visiting(page, workspace);
+
+	await choosingModel(page, "scripted-max");
+	const refusal = page
+		.locator("[data-session-header]")
+		.getByRole("alert")
+		.filter({ hasText: "the harness refused scripted-max" });
+	await expect(refusal).toBeVisible();
+	await expect(modelChoice(page)).toHaveText("scripted-mini");
+	await expect(modelChoice(page)).toBeEnabled();
+
+	scripted.session = sessionRead({
+		options: [option({ warns_cache: false })],
+		changing_options: [
+			{ option: "model", category: "model", value: "scripted-max", participant: "river" },
+		],
+	});
+	await page.reload();
+	await expect(page.locator("[data-changing-option]")).toContainText(
+		"river is changing model to scripted-max",
+	);
+	await expect(modelChoice(page)).toBeDisabled();
 });
 
 test("Shift+Tab cycles the mode and Escape leaves the composer, both announced", async ({

@@ -226,6 +226,11 @@ async fn a_session_read_shows_the_title_its_options_and_its_commands() {
     assert_eq!(custom["id"], CUSTOM_OPTION);
     assert_eq!(custom["kind"], "boolean");
     assert_eq!(custom["current"], false);
+    assert_eq!(
+        (&custom["values"], &custom["groups"]),
+        (&serde_json::json!([]), &serde_json::json!([])),
+        "a boolean option carries the lists the operator contract requires of every option"
+    );
 
     let compact = command(&shown, COMMAND);
     assert_eq!(compact["description"], COMMAND_DESCRIPTION);
