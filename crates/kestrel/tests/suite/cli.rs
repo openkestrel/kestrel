@@ -1102,6 +1102,35 @@ fn watching(kestrel: &Booted, stub: &GithubStub, interval: &str) {
 }
 
 #[test]
+fn the_client_retires_an_integration_only_on_an_explicit_choice() {
+    let kestrel = Kestrel::new();
+    let stub = GithubStub::start();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "info");
+    watching(&booted, &stub, "1h");
+
+    let unchosen = booted.refused(&["integration", "retire", "hub"]);
+    assert!(unchosen.contains("--yes"), "{unchosen}");
+    assert_eq!(
+        booted.record(&["integration", "show", "hub", "--json"])["state"],
+        "enabled"
+    );
+
+    let retired = booted.record(&["integration", "retire", "hub", "--yes", "--json"]);
+    assert_eq!(retired["state"], "retired");
+    assert_eq!(retired["repository"], "jtmthf/kestrel");
+    assert!(!retired.to_string().contains(support::PRIVATE_KEY));
+
+    let shown = booted.run(&["integration", "show", "hub"]);
+    assert!(shown.contains("retired"), "{shown}");
+    assert!(
+        !shown.contains("integration enable"),
+        "a retired integration offered a way back:\n{shown}"
+    );
+    let refused = booted.refused(&["integration", "enable", "hub"]);
+    assert!(refused.contains("retired"), "{refused}");
+}
+
+#[test]
 fn the_client_disables_changes_and_enables_an_integration() {
     let kestrel = Kestrel::new();
     let stub = GithubStub::start();

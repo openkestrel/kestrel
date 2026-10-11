@@ -47,6 +47,8 @@ pub const INTEGRATION: View = View::Detail(&[
     "state",
     "revision",
     "disabled_at",
+    "retired_at",
+    "canceled_posts",
     "diagnostic",
     "polled_every",
     "webhook_path",

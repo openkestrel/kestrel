@@ -17,8 +17,12 @@ CREATE TABLE post (
     due_at TEXT,
     posted_at TEXT,
     posted_to TEXT,
+    canceled_at TEXT,
+    canceled_because TEXT,
     recorded_at TEXT NOT NULL,
-    PRIMARY KEY (session_id, turn)
+    PRIMARY KEY (session_id, turn),
+    CHECK ((canceled_at IS NULL) = (canceled_because IS NULL)),
+    CHECK (canceled_at IS NULL OR (posted_at IS NULL AND due_at IS NULL))
 ) STRICT;
 
 CREATE INDEX post_due ON post (due_at) WHERE due_at IS NOT NULL;

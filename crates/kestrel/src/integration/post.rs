@@ -35,7 +35,7 @@ async fn surface(tx: &mut Tx<'_>, workspace: &Workspace) -> Result<Option<(Integ
         return Ok(None);
     };
     let integration = tx.integrations().with_id(integration).await?;
-    if !integration.carries(Direction::Outbound) {
+    if !integration.carries(Direction::Outbound) || integration.retired() {
         return Ok(None);
     }
     if integration.kind() != IntegrationKind::Github {

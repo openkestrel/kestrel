@@ -270,7 +270,8 @@ impl<'a> PullRequests<'a> {
     pub async fn watched(&mut self, organization: &Organization) -> Result<Vec<String>> {
         sqlx::query(
             "SELECT repository FROM integration
-             WHERE organization_id = ? AND kind = 'github' AND inbound = TRUE",
+             WHERE organization_id = ? AND kind = 'github' AND inbound = TRUE
+               AND state <> 'retired'",
         )
         .bind(organization.id.to_string())
         .fetch_all(&mut *self.connection)

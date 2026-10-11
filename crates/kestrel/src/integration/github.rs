@@ -198,6 +198,20 @@ impl Github {
         })
     }
 
+    /// A token whose Integration is retired is otherwise never asked for again, and so never
+    /// dropped.
+    pub async fn forget_unused(&self) -> Result<()> {
+        let Some(store) = &self.fence else {
+            return Ok(());
+        };
+        let in_use = store.read().await?.integrations().in_use().await?;
+        self.tokens
+            .lock()
+            .expect("the token cache is not poisoned")
+            .retain(|key, _| in_use.contains(key));
+        Ok(())
+    }
+
     async fn still_current(&self, integration: &Integration) -> Result<(), Refused> {
         let Some(store) = &self.fence else {
             return Ok(());
@@ -213,8 +227,14 @@ impl Github {
         .await
         .map_err(Refused::Failed)?;
         if !unchanged {
+            self.tokens
+                .lock()
+                .expect("the token cache is not poisoned")
+                .retain(|(id, revision), _| {
+                    *id != integration.id || *revision > integration.revision
+                });
             return Err(Refused::Failed(anyhow!(
-                "the integration {} was disabled or changed while this was under way",
+                "the integration {} was disabled, retired or changed while this was under way",
                 integration.name
             )));
         }
@@ -381,6 +401,7 @@ impl Github {
         integration: &Integration,
         from: Timestamp,
     ) -> Result<Listing, Refused> {
+        self.still_current(integration).await?;
         let github = integration.github().map_err(Refused::Failed)?;
         let mut url = format!(
             "{}/app/hook/deliveries?per_page={PER_PAGE}",
@@ -439,6 +460,7 @@ impl Github {
             payload: Option<serde_json::Value>,
         }
 
+        self.still_current(integration).await?;
         let github = integration.github().map_err(Refused::Failed)?;
         let asked_for = format!("the delivery {}", listed.guid);
         let response = self
@@ -784,7 +806,10 @@ fn app_jwt(app: &App) -> Result<String> {
         exp: now + 540,
         iss: app.id,
     };
-    let key = jsonwebtoken::EncodingKey::from_rsa_pem(app.private_key().as_bytes())
+    let private_key = app
+        .private_key()
+        .context("the github app's private key was erased when its integration was retired")?;
+    let key = jsonwebtoken::EncodingKey::from_rsa_pem(private_key.as_bytes())
         .context("a github app's private key does not read as PEM")?;
 
     jsonwebtoken::encode(
@@ -1305,6 +1330,8 @@ mod tests {
             state: crate::domain::IntegrationState::Enabled,
             revision: 1,
             disabled_at: None,
+            retired_at: None,
+            canceled_posts: Vec::new(),
             poll_due_at: None,
             deliveries_read_from: None,
             last_polled_at: None,

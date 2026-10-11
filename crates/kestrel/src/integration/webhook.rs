@@ -372,6 +372,8 @@ mod tests {
             state: crate::domain::IntegrationState::Enabled,
             revision: 1,
             disabled_at: None,
+            retired_at: None,
+            canceled_posts: Vec::new(),
             poll_due_at: None,
             deliveries_read_from: None,
             last_polled_at: None,

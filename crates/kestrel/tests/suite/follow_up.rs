@@ -553,6 +553,8 @@ async fn a_delivery_backlog_longer_than_a_page_loses_nothing() {
         state: kestrel::domain::IntegrationState::Enabled,
         revision: 1,
         disabled_at: None,
+        retired_at: None,
+        canceled_posts: Vec::new(),
         poll_due_at: None,
         deliveries_read_from: Some(from),
         last_polled_at: Some(from),
