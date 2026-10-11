@@ -322,11 +322,16 @@ impl Github {
         connection: &GithubConnection,
         replacement: &App,
     ) -> Result<(), Unproven> {
-        self.reached(connection, replacement).await.map(|_| ())
+        self.reading_token(connection, replacement)
+            .await
+            .map(|_| ())
     }
 
-    /// An installation token that has just read the repository the connection names.
-    async fn reached(&self, connection: &GithubConnection, app: &App) -> Result<String, Unproven> {
+    async fn reading_token(
+        &self,
+        connection: &GithubConnection,
+        app: &App,
+    ) -> Result<String, Unproven> {
         #[derive(Deserialize)]
         struct Named {
             id: i64,
@@ -354,14 +359,22 @@ impl Github {
         Ok(token)
     }
 
-    /// Whether `branch` is there. A repository the installation cannot read is `Unproven`, never
-    /// absent: a private repository answers a stranger the way a missing one does (ADR-0057).
+    /// A repository the installation cannot read is `Unproven`, never an absent branch: a private
+    /// repository answers a stranger the way a missing one does (ADR-0057).
     pub async fn reaches(
         &self,
         connection: &GithubConnection,
         branch: &str,
     ) -> Result<bool, Unproven> {
-        let token = self.reached(connection, &connection.credential).await?;
+        if branch
+            .split('/')
+            .any(|part| matches!(part, "" | "." | ".."))
+        {
+            return Ok(false);
+        }
+        let token = self
+            .reading_token(connection, &connection.credential)
+            .await?;
         let asked_for = format!("the branch {branch} of {}", connection.repository);
         let mut url = Url::parse(&format!(
             "{}/repos/{}/branches",
@@ -389,11 +402,26 @@ impl Github {
         match status {
             StatusCode::NOT_FOUND => Ok(false),
             StatusCode::UNAUTHORIZED => Err(Unproven::Rejected),
+            StatusCode::TOO_MANY_REQUESTS => Err(Unproven::Unanswered(anyhow!(
+                "github answered {status} for {asked_for}"
+            ))),
             status if status.is_client_error() => Err(Unproven::Repository),
             status if !status.is_success() => Err(Unproven::Unanswered(anyhow!(
                 "github answered {status} for {asked_for}"
             ))),
-            _ => Ok(true),
+            _ => {
+                #[derive(Deserialize)]
+                struct Named {
+                    name: String,
+                }
+                let named: Named = response.json().await.map_err(|error| {
+                    Unproven::Unanswered(anyhow!(
+                        "github's account of {asked_for} could not be read: {error}"
+                    ))
+                })?;
+                // GitHub redirects a renamed branch's old name to the new one.
+                Ok(named.name == branch)
+            }
         }
     }
 
@@ -978,6 +1006,11 @@ async fn proven<T: DeserializeOwned>(
     }
     match status {
         StatusCode::UNAUTHORIZED => return Err(Unproven::Rejected),
+        StatusCode::TOO_MANY_REQUESTS => {
+            return Err(Unproven::Unanswered(anyhow!(
+                "github answered {status} for {asked_for}"
+            )));
+        }
         status if status.is_client_error() => return Err(denied),
         status if !status.is_success() => {
             return Err(Unproven::Unanswered(anyhow!(

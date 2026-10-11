@@ -73,7 +73,7 @@ fn has_branch(stub: &GithubStub, branch: &str) {
     stub.script_answer(
         "GET",
         &format!("/branches/{branch}"),
-        ScriptedResponse::ok("{}"),
+        ScriptedResponse::ok(json!({ "name": branch }).to_string()),
     );
 }
 
@@ -193,6 +193,21 @@ async fn a_branch_the_app_cannot_see_is_refused_and_the_previous_declaration_sta
     assert_eq!(refusal["context"]["constraint"], "branch_in_repository");
     assert_eq!(projects(&kestrel).await, json!([]));
 
+    stub.script_answer(
+        "GET",
+        "/branches/master",
+        ScriptedResponse::ok(json!({ "name": "main" }).to_string()),
+    );
+    for absent in ["master", "..", "."] {
+        let (status, refusal) = declare(&kestrel, &selecting(REPOSITORY, absent, "github")).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{absent}: {refusal}"
+        );
+        assert_eq!(refusal["context"]["constraint"], "branch_in_repository");
+    }
+
     has_branch(&stub, "main");
     let (status, saved) = declare(&kestrel, &selecting(REPOSITORY, "main", "github")).await;
     assert_eq!(status, StatusCode::CREATED, "{saved}");
@@ -258,6 +273,7 @@ async fn a_rate_limit_or_an_outage_is_refused_as_safe_to_send_again() {
     for unanswered in [
         github_stub::rate_limited(),
         ScriptedResponse::answering(502),
+        ScriptedResponse::answering(429),
     ] {
         let limited = unanswered.status == 403;
         stub.script_answer("GET", "/branches/main", unanswered);
@@ -371,7 +387,7 @@ async fn maintenance_that_lands_while_github_is_asked_refuses_the_declaration() 
     stub.script_answer(
         "GET",
         "/branches/main",
-        ScriptedResponse::ok("{}").after(Duration::from_secs(1)),
+        ScriptedResponse::ok(json!({ "name": "main" }).to_string()).after(Duration::from_secs(1)),
     );
 
     let declaration = selecting(REPOSITORY, "main", "github");

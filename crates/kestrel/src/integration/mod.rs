@@ -559,7 +559,7 @@ fn reading<'a>(
 pub struct Reached {
     pub watched: String,
     pub page: u32,
-    pub per_page: u32,
+    pub next_page: Option<u32>,
     pub installed: Installed,
 }
 
@@ -598,13 +598,13 @@ pub async fn repositories(
     Ok(Reached {
         watched: connection.repository.clone(),
         page,
-        per_page,
+        next_page: (u64::from(page) * u64::from(per_page) < installed.total_count)
+            .then(|| page + 1),
         installed,
     })
 }
 
-/// Why GitHub would not be read through the Integration as it is saved. `again` is what a
-/// later attempt takes; nothing here establishes that a repository does not exist (ADR-0057).
+/// Nothing here establishes that a repository does not exist (ADR-0057).
 pub fn unreached(
     integration: &Integration,
     organization: &str,

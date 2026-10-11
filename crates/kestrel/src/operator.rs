@@ -1476,50 +1476,19 @@ async fn resolve_repositories(
             integration: selection.integration,
         })
         .collect();
-    let resolved: Vec<(repository::Resolved, Option<String>)> = if selections.is_empty() {
-        repository::resolved(OPERATION, "repositories", &request.repositories, purpose)?
-            .into_iter()
-            .map(|resolved| (resolved, None))
-            .collect()
-    } else {
-        if purpose == repository::Purpose::PublicSetup {
-            return Err(invalid_field(
-                OPERATION,
-                "integrations",
-                Constraint::DeclarationPurpose,
-                "public-repository setup selects no integration; resolve a declaration to \
-                 select one",
-            ));
-        }
-        let Some(organization) = request.organization.as_deref() else {
-            return Err(invalid_field(
-                OPERATION,
-                "organization",
-                Constraint::NonEmpty,
-                "an integration is selected within an organization; name it",
-            ));
-        };
-        repository::bound(
-            &control_plane.store,
-            &repository::Selecting {
-                operation: OPERATION,
-                repositories_field: "repositories",
-                integrations_field: "integrations",
-                organization,
-                repositories: &request.repositories,
-                selections: &selections,
-            },
-        )
-        .await?
-        .into_iter()
-        .map(|bound| {
-            (
-                bound.resolved,
-                bound.integration.map(|integration| integration.name),
-            )
-        })
-        .collect()
-    };
+    let resolved = repository::resolution(
+        &control_plane.store,
+        &repository::Selecting {
+            operation: OPERATION,
+            repositories_field: "repositories",
+            integrations_field: "integrations",
+            organization: request.organization.as_deref().unwrap_or_default(),
+            repositories: &request.repositories,
+            selections: &selections,
+        },
+        purpose,
+    )
+    .await?;
     let warnings = match purpose {
         repository::Purpose::Declaration => Vec::new(),
         repository::Purpose::PublicSetup => vec![wire::RepositoryWarning {
@@ -1534,11 +1503,11 @@ async fn resolve_repositories(
     Ok(Json(wire::RepositoryResolution {
         repositories: resolved
             .into_iter()
-            .map(|(resolved, integration)| wire::ResolvedRepository {
-                given: resolved.given,
-                address: resolved.address,
-                checkout_directory: resolved.directory,
-                integration,
+            .map(|bound| wire::ResolvedRepository {
+                given: bound.resolved.given,
+                address: bound.resolved.address,
+                checkout_directory: bound.resolved.directory,
+                integration: bound.integration.map(|integration| integration.name),
             })
             .collect(),
         warnings,
@@ -2367,10 +2336,9 @@ async fn integration_repositories(
         asked.per_page,
     )
     .await?;
-    let read = u64::from(reached.page) * u64::from(reached.per_page);
 
     Ok(Json(wire::IntegrationRepositories {
-        next_page: (read < reached.installed.total_count).then(|| i64::from(reached.page) + 1),
+        next_page: reached.next_page.map(i64::from),
         page: i64::from(reached.page),
         total: i64::try_from(reached.installed.total_count).unwrap_or(i64::MAX),
         repositories: reached

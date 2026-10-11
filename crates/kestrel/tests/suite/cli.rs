@@ -1123,7 +1123,11 @@ fn the_client_selects_an_integration_for_a_projects_repository() {
     assert!(refused.contains("has no branch main"), "{refused}");
     assert!(booted.records(&["project", "list", "--json"]).is_empty());
 
-    stub.script_answer("GET", "/branches/main", ScriptedResponse::ok("{}"));
+    stub.script_answer(
+        "GET",
+        "/branches/main",
+        ScriptedResponse::ok(r#"{"name":"main"}"#),
+    );
     let declared = booted.record(&[&DECLARE[..], &["--json"]].concat());
     assert_eq!(
         declared["repositories"],

@@ -86,7 +86,7 @@ pub fn resolved(
     Ok(resolved)
 }
 
-/// Only this selects authority: neither a GitHub shorthand nor an Event ever does (ADR-0057).
+/// Only this selects authority: neither a GitHub shorthand nor an Event ever does (ADR-0056).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Selection {
@@ -113,6 +113,52 @@ pub struct Declaring<'a> {
 pub struct Bound {
     pub resolved: Resolved,
     pub integration: Option<Integration>,
+}
+
+pub async fn resolution(
+    store: &Store,
+    selecting: &Selecting<'_>,
+    purpose: Purpose,
+) -> Result<Vec<Bound>> {
+    let refused = |field, constraint, message: &str| Reason::InvalidField {
+        field,
+        operation: selecting.operation,
+        constraint,
+        allowed: None,
+        message: message.to_owned(),
+    };
+    if selecting.selections.is_empty() {
+        return Ok(resolved(
+            selecting.operation,
+            selecting.repositories_field,
+            selecting.repositories,
+            purpose,
+        )?
+        .into_iter()
+        .map(|resolved| Bound {
+            resolved,
+            integration: None,
+        })
+        .collect());
+    }
+    if purpose == Purpose::PublicSetup {
+        return Err(refused(
+            selecting.integrations_field,
+            Constraint::DeclarationPurpose,
+            "public-repository setup selects no integration; resolve a declaration to select one",
+        )
+        .into());
+    }
+    if selecting.organization.is_empty() {
+        return Err(refused(
+            "organization",
+            Constraint::NonEmpty,
+            "an integration is selected within an organization; name it",
+        )
+        .into());
+    }
+
+    bound(store, selecting).await
 }
 
 /// Asks GitHub nothing: which Integration each repository selects, and the HTTPS address a
@@ -204,7 +250,6 @@ struct Checked {
     verified: bool,
 }
 
-/// What `declarable` established outside the transaction that saves it.
 pub struct Declarable {
     operation: &'static str,
     repositories: Vec<String>,
@@ -212,9 +257,8 @@ pub struct Declarable {
     selected: Vec<Checked>,
 }
 
-/// GitHub is asked here, before the transaction, and only about a binding, repository or branch
-/// the Project does not already hold: that answer says the App reaches them now, never that an
-/// Instance will check them out (ADR-0057).
+/// GitHub's answer says the App reaches the repository and branch now, never that an Instance
+/// will check them out (ADR-0057).
 pub async fn declarable(
     store: &Store,
     github: &Github,
