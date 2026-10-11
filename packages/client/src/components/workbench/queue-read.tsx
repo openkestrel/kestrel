@@ -12,7 +12,7 @@ import {
 	QueueSectionLabel,
 	QueueSectionTrigger,
 } from "#/components/ai-elements/queue";
-import { Refusal, RetryFallback } from "#/components/refusal";
+import { Diagnosis, Refusal, RetryFallback } from "#/components/refusal";
 import { Button } from "#/components/ui/button";
 import { ago } from "#/operator/format";
 import { queueQuery } from "#/operator/queries";
@@ -136,6 +136,9 @@ export function QueuedSessions({ organization }: { organization: string }) {
 												{row.position !== null && ` #${row.position}`}
 												{row.reasons !== "" && ` · ${row.reasons}`}
 											</QueueItemDescription>
+											{row.diagnostics.map((diagnostic) => (
+												<Diagnosis key={diagnostic.message} diagnostic={diagnostic} />
+											))}
 										</QueueItem>
 									))}
 								</QueueList>

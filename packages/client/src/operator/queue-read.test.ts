@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import type { Queue } from "./generated";
+import { stepOf } from "./diagnostic-view";
+import type { Diagnostic, Queue } from "./generated";
 import { queueRead, queuedSessions } from "./queue-read";
 import { Unreachable } from "./transport";
 
@@ -96,9 +97,66 @@ describe("the queued Sessions", () => {
 				label: "Queued",
 				position: 2,
 				reasons: "behind agile-robin",
+				diagnostics: [],
 			},
-			{ name: "merry-summit", workspace: "w1", label: "Next Turn", position: 1, reasons: "" },
-			{ name: "calm-heron", workspace: "w3", label: "First Turn", position: null, reasons: "" },
+			{
+				name: "merry-summit",
+				workspace: "w1",
+				label: "Next Turn",
+				position: 1,
+				reasons: "",
+				diagnostics: [],
+			},
+			{
+				name: "calm-heron",
+				workspace: "w3",
+				label: "First Turn",
+				position: null,
+				reasons: "",
+				diagnostics: [],
+			},
 		]);
+	});
+});
+
+test("a custody-held Session keeps the shared diagnostic and repair", () => {
+	const diagnostic: Diagnostic = {
+		kind: "state_conflict",
+		field: null,
+		message: "the sign-in is in use by probe",
+		context: {
+			operation: "use_sign_in",
+			resource: "subscription_profile",
+			reference: "jack",
+			organization: "acme",
+			state: "credential_in_use",
+			holding_session: null,
+		},
+		next_steps: [
+			{
+				action: "inspect_resource",
+				resource: "subscription_profile",
+				reference: "jack",
+				organization: "acme",
+			},
+		],
+	};
+	const queue = a_queue({
+		queued: [
+			{
+				name: "pending",
+				workspace: "w1",
+				agent: "agent",
+				enqueued_at: "2026-10-11T00:00:00Z",
+				position: null,
+				reasons: [{ kind: "subscription_profile", profile: "jack", session: null, diagnostic }],
+			},
+		],
+	});
+	const row = queuedSessions(queue)[0];
+	expect(row.reasons).toBe("the sign-in is in use by probe");
+	expect(row.diagnostics).toEqual([diagnostic]);
+	expect(stepOf(diagnostic.next_steps[0], "http://localhost:7719")).toMatchObject({
+		command: "kestrel profile list --organization acme --control-plane http://localhost:7719",
 	});
 });

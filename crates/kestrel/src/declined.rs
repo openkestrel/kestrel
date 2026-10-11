@@ -206,6 +206,7 @@ impl Next {
 /// `message` is display only; the boundary maps the other fields without reading it (ADR-0052).
 #[derive(Debug)]
 pub enum Reason {
+    SignInBusy(crate::sign_in::credential_use::Busy),
     MissingOperator {
         operation: &'static str,
     },
@@ -311,6 +312,7 @@ impl Reason {
 impl fmt::Display for Reason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
+            Reason::SignInBusy(busy) => return busy.fmt(f),
             Reason::MissingOperator { .. } => {
                 "this install has no Operator yet; name one, and what a Client leaves unnamed is theirs"
             }

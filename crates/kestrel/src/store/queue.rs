@@ -4,7 +4,7 @@ use sqlx::{Row, SqliteConnection};
 
 use crate::domain::{Exit, Organization, SessionId, SessionState};
 use crate::fanout::Touched;
-use crate::store::workspace::{UNSATISFIED_BLOCKER, held_input, live, occupying, profile_held};
+use crate::store::workspace::{UNSATISFIED_BLOCKER, held_input, live};
 
 /// What a work role that can dispatch recorded on start: the Active-Work Slot limit it
 /// enforces, the harnesses it dispatches one Session at a time, and the Compute driver it
@@ -153,42 +153,6 @@ impl<'a> Queue<'a> {
         .iter()
         .map(|row| row.get("instance"))
         .collect())
-    }
-
-    pub async fn profiles_held(
-        &mut self,
-        organization: &Organization,
-        serialized: &[String],
-    ) -> Result<Vec<(SessionId, String, Option<String>)>> {
-        sqlx::query(concat!(
-            "SELECT s.id AS held, CASE WHEN a.organization_id = s.organization_id THEN a.name END AS holder,
-                    (SELECT name FROM subscription_profile WHERE id = w.subscription_profile_id)
-                        AS profile
-             FROM session AS s, ",
-            profile_held!(),
-            "
-               AND s.organization_id = ?
-               AND s.state IN (?, ?, ?)
-             ORDER BY s.id, a.enqueued_at, a.id"
-        ))
-        .bind(serde_json::to_string(serialized)?)
-        .bind(occupying()?)
-        .bind(organization.id.to_string())
-        .bind(SessionState::Queued.as_str())
-        .bind(SessionState::Waiting.as_str())
-        .bind(SessionState::Unbriefed.as_str())
-        .fetch_all(&mut *self.connection)
-        .await
-        .context("reading which sessions a subscription profile holds back")?
-        .iter()
-        .map(|row| {
-            Ok((
-                row.get::<String, _>("held").parse()?,
-                row.get("profile"),
-                row.get("holder"),
-            ))
-        })
-        .collect()
     }
 
     pub async fn held_input(&mut self) -> Result<Vec<(SessionId, Timestamp)>> {

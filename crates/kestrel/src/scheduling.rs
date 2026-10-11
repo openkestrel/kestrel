@@ -6,6 +6,7 @@ use jiff::Timestamp;
 use crate::domain::{Organization, Preparing, Session, SessionId, SessionState, Workspace};
 use crate::instance::{self, Admission};
 use crate::link;
+use crate::sign_in::credential_use::{self, Busy};
 use crate::store::queue::Recorded;
 use crate::store::{Store, Tx};
 use crate::work;
@@ -35,10 +36,7 @@ pub struct Instances {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reason {
     Dependencies(Vec<String>),
-    SubscriptionProfile {
-        profile: String,
-        session: Option<String>,
-    },
+    SubscriptionProfile(Busy),
     InstanceArchiving(String),
     LiveInstanceLimit(usize),
     ActiveWorkSlots(usize),
@@ -117,14 +115,14 @@ impl Request {
 struct Evaluation {
     request: Request,
     blocked: bool,
-    profile_held: bool,
+    profile_held: Option<Busy>,
     admission: Option<Admission>,
 }
 
 impl Evaluation {
     fn eligible(&self) -> bool {
         !self.blocked
-            && !self.profile_held
+            && self.profile_held.is_none()
             && self.request.since().is_some()
             && self
                 .admission
@@ -133,7 +131,7 @@ impl Evaluation {
     }
 
     fn can_attempt(&self, full: bool, input_since: Option<Timestamp>) -> bool {
-        if self.blocked || self.profile_held {
+        if self.blocked || self.profile_held.is_some() {
             return false;
         }
         match self.request {
@@ -191,15 +189,11 @@ async fn evaluate(
         }
         _ => Request::None,
     };
-    let profile_held = !matches!(request, Request::None | Request::Provision)
-        && (tx
-            .workspaces()
-            .holds_profile(&candidate.session, serialized)
-            .await?
-            || tx
-                .sign_ins()
-                .lent_to_another(&candidate.session, serialized)
-                .await?);
+    let profile_held = if matches!(request, Request::None | Request::Provision) {
+        None
+    } else {
+        credential_use::check_session(tx, &candidate.session, serialized).await?
+    };
     let admission = if candidate.session.state == SessionState::Queued {
         Some(instance::admission(tx, &candidate.workspace).await?)
     } else {
@@ -349,27 +343,6 @@ pub async fn snapshot(store: &Store, name: &str) -> Result<Snapshot> {
         .filter(|evaluation| evaluation.eligible() && evaluation.request.input())
         .filter_map(|evaluation| evaluation.request.since())
         .min();
-    let mut held: HashMap<SessionId, Vec<Reason>> = HashMap::new();
-    if recorded.is_some() {
-        for (session, profile, holder) in
-            tx.queue().profiles_held(&organization, serialized).await?
-        {
-            held.entry(session)
-                .or_default()
-                .push(Reason::SubscriptionProfile {
-                    profile,
-                    session: holder,
-                });
-        }
-        for (session, profile) in tx.sign_ins().lent(&organization, serialized).await? {
-            held.entry(session)
-                .or_default()
-                .push(Reason::SubscriptionProfile {
-                    profile,
-                    session: None,
-                });
-        }
-    }
     let mut blocked: HashMap<SessionId, Vec<String>> = HashMap::new();
     for (session, blocker) in tx.queue().waiting_on(&organization).await? {
         blocked.entry(session.parse()?).or_default().push(blocker);
@@ -427,8 +400,8 @@ pub async fn snapshot(store: &Store, name: &str) -> Result<Snapshot> {
         if let Some(blockers) = blocked.remove(&candidate.session.id) {
             reasons.push(Reason::Dependencies(blockers));
         }
-        if evaluation.profile_held {
-            reasons.extend(held.remove(&candidate.session.id).unwrap_or_default());
+        if let Some(busy) = &evaluation.profile_held {
+            reasons.push(Reason::SubscriptionProfile(busy.clone()));
         }
         if let Some(admission) = &evaluation.admission {
             match admission {
@@ -539,4 +512,48 @@ async fn instances(tx: &mut Tx<'_>, organization: &Organization) -> Result<Insta
         count: tx.workspaces().live_instance_count(organization).await?,
         counted,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn evaluate_agrees_with_acquire() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).await.unwrap();
+        let mut tx = store.begin().await.unwrap();
+        let serialized = vec!["rotating".to_owned()];
+        tx.queue()
+            .record(2, &serialized, "local-exec")
+            .await
+            .unwrap();
+        let first = credential_use::tests::session(&mut tx, "rotating").await;
+        tx.workspaces()
+            .claim_session(&first, Timestamp::now() + work::LEASE, false)
+            .await
+            .unwrap()
+            .unwrap();
+        let pending = credential_use::tests::session(&mut tx, "rotating").await;
+        let workspace = tx.workspaces().get(pending.workspace).await.unwrap();
+        let evaluated = evaluate(
+            &mut tx,
+            &Candidate {
+                session: pending,
+                workspace,
+                blocked: false,
+                held_since: None,
+            },
+            &serialized,
+        )
+        .await
+        .unwrap();
+        let error = credential_use::acquire(&mut tx, "acme", "jack", "rotating", "probe")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error.downcast_ref::<crate::declined::Reason>(), Some(crate::declined::Reason::SignInBusy(busy)) if Some(busy) == evaluated.profile_held.as_ref())
+        );
+        assert!(!evaluated.eligible());
+    }
 }

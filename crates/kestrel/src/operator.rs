@@ -2953,6 +2953,7 @@ enum ReasonRecord {
     SubscriptionProfile {
         profile: String,
         session: Option<String>,
+        diagnostic: Box<wire::Diagnostic>,
     },
     InstanceArchiving {
         instance: String,
@@ -2978,8 +2979,15 @@ impl From<scheduling::Reason> for ReasonRecord {
     fn from(reason: scheduling::Reason) -> Self {
         match reason {
             scheduling::Reason::Dependencies(sessions) => Self::Dependencies { sessions },
-            scheduling::Reason::SubscriptionProfile { profile, session } => {
-                Self::SubscriptionProfile { profile, session }
+            scheduling::Reason::SubscriptionProfile(busy) => {
+                let profile = busy.profile.clone();
+                let session = busy.holder.session().map(str::to_owned);
+                let (_, diagnostic) = diagnosis(Reason::SignInBusy(busy), None);
+                Self::SubscriptionProfile {
+                    profile,
+                    session,
+                    diagnostic: Box::new(diagnostic),
+                }
             }
             scheduling::Reason::InstanceArchiving(instance) => Self::InstanceArchiving { instance },
             scheduling::Reason::LiveInstanceLimit(limit) => Self::LiveInstanceLimit { limit },
@@ -4753,6 +4761,7 @@ fn diagnosed(reason: Reason, field: Option<&'static str>) -> Refused {
 }
 
 fn diagnosis(reason: Reason, field: Option<&'static str>) -> (StatusCode, wire::Diagnostic) {
+    let request_field = field;
     let field = field.map(str::to_owned);
     match reason {
         Reason::MissingOperator { operation } => (
@@ -4839,6 +4848,23 @@ fn diagnosis(reason: Reason, field: Option<&'static str>) -> (StatusCode, wire::
             allowed,
             message,
         } => invalid_value(operation, field, constraint, allowed, message),
+        Reason::SignInBusy(busy) => {
+            let message = busy.to_string();
+            let holding_session = busy.holder.session().map(str::to_owned);
+            diagnosis(
+                Reason::StateConflict {
+                    operation: crate::sign_in::credential_use::ACQUIRE,
+                    resource: Resource::SubscriptionProfile,
+                    reference: busy.profile,
+                    organization: Some(busy.organization),
+                    state: "credential_in_use",
+                    holding_session,
+                    next: busy.next,
+                    message,
+                },
+                request_field,
+            )
+        }
         Reason::StateConflict {
             operation,
             resource,

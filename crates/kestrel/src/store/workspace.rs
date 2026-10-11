@@ -63,21 +63,6 @@ macro_rules! sessions_where {
     };
 }
 
-/// Another Session, aliased `a`, working on a Workspace, `o`, that shares the Subscription Profile
-/// of `s`'s Workspace, `w`, on the same serialized harness: what the dispatcher passes `s` over for
-/// and what the queue names as holding the profile, in one place.
-macro_rules! profile_held {
-    () => {
-        "workspace AS w
-         JOIN workspace AS o ON o.subscription_profile_id = w.subscription_profile_id
-         JOIN session AS a ON a.workspace_id = o.id AND a.harness = s.harness
-         WHERE w.id = s.workspace_id
-           AND s.harness IN (SELECT value FROM json_each(?))
-           AND a.state IN (SELECT value FROM json_each(?))"
-    };
-}
-pub(crate) use profile_held;
-
 /// Each Waiting Session's held input, oldest first: the order a freed slot prompts them in.
 macro_rules! held_input {
     ($condition:expr) => {
@@ -1224,25 +1209,6 @@ impl<'a> Workspaces<'a> {
             sessions.push(self.session(id.get::<String, _>("id").parse()?).await?);
         }
         Ok(sessions)
-    }
-
-    pub(crate) async fn holds_profile(
-        &mut self,
-        session: &Session,
-        serialized: &[String],
-    ) -> Result<bool> {
-        let holds = format!(
-            "SELECT EXISTS (SELECT 1 FROM session AS s WHERE s.id = ? AND EXISTS (SELECT 1 FROM \
-             {}))",
-            profile_held!()
-        );
-        sqlx::query_scalar(sqlx::AssertSqlSafe(holds))
-            .bind(session.id.to_string())
-            .bind(serde_json::to_string(serialized)?)
-            .bind(occupying()?)
-            .fetch_one(&mut *self.connection)
-            .await
-            .with_context(|| format!("reading what holds the profile of session {}", session.id))
     }
 
     /// Claimed without a slot, its first preparing step set in the same write that takes it out of

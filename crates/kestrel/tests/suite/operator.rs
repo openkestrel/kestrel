@@ -5604,6 +5604,23 @@ async fn at_the_instance_limit(kestrel: &Kestrel, maximum: usize, idle: usize) -
     kept
 }
 
+fn profile_reason(holding: &kestrel::domain::Session) -> Value {
+    json!({
+        "kind": "subscription_profile", "profile": "jack", "session": holding.name,
+        "diagnostic": {
+            "kind": "state_conflict", "field": null,
+            "message": format!("the {} sign-in in the subscription profile jack is in use by the session {}", holding.agent.harness, holding.name),
+            "context": { "operation": "use_sign_in", "resource": "subscription_profile",
+                "reference": "jack", "organization": "acme", "state": "credential_in_use", "holding_session": holding.name },
+            "next_steps": [
+                { "action": "inspect_resource", "resource": "session", "reference": holding.name, "organization": "acme" },
+                { "action": "stop_session", "organization": "acme", "session": holding.id.to_string(),
+                    "consequence": "Stopping the session now records it failed.", "effect": "fails_session", "requires_choice": true }
+            ]
+        }
+    })
+}
+
 fn reasons_of<'a>(queue: &'a Value, section: &str, name: &str) -> &'a Value {
     let row = queue[section]
         .as_array()
@@ -5690,8 +5707,7 @@ async fn a_queued_session_names_each_reason_that_holds_it_alone_and_together() {
         .enqueue_session(a_queued_workspace_in(&kestrel, "acme", "kestrel").await)
         .await;
     kestrel.block_session(&blocked, &held).await;
-    let profile =
-        json!({ "kind": "subscription_profile", "profile": "jack", "session": holding.name });
+    let profile = profile_reason(&holding);
     let dependencies = json!({ "kind": "dependencies", "sessions": [held.name] });
 
     let queue = queue_read(&kestrel).await;
@@ -6126,7 +6142,7 @@ async fn a_profile_held_first_brief_has_no_queue_position_until_the_profile_is_f
     assert_eq!(unbriefed_row(&queue, &first.name)["position"], Value::Null);
     assert_eq!(
         unbriefed_row(&queue, &first.name)["reasons"],
-        json!([{ "kind": "subscription_profile", "profile": "jack", "session": holding.name }])
+        json!([profile_reason(&holding)])
     );
     assert_eq!(numbered(&queue)[0]["position"], 1);
     kestrel.complete_session(&holding).await;
@@ -6447,8 +6463,7 @@ async fn a_waiting_session_with_held_input_waits_on_full_slots_and_on_its_profil
     kestrel
         .post_while_busy(jacks, "jack", "one more thing")
         .await;
-    let profile =
-        json!({ "kind": "subscription_profile", "profile": "jack", "session": holding.name });
+    let profile = profile_reason(&holding);
 
     let queue = queue_read(&kestrel).await;
     assert_eq!(
@@ -6579,7 +6594,7 @@ async fn kestrel_queue_says_each_reason_in_words_with_the_waiting_sessions_after
         (
             &every.prompted,
             format!(
-                "the Subscription Profile jack is held by {}",
+                "the codex sign-in in the subscription profile jack is in use by the session {}",
                 every.holding.name
             ),
         ),
@@ -6591,6 +6606,23 @@ async fn kestrel_queue_says_each_reason_in_words_with_the_waiting_sessions_after
     }
     assert!(lines[line_of(&every.prompted.name)].contains("input since "));
     assert!(lines[line_of(&every.unbriefed.name)].contains("input since "));
+
+    assert!(
+        shown.said.contains(&format!(
+            "kestrel session show {} --organization acme",
+            every.holding.name
+        )),
+        "{}",
+        shown.said
+    );
+    assert!(
+        shown.said.contains(&format!(
+            "kestrel session stop {} --organization acme",
+            every.holding.id
+        )),
+        "{}",
+        shown.said
+    );
 
     kestrel.teardown().await;
 }

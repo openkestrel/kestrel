@@ -1,5 +1,5 @@
 import { reasonsText } from "./format";
-import type { Queue } from "./generated";
+import type { Diagnostic, Queue } from "./generated";
 
 export type QueueRead =
 	| { kind: "reading"; delayed: boolean }
@@ -22,6 +22,7 @@ export type QueuedSession = {
 	label: "Queued" | "Next Turn" | "First Turn";
 	position: number | null;
 	reasons: string;
+	diagnostics: Diagnostic[];
 };
 
 export function queuedSessions(queue: Queue): QueuedSession[] {
@@ -35,6 +36,9 @@ export function queuedSessions(queue: Queue): QueuedSession[] {
 		label,
 		position: row.position,
 		reasons: reasonsText(row.reasons),
+		diagnostics: row.reasons.flatMap((reason) =>
+			reason.kind === "subscription_profile" ? [reason.diagnostic] : [],
+		),
 	}));
 }
 
