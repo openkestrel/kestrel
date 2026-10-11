@@ -441,10 +441,11 @@ impl Github {
                 reqwest::Method::GET,
                 &token,
                 &format!(
-                    "{}/installation/repositories?per_page={per_page}&page={page}",
+                    "{}/installation/repositories",
                     connection.api.trim_end_matches('/')
                 ),
-            ),
+            )
+            .query(&[("per_page", per_page), ("page", page)]),
             "the installation's repositories",
             Unproven::Installation,
         )
