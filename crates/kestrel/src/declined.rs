@@ -84,6 +84,7 @@ impl Locator {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Constraint {
     NonEmpty,
+    WellFormed,
     DistinctCheckoutDirectories,
     GitRepository,
     HttpsRepository,
@@ -115,6 +116,7 @@ impl Constraint {
     pub const fn as_str(self) -> &'static str {
         match self {
             Constraint::NonEmpty => "non_empty",
+            Constraint::WellFormed => "well_formed",
             Constraint::DistinctCheckoutDirectories => "distinct_checkout_directories",
             Constraint::GitRepository => "git_repository",
             Constraint::HttpsRepository => "https_repository",

@@ -26,20 +26,17 @@ use tracing::warn;
 
 use crate::agent;
 use crate::capability::{self, Capability, Images};
-use crate::cron::Cron;
 use crate::declaration;
 use crate::declined::{
     self as declined, Again, Concerning, Consequence, Constraint, Declined, Locator, Reason,
     Resource, Step,
 };
 use crate::domain::{
-    self, Agent, Connection, Correlation, Declared, Direction, EventRecordId, Fires, Firing,
-    HeldMessage, Integration, IntegrationKind, IntegrationState, Occurrence, Organization, Project,
-    Schedule, Session, StartedBy, SubscriptionProfile, Templates, Trigger, Workspace, WorkspaceId,
-    WorkspaceState,
+    self, Agent, Connection, Declared, Direction, EventRecordId, Fires, Firing, HeldMessage,
+    Integration, IntegrationKind, IntegrationState, Occurrence, Organization, Project, Schedule,
+    Session, StartedBy, SubscriptionProfile, Trigger, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::fanout;
-use crate::filter::Filter;
 use crate::integration::github::{self, Github};
 use crate::integration::{self, Connecting, Registration};
 use crate::log::{self, Cursor, Unreadable, Window};
@@ -54,7 +51,6 @@ use crate::sign_in::handoff::{self, Attribution};
 use crate::store::workspace::HeldMessageRefusal;
 use crate::store::{self, Declared as DeclaredRecord, Store};
 use crate::stream::{self, Emitted};
-use crate::template::Template;
 use crate::trigger::{self, apply};
 use crate::{instance, pull_request, start, work, workspace};
 
@@ -1537,45 +1533,30 @@ async fn declare_project(
     declaration: Result<Json<wire::ProjectDeclaration>, JsonRejection>,
 ) -> Result<Response, Refused> {
     let Json(declaration) = declaration?;
-    named("declare_project", &declaration.name)?;
-    repository::resolved(
-        "declare_project",
-        "repositories",
-        &declaration.repositories,
-        repository::Purpose::Declaration,
-    )?;
-    if declaration.branch.is_empty() {
-        return Err(invalid_field(
-            "declare_project",
-            "branch",
-            Constraint::NonEmpty,
-            "a project names the branch its work happens on",
-        ));
-    }
-    let declarable = repository::declarable(
+    let checked = declaration::check_project(
         &control_plane.store,
         &Github::unfenced()?,
-        &repository::Declaring {
-            selecting: repository::Selecting {
-                operation: "declare_project",
-                repositories_field: "repositories",
-                integrations_field: "integrations",
-                organization: &organization,
-                repositories: &declaration.repositories,
-                selections: declaration.integrations.as_deref().unwrap_or_default(),
-            },
-            branch_field: "branch",
-            project: &declaration.name,
-            branch: &declaration.branch,
+        &organization,
+        &declaration::Project {
+            name: declaration.name.clone(),
+            repositories: declaration.repositories.clone(),
+            integrations: declaration.integrations.clone().unwrap_or_default(),
+            branch: declaration.branch.clone(),
         },
+        "declare_project",
     )
-    .await?;
+    .await
+    .map_err(|error| declaration::scoped(declaration::Prefix::Root, "declare_project", error))?;
 
     let mut tx = control_plane.store.begin().await?;
     let organization = tx.organizations().named(&organization).await?;
-    let declared = declarable
-        .declare(&mut tx, &organization, &declaration.name)
-        .await?;
+    let (declared, _) = declaration::place_project(
+        &mut tx,
+        &organization,
+        &checked,
+        declaration::OnExisting::Change,
+    )
+    .await?;
     tx.commit().await?;
 
     Ok(answered::<_, ProjectRecord>(declared))
@@ -1614,28 +1595,26 @@ async fn declare_agent(
     declaration: Result<Json<AgentDeclaration>, JsonRejection>,
 ) -> Result<Response, Refused> {
     let Json(declaration) = declaration?;
-    named("declare_agent", &declaration.name)?;
-    if declaration.harness.is_empty() {
-        return Err(invalid_field(
-            "declare_agent",
-            "harness",
-            Constraint::NonEmpty,
-            "an agent names the harness that drives it",
-        ));
-    }
-    control_plane
-        .images
-        .admit(&declaration.harness, "declare_agent", "harness")
-        .await?;
-
-    let declared = agent::declare(
-        &control_plane.store,
-        &organization,
+    let checked = declaration::check_agent(
+        &control_plane.images,
         &declaration.name,
         &declaration.harness,
         &declaration.declared(),
+        "declare_agent",
+    )
+    .await
+    .map_err(|error| declaration::scoped(declaration::Prefix::Root, "declare_agent", error))?;
+
+    let mut tx = control_plane.store.begin().await?;
+    let organization = tx.organizations().named(&organization).await?;
+    let (declared, _) = declaration::place_agent(
+        &mut tx,
+        &organization,
+        &checked,
+        declaration::OnExisting::Change,
     )
     .await?;
+    tx.commit().await?;
 
     Ok(answered::<_, AgentRecord>(declared))
 }
@@ -2531,37 +2510,52 @@ async fn declare_trigger(
     declaration: Result<Json<TriggerDeclaration>, JsonRejection>,
 ) -> Result<(StatusCode, Json<TriggerRecord>), Refused> {
     let Json(declaration) = declaration?;
-    named("declare_trigger", &declaration.name)?;
-    let (fires, templates) = parse_trigger_declaration(&declaration)?;
-    let created = !trigger::triggers(&control_plane.store, &organization)
-        .await
-        .map_err(named_refusal)?
-        .iter()
-        .any(|trigger| trigger.name == declaration.name);
-    let trigger = trigger::declare(
-        &control_plane.store,
-        trigger::Declaration {
-            organization: &organization,
-            name: &declaration.name,
-            fires: &fires,
-            templates: &templates,
-            project: &declaration.project,
-            agent: &declaration.agent,
-            declared: &declaration.declared(),
-            allows: &declaration.allows,
-            profile: declaration.profile.as_deref(),
+    declaration::check_name(&declaration.name).map_err(|error| {
+        declaration::scoped(declaration::Prefix::Root, "declare_trigger", error)
+    })?;
+    let (fires, templates) = declaration::parse_trigger(
+        &declaration::ScheduleForms {
+            filter: declaration.filter.as_ref(),
+            every: declaration.every.as_deref(),
+            cron: declaration.cron.as_deref(),
+            zone: declaration.zone.as_deref(),
+        },
+        &declaration::TemplateFields {
+            brief: &declaration.brief,
+            branch: declaration.branch.as_deref(),
+            correlation: declaration.correlation.as_deref(),
+            on_miss: declaration.on_miss.as_deref(),
+            on_open_workspace: declaration.on_open_workspace.as_deref(),
         },
     )
-    .await
-    .map_err(named_refusal)?;
+    .map_err(|error| declaration::scoped(declaration::Prefix::Root, "declare_trigger", error))?;
+    let checked = declaration::CheckedTrigger::new(declaration::TriggerProposal {
+        name: declaration.name.clone(),
+        fires,
+        templates,
+        project: declaration.project.clone(),
+        agent: declaration.agent.clone(),
+        declared: declaration.declared(),
+        allows: declaration.allows.clone(),
+        profile: declaration.profile.clone(),
+    });
+    let mut tx = control_plane.store.begin().await?;
+    let organization = tx.organizations().named(&organization).await?;
+    let placed = declaration::place_trigger(
+        &mut tx,
+        &organization,
+        &checked,
+        declaration::Provenance::Flags,
+    )
+    .await?;
+    tx.commit().await?;
 
     Ok((
-        if created {
-            StatusCode::CREATED
-        } else {
-            StatusCode::OK
+        match placed.change.action {
+            declaration::Action::Add => StatusCode::CREATED,
+            _ => StatusCode::OK,
         },
-        Json(trigger.into()),
+        Json(placed.trigger.into()),
     ))
 }
 
@@ -2629,14 +2623,24 @@ async fn test_trigger(
     let tested = match tested.declared {
         Some(file) => {
             let declarations = apply::declarations(file)
-                .map_err(|error| Refused::Unprocessable(format!("{error:#}")))?;
+                .map_err(|error| {
+                    declaration::scoped(declaration::Prefix::Root, "test_trigger", error)
+                })
+                .map_err(named_refusal)?;
             let declared = declarations
                 .iter()
                 .find(|declared| declared.name == name)
                 .ok_or_else(|| {
-                    Refused::Unprocessable(format!(
-                        "the declaration file declares no trigger {name}"
-                    ))
+                    named_refusal(
+                        Reason::MissingReference {
+                            resource: Resource::Trigger,
+                            reference: name.clone(),
+                            organization: Some(organization.clone()),
+                            within: None,
+                            message: format!("the declaration file declares no trigger {name}"),
+                        }
+                        .into(),
+                    )
                 })?;
             trigger::test_declared(
                 &control_plane.store,
@@ -2791,76 +2795,19 @@ async fn applied_triggers(
     dry_run: bool,
 ) -> Result<Json<apply::Applied>, Refused> {
     let Json(file) = file?;
-    let declarations =
-        apply::declarations(file).map_err(|error| Refused::Unprocessable(format!("{error:#}")))?;
+    let operation = if dry_run {
+        "preview_applied_triggers"
+    } else {
+        "apply_triggers"
+    };
+    let declarations = apply::declarations(file)
+        .map_err(|error| declaration::scoped(declaration::Prefix::Root, operation, error))
+        .map_err(named_refusal)?;
     let applied = apply::apply(&control_plane.store, &organization, &declarations, dry_run)
         .await
         .map_err(named_refusal)?;
 
     Ok(Json(applied))
-}
-
-fn parse_trigger_declaration(
-    declaration: &TriggerDeclaration,
-) -> Result<(Fires, Templates), Refused> {
-    let fires = match (
-        &declaration.filter,
-        &declaration.every,
-        &declaration.cron,
-        &declaration.zone,
-    ) {
-        (Some(filter), None, None, None) => Fires::On(
-            Filter::from_json(filter)
-                .map_err(|error| Refused::Unprocessable(format!("a trigger filter: {error}")))?,
-        ),
-        (None, Some(every), None, None) => {
-            Fires::Scheduled(Schedule::Every(every.parse().map_err(|error| {
-                Refused::Unprocessable(format!("a trigger schedule is a duration: {error}"))
-            })?))
-        }
-        (None, None, Some(cron), Some(zone)) => {
-            Fires::Scheduled(Schedule::Cron(Cron::new(cron, zone).map_err(|error| {
-                Refused::Unprocessable(format!("a trigger schedule: {error:#}"))
-            })?))
-        }
-        (None, None, Some(_), None) => {
-            return Err(Refused::Unprocessable(
-                "a cron expression declares the time zone it is read in".to_owned(),
-            ));
-        }
-        (_, _, None, Some(_)) => {
-            return Err(Refused::Unprocessable(
-                "a time zone is declared only with a cron expression".to_owned(),
-            ));
-        }
-        _ => {
-            return Err(Refused::Unprocessable(
-                "a trigger declares a filter, an interval or a cron expression, and only one"
-                    .to_owned(),
-            ));
-        }
-    };
-    let correlation = Correlation::parse(
-        declaration.correlation.as_deref(),
-        declaration.on_miss.as_deref(),
-        declaration.on_open_workspace.as_deref(),
-    )
-    .map_err(|error| Refused::Unprocessable(format!("{error:#}")))?;
-    let templates = Templates {
-        brief: declaration
-            .brief
-            .parse::<Template>()
-            .map_err(|error| Refused::Unprocessable(format!("a trigger brief: {error}")))?,
-        branch: declaration
-            .branch
-            .as_deref()
-            .map(str::parse)
-            .transpose()
-            .map_err(|error| Refused::Unprocessable(format!("a trigger branch: {error}")))?,
-        correlation,
-    };
-
-    Ok((fires, templates))
 }
 
 /// An untyped refusal here is about what the request named, never a control plane that could

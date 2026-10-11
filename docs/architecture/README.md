@@ -184,9 +184,9 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
 
 - **Typed next steps** ([ADR-0052](../adr/0052-a-refusal-carries-its-next-steps.md)): the CLI
   still reads refusal sentences for corrections, and the browser has no sign-in or settings
-  screen to bind those steps to; Integration, GitHub App, start and
-  Trigger declaration refusals still answer a plain `Refusal`; readiness does not yet carry the
-  shared diagnostic contract, and a Session's failure diagnostic attributes no sign-in.
+  screen to bind those steps to; Integration and GitHub App refusals still answer a plain
+  `Refusal`; readiness does not yet carry the shared diagnostic contract, and a Session's
+  failure diagnostic attributes no sign-in.
 
 - **Integration identity** ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)): the
   GitHub Integration authenticates as a GitHub App and mints its own installation tokens. The

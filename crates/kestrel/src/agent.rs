@@ -2,6 +2,8 @@
 
 use anyhow::Result;
 
+use crate::capability::Images;
+use crate::declaration;
 use crate::domain::{Agent, Declared};
 use crate::store::{Declared as DeclaredRecord, Store};
 
@@ -12,14 +14,21 @@ pub async fn declare(
     harness: &str,
     declared: &Declared,
 ) -> Result<DeclaredRecord<Agent>> {
-    let declared = Declared::named(declared.clone());
+    let checked =
+        declaration::check_agent(&Images::default(), name, harness, declared, "declare_agent")
+            .await
+            .map_err(|error| {
+                declaration::scoped(declaration::Prefix::Root, "declare_agent", error)
+            })?;
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
-
-    let declared = tx
-        .agents()
-        .declare(&organization, name, harness, &declared)
-        .await?;
+    let (declared, _) = declaration::place_agent(
+        &mut tx,
+        &organization,
+        &checked,
+        declaration::OnExisting::Change,
+    )
+    .await?;
     tx.commit().await?;
 
     Ok(declared)

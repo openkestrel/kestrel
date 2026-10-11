@@ -331,6 +331,10 @@ impl Declarable {
         &self.repositories
     }
 
+    pub fn branch(&self) -> &str {
+        &self.branch
+    }
+
     pub fn selected(&self) -> impl Iterator<Item = (&str, &str)> {
         self.selected.iter().map(|checked| {
             (
