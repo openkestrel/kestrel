@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -10,7 +11,7 @@ use tokio::sync::mpsc;
 use crate::Diagnostics;
 use crate::evidence::Secrets;
 use crate::harness::{Conversation, ConversationEvent, Harness, Turn};
-use crate::link::{Evidence, Report, SessionInfo, SessionOptionKind};
+use crate::link::{Evidence, Report, SessionOption, SessionOptionKind};
 use crate::login;
 
 pub const VARIABLE: &str = "KESTREL_PROBE";
@@ -23,6 +24,10 @@ struct Asked {
     #[serde(default)]
     model: Option<String>,
     prompt: String,
+    /// Given up on here, before whoever started the probe stops it, so a login refreshed by then
+    /// is still said.
+    #[serde(default)]
+    give_up_after_seconds: Option<u64>,
     #[serde(default)]
     variables: BTreeMap<String, String>,
     #[serde(default)]
@@ -48,6 +53,7 @@ enum Outcome {
     Answered,
     AuthenticationRequired,
     ModelNotOffered,
+    TimedOut,
     Failed,
 }
 
@@ -84,24 +90,19 @@ pub async fn run(asked: &str, home: Option<&Path>, diagnostics: &dyn Diagnostics
 
     let secrets = Secrets::of(asked.variables.values().chain(asked.files.values()));
     let written = match (asked.files.is_empty(), home) {
-        (true, _) => None,
-        (false, Some(home)) => match login::write(home, asked.files.clone()) {
-            Ok(written) => Some(written),
-            Err(error) => {
-                say(&Said::Finished {
-                    model: asked.model.clone(),
-                    outcome: Outcome::Failed,
-                    because: Some(format!("the login files could not be written: {error}")),
-                    refreshed: BTreeMap::new(),
-                });
-                return 0;
-            }
-        },
-        (false, None) => {
+        (true, _) => Ok(None),
+        (false, Some(home)) => login::write(home, asked.files.clone())
+            .map(Some)
+            .map_err(|error| format!("the login files could not be written: {error}")),
+        (false, None) => Err("this environment has no home to put login files in".to_owned()),
+    };
+    let written = match written {
+        Ok(written) => written,
+        Err(because) => {
             say(&Said::Finished {
                 model: asked.model.clone(),
                 outcome: Outcome::Failed,
-                because: Some("this environment has no home to put login files in".to_owned()),
+                because: Some(because),
                 refreshed: BTreeMap::new(),
             });
             return 0;
@@ -126,7 +127,19 @@ pub async fn run(asked: &str, home: Option<&Path>, diagnostics: &dyn Diagnostics
     let mut conversation =
         Conversation::open(&harness, asked.variables.clone(), secrets, None, root);
 
-    let finding = probed(&mut conversation, &asked).await;
+    let finding = match asked.give_up_after_seconds {
+        Some(seconds) => tokio::time::timeout(
+            Duration::from_secs(seconds),
+            probed(&mut conversation, &asked),
+        )
+        .await
+        .unwrap_or_else(|_| Finding {
+            model: asked.model.clone(),
+            outcome: Outcome::TimedOut,
+            because: None,
+        }),
+        None => probed(&mut conversation, &asked).await,
+    };
     conversation.end().await;
     draining.abort();
     let refreshed = written
@@ -154,7 +167,7 @@ async fn probed(conversation: &mut Conversation, asked: &Asked) -> Finding {
     loop {
         match conversation.next().await {
             ConversationEvent::Report(Report::SessionInfo(info)) => {
-                selectable = model_option(&info);
+                selectable = model_option(&info.options);
             }
             ConversationEvent::Ready if !prompted => {
                 match (&asked.model, &selectable) {
@@ -181,6 +194,16 @@ async fn probed(conversation: &mut Conversation, asked: &Asked) -> Finding {
                             .await;
                         if let Some(refused) = set.refused {
                             return Finding::failed(Some(named.clone()), refused);
+                        }
+                        let kept = model_option(&set.options).map(|offered| offered.current);
+                        if kept.as_ref() != Some(named) {
+                            return Finding::failed(
+                                Some(named.clone()),
+                                format!(
+                                    "this harness was asked for the model {named} and stayed on {}",
+                                    kept.as_deref().unwrap_or("one it did not name")
+                                ),
+                            );
                         }
                     }
                     (Some(_), Some(_)) => {}
@@ -222,8 +245,8 @@ async fn probed(conversation: &mut Conversation, asked: &Asked) -> Finding {
     }
 }
 
-fn model_option(info: &SessionInfo) -> Option<Selectable> {
-    info.options.iter().find_map(|option| {
+fn model_option(options: &[SessionOption]) -> Option<Selectable> {
+    options.iter().find_map(|option| {
         if option.category.as_deref() != Some("model") {
             return None;
         }

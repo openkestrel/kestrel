@@ -4,7 +4,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use kestrel::domain::Organization;
 use kestrel::profile::Entry;
+use kestrel_scripted_agent::{DEFAULT_MODEL, OTHER_MODEL, REFRESHED};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -181,6 +183,15 @@ async fn dispatching(harnesses: &[(&str, &str)]) -> Kestrel {
     kestrel
 }
 
+async fn organization(kestrel: &Kestrel) -> Organization {
+    kestrel
+        .organizations()
+        .await
+        .into_iter()
+        .find(|organization| organization.name == OPERATOR)
+        .expect("the Operator's Organization")
+}
+
 fn instance_of(test: &Value) -> PathBuf {
     std::env::temp_dir().join(format!(
         "kestrel-sign-in-test-{}",
@@ -200,12 +211,7 @@ async fn a_test_spends_one_request_on_the_selected_material_and_nothing_else() {
     let witness = Witness::new();
     let kestrel = dispatching(&[("claude", &witness.playing(Script::Speaks))]).await;
     let token = save(&kestrel, "claude", "claude-setup-token", CLAUDE_TOKEN).await;
-    let organization = kestrel
-        .organizations()
-        .await
-        .into_iter()
-        .find(|organization| organization.name == OPERATOR)
-        .expect("the Operator's Organization");
+    let organization = organization(&kestrel).await;
     kestrel
         .hold_provider_credential(&organization, "ANTHROPIC_API_KEY", ANTHROPIC_KEY)
         .await;
@@ -229,7 +235,7 @@ async fn a_test_spends_one_request_on_the_selected_material_and_nothing_else() {
 
     assert_eq!(test["state"], "completed", "{test:#}");
     assert_eq!(test["outcome"], "worked");
-    assert_eq!(test["model"], scripted_agent_model());
+    assert_eq!(test["model"], DEFAULT_MODEL);
     assert_eq!(test["revision"], token["revision"]);
 
     let prompts = witness.prompts();
@@ -255,7 +261,7 @@ async fn a_test_spends_one_request_on_the_selected_material_and_nothing_else() {
     let used = after["model_use"].as_array().expect("model use");
     assert_eq!(used.len(), 1, "{after:#}");
     assert_eq!(used[0]["harness"], "claude");
-    assert_eq!(used[0]["model"], scripted_agent_model());
+    assert_eq!(used[0]["model"], DEFAULT_MODEL);
     assert_eq!(used[0]["result"], "worked");
     assert_eq!(used[0]["source"], "model_test");
 
@@ -264,10 +270,6 @@ async fn a_test_spends_one_request_on_the_selected_material_and_nothing_else() {
     left_nothing_behind(&test);
 
     kestrel.teardown().await;
-}
-
-fn scripted_agent_model() -> &'static str {
-    kestrel_scripted_agent::DEFAULT_MODEL
 }
 
 #[tokio::test]
@@ -280,7 +282,7 @@ async fn each_model_keeps_its_own_result_and_one_not_offered_fails_alone() {
     assert_eq!(default["outcome"], "worked", "{default:#}");
     let first = saved(&kestrel, "claude", "claude-setup-token").await["model_use"][0].clone();
 
-    let other = kestrel_scripted_agent::OTHER_MODEL;
+    let other = OTHER_MODEL;
     let named = tested(&kestrel, "claude", "claude-setup-token", Some(other)).await;
     assert_eq!(named["state"], "completed", "{named:#}");
     assert_eq!(named["requested_model"], other);
@@ -319,7 +321,7 @@ async fn each_model_keeps_its_own_result_and_one_not_offered_fails_alone() {
         used,
         [
             (other, "worked"),
-            (scripted_agent_model(), "worked"),
+            (DEFAULT_MODEL, "worked"),
             ("scripted-none", "not_covered"),
         ]
     );
@@ -339,12 +341,7 @@ async fn a_key_two_harnesses_share_is_tested_for_the_one_named() {
         ("opencode", &witness.playing(Script::Speaks)),
     ])
     .await;
-    let organization = kestrel
-        .organizations()
-        .await
-        .into_iter()
-        .find(|organization| organization.name == OPERATOR)
-        .expect("the Operator's Organization");
+    let organization = organization(&kestrel).await;
     kestrel
         .hold_provider_credential(&organization, "ANTHROPIC_API_KEY", ANTHROPIC_KEY)
         .await;
@@ -375,12 +372,7 @@ async fn a_method_that_routes_by_provider_names_its_model_and_enables_that_provi
         witness.playing(Script::Speaks)
     );
     let kestrel = dispatching(&[("opencode", &offering)]).await;
-    let organization = kestrel
-        .organizations()
-        .await
-        .into_iter()
-        .find(|organization| organization.name == OPERATOR)
-        .expect("the Operator's Organization");
+    let organization = organization(&kestrel).await;
     kestrel
         .hold_provider_credential(&organization, "ANTHROPIC_API_KEY", ANTHROPIC_KEY)
         .await;
@@ -517,7 +509,7 @@ async fn a_test_past_its_deadline_is_stopped_and_earlier_evidence_keeps_its_time
         .record_model_use(
             token["revision"].as_i64().expect("a revision"),
             "claude",
-            scripted_agent_model(),
+            DEFAULT_MODEL,
             "worked",
         )
         .await;
@@ -527,7 +519,7 @@ async fn a_test_past_its_deadline_is_stopped_and_earlier_evidence_keeps_its_time
 
     assert_eq!(test["state"], "failed", "{test:#}");
     assert_eq!(test["outcome"], "unavailable");
-    assert_eq!(test["model"], scripted_agent_model());
+    assert_eq!(test["model"], DEFAULT_MODEL);
     left_nothing_behind(&test);
     assert_eq!(
         saved(&kestrel, "claude", "claude-setup-token").await,
@@ -564,7 +556,7 @@ async fn a_login_the_harness_refreshed_is_kept_as_a_refresh_of_the_revision_test
         .expect("the Operator's Profile");
     assert_eq!(
         kestrel.profile_contents(&profile).await.files[".codex/auth.json"],
-        format!("{CODEX_LOGIN}{}", kestrel_scripted_agent::REFRESHED)
+        format!("{CODEX_LOGIN}{}", REFRESHED)
     );
     let again = start(&kestrel, "codex", "codex-device-auth", None).await;
     assert_eq!(again.status, StatusCode::ACCEPTED, "{}", again.text);

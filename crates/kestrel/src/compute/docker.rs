@@ -42,6 +42,9 @@ impl Docker {
         let container = super::named_after(&holder);
         let mut created = vec![
             "create".to_owned(),
+            // An image is inspected before it is used and never pulled (ADR-0048).
+            "--pull".to_owned(),
+            "never".to_owned(),
             "--name".to_owned(),
             container.clone(),
             // The Instance dials out and nothing dials in (ADR-0002), so this is the only

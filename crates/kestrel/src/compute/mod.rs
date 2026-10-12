@@ -59,7 +59,6 @@ impl Driver {
         }
     }
 
-    /// `holder` is the Session the Instance is provisioned for, or whatever else it is named after.
     pub fn provision(&self, holder: impl fmt::Display) -> io::Result<Instance> {
         let holder = holder.to_string();
         match self {
@@ -68,8 +67,8 @@ impl Driver {
         }
     }
 
-    /// The name `provision` gives the Instance it makes for `holder`.
-    pub fn names(&self, holder: impl fmt::Display) -> String {
+    /// What `provision` names the Instance it makes for `holder`, which finds one whose handle is gone.
+    pub fn instance_for(&self, holder: impl fmt::Display) -> String {
         format!("{}/{}", self.name(), named_after(&holder))
     }
 

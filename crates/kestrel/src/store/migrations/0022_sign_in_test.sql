@@ -1,5 +1,5 @@
--- An explicit test of saved material: one model call in a short-lived Instance. Kept so a Client
--- that lost its connection reads the test it started instead of starting another.
+-- An explicit model test of saved material, kept so a Client that lost its connection reads the
+-- test it started instead of starting another.
 CREATE TABLE sign_in_test (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL REFERENCES organization (id),

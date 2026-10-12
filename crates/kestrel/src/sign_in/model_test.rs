@@ -1,6 +1,6 @@
-//! An explicit test of saved material: one prompt, sent once, by the harness in a short-lived
-//! Instance that has no checkout and is handed nothing but the material selected. What it finds
-//! is evidence for that revision, harness and model alone.
+//! An explicit test of saved material: one prompt, sent once, in a short-lived Instance with no
+//! checkout that is handed only the material selected, as evidence for that revision, harness
+//! and model alone.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead as _, BufReader, Read};
@@ -33,6 +33,8 @@ pub const DEADLINE: Duration = Duration::from_secs(120);
 const PROMPT: &str = "Reply with the single word: ok";
 const MESSAGE_LIMIT: usize = 1024;
 const POLL: Duration = Duration::from_millis(100);
+/// How long past the deadline a probe has to say it gave up.
+const UNANSWERED: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct Test {
@@ -377,7 +379,7 @@ pub async fn interrupt_unfinished(store: &Store, driver: Option<&Driver>) -> Res
 
     for test in unfinished {
         let Some(driver) = driver else { continue };
-        let left = driver.names(instance(&test.id));
+        let left = driver.instance_for(instance(&test.id));
         if let Err(error) = driver.destroy_named(&left) {
             warn!(test = test.id, instance = left, %error, "an interrupted sign-in test's instance resisted being destroyed");
         }
@@ -424,6 +426,7 @@ enum Probed {
     Answered,
     AuthenticationRequired,
     ModelNotOffered,
+    TimedOut,
     Failed,
 }
 
@@ -518,6 +521,7 @@ impl Running<'_> {
             "auth": self.auth,
             "model": test.requested_model,
             "prompt": PROMPT,
+            "give_up_after_seconds": self.deadline.as_secs(),
             "variables": handed.variables,
             "files": handed.files,
         })
@@ -541,14 +545,11 @@ impl Running<'_> {
                 }
                 let waited = tokio::select! {
                     waited = self.probed(test, &mut said) => waited,
-                    () = tokio::time::sleep(self.deadline) => Waited::Ended(Ending::failed(
-                        TestOutcome::Unavailable,
-                        format!(
-                            "the test did not finish within {} seconds, so it was stopped; \
-                             what is saved is as it was",
-                            self.deadline.as_secs()
-                        ),
-                    )),
+                    // The probe gives up at the deadline itself and says what it refreshed;
+                    // this stops one that did not.
+                    () = tokio::time::sleep(self.deadline + UNANSWERED) => Waited::Ended(
+                        Ending::failed(TestOutcome::Unavailable, timed_out(self.deadline)),
+                    ),
                     () = self.shutdown.cancelled() => Waited::Ended(Ending {
                         state: TestState::Interrupted,
                         outcome: None,
@@ -592,7 +593,10 @@ impl Running<'_> {
                     return Waited::Probed {
                         model,
                         outcome,
-                        because,
+                        because: match outcome {
+                            Probed::TimedOut => Some(timed_out(self.deadline)),
+                            _ => because,
+                        },
                         refreshed,
                     };
                 }
@@ -628,8 +632,8 @@ async fn resolved(store: &Store, test: &Test, model: &str) -> Result<()> {
     tx.commit().await
 }
 
-/// `None` when the revision selected is no longer what is held: a different revision is never
-/// tested in its place. Nothing but the one entry is decrypted into what is handed.
+/// `None` when the revision selected is no longer what is held, since a different revision is
+/// never tested in its place.
 async fn hand_over(tx: &mut Tx<'_>, test: &Test) -> Result<Option<Handed>> {
     let offered = catalogue::sign_in_method(TEST, &test.harness, &test.method)?;
     let entry = filled(offered)?;
@@ -701,9 +705,7 @@ struct Unconcluded {
     found: Waited,
 }
 
-/// One transaction: what the harness refreshed is handed back, the evidence its answer
-/// supports is recorded, the hold is released and the test ends. A test that established
-/// nothing writes no evidence, so what was known before keeps its time.
+/// Hands `found` back when it could not be recorded, so a busy store is tried again.
 async fn conclude(
     store: &Store,
     test: &Test,
@@ -716,6 +718,7 @@ async fn conclude(
     }
 }
 
+/// One transaction, so a login the harness refreshed is handed back before its hold is released.
 async fn concluding(
     store: &Store,
     test: &Test,
@@ -723,6 +726,14 @@ async fn concluding(
     found: &Waited,
 ) -> Result<()> {
     let mut tx = store.begin().await?;
+    let unfinished = tx
+        .sign_ins()
+        .test(&test.id)
+        .await?
+        .is_some_and(|test| matches!(test.state, TestState::Pending | TestState::Running));
+    if !unfinished {
+        return Ok(());
+    }
 
     let ending = match found {
         Waited::Ended(ending) => ending.clone(),
@@ -740,17 +751,30 @@ async fn concluding(
             if let Some(model) = model {
                 tx.sign_ins().resolve_test_model(&test.id, model).await?;
             }
-            let used = match outcome {
-                Probed::Answered => Some(UseResult::Worked),
-                Probed::AuthenticationRequired => {
-                    tx.sign_ins()
-                        .observe(revision, State::AuthenticationFailed, Source::ModelTest)
-                        .await?;
-                    Some(UseResult::AuthenticationFailed)
-                }
-                Probed::ModelNotOffered => Some(UseResult::NotCovered),
-                Probed::Failed => None,
+            let (used, state, ended) = match outcome {
+                Probed::Answered => (
+                    Some(UseResult::Worked),
+                    TestState::Completed,
+                    TestOutcome::Worked,
+                ),
+                Probed::AuthenticationRequired => (
+                    Some(UseResult::AuthenticationFailed),
+                    TestState::Failed,
+                    TestOutcome::AuthenticationFailed,
+                ),
+                Probed::ModelNotOffered => (
+                    Some(UseResult::NotCovered),
+                    TestState::Failed,
+                    TestOutcome::NotCovered,
+                ),
+                Probed::TimedOut => (None, TestState::Failed, TestOutcome::Unavailable),
+                Probed::Failed => (None, TestState::Failed, TestOutcome::HarnessFailed),
             };
+            if used == Some(UseResult::AuthenticationFailed) {
+                tx.sign_ins()
+                    .observe(revision, State::AuthenticationFailed, Source::ModelTest)
+                    .await?;
+            }
             if let (Some(used), Some(model)) = (used, model) {
                 tx.sign_ins()
                     .record_use(
@@ -763,28 +787,10 @@ async fn concluding(
                     )
                     .await?;
             }
-            let message = because.as_deref().map(bounded);
-            match outcome {
-                Probed::Answered => Ending {
-                    state: TestState::Completed,
-                    outcome: Some(TestOutcome::Worked),
-                    message: None,
-                },
-                Probed::AuthenticationRequired => Ending {
-                    state: TestState::Failed,
-                    outcome: Some(TestOutcome::AuthenticationFailed),
-                    message,
-                },
-                Probed::ModelNotOffered => Ending {
-                    state: TestState::Failed,
-                    outcome: Some(TestOutcome::NotCovered),
-                    message,
-                },
-                Probed::Failed => Ending {
-                    state: TestState::Failed,
-                    outcome: Some(TestOutcome::HarnessFailed),
-                    message,
-                },
+            Ending {
+                state,
+                outcome: Some(ended),
+                message: because.as_deref().map(bounded),
             }
         }
     };
@@ -850,6 +856,13 @@ async fn refresh(
             Ok(test.revision)
         }
     }
+}
+
+fn timed_out(deadline: Duration) -> String {
+    format!(
+        "the test did not finish within {} seconds, so it was stopped; what is saved is as it was",
+        deadline.as_secs()
+    )
 }
 
 fn bounded(text: &str) -> String {

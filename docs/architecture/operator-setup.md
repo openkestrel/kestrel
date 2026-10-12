@@ -169,7 +169,8 @@ found. Saving never starts one, and nothing else spends model usage on a sign-in
   [probe mode](link.md#harness-side). That Instance has no checkout, no link and no
   Workspace; its harness is handed that entry alone, plus the variable that enables only the
   named provider (`catalogue::confining`). `model` is recorded when the probe says it is
-  ready, before the prompt.
+  ready, before the prompt. The probe gives up at the deadline itself, so a login it refreshed
+  by then is still handed back; one that says nothing five seconds later is stopped.
 - **Ending** is one transaction: a login file the harness rewrote is kept by compare-and-set
   against the tested revision, evidence is recorded, the hold is released and the test ends.
 
@@ -184,14 +185,14 @@ found. Saving never starts one, and nothing else spends model usage on a sign-in
   Evidence goes to the revision a kept refresh minted, otherwise to the one tested. A test
   that records nothing leaves earlier evidence and its `observed_at` as they were.
 - **Stopping.** The Instance is destroyed however the test ends. A control plane that stops
-  ends its running tests `interrupted`; one that starts ends every unfinished test
+  ends its running tests `interrupted`, and a login refreshed in one of those is lost with it; one that starts ends every unfinished test
   `interrupted` and destroys the Instance its name gives, beside clearing every
   `credential_use`. Nothing resumes a test, since that would send a second prompt.
 
 ## Image capabilities
 
 `capability.rs` resolves the configured image reference again on every read, through
-`docker image inspect` and never a pull, and caches only parsed labels, keyed by the image ID the
+`docker image inspect` and never a pull (the driver creates containers with `--pull never`), and caches only parsed labels, keyed by the image ID the
 reference resolved to. A failed inspection is `Unavailable`; it never falls back to an earlier
 positive result. `Images::admit` gates declaring an Agent, previewing or applying a declaration,
 and a start. It runs before any transaction opens, so a refusal writes nothing. A harness the
