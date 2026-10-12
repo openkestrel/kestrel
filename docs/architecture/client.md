@@ -93,7 +93,12 @@ whose `open` refetches the Organization and whose changes invalidate TanStack Qu
 Workspace route's Transcript follow, which resumes from its mirror's cursor and renews its
 follower's lease. The follow is connecting until its `follower` event says the backlog is replayed,
 reconnecting after a drop with what it showed kept, and unavailable when refused or before it was
-ever live, so an unreachable stream never reads as an empty Transcript. Every queue reader shares
+ever live, so an unreachable stream never reads as an empty Transcript. `src/operator/transcript-view.ts`
+is the one mapping from Transcript entries to what a component takes, for the flow and for an opened
+Activity alike: a message `said` under a Session's id is the Agent's and is unframed Markdown, anyone
+else's is a bubble under their name, and a Session-ended entry says how it went and why it failed.
+`MessageResponse` (`src/components/ai-elements/message.tsx`) renders the Markdown with Streamdown; no
+AI SDK runtime is a dependency. Every queue reader shares
 one read (`src/components/workbench/queue-read.tsx`) that says when it is slow, and on failure
 names the error, offers a retry and keeps the last known queue. About five tabs fit HTTP/1.1's six connections per origin; nothing detects a
 sixth. Browser sign-in progress polls its state read rather than opening a second stream.

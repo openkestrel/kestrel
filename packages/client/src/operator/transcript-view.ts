@@ -1,4 +1,4 @@
-import type { Activity, Entry, PayloadReference } from "./generated";
+import type { Activity, Entry, Exit, PayloadReference } from "./generated";
 import type { Delivered } from "./transcript";
 
 export type FlowItem =
@@ -133,7 +133,7 @@ export function entryText(entry: Entry): string {
 		case "session_started":
 			return `${entry.agent} started`;
 		case "session_ended":
-			return "Session ended";
+			return exitLine(entry.exit);
 		case "turn_interrupted":
 			return `Interrupted by ${entry.participant}`;
 		case "option_changed":
@@ -172,4 +172,42 @@ export function entryText(entry: Entry): string {
 export function firstLine(text: string): string {
 	const line = text.split("\n")[0] ?? text;
 	return line.length > 160 ? `${line.slice(0, 159)}…` : line;
+}
+
+export type Spoken = {
+	key: string;
+	participant: string;
+	speaker: "agent" | "person";
+	body: string | PayloadReference;
+};
+
+// Only a Session's own report carries its id, so that is what marks the Agent among Participants.
+export function spoken({ seq, entry }: Delivered): Spoken[] {
+	switch (entry.type) {
+		case "said":
+			return [
+				{
+					key: `${seq}:0`,
+					participant: entry.participant,
+					speaker: entry.session_id ? "agent" : "person",
+					body: entry.message,
+				},
+			];
+		case "messages":
+			return Array.isArray(entry.messages)
+				? entry.messages.map((message, index) => ({
+						key: `${seq}:${index}`,
+						participant: message.participant,
+						speaker: "person",
+						body: message.message,
+					}))
+				: [];
+		default:
+			return [];
+	}
+}
+
+export function exitLine(exit: Exit): string {
+	if (exit.status === "succeeded") return "Session succeeded";
+	return exit.because ? `Session failed: ${exit.because}` : "Session failed";
 }

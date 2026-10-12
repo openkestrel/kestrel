@@ -3,6 +3,8 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
+@source "../node_modules/streamdown/dist/*.js";
+@source "../node_modules/@streamdown/code/dist/*.js";
 
 @custom-variant dark (@media (prefers-color-scheme: dark));
 
@@ -144,4 +146,12 @@
 
 @utility grid-cols-key-value {
   grid-template-columns: auto 1fr;
+}
+
+/* Slimmer than Streamdown's chip, and tinted from the text so it shows inside a bubble too. */
+[data-streamdown="inline-code"] {
+    font-size: 0.875em;
+    padding: 0.0625em 0.3em;
+    border-radius: 0.25rem;
+    background: color-mix(in oklab, var(--foreground) 7%, transparent);
 }

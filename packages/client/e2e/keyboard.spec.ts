@@ -191,7 +191,12 @@ test("a keyboard-only pass finds a running Session, follows it, opens a diff and
 
 	await tabTo(page, post, "the Post button");
 	await page.keyboard.press("Enter");
-	await expect(page.getByRole("log").getByText("jack: a keyboard turn")).toBeVisible({
+	await expect(
+		page
+			.getByRole("log")
+			.getByRole("article", { name: "jack" })
+			.filter({ hasText: "a keyboard turn" }),
+	).toBeVisible({
 		timeout: 20_000,
 	});
 	await expect(page.locator("[data-transcript-announcement]")).toHaveText("jack: a keyboard turn");

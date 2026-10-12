@@ -74,7 +74,11 @@ await page.waitForTimeout(3_000);
 const held = page.locator("[data-held-message]").filter({ hasText: "keyboard acceptance check" });
 const posted =
 	(await held.count()) > 0 ||
-	(await page.getByRole("log").getByText("keyboard: keyboard acceptance check").count()) > 0;
+	(await page
+		.getByRole("log")
+		.getByRole("article", { name: "keyboard" })
+		.filter({ hasText: "keyboard acceptance check" })
+		.count()) > 0;
 steps.push(`turn taken: ${posted} (held: ${await held.count()})`);
 if ((await held.count()) > 0) {
 	await tabTo(page, held.getByRole("button", { name: "Withdraw" }), "Withdraw");

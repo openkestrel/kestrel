@@ -1,15 +1,21 @@
+import { CircleCheckIcon, CircleXIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useId, useState } from "react";
+import { MessageResponse } from "#/components/ai-elements/message";
 import { Button } from "#/components/ui/button";
 import { ScrollablePre } from "#/components/workbench/scrollable-pre";
+import { cn } from "#/lib/utils";
 import type { Delivered } from "#/operator/transcript";
 import {
 	at,
 	elapsed,
 	exitCode,
+	exitLine,
 	firstLine,
 	payloadReference,
 	planStep,
+	spoken,
+	type Spoken,
 	toolState,
 } from "#/operator/transcript-view";
 import { PayloadText } from "./payload-text";
@@ -20,9 +26,9 @@ type Row = { organization: string; workspace: string };
 
 export function EntryRow({ entry, mode, ...row }: { entry: Delivered; mode: Disclosure } & Row) {
 	return (
-		<article data-seq={entry.seq} className="py-0.5 text-sm">
+		<div data-seq={entry.seq} className="py-0.5 text-sm">
 			{content(entry, mode, row)}
-		</article>
+		</div>
 	);
 }
 
@@ -30,31 +36,17 @@ function content(entry: Delivered, mode: Disclosure, row: Row): ReactNode {
 	const value = entry.entry;
 	switch (value.type) {
 		case "said":
-			return (
-				<p>
-					<span className="font-medium">{value.participant}:</span>{" "}
-					{typeof value.message === "string" ? (
-						value.message
-					) : (
-						<PayloadText {...row} reference={value.message} />
-					)}
-				</p>
-			);
+			return spoken(entry).map((message) => (
+				<Message key={message.key} message={message} appendedAt={entry.appendedAt} {...row} />
+			));
 		case "messages":
 			return Array.isArray(value.messages) ? (
-				<ul className="grid gap-1">
-					{withKeys(value.messages, (message) => `${entry.seq}:${message.participant}`).map(
-						({ item: message, key }) => (
-							<li key={key}>
-								<span className="font-medium">{message.participant}:</span>{" "}
-								{typeof message.message === "string" ? (
-									message.message
-								) : (
-									<PayloadText {...row} reference={message.message} />
-								)}
-							</li>
-						),
-					)}
+				<ul className="grid gap-3">
+					{spoken(entry).map((message) => (
+						<li key={message.key}>
+							<Message message={message} appendedAt={entry.appendedAt} {...row} />
+						</li>
+					))}
 				</ul>
 			) : (
 				<PayloadText {...row} reference={value.messages} />
@@ -63,7 +55,7 @@ function content(entry: Delivered, mode: Disclosure, row: Row): ReactNode {
 			return (
 				<div className="text-muted-foreground">
 					{typeof value.brief === "string" ? (
-						value.brief
+						<MessageResponse>{value.brief}</MessageResponse>
 					) : (
 						<PayloadText {...row} reference={value.brief} />
 					)}
@@ -74,7 +66,7 @@ function content(entry: Delivered, mode: Disclosure, row: Row): ReactNode {
 		case "session_started":
 			return <p className="text-muted-foreground text-xs">{value.agent} started</p>;
 		case "session_ended":
-			return <p className="text-muted-foreground text-xs">Session ended</p>;
+			return <SessionEnded exit={value.exit} />;
 		case "turn_interrupted":
 			return <p className="text-muted-foreground text-xs">Interrupted by {value.participant}</p>;
 		case "option_changed":
@@ -99,27 +91,21 @@ function content(entry: Delivered, mode: Disclosure, row: Row): ReactNode {
 				</p>
 			);
 		case "thought": {
-			const text =
-				typeof value.text === "string" ? (
-					mode === "full" ? (
-						value.text
-					) : (
-						firstLine(value.text)
-					)
-				) : (
-					<PayloadText {...row} reference={value.text} />
-				);
+			if (typeof value.text !== "string") return <PayloadText {...row} reference={value.text} />;
+			const text = value.text;
 			return (
 				<Expandable
 					mode={mode}
-					summary={<p className="text-muted-foreground">{text}</p>}
-					detail={
-						typeof value.text === "string" ? (
-							<ScrollablePre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">
-								{value.text}
-							</ScrollablePre>
-						) : null
+					summary={(open) =>
+						open ? (
+							<div className="text-muted-foreground">
+								<MessageResponse>{text}</MessageResponse>
+							</div>
+						) : (
+							<p className="text-muted-foreground italic">{firstLine(text)}</p>
+						)
 					}
+					detail={null}
 				/>
 			);
 		}
@@ -161,13 +147,58 @@ function content(entry: Delivered, mode: Disclosure, row: Row): ReactNode {
 	}
 }
 
+function Message({ message, appendedAt, ...row }: { message: Spoken; appendedAt: string } & Row) {
+	const name = useId();
+	const agent = message.speaker === "agent";
+	return (
+		<article aria-labelledby={name} className="min-w-0">
+			<p className="mb-1 flex items-baseline gap-2 text-xs">
+				<span id={name} className={cn("font-medium", agent && "text-muted-foreground")}>
+					{message.participant}
+				</span>
+				<time dateTime={appendedAt} className="text-muted-foreground">
+					{at(appendedAt)}
+				</time>
+			</p>
+			<div
+				className={cn(
+					"min-w-0 text-sm",
+					agent ? "leading-relaxed" : "w-fit max-w-5/6 rounded-lg bg-muted px-3 py-2",
+				)}
+			>
+				{typeof message.body === "string" ? (
+					<MessageResponse>{message.body}</MessageResponse>
+				) : (
+					<PayloadText {...row} reference={message.body} />
+				)}
+			</div>
+		</article>
+	);
+}
+
+function SessionEnded({
+	exit,
+}: {
+	exit: Extract<Delivered["entry"], { type: "session_ended" }>["exit"];
+}) {
+	const failed = exit.status === "failed";
+	const Icon = failed ? CircleXIcon : CircleCheckIcon;
+	return (
+		<p className="flex items-center gap-1.5 py-1 text-xs">
+			<Icon aria-hidden className={cn("size-3.5 shrink-0", failed && "text-destructive")} />
+			<span className={failed ? "font-medium" : "text-muted-foreground"}>{exitLine(exit)}</span>
+			<span aria-hidden className="h-px min-w-4 flex-1 bg-border" />
+		</p>
+	);
+}
+
 function Expandable({
 	mode,
 	summary,
 	detail,
 }: {
 	mode: Disclosure;
-	summary: ReactNode;
+	summary: ReactNode | ((open: boolean) => ReactNode);
 	detail: ReactNode;
 }) {
 	const [override, setOverride] = useState<boolean | undefined>(undefined);
@@ -176,7 +207,9 @@ function Expandable({
 	return (
 		<div className="grid gap-1">
 			<div className="flex items-start gap-2">
-				<div className="min-w-0 flex-1">{summary}</div>
+				<div className="min-w-0 flex-1">
+					{typeof summary === "function" ? summary(open) : summary}
+				</div>
 				<Button
 					type="button"
 					variant="ghost"
