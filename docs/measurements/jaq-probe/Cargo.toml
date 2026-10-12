@@ -1,0 +1,23 @@
+[package]
+name = "jaq-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Its own workspace, so the repository's root workspace does not claim it.
+[workspace]
+
+[dependencies]
+jaq-core = "=3.1.1"
+jaq-json = { version = "=2.0.3", features = ["serde"] }
+jaq-std = "=3.0.3"
+serde = "1"
+serde_json = "1"
+
+# Match the workspace's profiles, so the measurement is comparable.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+strip = "none"

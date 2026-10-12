@@ -95,7 +95,7 @@ ANTHROPIC_API_KEY=… kestrel start --credential ANTHROPIC_API_KEY \
 
 `--credential` names an environment variable in your shell. Kestrel stores its value for the organization and supplies it to the harness when a session starts. The value does not go into the command line. The `start` command creates any missing declarations, opens a workspace, and queues its first session together. It does not silently replace an existing project or agent with different settings.
 
-The command prints the organization, project, agent, workspace, and session it created. For scripts, `--json workspace,session` produces structured output. Use `kestrel status` to see what the control plane has and what to do next.
+The command prints the organization, project, agent, workspace, and session it created. For scripts, `--json` writes that whole response, and `--jq EXPR` filters it without a separate `jq`. Use `kestrel status` to see what the control plane has and what to do next.
 
 ## Follow the session
 

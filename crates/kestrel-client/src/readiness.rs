@@ -7,6 +7,7 @@ use crate::BINARY;
 use crate::api::ControlPlane;
 use crate::diagnostic::{self, Invocation};
 use crate::exit::{Exit, Failed};
+use crate::output::Presentation;
 use crate::scope::{self, Derived, Scoping, Source};
 use crate::shell::quoted;
 
@@ -16,7 +17,12 @@ const RED: &str = "1;31";
 
 /// The summary is a successful read on stdout whatever it found; a gap's repair goes through
 /// the common diagnostics, which is what makes the exit 78 or 5.
-pub async fn show(api: &ControlPlane, scoping: Scoping<'_>, invocation: &Invocation) -> Result<()> {
+pub async fn show(
+    api: &ControlPlane,
+    scoping: Scoping<'_>,
+    invocation: &Invocation,
+    presentation: &Presentation,
+) -> Result<()> {
     let (organization, named) = match scoping.derive().await? {
         Derived::Scope(scope) => {
             let named = matches!(scope.source, Source::Flag);
@@ -34,8 +40,8 @@ pub async fn show(api: &ControlPlane, scoping: Scoping<'_>, invocation: &Invocat
         .with_context(|| Failed::new(Exit::Unavailable, "reading readiness"))?;
 
     let mut out = std::io::stdout().lock();
-    if invocation.json {
-        writeln!(out, "{answer}")?;
+    if presentation.json() {
+        crate::output::document(&mut out, presentation, &answer)?;
     } else {
         let decorated = out.is_terminal() && !undecorated_by_request();
         write!(out, "{}", summary(&read, invocation, named, decorated))?;

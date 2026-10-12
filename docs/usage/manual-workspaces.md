@@ -68,6 +68,19 @@ A transcript without `--follow` ends with a cursor on stderr. Pass it to `--curs
 
 The CLI renders readable columns at a terminal and tab-delimited records when piped. `--json` writes the complete response as one JSON document (a collection is one array, `[]` when empty), and a transcript as one JSON record a line; select fields with `jq`, such as `kestrel session list --workspace latest --json | jq '.[] | {id, state}'`. Under `--json` a failure is one JSON diagnostic on stderr; use exit codes rather than parsing diagnostic text. `kestrel exit-codes` lists them.
 
+## Filter a response with jq
+
+`--jq EXPR` filters that same complete response through an embedded jaq, so no separate `jq` has to be installed. It implies JSON. A collection reaches the expression as one array, and a followed transcript reaches it one record at a time. A string result prints as it is, anything else as JSON, one result a line, and an expression that yields nothing is a success.
+
+The expression is compiled before anything is sent: a malformed filter changes nothing, including an interactive `start` or a sign-in relay. A filter never hides a failure — a refusal is still a diagnostic on stderr with its exit, and an empty result does not turn a failed operation into success. A filter that fails after a successful write exits 1 and says the operation may have taken effect; kestrel does not send it again.
+
+```sh
+kestrel agent list --jq '.[] | select(.harness == "opencode") | .name'
+kestrel workspace show latest --jq '.pull_requests[] | .number'
+```
+
+This is jaq, a jq-compatible implementation, not jq itself; treat these expressions as the compatibility to rely on. Two commands have no complete response to filter: `workspace read` writes a file's bytes as they are unless the file is JSON, and a command that answers `204` (`forget`, `withdraw`, `acknowledge-refusal`) has nothing to write.
+
 ## Continue the work
 
 ```sh

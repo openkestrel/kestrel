@@ -3,6 +3,7 @@ mod changes;
 mod diagnostic;
 mod exit;
 mod files;
+mod filter;
 mod output;
 mod readiness;
 mod scope;
@@ -77,6 +78,11 @@ struct Client {
     /// else gets it tab-delimited
     #[arg(long, global = true)]
     json: bool,
+
+    /// Filter the complete JSON response through a jq expression, as jaq implements it. A
+    /// string result prints raw and any other result as JSON, one a line; no results is success
+    #[arg(long, global = true, value_name = "EXPR", value_parser = NonEmptyStringValueParser::new())]
+    jq: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -999,9 +1005,18 @@ async fn main() -> ExitCode {
         control_plane: client.control_plane.clone(),
         operation: operation(&matches),
         args,
-        json: client.json,
+        json: client.json || client.jq.is_some(),
     };
-    let exit = match run(client, &matches, &invocation).await {
+    // A malformed filter is refused here, before any consumer can read or change anything.
+    let filter = match client.jq.as_deref().map(filter::Filter::compile) {
+        Some(Ok(filter)) => Some(filter),
+        Some(Err(why)) => {
+            let refused = Failed::new(Exit::Usage, format!("--jq is not a valid filter: {why}"));
+            return ExitCode::from(diagnostic::report(&refused.into(), &invocation).code());
+        }
+        None => None,
+    };
+    let exit = match run(client, filter, &matches, &invocation).await {
         Ok(()) => Exit::Success,
         Err(error) => diagnostic::report(&error, &invocation),
     };
@@ -1019,8 +1034,14 @@ fn operation(matches: &clap::ArgMatches) -> String {
     words.join(" ")
 }
 
-async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation) -> Result<()> {
-    let presentation = Presentation::chosen(client.json);
+async fn run(
+    client: Client,
+    filter: Option<filter::Filter>,
+    matches: &clap::ArgMatches,
+    invocation: &Invocation,
+) -> Result<()> {
+    let json = invocation.json;
+    let presentation = Presentation::chosen(json, filter);
 
     let named = client.organization.map(|organization| Scope {
         organization,
@@ -1063,7 +1084,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
     let scoping = Scoping::new(&api, named);
 
     let Some(command) = client.command else {
-        return readiness::show(&api, scoping, invocation).await;
+        return readiness::show(&api, scoping, invocation, &presentation).await;
     };
     match command {
         Command::Start(start) => {
@@ -1072,7 +1093,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
         Command::Apply(Apply { file }) => {
             let declaration = declaration(&file)?;
             let organization = scoping.resolve().await?.organization;
-            if client.json {
+            if json {
                 let applied = api
                     .post(
                         &["organizations", &organization, "declaration"],
@@ -1439,8 +1460,12 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                 .await?,
             )?;
             let mut out = std::io::stdout().lock();
-            if matches!(presentation, Presentation::Json) {
-                writeln!(out, "{}", serde_json::to_value(repositories)?)?;
+            if presentation.json() {
+                crate::output::document(
+                    &mut out,
+                    &presentation,
+                    &serde_json::to_value(repositories)?,
+                )?;
             } else {
                 for repository in repositories.repositories {
                     writeln!(
@@ -1688,7 +1713,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                 path.push("preview");
             }
             let applied = api.post(&path, &declarations).await?;
-            if client.json {
+            if json {
                 show_applied_whole(&presentation, &applied)?;
             } else {
                 show_applied_triggers(&applied)?;
@@ -1842,7 +1867,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                     }),
                 )
                 .await?;
-            let shown = if client.json {
+            let shown = if json {
                 opened
             } else {
                 json!({
@@ -1880,7 +1905,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                     "work",
                 ])
                 .await?;
-            work::show(answer, client.json)?;
+            work::show(answer, &presentation)?;
         }
         Command::Workspace(WorkspaceCommand::Changes {
             workspace,
@@ -1915,7 +1940,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                 .await?;
             changes::show(
                 answer,
-                client.json,
+                &presentation,
                 &empty_list(
                     &client.control_plane,
                     "changes in this comparison",
@@ -1944,7 +1969,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                 .await?;
             changes::show(
                 answer,
-                client.json,
+                &presentation,
                 &empty_list(
                     &client.control_plane,
                     read,
@@ -1970,7 +1995,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                 .await?;
             files::list(
                 answer,
-                client.json,
+                &presentation,
                 &empty_list(
                     &client.control_plane,
                     "directory entries",
@@ -1993,7 +2018,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                     &[("path", &path)],
                 )
                 .await?;
-            files::read(response, client.json).await?;
+            files::read(response, &presentation).await?;
         }
         Command::Workspace(WorkspaceCommand::Show { workspace }) => {
             let organization = scoping.resolve().await?.organization;
@@ -2024,7 +2049,7 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                 .await?;
             let session = &answer["session"];
             let held = &answer["held_message"];
-            if client.json {
+            if json {
                 show(&presentation, &view::DECLARED, &answer)?;
             } else if !session.is_null() {
                 show(&presentation, &view::DECLARED, session)?;
@@ -2406,7 +2431,7 @@ async fn started(
             eprintln!("declared the {kind} {}", rendered(&settled["name"]));
         }
     }
-    if matches!(presentation, Presentation::Json) {
+    if presentation.json() {
         return show(presentation, &view::STARTED, &started);
     }
     show(
@@ -2528,7 +2553,7 @@ fn shown_integration(
 ) -> Result<()> {
     let integration: wire::Integration = serde_json::from_value(answered)?;
     let mut record = serde_json::to_value(&integration)?;
-    if !matches!(presentation, Presentation::Json) {
+    if !presentation.json() {
         record["canceled_posts"] = integration
             .canceled_posts
             .iter()
@@ -2565,7 +2590,7 @@ fn shown_session(
     session: &Value,
 ) -> Result<()> {
     let mut record = session.clone();
-    if !matches!(presentation, Presentation::Json) {
+    if !presentation.json() {
         record["diagnostic"] =
             serde_json::from_value::<wire::Diagnostic>(record["diagnostic"].clone())
                 .map_or(Value::Null, |diagnostic| {
@@ -2662,7 +2687,7 @@ fn shown_queue(
     snapshot: &Value,
     invocation: &Invocation,
 ) -> Result<()> {
-    if matches!(presentation, Presentation::Json) {
+    if presentation.json() {
         return show(presentation, &view::QUEUE, snapshot);
     }
     let slots = &snapshot["active_work"];
