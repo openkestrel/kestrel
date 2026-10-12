@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { factsOf, stepOf } from "./diagnostic-view";
+import { factsOf, isStack, stepOf } from "./diagnostic-view";
 import type { Action, Diagnostic } from "./generated";
 
 const ORIGIN = "https://kestrel.example";
@@ -612,5 +612,18 @@ describe("a recovery command", () => {
 				organization: "acme",
 			}),
 		).toBe(`kestrel session show 'it'"'"'s here' --organization acme ${at}`);
+	});
+});
+
+describe("evidence that is a stack", () => {
+	it("is told from prose by frames that name a line and column", () => {
+		expect(
+			isStack(
+				"TypeError: session is undefined\n    at render (src/app.js:10:5)\n    at src/main.js:3:1",
+			),
+		).toBe(true);
+		expect(isStack("the agent refused the request")).toBe(false);
+		expect(isStack("meet the reviewer\nat the end of the Turn")).toBe(false);
+		expect(isStack("    at render (src/app.js:10:5)")).toBe(false);
 	});
 });

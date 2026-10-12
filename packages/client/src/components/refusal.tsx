@@ -2,11 +2,28 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { CircleAlert } from "lucide-react";
 import { useEffect, useId, useState } from "react";
+import {
+	StackTrace,
+	StackTraceContent,
+	StackTraceError,
+	StackTraceErrorMessage,
+	StackTraceErrorType,
+	StackTraceExpandButton,
+	StackTraceFrames,
+	StackTraceHeader,
+} from "#/components/ai-elements/stack-trace";
 import { Alert, AlertDescription, AlertTitle } from "#/components/ui/alert";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
-import { type Collected, type Fact, factsOf, type Step, stepOf } from "#/operator/diagnostic-view";
+import {
+	type Collected,
+	type Fact,
+	factsOf,
+	isStack,
+	type Step,
+	stepOf,
+} from "#/operator/diagnostic-view";
 import type { Action, Diagnostic } from "#/operator/generated";
 import { operator } from "#/operator/queries";
 import { diagnosisOf, Refused } from "#/operator/transport";
@@ -84,10 +101,27 @@ function Facts({ facts }: { facts: Fact[] }) {
 			{facts.map(([term, detail]) => (
 				<div key={`${term}:${detail}`} className="contents">
 					<dt>{term}</dt>
-					<dd>{detail}</dd>
+					<dd>{isStack(detail) ? <Stack trace={detail} /> : detail}</dd>
 				</div>
 			))}
 		</dl>
+	);
+}
+
+function Stack({ trace }: { trace: string }) {
+	return (
+		<StackTrace trace={trace} data-stack>
+			<StackTraceHeader>
+				<StackTraceError>
+					<StackTraceErrorType />
+					<StackTraceErrorMessage />
+				</StackTraceError>
+				<StackTraceExpandButton />
+			</StackTraceHeader>
+			<StackTraceContent>
+				<StackTraceFrames />
+			</StackTraceContent>
+		</StackTrace>
 	);
 }
 
