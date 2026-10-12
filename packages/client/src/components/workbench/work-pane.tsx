@@ -7,7 +7,7 @@ import { FilesTab } from "./work/files-tab";
 import { PeopleTab } from "./work/people-tab";
 import { SessionsTab } from "./work/sessions-tab";
 import { WorkTab } from "./work/work-tab";
-import { PaneHeading } from "./workbench";
+import { ComposerSkipLink, PaneHeading } from "./workbench";
 
 const VIEWS = [
 	{ value: "work", label: "Work" },
@@ -34,11 +34,11 @@ export function WorkPane({
 
 	return (
 		<>
-			<PaneHeading>Work</PaneHeading>
+			<PaneHeading side="work">Work</PaneHeading>
 			<Tabs
 				value={view}
 				onValueChange={(value: View) => setView(value)}
-				className="flex min-h-0 flex-1 flex-col gap-0"
+				className="relative flex min-h-0 flex-1 flex-col gap-0"
 			>
 				<TabsList className="w-full shrink-0 justify-start" aria-label="Work views">
 					{VIEWS.map(({ value, label }) => (
@@ -47,6 +47,7 @@ export function WorkPane({
 						</TabsTrigger>
 					))}
 				</TabsList>
+				<ComposerSkipLink name="Go to the composer" />
 				<TabsContent value="work" keepMounted className="min-h-0 flex-1 overflow-y-auto">
 					<WorkTab organization={organization} workspace={workspace} record={record} />
 				</TabsContent>

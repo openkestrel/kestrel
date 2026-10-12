@@ -99,6 +99,67 @@ function workingSession(workspace: { id: string }) {
 	];
 }
 
+// A Workspace whose Session is working, so the Transcript holds the live composer.
+async function working(page: Page, workspace: { id: string; name: string }): Promise<void> {
+	const running = workingSession(workspace)[0];
+	const base = `/operator/organizations/${ORGANIZATION}/workspaces/${workspace.name}`;
+	await page.route(
+		(url) => url.pathname === base,
+		async (route) => {
+			const record = await route.fetch();
+			const body = await record.json();
+			await route.fulfill({
+				response: record,
+				json: {
+					...body,
+					unfinished_session: {
+						id: running.id,
+						name: running.name,
+						state: "working",
+						preparing: null,
+					},
+				},
+			});
+		},
+	);
+	await page.route(
+		(url) => url.pathname === `${base}/sessions`,
+		(route) =>
+			route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify(workingSession(workspace)),
+			}),
+	);
+	await page.route(
+		(url) => url.pathname === `/operator/organizations/${ORGANIZATION}/sessions/${running.id}`,
+		(route) =>
+			route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify(running),
+			}),
+	);
+	await page.route(
+		(url) => url.pathname === `${base}/changes`,
+		(route) =>
+			route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					repositories: [
+						{
+							repository: "https://github.com/openkestrel/kestrel",
+							diff: "diff --git a/keyboard b/keyboard\n+a keyboard diff\n",
+							files: [{ path: "keyboard", added: 1, removed: 0 }],
+							truncated: false,
+						},
+					],
+				}),
+			}),
+	);
+}
+
 test("a keyboard-only pass finds a running Session, follows it, opens a diff and takes a turn", async ({
 	page,
 	request,
@@ -154,6 +215,8 @@ test("a keyboard-only pass finds a running Session, follows it, opens a diff and
 	await tabTo(page, row, "the running Session row");
 	await page.keyboard.press("Enter");
 	await expect(page).toHaveURL(new RegExp(`/workspaces/${workspace.name}$`));
+	// The new route is only the old one's tablist away once it has actually rendered.
+	await expect(page.getByRole("heading", { name: workspace.name })).toBeVisible();
 
 	const panes = page.getByRole("tablist", { name: "Panes" });
 	await tabTo(page, panes.getByRole("tab", { selected: true }), "the selected area tab");
@@ -264,4 +327,140 @@ test("Shift+Tab cycles a mode with an announcement, and Escape leaves the compos
 	await expect(page.locator("[data-announcement]")).toHaveText("Left the composer");
 	const blurred = await composer.evaluate((element) => element !== document.activeElement);
 	expect(blurred).toBe(true);
+});
+
+test("Command-B folds the Workspaces pane and Command-Option-B the Work pane, independently", async ({
+	page,
+	request,
+}) => {
+	await page.setViewportSize({ width: 1280, height: 800 });
+	const workspace = await opened(request);
+	await working(page, workspace);
+	await page.goto(`/organizations/${ORGANIZATION}/workspaces/${workspace.name}`);
+
+	const workspaces = page.locator('[data-sidebar="heading"][data-side="workspaces"]');
+	const workspacesPane = page.getByRole("region", { name: "Workspaces", exact: true });
+	const workPane = page.getByRole("region", { name: "Work", exact: true });
+
+	await expect(workspaces).toBeVisible();
+	await expect(workspaces).toHaveAccessibleName("Toggle the Workspaces pane");
+	await expect(workspaces).toHaveAttribute("aria-expanded", "true");
+	await expect(workspacesPane).toBeVisible();
+
+	await page.keyboard.press("Meta+b");
+	const workspacesRail = page.locator('[data-sidebar="rail"][data-side="workspaces"]');
+	await expect(workspacesRail).toBeVisible();
+	await expect(workspacesRail).toHaveAccessibleName("Toggle the Workspaces pane");
+	await expect(workspacesRail).toHaveAttribute("aria-expanded", "false");
+	await expect(workspacesPane).toBeHidden();
+	await expect(workPane).toBeVisible();
+	await expect(page.locator("[data-workbench-announcement]")).toHaveText(
+		"Workspaces pane collapsed",
+	);
+
+	await page.keyboard.press("Meta+Alt+b");
+	const workRail = page.locator('[data-sidebar="rail"][data-side="work"]');
+	await expect(workRail).toBeVisible();
+	await expect(workRail).toHaveAttribute("aria-expanded", "false");
+	await expect(workPane).toBeHidden();
+	await expect(workspacesPane).toBeHidden();
+	await expect(page.locator("[data-workbench-announcement]")).toHaveText("Work pane collapsed");
+
+	await workspacesRail.click();
+	await expect(workspacesPane).toBeVisible();
+	await expect(workPane).toBeHidden();
+	await expect(workspaces).toHaveAttribute("aria-expanded", "true");
+});
+
+test("folding a pane a reader is inside leaves their focus on its toggle", async ({
+	page,
+	request,
+}) => {
+	await page.setViewportSize({ width: 1280, height: 800 });
+	const workspace = await opened(request);
+	await working(page, workspace);
+	await page.goto(`/organizations/${ORGANIZATION}/workspaces/${workspace.name}`);
+
+	const work = page.getByRole("region", { name: "Work", exact: true });
+	const changes = work.getByRole("tab", { name: "Changes" });
+	await changes.click();
+	await expect(changes).toHaveAttribute("aria-selected", "true");
+	await changes.focus();
+	await expect(changes).toBeFocused();
+
+	await page.keyboard.press("Meta+Alt+b");
+	const rail = page.locator('[data-sidebar="rail"][data-side="work"]');
+	await expect(rail).toBeVisible();
+	await expect(rail).toBeFocused();
+	await expect(work).toBeHidden();
+});
+
+test("the skip link is the first stop and lands on the composer", async ({ page, request }) => {
+	await page.setViewportSize({ width: 1280, height: 800 });
+	const workspace = await opened(request);
+	await working(page, workspace);
+	await page.goto(`/organizations/${ORGANIZATION}/workspaces/${workspace.name}`);
+	await expect(page.getByRole("heading", { name: workspace.name })).toBeVisible();
+	await expect(page.locator("[data-composer-input]")).toBeVisible();
+
+	const skip = page.getByRole("link", { name: "Skip to the composer", exact: true });
+	await page.keyboard.press("Tab");
+	await expect(skip).toBeFocused();
+	// Focusing reveals it, which a link left hidden at rest cannot do.
+	expect(await skip.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(
+		20,
+	);
+
+	await page.keyboard.press("Enter");
+	await expect(page.locator("[data-composer-input]")).toBeFocused();
+});
+
+test("Changes reaches the composer in one Tab", async ({ page, request }) => {
+	await page.setViewportSize({ width: 1280, height: 800 });
+	const workspace = await opened(request);
+	await working(page, workspace);
+	await page.goto(`/organizations/${ORGANIZATION}/workspaces/${workspace.name}`);
+
+	const work = page.getByRole("region", { name: "Work", exact: true });
+	const changes = work.getByRole("tab", { name: "Changes" });
+	await changes.click();
+	await expect(work.getByRole("button", { name: /keyboard/ })).toBeVisible();
+	await expect(page.locator("[data-composer-input]")).toBeVisible();
+	await changes.focus();
+
+	await page.keyboard.press("Tab");
+	const jump = work.getByRole("link", { name: "Go to the composer", exact: true });
+	await expect(jump).toBeFocused();
+
+	await page.keyboard.press("Enter");
+	await expect(page.locator("[data-composer-input]")).toBeFocused();
+});
+
+test("at 375 px the sidebars are tabs, with no sideways scroll, and the skip link still works", async ({
+	page,
+	request,
+}) => {
+	await page.setViewportSize({ width: 375, height: 667 });
+	const workspace = await opened(request);
+	await working(page, workspace);
+	await page.goto(`/organizations/${ORGANIZATION}/workspaces/${workspace.name}`);
+	await expect(page.getByRole("heading", { name: workspace.name })).toBeVisible();
+	await expect(page.locator("[data-composer-input]")).toBeVisible();
+
+	await expect(page.getByRole("tablist", { name: "Panes" })).toBeVisible();
+	await expect(page.locator('[data-sidebar="heading"][data-side="workspaces"]')).toBeHidden();
+	await expect(page.locator('[data-sidebar="heading"][data-side="work"]')).toBeHidden();
+	await expect(page.locator('[data-sidebar="rail"]')).toHaveCount(0);
+	const width = await page.evaluate(() => ({
+		document: document.documentElement.scrollWidth,
+		viewport: window.innerWidth,
+	}));
+	expect(width.document, "the page scrolls horizontally").toBeLessThanOrEqual(width.viewport);
+
+	await page.keyboard.press("Tab");
+	const skip = page.getByRole("link", { name: "Skip to the composer", exact: true });
+	await expect(skip).toBeFocused();
+	await page.keyboard.press("Enter");
+	await expect(page.locator("[data-composer-input]")).toBeFocused();
+	await expect(page.getByRole("region", { name: "Transcript", exact: true })).toBeVisible();
 });

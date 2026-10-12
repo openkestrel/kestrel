@@ -26,7 +26,9 @@ export function WorkspacesPane({
 
 	return (
 		<>
-			<PaneHeading level={headingLevel}>Workspaces</PaneHeading>
+			<PaneHeading level={headingLevel} side="workspaces">
+				Workspaces
+			</PaneHeading>
 			<QueueHeader queue={knownQueue(queueReading.read)} />
 			<div className="border-b px-3 py-2 empty:hidden">
 				<QueueReadNotice {...queueReading} compact />

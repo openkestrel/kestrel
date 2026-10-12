@@ -21,6 +21,7 @@ import { interruptTurn, postTurn } from "#/operator/turns";
 import { HeldMessages } from "./held-messages";
 import type { OptionWrite } from "./option-write";
 import { SessionControls } from "./session-controls";
+import { useWorkbenchChrome } from "./workbench";
 
 export function Composer({
 	organization,
@@ -39,6 +40,7 @@ export function Composer({
 }) {
 	const name = useParticipant();
 	const queryClient = useQueryClient();
+	const chrome = useWorkbenchChrome();
 	const input = useRef<HTMLTextAreaElement>(null);
 	const nameInput = useRef<HTMLInputElement>(null);
 	const [draft, setDraft] = useState("");
@@ -46,6 +48,11 @@ export function Composer({
 	useEffect(() => {
 		if (asking) nameInput.current?.focus();
 	}, [asking]);
+	// The workbench's skip links reach this input, from the top of the page or from the Work pane.
+	useEffect(() => {
+		chrome?.registerComposer(input.current);
+		return () => chrome?.registerComposer(null);
+	}, [chrome]);
 	const [draftName, setDraftName] = useState("");
 	const [nameProblem, setNameProblem] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
@@ -300,6 +307,7 @@ export function Composer({
 							}
 							aria-label={label}
 							data-composer-input
+							id="composer-input"
 							onChange={(event) => {
 								setDraft(event.target.value);
 								setCommandIndex(0);
