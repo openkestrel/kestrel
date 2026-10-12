@@ -1,3 +1,4 @@
+import type { BundledLanguage } from "shiki";
 import { ago } from "./format";
 import type { FileEntry, Session } from "./generated";
 import type { Delivered } from "./transcript";
@@ -69,6 +70,62 @@ export function fileKindLabel(entry: FileEntry): string {
 	if (entry.kind === "symlink") return "symlink";
 	if (entry.kind === "file") return entry.git === "untracked" ? "untracked" : (entry.git ?? "file");
 	return "other";
+}
+
+export function splitPath(path: string): { folder: string; name: string } {
+	const cut = path.lastIndexOf("/");
+	if (cut === -1) return { folder: "", name: path };
+	return { folder: `${path.slice(0, cut)}/`, name: path.slice(cut + 1) };
+}
+
+export function statText(added: number | null, removed: number | null): string {
+	return added === null ? "" : `+${added} −${removed ?? 0}`;
+}
+
+export function filesTotals(files: { added: number | null; removed: number | null }[]): {
+	added: number;
+	removed: number;
+} {
+	return files.reduce<{ added: number; removed: number }>(
+		(total, file) => ({
+			added: total.added + (file.added ?? 0),
+			removed: total.removed + (file.removed ?? 0),
+		}),
+		{ added: 0, removed: 0 },
+	);
+}
+
+const LANGUAGES: Record<string, BundledLanguage> = {
+	css: "css",
+	go: "go",
+	html: "html",
+	js: "javascript",
+	json: "json",
+	jsx: "jsx",
+	md: "markdown",
+	mjs: "javascript",
+	py: "python",
+	rs: "rust",
+	sh: "shellscript",
+	sql: "sql",
+	toml: "toml",
+	ts: "typescript",
+	tsx: "tsx",
+	yaml: "yaml",
+	yml: "yaml",
+};
+
+export function languageFor(path: string): BundledLanguage {
+	const { name } = splitPath(path);
+	const dot = name.lastIndexOf(".");
+	if (dot <= 0) return plain();
+	return LANGUAGES[name.slice(dot + 1).toLowerCase()] ?? plain();
+}
+
+// Shiki reads "text" as plain text, but does not list it among its bundled languages.
+function plain(): BundledLanguage {
+	// oxlint-disable-next-line typescript/no-unsafe-type-assertion
+	return "text" as BundledLanguage;
 }
 
 export function sessionOutcome(session: Session): string | undefined {

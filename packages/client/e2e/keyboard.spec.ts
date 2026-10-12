@@ -166,9 +166,9 @@ test("a keyboard-only pass finds a running Session, follows it, opens a diff and
 	const views = work.getByRole("tablist", { name: "Work views" });
 	await tabTo(page, views.getByRole("tab", { selected: true }), "the selected Work view tab");
 	await page.keyboard.press("ArrowRight");
-	await expect(views.getByRole("tab", { name: "Diff" })).toBeFocused();
+	await expect(views.getByRole("tab", { name: "Changes" })).toBeFocused();
 	await page.keyboard.press("Enter");
-	await expect(work.getByText("a keyboard diff")).toBeVisible();
+	await expect(work.getByRole("button", { name: /keyboard/ })).toBeVisible();
 
 	await tabTo(page, panes.getByRole("tab", { selected: true }), "the selected area tab");
 	await page.keyboard.press("ArrowLeft");

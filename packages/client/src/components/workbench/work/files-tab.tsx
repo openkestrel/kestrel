@@ -1,132 +1,229 @@
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useState } from "react";
+import { CodeBlock } from "#/components/ai-elements/code-block";
+import { FileTree, FileTreeFile, FileTreeFolder } from "#/components/ai-elements/file-tree";
 import { Refusal } from "#/components/refusal";
 import { Button } from "#/components/ui/button";
 import { Skeleton } from "#/components/ui/skeleton";
 import { Toggle } from "#/components/ui/toggle";
-import { ScrollablePre } from "#/components/workbench/scrollable-pre";
 import { size } from "#/operator/format";
+import type { FileEntry } from "#/operator/generated";
 import { fileQuery, filesQuery } from "#/operator/work-queries";
-import { breadcrumbs, childPath, fileKindLabel } from "#/operator/work-view";
+import { childPath, fileKindLabel, languageFor } from "#/operator/work-view";
 
 export function FilesTab({ organization, workspace }: { organization: string; workspace: string }) {
-	const [path, setPath] = useState("");
+	const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 	const [open, setOpen] = useState<string | null>(null);
 	const [raw, setRaw] = useState(false);
-	const listing = useQuery(filesQuery(organization, workspace, path));
-	const file = useQuery({
-		...fileQuery(organization, workspace, open ?? "", raw),
-		enabled: open !== null,
-	});
+	const root = useQuery(filesQuery(organization, workspace, ""));
 
+	const toggle = (path: string) =>
+		setExpanded((all) => {
+			const next = new Set(all);
+			if (next.has(path)) next.delete(path);
+			else next.add(path);
+			return next;
+		});
+	const showing = (path: string) => {
+		setOpen(path);
+		setRaw(false);
+	};
+
+	// A tree holds only treeitems and groups, so the read's own states stand outside it.
 	return (
 		<div className="grid gap-4 p-4 text-sm">
-			<nav aria-label="Path" className="flex flex-wrap items-center gap-1">
-				{breadcrumbs(path).map((crumb, index, all) => (
-					<span key={crumb.path} className="flex items-center gap-1">
-						{index === all.length - 1 ? (
-							<span className="text-muted-foreground text-xs">{crumb.label}</span>
-						) : (
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
-								onClick={() => {
-									setPath(crumb.path);
-									setOpen(null);
-								}}
-							>
-								{crumb.label}
-							</Button>
-						)}
-						{index < all.length - 1 && <span className="text-muted-foreground text-xs">/</span>}
-					</span>
-				))}
-			</nav>
-
-			{listing.isPending ? (
+			{root.isPending ? (
 				<Skeleton className="h-8 w-full" />
-			) : listing.isError ? (
-				<Refusal error={listing.error} retry={() => void listing.refetch()} />
+			) : root.isError ? (
+				<Refusal error={root.error} retry={() => void root.refetch()} />
+			) : root.data.entries.length === 0 ? (
+				<p className="text-muted-foreground text-xs" data-empty>
+					This directory is empty.
+				</p>
 			) : (
-				<section className="grid gap-1">
-					{listing.data.entries.length === 0 ? (
-						<p className="text-muted-foreground text-xs">This directory is empty.</p>
-					) : (
-						<ul className="grid gap-0.5">
-							{listing.data.entries.map((entry) => (
-								<li key={entry.name}>
-									<button
-										type="button"
-										className="flex w-full items-baseline gap-2 rounded-md px-2 py-1 text-left hover:bg-accent"
-										onClick={() => {
-											const next = childPath(path, entry.name);
-											if (entry.kind === "directory") {
-												setPath(next);
-												setOpen(null);
-											} else {
-												setOpen(next);
-												setRaw(false);
-											}
-										}}
-									>
-										<span className="truncate">{entry.name}</span>
-										<span className="text-muted-foreground text-xs">
-											{fileKindLabel(entry)}
-											{entry.size !== undefined ? ` · ${size(entry.size)}` : ""}
-										</span>
-									</button>
-								</li>
-							))}
-						</ul>
-					)}
-					{listing.data.truncated && (
+				<>
+					<FileTree
+						expanded={expanded}
+						onExpandedChange={setExpanded}
+						onSelect={toggle}
+						selectedPath={open ?? undefined}
+					>
+						{root.data.entries.map((entry) => (
+							<Entry
+								key={entry.name}
+								organization={organization}
+								workspace={workspace}
+								parent=""
+								entry={entry}
+								expanded={expanded}
+								onOpen={showing}
+							/>
+						))}
+					</FileTree>
+					{root.data.truncated && (
 						<p className="text-muted-foreground text-xs" data-truncated>
-							showing {listing.data.entries.length} of {listing.data.total} entries
+							showing {root.data.entries.length} of {root.data.total} entries
 						</p>
 					)}
-				</section>
+				</>
 			)}
 
 			{open !== null && (
-				<section data-file={open} className="grid gap-2 rounded-md border p-3">
-					<header className="flex flex-wrap items-center gap-2">
-						<h3 className="min-w-0 flex-1 truncate font-medium text-xs">{open}</h3>
-						<Toggle
-							type="button"
-							size="sm"
-							variant="outline"
-							pressed={raw}
-							onPressedChange={setRaw}
-						>
-							Raw
-						</Toggle>
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon"
-							aria-label="Close file"
-							onClick={() => setOpen(null)}
-						>
-							<X aria-hidden />
-						</Button>
-					</header>
-					{file.isPending ? (
-						<Skeleton className="h-8 w-full" />
-					) : file.isError ? (
-						<Refusal error={file.error} retry={() => void file.refetch()} />
-					) : file.data.kind === "text" ? (
-						<ScrollablePre className="max-h-96 overflow-auto rounded-md border p-2 text-xs">
-							{file.data.text}
-						</ScrollablePre>
-					) : (
-						<p data-binary className="text-muted-foreground text-xs">
-							binary content · {size(file.data.bytes)}
-						</p>
-					)}
-				</section>
+				<OpenFile
+					organization={organization}
+					workspace={workspace}
+					path={open}
+					raw={raw}
+					onRaw={setRaw}
+					onClose={() => setOpen(null)}
+				/>
 			)}
 		</div>
+	);
+}
+
+function Directory({
+	organization,
+	workspace,
+	path,
+	expanded,
+	onOpen,
+}: {
+	organization: string;
+	workspace: string;
+	path: string;
+	expanded: Set<string>;
+	onOpen: (path: string) => void;
+}) {
+	const listing = useQuery(filesQuery(organization, workspace, path));
+
+	if (listing.isPending) return <Skeleton className="h-8 w-full" />;
+	if (listing.isError)
+		return <Refusal error={listing.error} retry={() => void listing.refetch()} />;
+	if (listing.data.entries.length === 0) {
+		return <p className="text-muted-foreground text-xs">This directory is empty.</p>;
+	}
+
+	return (
+		<>
+			{listing.data.entries.map((entry) => (
+				<Entry
+					key={entry.name}
+					organization={organization}
+					workspace={workspace}
+					parent={path}
+					entry={entry}
+					expanded={expanded}
+					onOpen={onOpen}
+				/>
+			))}
+			{listing.data.truncated && (
+				<p className="text-muted-foreground text-xs" data-truncated>
+					showing {listing.data.entries.length} of {listing.data.total} entries
+				</p>
+			)}
+		</>
+	);
+}
+
+function Entry({
+	organization,
+	workspace,
+	parent,
+	entry,
+	expanded,
+	onOpen,
+}: {
+	organization: string;
+	workspace: string;
+	parent: string;
+	entry: FileEntry;
+	expanded: Set<string>;
+	onOpen: (path: string) => void;
+}) {
+	const path = childPath(parent, entry.name);
+
+	if (entry.kind === "directory") {
+		return (
+			<FileTreeFolder data-path={path} path={path} name={entry.name}>
+				{expanded.has(path) && (
+					<Directory
+						organization={organization}
+						workspace={workspace}
+						path={path}
+						expanded={expanded}
+						onOpen={onOpen}
+					/>
+				)}
+			</FileTreeFolder>
+		);
+	}
+
+	return (
+		<FileTreeFile
+			data-path={path}
+			path={path}
+			name={entry.name}
+			onClick={() => onOpen(path)}
+			onKeyDown={(event) => {
+				if (event.key !== "Enter" && event.key !== " ") return;
+				event.preventDefault();
+				onOpen(path);
+			}}
+		>
+			<span className="min-w-0 truncate">{entry.name}</span>
+			<span className="ml-auto shrink-0 pl-2 text-muted-foreground text-xs">
+				{fileKindLabel(entry)}
+				{entry.size === undefined ? "" : ` · ${size(entry.size)}`}
+			</span>
+		</FileTreeFile>
+	);
+}
+
+function OpenFile({
+	organization,
+	workspace,
+	path,
+	raw,
+	onRaw,
+	onClose,
+}: {
+	organization: string;
+	workspace: string;
+	path: string;
+	raw: boolean;
+	onRaw: (raw: boolean) => void;
+	onClose: () => void;
+}) {
+	const file = useQuery(fileQuery(organization, workspace, path, raw));
+
+	return (
+		<section
+			data-file={path}
+			aria-busy={file.isPending}
+			className="grid gap-2 rounded-md border p-3"
+		>
+			<header className="flex flex-wrap items-center gap-2">
+				<h3 className="min-w-0 flex-1 truncate font-medium text-xs">{path}</h3>
+				<Toggle type="button" size="sm" variant="outline" pressed={raw} onPressedChange={onRaw}>
+					Raw
+				</Toggle>
+				<Button type="button" variant="ghost" size="icon" aria-label="Close file" onClick={onClose}>
+					<X aria-hidden />
+				</Button>
+			</header>
+			{file.isPending ? (
+				<Skeleton className="h-8 w-full" />
+			) : file.isError ? (
+				<Refusal error={file.error} retry={() => void file.refetch()} />
+			) : file.data.kind === "text" ? (
+				<CodeBlock className="text-xs" code={file.data.text} language={languageFor(path)} />
+			) : (
+				<p data-binary className="text-muted-foreground text-xs">
+					binary content · {size(file.data.bytes)}
+				</p>
+			)}
+		</section>
 	);
 }

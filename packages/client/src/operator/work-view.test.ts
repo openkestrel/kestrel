@@ -10,6 +10,8 @@ import {
 	childPath,
 	commitsText,
 	fileKindLabel,
+	filesTotals,
+	languageFor,
 	joinedParticipants,
 	optionSummary,
 	parentPath,
@@ -17,6 +19,8 @@ import {
 	scopeLabel,
 	sessionContinuity,
 	sessionOutcome,
+	splitPath,
+	statText,
 	stashedText,
 	untrackedText,
 	usageText,
@@ -87,6 +91,39 @@ describe("work readings", () => {
 		expect(untrackedText(4)).toBe("4 files");
 		expect(stashedText(1)).toBe("1 stash");
 		expect(stashedText(2)).toBe("2 stashes");
+	});
+});
+
+describe("a changed file's row", () => {
+	it("splits the folder from the filename, and counts the lines it added and removed", () => {
+		expect(splitPath("crates/kestrel/src/operator.rs")).toEqual({
+			folder: "crates/kestrel/src/",
+			name: "operator.rs",
+		});
+		expect(splitPath("README.md")).toEqual({ folder: "", name: "README.md" });
+		expect(statText(12, 3)).toBe("+12 −3");
+		expect(statText(4, null)).toBe("+4 −0");
+		expect(statText(null, null)).toBe("");
+	});
+
+	it("totals a repository's files", () => {
+		expect(
+			filesTotals([
+				{ added: 10, removed: 2 },
+				{ added: 2, removed: 1 },
+			]),
+		).toEqual({ added: 12, removed: 3 });
+		expect(filesTotals([{ added: null, removed: null }])).toEqual({ added: 0, removed: 0 });
+	});
+});
+
+describe("a file's language", () => {
+	it("reads it from the extension, and falls back to plain text", () => {
+		expect(languageFor("crates/kestrel/src/operator.rs")).toBe("rust");
+		expect(languageFor("src/components/workbench/work-pane.tsx")).toBe("tsx");
+		expect(languageFor("README.md")).toBe("markdown");
+		expect(languageFor("scripts/run.sh")).toBe("shellscript");
+		expect(languageFor("Dockerfile")).toBe("text");
 	});
 });
 
