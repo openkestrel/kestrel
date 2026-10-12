@@ -79,7 +79,8 @@ KESTREL_CLIENT_ROOT="$TMPDIR/kestrel-base/packages/client/dist/client" \
    uploaded URL:
 
    ```sh
-   gh pr edit <number> --body-file body.md $(grep -o '\./[^)]*' body.md | sort -u | sed 's/^/--attach /')
+   gh pr edit <number> --body-file body.md \
+   	$(grep -o '](\./[^)]*' body.md | cut -c3- | sort -u | sed 's/^/--attach /')
    ```
 
    `gh pr create` takes the same flags.
