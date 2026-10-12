@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Presence, Session, Usage, Workspace } from "./generated";
+import type { Presence, Session, TranscriptSessionState, Usage, Workspace } from "./generated";
 import {
 	commandLine,
 	continuityLine,
@@ -10,6 +10,7 @@ import {
 	optionCurrent,
 	pendingLine,
 	sessionTitle,
+	trailingOf,
 	usageLine,
 } from "./session-view";
 
@@ -179,5 +180,112 @@ describe("interrupting", () => {
 				}),
 			),
 		).toBe("jack asked this Turn to stop");
+	});
+});
+
+describe("a trailing Session", () => {
+	const observed = { availability: "current", observed_at: "2026-09-30T10:00:00Z" } as const;
+	const build = {
+		call_id: "call-1",
+		title: "cargo build",
+		tool_kind: "execute",
+		status: "in_progress",
+		started_at: "2026-09-30T09:59:00Z",
+	};
+	const reviewer = {
+		id: "unit-1",
+		kind: "subagent",
+		title: "review the diff",
+		started_at: "2026-09-30T09:59:30Z",
+	} as const;
+	const watcher = {
+		id: "unit-2",
+		kind: "background_task",
+		title: "bun run dev",
+		started_at: "2026-09-30T09:59:40Z",
+	} as const;
+
+	function live(overrides: Partial<TranscriptSessionState> = {}): TranscriptSessionState {
+		return {
+			session_id: "22222222-2222-2222-2222-222222222222",
+			tools: [],
+			units: [],
+			message_buffering: false,
+			thought_buffering: false,
+			usage: null,
+			observation: observed,
+			...overrides,
+		};
+	}
+
+	it("names the open tools and Adapter Units a current observation lists", () => {
+		expect(
+			trailingOf(
+				session({
+					state: "trailing",
+					observation: observed,
+					tools: [build],
+					units: [reviewer, watcher],
+				}),
+				undefined,
+			),
+		).toEqual({
+			observed: "open",
+			work: [
+				{ key: "tool:call-1", title: "cargo build", kind: "tool" },
+				{ key: "unit:unit-1", title: "review the diff", kind: "subagent" },
+				{ key: "unit:unit-2", title: "bun run dev", kind: "background task" },
+			],
+		});
+	});
+
+	it("only checks that work has settled when a current observation lists nothing", () => {
+		expect(trailingOf(session({ state: "trailing", observation: observed }), undefined)).toEqual({
+			observed: "settling",
+		});
+		expect(
+			trailingOf(session({ state: "trailing", observation: observed }), live({ tools: [] })),
+		).toEqual({ observed: "settling" });
+	});
+
+	it("never reads an unavailable observation's empty lists as quiet", () => {
+		const unseen = session({
+			state: "trailing",
+			observation: { availability: "unavailable", last: null },
+		});
+		expect(trailingOf(unseen, undefined)).toEqual({ observed: "unavailable", last: null });
+		expect(
+			trailingOf(
+				unseen,
+				live({
+					observation: {
+						availability: "unavailable",
+						last: { observed_at: "2026-09-30T09:50:00Z", tools: [build], units: [] },
+					},
+				}),
+			),
+		).toEqual({
+			observed: "unavailable",
+			last: {
+				observedAt: "2026-09-30T09:50:00Z",
+				work: [{ key: "tool:call-1", title: "cargo build", kind: "tool" }],
+			},
+		});
+	});
+
+	it("takes the follow's snapshot over the Session read, once it is about this Session", () => {
+		const read = session({ state: "trailing", observation: observed, tools: [build] });
+		expect(
+			trailingOf(read, live({ observation: { availability: "unavailable", last: null } })),
+		).toEqual({ observed: "unavailable", last: null });
+		expect(trailingOf(read, live({ session_id: null }))).toMatchObject({ observed: "open" });
+		expect(trailingOf(read, live({ session_id: "another" }))).toMatchObject({ observed: "open" });
+	});
+
+	it("explains nothing for a Session that is not trailing", () => {
+		expect(
+			trailingOf(session({ state: "working", observation: observed }), live()),
+		).toBeUndefined();
+		expect(trailingOf(undefined, live())).toBeUndefined();
 	});
 });

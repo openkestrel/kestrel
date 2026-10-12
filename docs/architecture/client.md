@@ -107,6 +107,17 @@ one read (`src/components/workbench/queue-read.tsx`) that says when it is slow, 
 names the error, offers a retry and keeps the last known queue. About five tabs fit HTTP/1.1's six connections per origin; nothing detects a
 sixth. Browser sign-in progress polls its state read rather than opening a second stream.
 
+A trailing Session's status line (`src/components/workbench/session-status.tsx`) reads its
+`observation`, the follow's snapshot before the Session read once it names that Session: a current
+one names its open tools and Adapter Units or says it is checking that background work has settled,
+and an unavailable one says so and shows any last snapshot as history, never as quiet. The Work tab
+keeps `last_report` and `earlier_reports` as history under the Instance that sent each, beside
+whatever the live reading says, and says when no report was received. A lease is worded as a
+deadline; once the shown deadline passes the Sessions tab re-reads the Organization's Sessions every
+15 s, so only the control plane's answer changes a phase or a deadline. A Diagnostic fact that is a
+stack, frames with a line and column under what was thrown, opens in AI Elements' Stack Trace
+(`src/components/ai-elements/stack-trace.tsx`); any other evidence stays text.
+
 `/setup` names the Operator through the shared producer, then shows saved prerequisites and the
 readiness read’s typed gaps, warnings and failed inspections in Questionnaire. The root route resumes
 unfinished setup, preserving an explicitly selected Organization when several exist. The durable

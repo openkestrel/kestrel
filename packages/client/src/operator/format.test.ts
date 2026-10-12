@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ago, preparingStep, reasonText, size } from "./format";
+import { ago, leaseLine, preparingStep, reasonText, size } from "./format";
 
 describe("a moment", () => {
 	it("reads as how long ago it was", () => {
@@ -7,9 +7,32 @@ describe("a moment", () => {
 		expect(ago("2026-09-30T09:59:55Z", now)).toBe("just now");
 		expect(ago("2026-09-30T09:59:00Z", now)).toBe("a minute ago");
 		expect(ago("2026-09-30T09:58:00Z", now)).toBe("2 minutes ago");
+		expect(ago("2026-09-30T09:00:00Z", now)).toBe("an hour ago");
 		expect(ago("2026-09-30T07:00:00Z", now)).toBe("3 hours ago");
+		expect(ago("2026-09-29T08:00:00Z", now)).toBe("a day ago");
 		expect(ago("2026-09-27T10:00:00Z", now)).toBe("3 days ago");
 		expect(ago("not a time", now)).toBe("at an unknown time");
+	});
+});
+
+describe("a lease deadline", () => {
+	const now = Date.parse("2026-09-30T10:00:00Z");
+
+	it("says how long is left before a deadline still ahead", () => {
+		expect(leaseLine("2026-09-30T10:00:20Z", now)).toBe("Lease expires in less than a minute");
+		expect(leaseLine("2026-09-30T10:01:00Z", now)).toBe("Lease expires in a minute");
+		expect(leaseLine("2026-09-30T10:04:00Z", now)).toBe("Lease expires in 4 minutes");
+		expect(leaseLine("2026-09-30T13:00:00Z", now)).toBe("Lease expires in 3 hours");
+	});
+
+	it("says a passed deadline expired, never that it was just now", () => {
+		expect(leaseLine("2026-09-30T09:59:50Z", now)).toBe("Lease expired less than a minute ago");
+		expect(leaseLine("2026-09-30T09:58:00Z", now)).toBe("Lease expired 2 minutes ago");
+		expect(leaseLine("2026-09-30T10:00:00Z", now)).toBe("Lease expired less than a minute ago");
+	});
+
+	it("does not guess at a deadline it cannot read", () => {
+		expect(leaseLine("not a time", now)).toBe("Lease deadline unknown");
 	});
 });
 
