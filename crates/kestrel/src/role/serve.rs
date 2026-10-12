@@ -34,6 +34,7 @@ pub struct Listening {
     wake: Wake,
     follow_lease: Duration,
     providers: Providers,
+    github_app_api: String,
     images: Images,
     pub(crate) live: crate::live::Live,
 }
@@ -46,6 +47,12 @@ impl Listening {
     #[must_use]
     pub fn checking_sign_ins_with(mut self, providers: Providers) -> Self {
         self.providers = providers;
+        self
+    }
+
+    #[must_use]
+    pub fn creating_github_apps_at(mut self, api: &str) -> Self {
+        self.github_app_api = api.into();
         self
     }
 
@@ -85,6 +92,7 @@ pub async fn bind(
         wake,
         follow_lease,
         providers: Providers::default(),
+        github_app_api: crate::integration::github::API.into(),
         images: Images::default(),
         live: crate::live::Live::default(),
     })
@@ -100,6 +108,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         wake,
         follow_lease,
         providers,
+        github_app_api,
         images,
         live,
     } = listening;
@@ -133,6 +142,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         images,
         client,
         providers,
+        github_app_api,
     );
 
     let serving_link = axum::serve(link_listener, link_router)

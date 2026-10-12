@@ -179,7 +179,9 @@ cancelling or expiring while a check runs fences its commit.
 
 The server setup pages remain an independent fallback for installation discovery, repository
 selection and explicit completion. Browser-integrated picker behavior belongs to the browser
-setup owner. The authored operator document supplies all JSON request and response types.
+setup owner. The authored operator document supplies all JSON request and response types. Manifest setup uses
+GitHub's public API and refuses arbitrary request-supplied upstreams; tests inject their GitHub stub
+at server startup through `Listening::creating_github_apps_at`.
 
 Completion and `DELETE …/flows/{flow}` erase temporary sealed material; the timer and reads erase
 expired material. Safe completion remains readable and idempotent until the original expiry.

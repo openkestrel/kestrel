@@ -9387,10 +9387,9 @@
             ]
           },
           "api": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "enum": ["https://api.github.com"],
+            "description": "Manifest setup uses GitHub's public API; arbitrary upstream hosts are refused"
           },
           "app_organization": {
             "type": [

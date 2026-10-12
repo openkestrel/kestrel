@@ -166,6 +166,7 @@ struct ControlPlane {
     providers: sign_in::check::Providers,
     images: Images,
     client: url::Url,
+    github_app_api: String,
 }
 
 #[derive(Deserialize)]
@@ -342,6 +343,7 @@ pub fn router(
     images: Images,
     client: url::Url,
     providers: sign_in::check::Providers,
+    github_app_api: String,
 ) -> Router {
     let root = format!(
         "kestrel operator API\n\nClients reach this API under /operator. Open the browser Client at {client}\n"
@@ -454,6 +456,7 @@ pub fn router(
             followers,
             streams,
             providers,
+            github_app_api,
             images,
             client,
         })
@@ -2078,7 +2081,13 @@ async fn start_github_app(
     Ok((
         StatusCode::CREATED,
         Json(
-            integration::manifest::start(&control_plane.store, &organization, registration).await?,
+            integration::manifest::start(
+                &control_plane.store,
+                &organization,
+                registration,
+                &control_plane.github_app_api,
+            )
+            .await?,
         ),
     ))
 }

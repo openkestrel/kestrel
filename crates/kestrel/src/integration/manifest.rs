@@ -26,6 +26,7 @@ use wire::GithubAppFlowPhase as Phase;
 
 #[derive(Deserialize, Serialize)]
 struct Flow {
+    api: String,
     app_name: String,
     organization: String,
     registration: wire::GithubAppStart,
@@ -55,6 +56,7 @@ pub async fn start(
     store: &Store,
     organization: &str,
     mut registration: wire::GithubAppStart,
+    api: &str,
 ) -> Result<wire::GithubAppStarted> {
     if registration
         .app_organization
@@ -110,6 +112,7 @@ pub async fn start(
         ),
     };
     let flow = Flow {
+        api: api.into(),
         app_name: format!("kestrel-{}", &Secret::mint().as_str()[..24]),
         organization: organization.into(),
         registration,
@@ -164,11 +167,7 @@ fn app(flow: &Flow, installation: i64) -> Result<App> {
 }
 
 fn api(flow: &Flow) -> &str {
-    flow.registration
-        .api
-        .as_ref()
-        .and_then(|api| api.as_deref())
-        .unwrap_or(github::API)
+    &flow.api
 }
 
 fn unproven(flow: &Flow, operation: &'static str, again: Again, error: Unproven) -> Reason {

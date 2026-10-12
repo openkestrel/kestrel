@@ -7,14 +7,14 @@ use support::{
     github_stub::{GithubStub, ScriptedResponse},
 };
 
-async fn start(kestrel: &Kestrel, stub: &GithubStub, webhook: bool) -> (Client, String, String) {
+async fn start(kestrel: &Kestrel, webhook: bool) -> (Client, String, String) {
     kestrel.declare_organization("acme").await;
     let client = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
     let response = client.post(format!("{}/operator/organizations/acme/github-app", kestrel.operator()))
-        .json(&json!({"name": "github", "callback_base": kestrel.operator(), "api": stub.base_url(), "webhook_base": webhook.then_some("https://hooks.example.com")}))
+        .json(&json!({"name": "github", "callback_base": kestrel.operator(), "webhook_base": webhook.then_some("https://hooks.example.com")}))
         .send().await.unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
     let answer: Value = response.json().await.unwrap();
@@ -72,9 +72,9 @@ async fn select(kestrel: &Kestrel, stub: &GithubStub, client: &Client, state: &s
 #[tokio::test]
 async fn manifest_setup_registers_a_usable_app_without_returning_secrets() {
     for webhook in [false, true] {
-        let kestrel = Kestrel::boot_serving_alone().await;
         let stub = GithubStub::start();
-        let (client, url, state) = start(&kestrel, &stub, webhook).await;
+        let kestrel = Kestrel::boot_serving_at_github(&stub.base_url()).await;
+        let (client, url, state) = start(&kestrel, webhook).await;
         let response = client.get(url).send().await.unwrap();
         assert_eq!(response.headers()["cache-control"], "no-store");
         let html = response.text().await.unwrap();
@@ -235,9 +235,9 @@ async fn manifest_setup_registers_a_usable_app_without_returning_secrets() {
 
 #[tokio::test]
 async fn unknown_expired_and_concurrent_callbacks_cannot_exchange_twice() {
-    let kestrel = Kestrel::boot_serving_alone().await;
     let stub = GithubStub::start();
-    let (client, _, state) = start(&kestrel, &stub, false).await;
+    let kestrel = Kestrel::boot_serving_at_github(&stub.base_url()).await;
+    let (client, _, state) = start(&kestrel, false).await;
     let callback = format!("{}/operator/github-app/callback", kestrel.operator());
     assert_eq!(
         client
@@ -278,9 +278,9 @@ async fn unknown_expired_and_concurrent_callbacks_cannot_exchange_twice() {
 
 #[tokio::test]
 async fn installation_must_belong_to_the_created_app_and_requested_repository() {
-    let kestrel = Kestrel::boot_serving_alone().await;
     let stub = GithubStub::start();
-    let (client, _, state) = start(&kestrel, &stub, false).await;
+    let kestrel = Kestrel::boot_serving_at_github(&stub.base_url()).await;
+    let (client, _, state) = start(&kestrel, false).await;
     conversion(&stub);
     client
         .get(format!(
@@ -347,9 +347,9 @@ async fn installation_must_belong_to_the_created_app_and_requested_repository() 
 
 #[tokio::test]
 async fn a_converted_app_survives_a_control_plane_restart() {
-    let kestrel = Kestrel::boot_serving_alone().await;
     let stub = GithubStub::start();
-    let (client, _, state) = start(&kestrel, &stub, true).await;
+    let kestrel = Kestrel::boot_serving_at_github(&stub.base_url()).await;
+    let (client, _, state) = start(&kestrel, true).await;
     conversion(&stub);
     client
         .get(format!(
@@ -433,9 +433,9 @@ async fn an_organization_app_uses_the_organization_manifest_form() {
 
 #[tokio::test]
 async fn setup_starts_without_a_repository_and_waits_for_explicit_selection() {
-    let kestrel = Kestrel::boot_serving_alone().await;
-    kestrel.declare_organization("acme").await;
     let stub = GithubStub::start();
+    let kestrel = Kestrel::boot_serving_at_github(&stub.base_url()).await;
+    kestrel.declare_organization("acme").await;
     let client = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -445,7 +445,7 @@ async fn setup_starts_without_a_repository_and_waits_for_explicit_selection() {
             "{}/operator/organizations/acme/github-app",
             kestrel.operator()
         ))
-        .json(&json!({"name":"github", "callback_base":kestrel.operator(), "api":stub.base_url()}))
+        .json(&json!({"name":"github", "callback_base":kestrel.operator()}))
         .send()
         .await
         .unwrap();
@@ -558,9 +558,9 @@ async fn setup_starts_without_a_repository_and_waits_for_explicit_selection() {
 
 #[tokio::test]
 async fn repository_pages_expose_empty_results_pagination_and_safe_retries() {
-    let kestrel = Kestrel::boot_serving_alone().await;
     let stub = GithubStub::start();
-    let (client, _, state) = start(&kestrel, &stub, false).await;
+    let kestrel = Kestrel::boot_serving_at_github(&stub.base_url()).await;
+    let (client, _, state) = start(&kestrel, false).await;
     conversion(&stub);
     client
         .get(format!(
@@ -661,9 +661,9 @@ async fn repository_pages_expose_empty_results_pagination_and_safe_retries() {
 #[tokio::test]
 async fn cancellation_and_expiry_erase_temporary_material_and_never_register() {
     for cancelled in [false, true] {
-        let kestrel = Kestrel::boot_serving_alone().await;
         let stub = GithubStub::start();
-        let (client, _, state) = start(&kestrel, &stub, false).await;
+        let kestrel = Kestrel::boot_serving_at_github(&stub.base_url()).await;
+        let (client, _, state) = start(&kestrel, false).await;
         conversion(&stub);
         client
             .get(format!(
@@ -733,9 +733,9 @@ async fn cancellation_and_expiry_erase_temporary_material_and_never_register() {
 
 #[tokio::test]
 async fn an_uncertain_conversion_explains_restart_without_reusing_the_code() {
-    let kestrel = Kestrel::boot_serving_alone().await;
     let stub = GithubStub::start();
-    let (client, _, state) = start(&kestrel, &stub, false).await;
+    let kestrel = Kestrel::boot_serving_at_github(&stub.base_url()).await;
+    let (client, _, state) = start(&kestrel, false).await;
     stub.script_answer(
         "POST",
         "/app-manifests/code123/conversions",
@@ -779,9 +779,9 @@ async fn an_uncertain_conversion_explains_restart_without_reusing_the_code() {
 
 #[tokio::test]
 async fn server_setup_pages_discover_installations_and_finish_an_explicit_choice() {
-    let kestrel = Kestrel::boot_serving_alone().await;
     let stub = GithubStub::start();
-    let (client, url, state) = start(&kestrel, &stub, false).await;
+    let kestrel = Kestrel::boot_serving_at_github(&stub.base_url()).await;
+    let (client, url, state) = start(&kestrel, false).await;
     conversion(&stub);
     client
         .get(format!(
@@ -866,9 +866,9 @@ async fn server_setup_pages_discover_installations_and_finish_an_explicit_choice
 
 #[tokio::test]
 async fn finish_retries_temporary_installation_failure_without_saving() {
-    let kestrel = Kestrel::boot_serving_alone().await;
     let stub = GithubStub::start();
-    let (client, _, state) = start(&kestrel, &stub, false).await;
+    let kestrel = Kestrel::boot_serving_at_github(&stub.base_url()).await;
+    let (client, _, state) = start(&kestrel, false).await;
     conversion(&stub);
     client
         .get(format!(
@@ -915,4 +915,30 @@ async fn finish_retries_temporary_installation_failure_without_saving() {
             .status(),
         StatusCode::OK
     );
+}
+
+#[tokio::test]
+async fn manifest_requests_cannot_choose_an_arbitrary_upstream() {
+    let kestrel = Kestrel::boot_serving_alone().await;
+    kestrel.declare_organization("acme").await;
+    for api in [
+        "http://169.254.169.254",
+        "https://api.github.com.attacker.example",
+        "null",
+    ] {
+        let response = Client::new()
+            .post(format!(
+                "{}/operator/organizations/acme/github-app",
+                kestrel.operator()
+            ))
+            .json(&json!({"name":"github", "callback_base":kestrel.operator(), "api":api}))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            response.status().is_client_error(),
+            "an operator request must not choose the App's upstream host"
+        );
+    }
+    assert!(kestrel.integrations("acme").await.is_empty());
 }

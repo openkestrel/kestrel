@@ -558,6 +558,10 @@ impl Kestrel {
     /// Serves the link with no work role behind it, so nothing sweeps a lease a test has let
     /// lapse until it restarts as a whole control plane.
     pub async fn boot_serving_alone() -> Self {
+        Self::boot_serving_at_github(kestrel::integration::github::API).await
+    }
+
+    pub async fn boot_serving_at_github(api: &str) -> Self {
         let data_dir = TempDir::new().expect("a temporary data directory");
         let store = Store::open(data_dir.path())
             .await
@@ -575,7 +579,8 @@ impl Kestrel {
         )
         .await
         .expect("the control plane should bind its link")
-        .checking_sign_ins_with(no_provider());
+        .checking_sign_ins_with(no_provider())
+        .creating_github_apps_at(api);
         let bound = listening.bound();
         let roles = tokio::spawn(serve::run(listening, shutdown.clone()));
 

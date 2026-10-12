@@ -1314,7 +1314,9 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
                         name,
                         callback_base: callback_base.unwrap_or_else(|| control_plane.to_string()),
                         webhook_base: webhook_base.map(Some),
-                        api: github_api.map(Some),
+                        api: github_api
+                            .map(|api| serde_json::from_value(json!(api)))
+                            .transpose()?,
                         app_organization: app_organization.map(Some),
                     },
                 )
