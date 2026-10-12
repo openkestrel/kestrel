@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use jiff::SignedDuration;
 use kestrel::cron::Cron;
+use kestrel::declaration::triggers::Action;
 use kestrel::domain::{
     CorrelationMiss, Declared, Direction, Event, Schedule, SessionState, StartedBy, TriggerState,
     Workspace,
 };
 use kestrel::log::{BriefSource, Entry, Message};
 use kestrel::trigger::Rendered;
-use kestrel::trigger::apply::Action;
 use kestrel_scripted_agent::{STARTING_MODE, SWITCHED_MODE};
 use support::fixture::Fixture;
 use support::github_stub::{self, GithubStub};

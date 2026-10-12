@@ -1,7 +1,7 @@
 # Triggers
 
 How Events get in, how a Trigger turns one into work, and how answers get back out. Code:
-`integration/`, `trigger.rs`, `trigger/apply.rs`, `filter.rs`, `template.rs`, `cron.rs`,
+`integration/`, `trigger.rs`, `declaration/triggers.rs`, `filter.rs`, `template.rs`, `cron.rs`,
 `readiness.rs`, `follow_up.rs`, `store/trigger.rs`, `store/integration.rs`.
 
 ## Where Events come from
@@ -173,7 +173,7 @@ counted once, when first recorded.
 ## Declaring Triggers
 
 - `kestrel trigger declare` creates one Trigger from flags.
-- `kestrel apply` reads `.kestrel/triggers.yaml` (`trigger/apply.rs`) and converges the applied set
+- `kestrel apply` reads `.kestrel/triggers.yaml` (`declaration/triggers.rs`) and converges the applied set
   in one transaction: it removes only Triggers an apply created (`trigger.applied`), never ones
   declared by flags. A preview is the same transaction rolled back.
 - `kestrel trigger test` renders against a real or supplied Event without recording anything, and

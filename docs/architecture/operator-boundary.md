@@ -32,7 +32,8 @@ Domain code refuses with the typed `declined::Reason`, which the boundary maps t
 kind-specific record (a missing reference's resource and scope, an invalid field's name,
 constraint and allowed values, a state conflict's resource, current state and holding Session);
 `next_steps` is an ordered list of typed `Action`s, never a shell command or a browser route. A
-`Reason` about a request field is wrapped in `declined::Concerning`, which sets `field`. `message`
+`Reason` about a request field is wrapped in `declined::Concerning`, which sets `field`;
+`declined::Within` also names the record the field is in, and the boundary joins the two. `message`
 is display only: nothing classifies it, so rewording one cannot change a status or a step. Tokens
 in `context` (`declined::Constraint`, a state such as `session_in_flight`, `sealed`,
 `no_instance` or a Session's phase) are short and stable, never the display sentence.
@@ -57,7 +58,7 @@ replacement again, after `retry_after_seconds` when GitHub named a wait. A decla
 selected App could not be asked is refused the same way and offers `retry_request`.
 
 `declined::Declined` remains for producers no ticket has typed yet (Integration registration,
-the GitHub App flow, starts, Trigger declaration and supervisor-relayed read refusals); they answer
+the GitHub App flow and supervisor-relayed read refusals); they answer
 a plain `Refusal` (`message` only) on their status, and the shared `Refused` response's
 `DiagnosedRefusal` schema admits both, told apart by `kind`. The loopback guard's 403 and an unknown
 follower lease's 404 are also plain. Anything else is `Unavailable`.
@@ -96,6 +97,14 @@ candidates as `{id, name}` rather than formatting them into the message.
 
 - `POST …/declaration` applies a whole document (Projects, Agents, Triggers) in one transaction;
   `…/declaration/preview` is the same transaction rolled back and returns the difference.
+- Every Declaration goes through `declaration.rs`, whichever route carried it: the single-record
+  routes, the document, the applied-Triggers file (`declaration/triggers.rs`) and `start`. Checking
+  (field rules, the Trigger parser, the firing budget, harness admission) yields a checked
+  declaration, and only a checked one is written, in the caller's transaction. A broken rule is an
+  `invalid_field` with the same constraint and message on every path; only the field path differs,
+  by the record it is under: `branch`, `project.branch`, `triggers.<name>.brief`.
+  The callers choose two things: whether an existing record that differs is changed or refused
+  (`start`), and whether flags or a file declared a Trigger.
 - `POST …/workspaces` is the one open: it opens a Workspace and enqueues its first Session in one
   transaction, with an optional Brief, declared model, mode, thought level and declared name, or
   refuses and leaves nothing behind ([ADR-0038](../adr/0038-a-session-may-start-before-its-brief.md),

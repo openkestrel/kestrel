@@ -36,7 +36,8 @@ Patterns the code relies on that no single file states. Comment style is in `COD
 ## Errors
 
 - `anyhow` throughout. Refuse with `declined::Reason` (wrapped in `declined::Concerning` when it is
-  about a request field), and with `declined::Declined` only where a producer is not typed yet
+  about a request field, or `declined::Within` when that field is inside one record of a larger
+  declaration), and with `declined::Declined` only where a producer is not typed yet
   ([Operator boundary](operator-boundary.md#errors)). Never match a refusal's message.
 - Messages are sentences a person reads: say what happened and to what, in `GLOSSARY.md`'s terms.
 

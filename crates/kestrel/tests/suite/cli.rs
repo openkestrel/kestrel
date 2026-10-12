@@ -1698,7 +1698,7 @@ fn a_declaration_file_that_is_not_one_is_refused_saying_where() {
         ("triggers:\n  ready:\n    brief: x\n", "filter"),
         (
             "triggers:\n  ready:\n    filter: {sql: x}\n    brief: x\n    project: kestrel\n    agent: builder\n",
-            "the trigger ready",
+            "triggers.ready.filter",
         ),
         (
             "triggers:\n  ready:\n    filter: {exact: {type: x}}\n    brief: x\n    correlation: x\n    project: kestrel\n    agent: builder\n",

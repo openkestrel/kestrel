@@ -6,13 +6,11 @@ use std::collections::BTreeSet;
 use anyhow::{Context as _, Result, anyhow, bail};
 use jiff::{SignedDuration, Timestamp};
 
-pub mod apply;
-
 use crate::declaration;
 use crate::domain::{
-    Agent, CorrelationMiss, Declared, DisableReason, Event, EventRecordId, Fires, Firing,
-    FiringBudget, Integration, Occurrence, OnOpenWorkspace, Organization, SessionId, StartedBy,
-    Templates, Trigger, TriggerId, TriggerState, Workspace, WorkspaceId,
+    Agent, CorrelationMiss, DisableReason, Event, EventRecordId, Fires, Firing, Integration,
+    Occurrence, OnOpenWorkspace, SessionId, StartedBy, Trigger, TriggerState, Workspace,
+    WorkspaceId,
 };
 use crate::integration::github::{self, EventData, Github};
 use crate::integration::out_of_use;
@@ -72,18 +70,6 @@ pub enum Against<'a> {
         integration: &'a str,
         issue: i64,
     },
-}
-
-pub struct Declaration<'a> {
-    pub organization: &'a str,
-    pub name: &'a str,
-    pub fires: &'a Fires,
-    pub templates: &'a Templates,
-    pub project: &'a str,
-    pub agent: &'a str,
-    pub declared: &'a Declared,
-    pub allows: &'a [String],
-    pub profile: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -155,45 +141,6 @@ pub struct Tested {
     pub would: Option<Would>,
     /// When the elapsing a test named no Event for is due.
     pub elapsing: Option<Timestamp>,
-}
-
-pub async fn declare(store: &Store, declaration: Declaration<'_>) -> Result<Trigger> {
-    declaration::check_budget(declaration.fires)?;
-    let mut tx = store.begin().await?;
-    let organization = tx.organizations().named(declaration.organization).await?;
-    let checked = declaration::CheckedTrigger::new(declaration::TriggerProposal {
-        name: declaration.name.to_owned(),
-        fires: declaration.fires.clone(),
-        templates: declaration.templates.clone(),
-        project: declaration.project.to_owned(),
-        agent: declaration.agent.to_owned(),
-        declared: declaration.declared.clone(),
-        allows: declaration.allows.to_vec(),
-        profile: declaration.profile.map(str::to_owned),
-    });
-    let placed = declaration::place_trigger(
-        &mut tx,
-        &organization,
-        &checked,
-        declaration::Provenance::Flags,
-    )
-    .await?;
-    tx.commit().await?;
-
-    Ok(placed.trigger)
-}
-
-pub(crate) async fn allowed(
-    tx: &mut Tx<'_>,
-    organization: &Organization,
-    names: &[String],
-) -> Result<Vec<Agent>> {
-    let mut allows = Vec::with_capacity(names.len());
-    for name in names {
-        allows.push(tx.agents().named(organization, name).await?);
-    }
-
-    Ok(allows)
 }
 
 /// Whatever chooses the Agent, it is one the Trigger allows, so no Event reaches an Agent a human
@@ -275,36 +222,14 @@ pub async fn test(
 pub async fn test_declared(
     store: &Store,
     organization: &str,
-    declared: &apply::Declared,
+    declared: &declaration::CheckedTrigger,
     against: Against<'_>,
     asked: Asked<'_>,
 ) -> Result<Tested> {
     let trigger = {
         let mut tx = store.begin().await?;
         let organization = tx.organizations().named(organization).await?;
-        Trigger {
-            id: TriggerId::generate(),
-            project: tx
-                .projects()
-                .named(&organization, &declared.project)
-                .await?,
-            agent: tx.agents().named(&organization, &declared.agent).await?,
-            allows: allowed(&mut tx, &organization, &declared.allows).await?,
-            profile: match &declared.profile {
-                Some(profile) => Some(tx.profiles().named(&organization, profile).await?),
-                None => None,
-            },
-            organization,
-            name: declared.name.clone(),
-            fires: Fires::On(declared.filter.clone()),
-            templates: declared.templates.clone(),
-            declared: declared.declared.clone(),
-            state: TriggerState::Enabled,
-            disabled_because: None,
-            firing_budget: FiringBudget::default(),
-            applied: true,
-            declared_at: jiff::Timestamp::now(),
-        }
+        declaration::unwritten_trigger(&mut tx, organization, declared).await?
     };
 
     tested(store, &trigger, against, asked).await

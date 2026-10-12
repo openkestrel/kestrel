@@ -491,78 +491,115 @@ async fn a_document_trigger_names_the_declared_project_and_agent() {
     kestrel.teardown().await;
 }
 
-/// The applied-Triggers file parses each entry through the same module, and names the entry a
-/// refusal belongs to.
+/// The applied-Triggers file checks each entry through the same module: the sentence is the one
+/// every other path answers, and the field is under the entry it was read from.
 #[tokio::test]
-async fn an_applied_trigger_declaration_names_the_trigger_it_was_read_from() {
+async fn an_applied_trigger_refusal_names_the_entry_in_its_field_path() {
     let kestrel = Kestrel::boot().await;
     kestrel.declare_organization("acme").await;
+    let entry = |name: &str, fields: Value| {
+        let mut entry = json!({
+            "filter": { "exact": { "type": "example" } },
+            "brief": "Sweep the backlog",
+            "project": "kestrel",
+            "agent": "builder",
+        });
+        for (field, value) in fields.as_object().expect("an entry is an object") {
+            entry[field] = value.clone();
+        }
+        json!({ "triggers": { name: entry } })
+    };
 
-    for (file, field, message) in [
+    for (file, field, constraint, message) in [
         (
-            json!({ "triggers": { "nightly": {
-                "filter": { "bogus": { "type": "example" } },
-                "brief": "Tidy up",
-                "project": "kestrel",
-                "agent": "builder",
-            } } }),
-            "filter",
-            "the trigger nightly: a trigger filter: bogus is not a filter kestrel knows: use \
-             exact, prefix, suffix, all, any or not",
+            entry(
+                "nightly",
+                json!({ "filter": { "bogus": { "type": "example" } } }),
+            ),
+            "triggers.nightly.filter",
+            "well_formed",
+            "a trigger filter: bogus is not a filter kestrel knows: use exact, prefix, suffix, \
+             all, any or not",
         ),
         (
-            json!({ "triggers": { "sweep": {
-                "filter": { "exact": { "type": "example" } },
-                "brief": "Sweep the backlog",
-                "on_open_workspace": "restart",
-                "project": "kestrel",
-                "agent": "builder",
-            } } }),
-            "on_open_workspace",
-            "the trigger sweep: a trigger on_open_workspace: restart is not what a trigger does \
-             to an open workspace",
+            entry("sweep", json!({ "on_open_workspace": "restart" })),
+            "triggers.sweep.on_open_workspace",
+            "well_formed",
+            "a trigger on_open_workspace: restart is not what a trigger does to an open workspace",
+        ),
+        (
+            entry("", json!({})),
+            "triggers..name",
+            "non_empty",
+            "a declaration names each record",
         ),
     ] {
-        let refusal = refused(&kestrel, &applied_triggers_of("acme"), &file).await;
-        names_the_field(&refusal, field, "well_formed", message, "apply_triggers");
-
-        let (status, refusal) = posted(&kestrel, &applied_triggers_preview_of("acme"), &file).await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
-        assert_eq!(
-            refusal["next_steps"][0]["operation"], "preview_applied_triggers",
-            "{refusal}"
-        );
+        for (path, operation) in [
+            (applied_triggers_of("acme"), "apply_triggers"),
+            (
+                applied_triggers_preview_of("acme"),
+                "preview_applied_triggers",
+            ),
+        ] {
+            let refusal = refused(&kestrel, &path, &file).await;
+            names_the_field(&refusal, field, constraint, message, operation);
+        }
     }
     assert!(list(&kestrel, &triggers_of("acme")).await.is_empty());
 
     kestrel.teardown().await;
 }
 
-/// An applied-Triggers file that names a trigger with the empty string is refused before any
-/// Trigger is read, by the same sentence, on the route that writes and the one that previews.
+/// The same broken rule answers the same constraint and sentence whichever path carried it;
+/// only the record its field is under differs.
 #[tokio::test]
-async fn an_applied_trigger_file_names_each_trigger_it_declares() {
+async fn one_broken_rule_answers_the_same_refusal_on_every_path() {
     let kestrel = Kestrel::boot().await;
     kestrel.declare_organization("acme").await;
-    let message = "a declaration names each record";
-    let file = json!({ "triggers": { "": {
+    let message = "a trigger on_open_workspace: restart is not what a trigger does to an open \
+                   workspace";
+    let trigger = json!({
+        "name": "sweep",
         "filter": { "exact": { "type": "example" } },
         "brief": "Sweep the backlog",
+        "on_open_workspace": "restart",
         "project": "kestrel",
         "agent": "builder",
-    } } });
+    });
+    let mut entry = trigger.clone();
+    entry.as_object_mut().expect("an object").remove("name");
 
-    for (path, operation) in [
-        (applied_triggers_of("acme"), "apply_triggers"),
+    for (path, body, field, operation) in [
         (
-            applied_triggers_preview_of("acme"),
-            "preview_applied_triggers",
+            triggers_of("acme"),
+            trigger.clone(),
+            "on_open_workspace",
+            "declare_trigger",
+        ),
+        (
+            declaration_of("acme"),
+            json!({
+                "project": {
+                    "name": "kestrel",
+                    "repositories": ["https://example.com/acme/kestrel.git"],
+                    "branch": "main",
+                },
+                "agent": { "name": "builder", "harness": "scripted" },
+                "trigger": trigger,
+            }),
+            "trigger.on_open_workspace",
+            "apply_declaration",
+        ),
+        (
+            applied_triggers_of("acme"),
+            json!({ "triggers": { "sweep": entry } }),
+            "triggers.sweep.on_open_workspace",
+            "apply_triggers",
         ),
     ] {
-        let refusal = refused(&kestrel, &path, &file).await;
-        names_the_field(&refusal, "name", "non_empty", message, operation);
+        let refusal = refused(&kestrel, &path, &body).await;
+        names_the_field(&refusal, field, "well_formed", message, operation);
     }
-    assert!(list(&kestrel, &triggers_of("acme")).await.is_empty());
 
     kestrel.teardown().await;
 }
