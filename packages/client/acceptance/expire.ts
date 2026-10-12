@@ -17,7 +17,7 @@ async function openActivity(page: Page) {
 	await activity.locator("button").first().focus();
 	await page.keyboard.press("Enter");
 	await page.waitForTimeout(2_000);
-	const entry = activity.locator(`article[data-seq="${entrySeq}"]`);
+	const entry = activity.locator(`[data-seq="${entrySeq}"]`);
 	const more = entry.getByRole("button", { name: "More" });
 	if (await more.isVisible().catch(() => false)) {
 		await more.focus();

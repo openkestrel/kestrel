@@ -86,7 +86,12 @@ test("five tabs follow their Workspaces over HTTP/1.1, navigate, and still answe
 	await Promise.all(followed.map((name) => posting(request, name, `to ${name}`)));
 	for (const [index, page] of pages.entries()) {
 		// oxlint-disable-next-line no-await-in-loop -- each tab is asserted in turn.
-		await expect(page.getByRole("log").getByText(`${ACTOR}: to ${followed[index]}`)).toBeVisible({
+		await expect(
+			page
+				.getByRole("log")
+				.getByRole("article", { name: ACTOR })
+				.filter({ hasText: `to ${followed[index]}` }),
+		).toBeVisible({
 			timeout: 20_000,
 		});
 	}
@@ -103,7 +108,12 @@ test("five tabs follow their Workspaces over HTTP/1.1, navigate, and still answe
 		.click();
 	await expect(moving.getByRole("heading", { name: elsewhere })).toBeVisible();
 	await posting(request, elsewhere, `to ${elsewhere}`);
-	await expect(moving.getByRole("log").getByText(`${ACTOR}: to ${elsewhere}`)).toBeVisible({
+	await expect(
+		moving
+			.getByRole("log")
+			.getByRole("article", { name: ACTOR })
+			.filter({ hasText: `to ${elsewhere}` }),
+	).toBeVisible({
 		timeout: 20_000,
 	});
 
@@ -210,13 +220,21 @@ test("a dropped stream resumes the Transcript from its cursor without a gap or d
 
 	await page.goto(`/organizations/acme/workspaces/${name}`);
 	await expect(page.getByRole("heading", { name })).toBeVisible();
-	await expect(page.getByRole("log").getByText(`${ACTOR}: one`)).toBeVisible({ timeout: 20_000 });
+	await expect(
+		page.getByRole("log").getByRole("article", { name: ACTOR }).filter({ hasText: "one" }),
+	).toBeVisible({ timeout: 20_000 });
 
 	await resumed.promise;
 	await posting(request, name, "two");
 	cut.resolve();
 
-	await expect(page.getByRole("log").getByText(`${ACTOR}: two`)).toBeVisible({ timeout: 20_000 });
-	await expect(page.getByRole("log").getByText(`${ACTOR}: one`)).toHaveCount(1);
-	await expect(page.getByRole("log").getByText(`${ACTOR}: two`)).toHaveCount(1);
+	await expect(
+		page.getByRole("log").getByRole("article", { name: ACTOR }).filter({ hasText: "two" }),
+	).toBeVisible({ timeout: 20_000 });
+	await expect(
+		page.getByRole("log").getByRole("article", { name: ACTOR }).filter({ hasText: "one" }),
+	).toHaveCount(1);
+	await expect(
+		page.getByRole("log").getByRole("article", { name: ACTOR }).filter({ hasText: "two" }),
+	).toHaveCount(1);
 });

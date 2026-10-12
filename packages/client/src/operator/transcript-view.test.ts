@@ -7,9 +7,11 @@ import {
 	elapsed,
 	entryText,
 	exitCode,
+	exitLine,
 	flow,
 	payloadReference,
 	planStep,
+	spoken,
 	toolState,
 } from "./transcript-view";
 
@@ -153,5 +155,80 @@ describe("entry text", () => {
 			}),
 		).toBe("cargo test");
 		expect(entryText({ type: "expired", expired_at: "2026-09-30T00:00:00Z" })).toBe("expired");
+	});
+});
+
+describe("who spoke", () => {
+	const session = "00000000-0000-0000-0000-000000000001";
+
+	it("is a person unless a Session said it", () => {
+		expect(spoken(entry(4, { type: "said", participant: "jack", message: "hello" }))).toEqual([
+			{ key: "4:0", participant: "jack", speaker: "person", body: "hello" },
+		]);
+		expect(
+			spoken(
+				entry(5, {
+					type: "said",
+					participant: "builder",
+					message: "**done**",
+					session_id: session,
+					completion: {
+						started_at: "2026-09-30T00:00:00Z",
+						finished_at: "2026-09-30T00:00:01Z",
+						turn_outcome: null,
+					},
+				}),
+			),
+		).toEqual([{ key: "5:0", participant: "builder", speaker: "agent", body: "**done**" }]);
+	});
+
+	it("keeps each drained message's Participant and order, however many one posted", () => {
+		const reference = {
+			payload_id: "00000000-0000-0000-0000-000000000001:7:messages.1.message",
+			bytes: 70_000,
+			media_type: "text/plain; charset=utf-8" as const,
+		};
+
+		expect(
+			spoken(
+				entry(7, {
+					type: "messages",
+					messages: [
+						{ participant: "jack", message: "first" },
+						{ participant: "priya", message: reference },
+						{ participant: "jack", message: "third" },
+					],
+				}),
+			),
+		).toEqual([
+			{ key: "7:0", participant: "jack", speaker: "person", body: "first" },
+			{ key: "7:1", participant: "priya", speaker: "person", body: reference },
+			{ key: "7:2", participant: "jack", speaker: "person", body: "third" },
+		]);
+	});
+
+	it("is nobody for an entry that is not speech", () => {
+		expect(spoken(entry(1, { type: "participant_joined", participant: "jack" }))).toEqual([]);
+		expect(spoken(entry(2, { type: "expired", expired_at: "2026-10-30T00:00:00Z" }))).toEqual([]);
+	});
+});
+
+describe("a Session's exit", () => {
+	it("names success, failure and the reported reason", () => {
+		expect(exitLine({ status: "succeeded" })).toBe("Session succeeded");
+		expect(exitLine({ status: "failed", because: "the harness exited with status 1" })).toBe(
+			"Session failed: the harness exited with status 1",
+		);
+		expect(exitLine({ status: "failed" })).toBe("Session failed");
+	});
+
+	it("is what a Session-ended entry is announced as", () => {
+		expect(
+			entryText({
+				type: "session_ended",
+				session: "00000000-0000-0000-0000-000000000001",
+				exit: { status: "failed", because: "it broke" },
+			}),
+		).toBe("Session failed: it broke");
 	});
 });

@@ -353,13 +353,13 @@ test("the first write asks for a name and remembers it in this browser", async (
 
 	await page.getByRole("button", { name: "Post" }).click();
 	await expect(
-		page.locator("[data-seq]").filter({ hasText: "jack: hello from the browser" }),
+		page.getByRole("article", { name: "jack" }).filter({ hasText: "hello from the browser" }),
 	).toBeVisible({ timeout: 20_000 });
 
 	await page.reload();
 	await expect(page.getByText("writing as jack")).toBeVisible();
 	await expect(
-		page.locator("[data-seq]").filter({ hasText: "jack: hello from the browser" }),
+		page.getByRole("article", { name: "jack" }).filter({ hasText: "hello from the browser" }),
 	).toBeVisible({ timeout: 20_000 });
 
 	await page.getByRole("button", { name: "change" }).click();
@@ -388,10 +388,14 @@ test("two named people post in order, and a CLI follower is handed both", async 
 
 	await Promise.all(
 		[first, second].flatMap((page) => [
-			expect(page.locator("[data-seq]").filter({ hasText: "jack: first from jack" })).toBeVisible({
+			expect(
+				page.getByRole("article", { name: "jack" }).filter({ hasText: "first from jack" }),
+			).toBeVisible({
 				timeout: 20_000,
 			}),
-			expect(page.locator("[data-seq]").filter({ hasText: "jill: second from jill" })).toBeVisible({
+			expect(
+				page.getByRole("article", { name: "jill" }).filter({ hasText: "second from jill" }),
+			).toBeVisible({
 				timeout: 20_000,
 			}),
 		]),

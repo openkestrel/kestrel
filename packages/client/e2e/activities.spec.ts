@@ -207,8 +207,12 @@ test("a late joiner reads one line per Activity and expands only the one it open
 	await expect(first).toContainText("interrupted or unresolved");
 	await expect(first).toContainText("cargo test · completed");
 	await expect(first.locator("[data-seq]")).toHaveCount(0);
-	await expect(page.getByRole("log").getByText("jack: all done")).toBeVisible();
-	await expect(page.getByRole("log").getByText("jack: later")).toBeVisible();
+	await expect(
+		page.getByRole("log").getByRole("article", { name: "jack" }).filter({ hasText: "all done" }),
+	).toBeVisible();
+	await expect(
+		page.getByRole("log").getByRole("article", { name: "jack" }).filter({ hasText: "later" }),
+	).toBeVisible();
 	await expect(page.locator('[data-activity="253"] [data-seq]')).toHaveCount(0);
 
 	await first.getByRole("button").first().click();
@@ -356,11 +360,17 @@ test("an Activity is replaced as it grows, and a reconnect adds no duplicate ent
 	await scripted.install(page);
 	await visiting(page, workspace);
 
-	await expect(page.getByRole("log").getByText("jack: done")).toBeVisible();
+	await expect(
+		page.getByRole("log").getByRole("article", { name: "jack" }).filter({ hasText: "done" }),
+	).toBeVisible();
 	await expect(page.locator('[data-activity="2"]')).toHaveCount(1);
 	await expect(page.locator('[data-activity="2"]')).toContainText("2 tools");
-	await expect(page.getByRole("log").getByText("jack: hello")).toHaveCount(1);
-	await expect(page.getByRole("log").getByText("jack: done")).toHaveCount(1);
+	await expect(
+		page.getByRole("log").getByRole("article", { name: "jack" }).filter({ hasText: "hello" }),
+	).toHaveCount(1);
+	await expect(
+		page.getByRole("log").getByRole("article", { name: "jack" }).filter({ hasText: "done" }),
+	).toHaveCount(1);
 
 	const resumed = scripted.streamed.subscriptions.filter(
 		(subscribed) => subscribed.kind === "transcript",

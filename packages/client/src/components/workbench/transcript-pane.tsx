@@ -9,7 +9,7 @@ import { ToggleGroup, ToggleGroupItem } from "#/components/ui/toggle-group";
 import type { Session, Workspace } from "#/operator/generated";
 import { sessionPhase } from "#/operator/session-state";
 import type { TranscriptSnapshot } from "#/operator/transcript";
-import { entryText, flow } from "#/operator/transcript-view";
+import { entryText, exitLine, flow } from "#/operator/transcript-view";
 import { BriefComposer } from "./brief-composer";
 import { Composer } from "./composer";
 import { useOptionWrite } from "./option-write";
@@ -113,7 +113,7 @@ export function TranscriptPane({
 			</div>
 			<ConnectionNotice connection={transcript.connection} reconnect={reconnect} />
 			<Conversation aria-live="off">
-				<ConversationContent className="gap-2">
+				<ConversationContent className="gap-3">
 					{emptyOfEverything ? (
 						// Reconnecting follows a live read, so an empty history then is known to be empty.
 						transcript.connection.state === "live" ||
@@ -184,8 +184,6 @@ export function TranscriptPane({
 }
 
 function phaseLine(session: Session): string {
-	if (session.state === "ended" && session.exit?.status === "failed") {
-		return session.exit.because ? `Session failed: ${session.exit.because}` : "Session failed";
-	}
+	if (session.state === "ended" && session.exit?.status === "failed") return exitLine(session.exit);
 	return `Session ${sessionPhase(session).toLowerCase()}`;
 }
