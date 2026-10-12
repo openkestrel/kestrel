@@ -24,7 +24,7 @@ export function postLabel(state: Session["state"] | undefined): string {
 }
 
 export function mayWriteOptions(state: Session["state"] | undefined): boolean {
-	return state !== "working";
+	return state === "queued" || state === "unbriefed" || state === "waiting" || state === "trailing";
 }
 
 export function amendable(held: HeldMessage, participant: string | null): boolean {
@@ -62,7 +62,13 @@ export function modeStep(
 	const option = modeOption(options);
 	const next = option && nextMode(option, String(option.current));
 	if (!option || !next) return { say: "This harness offers no mode to cycle" };
-	if (!mayWriteOptions(state)) return { say: "The mode cannot change during a working turn" };
+	if (!mayWriteOptions(state))
+		return {
+			say:
+				state === "working"
+					? "The mode cannot change during a working turn"
+					: "The mode cannot change in this Session phase",
+		};
 	if (participant === null) return { say: nameToChangeOptions };
 	return { option, value: next.value };
 }
@@ -84,4 +90,14 @@ export function partialReport(posted: boolean, interrupted: boolean): string | u
 		return "The message was posted, but the Turn was not interrupted";
 	}
 	return undefined;
+}
+
+// Only a name counts, so an entry that merely echoes a description stays ordinary text.
+export function offeredCommands<Command extends { name: string }>(
+	commands: Command[],
+	draft: string,
+): Command[] {
+	if (!/^\/\S*$/.test(draft)) return [];
+	const typed = draft.slice(1).toLowerCase();
+	return commands.filter(({ name }) => name.toLowerCase().startsWith(typed));
 }

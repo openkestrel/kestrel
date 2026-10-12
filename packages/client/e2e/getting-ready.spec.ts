@@ -166,7 +166,8 @@ test("an open with no Brief lands with the composer, and its first message becom
 
 	const message = page.getByLabel("Message");
 	await expect(message).toBeVisible();
-	await page.getByLabel("Your name").fill("jack");
+	await page.getByLabel("Your name").pressSequentially("jack");
+	await expect(page.getByLabel("Your name")).toHaveValue("jack");
 	await message.fill("the first brief");
 	await page.getByRole("button", { name: "Send" }).click();
 
@@ -229,7 +230,9 @@ test("a message sent before ready shows as held, then becomes the Brief", async 
 	await reads.install(page);
 	await page.goto(`/organizations/${ORGANIZATION}/workspaces/${workspace.name}`);
 
-	await expect(page.locator("[data-held-message]")).toContainText("jack: the first brief");
+	const heldMessages = page.getByRole("list", { name: "Held Messages" });
+	await expect(heldMessages.getByRole("listitem")).toContainText("jack");
+	await expect(heldMessages.getByText("the first brief", { exact: true })).toBeVisible();
 	await expect(page.locator("[data-preparing]")).toContainText("provisioning the Instance");
 
 	reads.workspace = workspaceRecord(workspace, {
@@ -274,7 +277,7 @@ test("a message sent before ready shows as held, then becomes the Brief", async 
 	// Only a supervisor can drive this transition live, so the page reloads against the fixtures.
 	await page.reload();
 
-	await expect(page.locator("[data-held]")).toHaveCount(0);
+	await expect(heldMessages).toHaveCount(0);
 	await expect(page.locator("[data-preparing]")).toContainText("Ready: the harness is up");
 	await expect(page.getByRole("log").getByText("the first brief")).toBeVisible({ timeout: 20_000 });
 });

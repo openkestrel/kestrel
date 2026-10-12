@@ -1,132 +1,194 @@
-import { useQuery } from "@tanstack/react-query";
+import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useState } from "react";
-import { Refusal } from "#/components/refusal";
+import { CodeBlock } from "#/components/ai-elements/code-block";
+import { languageFor } from "#/components/ai-elements/code-language";
+import { FileTree, FileTreeFile, FileTreeFolder } from "#/components/ai-elements/file-tree";
 import { Button } from "#/components/ui/button";
-import { Skeleton } from "#/components/ui/skeleton";
 import { Toggle } from "#/components/ui/toggle";
-import { ScrollablePre } from "#/components/workbench/scrollable-pre";
 import { size } from "#/operator/format";
+import type { FileEntry, FileListing } from "#/operator/generated";
 import { fileQuery, filesQuery } from "#/operator/work-queries";
-import { breadcrumbs, childPath, fileKindLabel } from "#/operator/work-view";
+import { childPath, fileKindLabel } from "#/operator/work-view";
+import type { Row } from "../row";
+import { WorkRead } from "./work-read";
 
-export function FilesTab({ organization, workspace }: { organization: string; workspace: string }) {
-	const [path, setPath] = useState("");
+export function FilesTab(row: Row) {
+	const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 	const [open, setOpen] = useState<string | null>(null);
 	const [raw, setRaw] = useState(false);
-	const listing = useQuery(filesQuery(organization, workspace, path));
-	const file = useQuery({
-		...fileQuery(organization, workspace, open ?? "", raw),
-		enabled: open !== null,
-	});
+	const root = useQuery(filesQuery(row.organization, row.workspace, ""));
+
+	const toggle = (path: string) =>
+		setExpanded((all) => {
+			const next = new Set(all);
+			if (next.has(path)) next.delete(path);
+			else next.add(path);
+			return next;
+		});
+	const showing = (path: string) => {
+		setOpen(path);
+		setRaw(false);
+	};
 
 	return (
 		<div className="grid gap-4 p-4 text-sm">
-			<nav aria-label="Path" className="flex flex-wrap items-center gap-1">
-				{breadcrumbs(path).map((crumb, index, all) => (
-					<span key={crumb.path} className="flex items-center gap-1">
-						{index === all.length - 1 ? (
-							<span className="text-muted-foreground text-xs">{crumb.label}</span>
-						) : (
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
-								onClick={() => {
-									setPath(crumb.path);
-									setOpen(null);
-								}}
-							>
-								{crumb.label}
-							</Button>
-						)}
-						{index < all.length - 1 && <span className="text-muted-foreground text-xs">/</span>}
-					</span>
-				))}
-			</nav>
-
-			{listing.isPending ? (
-				<Skeleton className="h-8 w-full" />
-			) : listing.isError ? (
-				<Refusal error={listing.error} retry={() => void listing.refetch()} />
-			) : (
-				<section className="grid gap-1">
-					{listing.data.entries.length === 0 ? (
-						<p className="text-muted-foreground text-xs">This directory is empty.</p>
-					) : (
-						<ul className="grid gap-0.5">
-							{listing.data.entries.map((entry) => (
-								<li key={entry.name}>
-									<button
-										type="button"
-										className="flex w-full items-baseline gap-2 rounded-md px-2 py-1 text-left hover:bg-accent"
-										onClick={() => {
-											const next = childPath(path, entry.name);
-											if (entry.kind === "directory") {
-												setPath(next);
-												setOpen(null);
-											} else {
-												setOpen(next);
-												setRaw(false);
-											}
-										}}
-									>
-										<span className="truncate">{entry.name}</span>
-										<span className="text-muted-foreground text-xs">
-											{fileKindLabel(entry)}
-											{entry.size !== undefined ? ` · ${size(entry.size)}` : ""}
-										</span>
-									</button>
-								</li>
-							))}
-						</ul>
-					)}
-					{listing.data.truncated && (
-						<p className="text-muted-foreground text-xs" data-truncated>
-							showing {listing.data.entries.length} of {listing.data.total} entries
-						</p>
-					)}
-				</section>
+			{root.isSuccess && root.data.entries.length > 0 && (
+				<FileTree
+					expanded={expanded}
+					onExpandedChange={setExpanded}
+					onSelect={toggle}
+					selectedPath={open ?? undefined}
+				>
+					{root.data.entries.map((entry) => (
+						<Entry
+							key={entry.name}
+							parent=""
+							entry={entry}
+							expanded={expanded}
+							onOpen={showing}
+							{...row}
+						/>
+					))}
+				</FileTree>
 			)}
+			<ListingState listing={root} />
 
 			{open !== null && (
-				<section data-file={open} className="grid gap-2 rounded-md border p-3">
-					<header className="flex flex-wrap items-center gap-2">
-						<h3 className="min-w-0 flex-1 truncate font-medium text-xs">{open}</h3>
-						<Toggle
-							type="button"
-							size="sm"
-							variant="outline"
-							pressed={raw}
-							onPressedChange={setRaw}
-						>
-							Raw
-						</Toggle>
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon"
-							aria-label="Close file"
-							onClick={() => setOpen(null)}
-						>
-							<X aria-hidden />
-						</Button>
-					</header>
-					{file.isPending ? (
-						<Skeleton className="h-8 w-full" />
-					) : file.isError ? (
-						<Refusal error={file.error} retry={() => void file.refetch()} />
-					) : file.data.kind === "text" ? (
-						<ScrollablePre className="max-h-96 overflow-auto rounded-md border p-2 text-xs">
-							{file.data.text}
-						</ScrollablePre>
-					) : (
-						<p data-binary className="text-muted-foreground text-xs">
-							binary content · {size(file.data.bytes)}
-						</p>
-					)}
-				</section>
+				<OpenFile path={open} raw={raw} onRaw={setRaw} onClose={() => setOpen(null)} {...row} />
 			)}
 		</div>
+	);
+}
+
+// A tree holds only treeitems and groups, so a listing's own states are drawn outside both.
+function ListingState({ listing }: { listing: UseQueryResult<FileListing> }) {
+	return (
+		<WorkRead read={listing}>
+			{({ entries, total, truncated }) =>
+				entries.length === 0 ? (
+					<p className="text-muted-foreground text-xs" data-empty>
+						This directory is empty.
+					</p>
+				) : (
+					truncated && (
+						<p className="text-muted-foreground text-xs" data-truncated>
+							showing {entries.length} of {total} entries
+						</p>
+					)
+				)
+			}
+		</WorkRead>
+	);
+}
+
+type Listed = {
+	parent: string;
+	entry: FileEntry;
+	expanded: Set<string>;
+	onOpen: (path: string) => void;
+} & Row;
+
+function Entry({ parent, entry, onOpen, ...rest }: Listed) {
+	const path = childPath(parent, entry.name);
+
+	if (entry.kind === "directory") {
+		return <Folder parent={parent} entry={entry} onOpen={onOpen} {...rest} />;
+	}
+
+	return (
+		<FileTreeFile
+			data-path={path}
+			path={path}
+			name={entry.name}
+			onClick={() => onOpen(path)}
+			onKeyDown={(event) => {
+				if (event.key !== "Enter" && event.key !== " ") return;
+				event.preventDefault();
+				onOpen(path);
+			}}
+		>
+			<span className="min-w-0 truncate">{entry.name}</span>
+			<span className="ml-auto shrink-0 pl-2 text-muted-foreground text-xs">
+				{fileKindLabel(entry)}
+				{entry.size === undefined ? "" : ` · ${size(entry.size)}`}
+			</span>
+		</FileTreeFile>
+	);
+}
+
+function Folder({ parent, entry, expanded, onOpen, ...row }: Listed) {
+	const path = childPath(parent, entry.name);
+	const open = expanded.has(path);
+	const listing = useQuery({
+		...filesQuery(row.organization, row.workspace, path),
+		enabled: open,
+	});
+
+	return (
+		<FileTreeFolder
+			data-path={path}
+			path={path}
+			name={entry.name}
+			status={open && <ListingState listing={listing} />}
+		>
+			{open &&
+				listing.isSuccess &&
+				listing.data.entries.map((child) => (
+					<Entry
+						key={child.name}
+						parent={path}
+						entry={child}
+						expanded={expanded}
+						onOpen={onOpen}
+						{...row}
+					/>
+				))}
+		</FileTreeFolder>
+	);
+}
+
+function OpenFile({
+	organization,
+	workspace,
+	path,
+	raw,
+	onRaw,
+	onClose,
+}: {
+	path: string;
+	raw: boolean;
+	onRaw: (raw: boolean) => void;
+	onClose: () => void;
+} & Row) {
+	const file = useQuery(fileQuery(organization, workspace, path, raw));
+
+	return (
+		<section
+			data-file={path}
+			aria-busy={file.isPending}
+			className="grid gap-2 rounded-md border p-3"
+		>
+			<header className="flex flex-wrap items-center gap-2">
+				<h3 className="min-w-0 flex-1 truncate font-medium text-xs">{path}</h3>
+				<Toggle type="button" size="sm" variant="outline" pressed={raw} onPressedChange={onRaw}>
+					Raw
+				</Toggle>
+				<Button type="button" variant="ghost" size="icon" aria-label="Close file" onClick={onClose}>
+					<X aria-hidden />
+				</Button>
+			</header>
+			<WorkRead read={file}>
+				{(data) =>
+					data.kind === "text" ? (
+						<CodeBlock className="text-xs" code={data.text} language={languageFor(path)} />
+					) : (
+						<p data-binary className="text-muted-foreground text-xs">
+							binary content · {size(data.bytes)}
+						</p>
+					)
+				}
+			</WorkRead>
+		</section>
 	);
 }

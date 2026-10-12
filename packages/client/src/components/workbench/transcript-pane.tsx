@@ -8,7 +8,7 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "#/components/ui/toggle-group";
 import type { Session, Workspace } from "#/operator/generated";
 import { sessionPhase } from "#/operator/session-state";
-import type { TranscriptSnapshot } from "#/operator/transcript";
+import { cursorSeq, type TranscriptSnapshot } from "#/operator/transcript";
 import { entryText, exitLine, flow } from "#/operator/transcript-view";
 import { BriefComposer } from "./brief-composer";
 import { Composer } from "./composer";
@@ -17,7 +17,6 @@ import { SessionHeader } from "./session-header";
 import { ActivityRow } from "./transcript/activity-row";
 import { ConnectionNotice } from "./transcript/connection-notice";
 import { EntryRow, type Disclosure } from "./transcript/entry-row";
-import { LiveLine } from "./transcript/live-line";
 
 const MODES: { value: Disclosure; label: string }[] = [
 	{ value: "line", label: "One line" },
@@ -79,6 +78,25 @@ export function TranscriptPane({
 
 	const items = flow(transcript.entries, transcript.activities);
 	const emptyOfEverything = items.length === 0 && transcript.sessionState === undefined;
+	const state = transcript.sessionState;
+	// An Activity left open by a Turn that has ended is not being worked in.
+	const turning = session?.state !== "waiting" && session?.state !== "ended";
+	const live = state && state.session_id !== null && turning ? state : undefined;
+	const liveActivity = live && transcript.activities.findLast((activity) => !activity.closed);
+	const unrecorded =
+		live !== undefined &&
+		liveActivity === undefined &&
+		(live.tools.length > 0 || live.thought_buffering || live.message_buffering);
+	// The Activity these calls will be recorded in starts at the next seq, so it takes over this
+	// row's key and state rather than mounting beside it.
+	const nextSeq = (transcript.cursor === undefined ? 0 : (cursorSeq(transcript.cursor) ?? 0)) + 1;
+	// Opened once for being live, an Activity stays open when the Session moves on from it.
+	const liveSeq = liveActivity?.first_seq ?? (unrecorded ? nextSeq : undefined);
+	if (liveSeq !== undefined && !overrides.has(liveSeq)) {
+		setOverrides(new Map(overrides).set(liveSeq, true));
+	}
+	const toggle = (seq: number) => (open: boolean) =>
+		setOverrides((current) => new Map(current).set(seq, open));
 	const hasBrief = transcript.entries.some(({ entry }) => entry.type === "brief");
 	const settling =
 		session === undefined || session.state === "queued" || session.state === "unbriefed";
@@ -87,8 +105,6 @@ export function TranscriptPane({
 	return (
 		<>
 			<SessionHeader
-				live={transcript.sessionState}
-				optionWrite={optionWrite}
 				presence={transcript.presence}
 				read={read}
 				session={session}
@@ -131,30 +147,42 @@ export function TranscriptPane({
 						) : null
 					) : (
 						<>
-							{items.map((item) =>
-								item.kind === "activity" ? (
+							{[
+								...items.map((item) =>
+									item.kind === "activity" ? (
+										<ActivityRow
+											key={`activity-${item.activity.first_seq}`}
+											activity={item.activity}
+											live={item.activity === liveActivity ? live : undefined}
+											mode={mode}
+											override={overrides.get(item.activity.first_seq)}
+											onToggle={toggle(item.activity.first_seq)}
+											organization={organization}
+											workspace={workspace}
+										/>
+									) : (
+										<EntryRow
+											key={`entry-${item.entry.seq}`}
+											entry={item.entry}
+											mode={mode}
+											organization={organization}
+											workspace={workspace}
+										/>
+									),
+								),
+								unrecorded && (
 									<ActivityRow
-										key={`activity-${item.activity.first_seq}`}
-										activity={item.activity}
+										key={`activity-${nextSeq}`}
+										activity={undefined}
+										live={live}
 										mode={mode}
-										override={overrides.get(item.activity.first_seq)}
-										onToggle={(open) =>
-											setOverrides((current) => new Map(current).set(item.activity.first_seq, open))
-										}
-										organization={organization}
-										workspace={workspace}
-									/>
-								) : (
-									<EntryRow
-										key={`entry-${item.entry.seq}`}
-										entry={item.entry}
-										mode={mode}
+										override={overrides.get(nextSeq)}
+										onToggle={toggle(nextSeq)}
 										organization={organization}
 										workspace={workspace}
 									/>
 								),
-							)}
-							<LiveLine state={transcript.sessionState} />
+							]}
 						</>
 					)}
 				</ConversationContent>
@@ -166,10 +194,18 @@ export function TranscriptPane({
 			{read.state === "open" && (
 				<>
 					<div hidden={!briefing}>
-						<BriefComposer briefed={!briefing} organization={organization} record={read} />
+						<BriefComposer
+							briefed={!briefing}
+							organization={organization}
+							record={read}
+							session={session}
+							usage={transcript.sessionState?.usage ?? session?.usage}
+							optionWrite={optionWrite}
+						/>
 					</div>
 					{!briefing && (
 						<Composer
+							live={transcript.sessionState}
 							optionWrite={optionWrite}
 							organization={organization}
 							read={read}

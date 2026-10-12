@@ -14,7 +14,7 @@ function NewWorkspace() {
 		<Workbench
 			workspaces={<WorkspacesPane organization={organization} />}
 			transcript={<NewWorkspaceForm organization={organization} />}
-			work={<PaneHeading>Work</PaneHeading>}
+			work={<PaneHeading side="work">Work</PaneHeading>}
 		/>
 	);
 }

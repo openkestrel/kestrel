@@ -23,7 +23,7 @@ function Organization() {
 					/>
 				</>
 			}
-			work={<PaneHeading>Work</PaneHeading>}
+			work={<PaneHeading side="work">Work</PaneHeading>}
 		/>
 	);
 }

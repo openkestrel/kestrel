@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Session } from "./generated";
+import type { Session, WorkInstanceReport } from "./generated";
 import { sessionPhase } from "./session-state";
 import { delivered, type Delivered } from "./transcript";
 import { transport } from "./transport";
@@ -10,13 +10,18 @@ import {
 	childPath,
 	commitsText,
 	fileKindLabel,
+	filesTotals,
 	joinedParticipants,
 	optionSummary,
 	parentPath,
+	priorReports,
 	pushedText,
+	reportedBy,
 	scopeLabel,
 	sessionContinuity,
 	sessionOutcome,
+	splitPath,
+	statText,
 	stashedText,
 	untrackedText,
 	usageText,
@@ -90,6 +95,29 @@ describe("work readings", () => {
 	});
 });
 
+describe("a changed file's row", () => {
+	it("splits the folder from the filename, and counts the lines it added and removed", () => {
+		expect(splitPath("crates/kestrel/src/operator.rs")).toEqual({
+			folder: "crates/kestrel/src/",
+			name: "operator.rs",
+		});
+		expect(splitPath("README.md")).toEqual({ folder: "", name: "README.md" });
+		expect(statText(12, 3)).toBe("+12 −3");
+		expect(statText(4, null)).toBe("+4 −0");
+		expect(statText(null, null)).toBe("");
+	});
+
+	it("totals a repository's files", () => {
+		expect(
+			filesTotals([
+				{ added: 10, removed: 2 },
+				{ added: 2, removed: 1 },
+			]),
+		).toEqual({ added: 12, removed: 3 });
+		expect(filesTotals([{ added: null, removed: null }])).toEqual({ added: 0, removed: 0 });
+	});
+});
+
 describe("diff scopes", () => {
 	it("names the published scopes and a commit", () => {
 		expect(scopeLabel("unpublished")).toBe("Unpublished");
@@ -142,6 +170,9 @@ describe("a Session's reading", () => {
 			),
 		).toContain("instance local-1 · supervisor 1.2.3 · connected 2 minutes ago");
 		expect(sessionContinuity(session())).toBe("no Instance");
+		expect(
+			sessionContinuity(session({ instance: "local-1", lease_expires_at: "2026-09-30T10:05:00Z" })),
+		).toBe("instance local-1");
 		expect(
 			optionSummary(
 				session({
@@ -211,5 +242,70 @@ describe("a file read", () => {
 			kind: "bytes",
 			bytes: 4,
 		});
+	});
+});
+
+function report(overrides: Partial<WorkInstanceReport> = {}): WorkInstanceReport {
+	return {
+		report: "received",
+		instance: "local-1",
+		current_instance: true,
+		repositories: [],
+		reported_at: "2026-09-30T09:58:00Z",
+		...overrides,
+	};
+}
+
+describe("work reports kept as history", () => {
+	const earlier = report({ instance: "local-0", current_instance: false });
+
+	it("keeps the last report beside a live reading that is unavailable", () => {
+		expect(
+			priorReports({
+				state: "not_answering",
+				message: "the Instance isn't answering",
+				last_report: report(),
+				earlier_reports: [earlier],
+			}),
+		).toEqual({ missing: false, reports: [report(), earlier] });
+	});
+
+	it("says no report was received rather than showing nothing", () => {
+		expect(
+			priorReports({
+				state: "no_instance",
+				branch: "kestrel/work",
+				pull_request: null,
+				last_report: { report: "none" },
+				earlier_reports: [],
+			}),
+		).toEqual({ missing: true, reports: [] });
+	});
+
+	it("does not repeat the current Instance's report as history under its live reading", () => {
+		const live = {
+			state: "reported" as const,
+			repositories: [],
+			reported_at: "2026-09-30T10:00:00Z",
+			earlier_reports: [earlier],
+		};
+		expect(priorReports({ ...live, last_report: report() })).toEqual({
+			missing: false,
+			reports: [earlier],
+		});
+		expect(priorReports({ ...live, last_report: { report: "none" } })).toEqual({
+			missing: false,
+			reports: [earlier],
+		});
+	});
+
+	it("attributes a report to the Instance that sent it, never to its replacement", () => {
+		const now = Date.parse("2026-09-30T10:00:00Z");
+		expect(reportedBy(report(), now)).toBe(
+			"Last reported 2 minutes ago by this Workspace's Instance local-1",
+		);
+		expect(reportedBy(earlier, now)).toBe(
+			"Last reported 2 minutes ago by the earlier Instance local-0",
+		);
 	});
 });

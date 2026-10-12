@@ -1,5 +1,5 @@
 import { ago } from "./format";
-import type { FileEntry, Session } from "./generated";
+import type { FileEntry, Session, WorkInstanceReport, WorkspaceWork } from "./generated";
 import type { Delivered } from "./transcript";
 
 export function shortRevision(revision: string): string {
@@ -31,9 +31,30 @@ export function repositoryName(repository: { repository: string }): string {
 	return parts.at(-1) ?? repository.repository;
 }
 
+// The current Instance's last report is its live reading while that reading answers.
+export function priorReports(work: WorkspaceWork): {
+	missing: boolean;
+	reports: WorkInstanceReport[];
+} {
+	const last = work.last_report;
+	const live = work.state === "reported";
+	const latest = last.report === "none" || (live && last.current_instance) ? [] : [last];
+	return {
+		missing: !live && last.report === "none",
+		reports: [...latest, ...work.earlier_reports],
+	};
+}
+
+export function reportedBy(report: WorkInstanceReport, now: number = Date.now()): string {
+	const sender = report.current_instance ? "this Workspace's Instance" : "the earlier Instance";
+	return `Last reported ${ago(report.reported_at, now)} by ${sender} ${report.instance}`;
+}
+
 export const DIFF_SCOPES = ["unpublished", "changed", "staged"] as const;
 
-export function scopeLabel(scope: string): string {
+export type DiffScope = (typeof DIFF_SCOPES)[number] | `commit:${string}`;
+
+export function scopeLabel(scope: DiffScope): string {
 	switch (scope) {
 		case "unpublished":
 			return "Unpublished";
@@ -42,7 +63,7 @@ export function scopeLabel(scope: string): string {
 		case "staged":
 			return "Staged";
 		default:
-			return scope.startsWith("commit:") ? `Commit ${shortRevision(scope.slice(7))}` : scope;
+			return `Commit ${shortRevision(scope.slice("commit:".length))}`;
 	}
 }
 
@@ -71,6 +92,29 @@ export function fileKindLabel(entry: FileEntry): string {
 	return "other";
 }
 
+export function splitPath(path: string): { folder: string; name: string } {
+	const cut = path.lastIndexOf("/");
+	if (cut === -1) return { folder: "", name: path };
+	return { folder: `${path.slice(0, cut)}/`, name: path.slice(cut + 1) };
+}
+
+export function statText(added: number | null, removed: number | null): string {
+	return added === null ? "" : `+${added} −${removed ?? 0}`;
+}
+
+export function filesTotals(files: { added: number | null; removed: number | null }[]): {
+	added: number;
+	removed: number;
+} {
+	return files.reduce<{ added: number; removed: number }>(
+		(total, file) => ({
+			added: total.added + (file.added ?? 0),
+			removed: total.removed + (file.removed ?? 0),
+		}),
+		{ added: 0, removed: 0 },
+	);
+}
+
 export function sessionOutcome(session: Session): string | undefined {
 	if (session.state !== "ended" && session.state !== "unreachable") return undefined;
 	if (session.exit) {
@@ -86,7 +130,6 @@ export function sessionContinuity(session: Session): string {
 	parts.push(session.instance === null ? "no Instance" : `instance ${session.instance}`);
 	if (session.supervisor !== null) parts.push(`supervisor ${session.supervisor}`);
 	if (session.connected_at !== null) parts.push(`connected ${ago(session.connected_at)}`);
-	if (session.lease_expires_at !== null) parts.push(`lease ${ago(session.lease_expires_at)}`);
 	return parts.join(" · ");
 }
 

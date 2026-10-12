@@ -1,9 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { Diagnosis, Refusal } from "#/components/refusal";
 import { Skeleton } from "#/components/ui/skeleton";
 import { QueuedSessions } from "#/components/workbench/queue-read";
-import { ago } from "#/operator/format";
-import { workspaceSessionsQuery } from "#/operator/queries";
+import { useNow } from "#/lib/use-now";
+import { ago, leaseLine, absoluteTime } from "#/operator/format";
+import { sessionsKey, workspaceSessionsQuery } from "#/operator/queries";
 import { sessionPhase } from "#/operator/session-state";
 import { optionSummary, sessionContinuity, sessionOutcome, usageText } from "#/operator/work-view";
 
@@ -77,6 +79,12 @@ function WorkspaceSessions({
 							)}
 							<dt className="text-muted-foreground">Continuity</dt>
 							<dd data-session-continuity>{sessionContinuity(session)}</dd>
+							{session.lease_expires_at !== null && (
+								<>
+									<dt className="text-muted-foreground">Lease</dt>
+									<Lease organization={organization} deadline={session.lease_expires_at} />
+								</>
+							)}
 							{options.length > 0 && (
 								<>
 									<dt className="text-muted-foreground">Options</dt>
@@ -105,5 +113,29 @@ function WorkspaceSessions({
 				);
 			})}
 		</div>
+	);
+}
+
+const REREAD_EVERY = 15_000;
+
+// Only the control plane judges a lease expired, so a passed deadline re-reads the Sessions and ends nothing here.
+function Lease({ organization, deadline }: { organization: string; deadline: string }) {
+	const queryClient = useQueryClient();
+	const now = useNow(5_000);
+	const passed = Date.parse(deadline) <= now;
+
+	useEffect(() => {
+		if (!passed) return undefined;
+		const reread = () =>
+			void queryClient.invalidateQueries({ queryKey: sessionsKey(organization) });
+		reread();
+		const again = setInterval(reread, REREAD_EVERY);
+		return () => clearInterval(again);
+	}, [passed, organization, queryClient]);
+
+	return (
+		<dd data-session-lease={passed ? "expired" : "ahead"}>
+			{leaseLine(deadline, now)} · <time dateTime={deadline}>{absoluteTime(deadline)}</time>
+		</dd>
 	);
 }

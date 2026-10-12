@@ -12,6 +12,7 @@ import {
 
 test.setTimeout(600_000);
 test.describe.configure({ mode: "serial" });
+test.use({ actionTimeout: 10_000 });
 
 const ORGANIZATION = "acme";
 const ROOT = resolve(import.meta.dirname, "../../..");
@@ -44,9 +45,13 @@ test.afterAll(() => {
 	for (const follower of followers) follower.kill();
 });
 
-async function opened(request: APIRequestContext): Promise<string> {
+async function opened(request: APIRequestContext, briefed = true): Promise<string> {
 	const response = await request.post(`/operator/organizations/${ORGANIZATION}/workspaces`, {
-		data: { project: "kestrel", agent: "builder", brief: "an opening brief" },
+		data: {
+			project: "kestrel",
+			agent: "builder",
+			...(briefed ? { brief: "an opening brief" } : {}),
+		},
 	});
 	expect(response.ok(), await response.text()).toBe(true);
 	// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the control plane's opened shape.
@@ -163,6 +168,9 @@ function sessionRead(overrides: Record<string, unknown> = {}) {
 		mode: null,
 		thought_level: null,
 		worked_model: "scripted-mini",
+		sign_in_method: null,
+		supplied: [],
+		diagnostic: null,
 		title: null,
 		options: [],
 		changing_options: [],
@@ -178,6 +186,10 @@ function sessionRead(overrides: Record<string, unknown> = {}) {
 		supervisor_version: null,
 		usage: { context_used: 1_200, context_size: 200_000, cost: null },
 		tools: [],
+		units: [],
+		last_activity_at: null,
+		observation: { availability: "unavailable", last: null },
+		depends_on: [],
 		message_buffering: false,
 		thought_buffering: false,
 		...overrides,
@@ -217,7 +229,7 @@ function modeOption(warns_cache: boolean) {
 }
 
 function modelChoice(page: Page) {
-	return page.locator('[data-option="model"] [data-model-choice="offered"]');
+	return page.getByRole("button", { name: /^Model:/ });
 }
 
 async function choosingModel(page: Page, name: string): Promise<void> {
@@ -264,6 +276,7 @@ class Scripted {
 	interrupt: Answer = { status: 202, body: null };
 	option: Answer = { status: 202, body: null };
 	optionGate: Promise<void> | null = null;
+	interruptGate: Promise<void> | null = null;
 
 	constructor(name: string) {
 		this.name = name;
@@ -292,7 +305,7 @@ class Scripted {
 		);
 		await page.route(
 			(url) => url.pathname === `${session}/interrupt`,
-			(route) => this.answer(route, this.interrupt),
+			(route) => this.answer(route, this.interrupt, this.interruptGate),
 		);
 		await page.route(
 			(url) => url.pathname === `${session}/options`,
@@ -346,9 +359,11 @@ test("the first write asks for a name and remembers it in this browser", async (
 	await page.getByRole("button", { name: "Post" }).click();
 
 	await expect(page.getByLabel("Your name")).toBeVisible();
+	await expect(page.getByLabel("Your name")).toBeFocused();
 	await page.getByLabel("Your name").fill("jack");
 	await page.getByRole("button", { name: "Use this name" }).click();
 	await expect(page.getByText("writing as jack")).toBeVisible();
+	await expect(page.getByRole("textbox", { name: "Post", exact: true })).toBeFocused();
 	expect(await page.evaluate(() => localStorage.getItem("kestrel:participant"))).toBe("jack");
 
 	await page.getByRole("button", { name: "Post" }).click();
@@ -617,7 +632,9 @@ test("an option change warns about the cache before it is confirmed", async ({ p
 	await visiting(page, workspace);
 
 	await expect(modelChoice(page)).toHaveText("scripted-mini");
-	await expect(page.locator("[data-session-usage]")).toContainText("1,200 of 200,000 tokens");
+	await expect(
+		page.getByRole("button", { name: /Context: 0.6%, 1,200 of 200,000 tokens/ }),
+	).toBeVisible();
 	await choosingModel(page, "scripted-max");
 
 	const confirm = page.locator("[data-option-confirm]");
@@ -782,6 +799,7 @@ test("the Model Selector searches what the harness offers, takes the keyboard an
 	);
 	await page.keyboard.press("Escape");
 	await expect(dialog).toHaveCount(0);
+	await expect(modelChoice(page)).toBeFocused();
 	expect(scripted.requests.filter((sent) => sent.path.endsWith("/options"))).toHaveLength(1);
 	expect(elsewhere).toEqual([]);
 });
@@ -803,7 +821,7 @@ test("a refused model change stays explained beside the model the harness still 
 
 	await choosingModel(page, "scripted-max");
 	const refusal = page
-		.locator("[data-session-header]")
+		.getByRole("form", { name: "Session composer" })
 		.getByRole("alert")
 		.filter({ hasText: "the harness refused scripted-max" });
 	await expect(refusal).toBeVisible();
@@ -910,4 +928,253 @@ test("Shift+Tab warns before a mode that drops the cache, and announces it only 
 	gate.resolve();
 	await expect(announcement).toHaveText("mode plan");
 	expect(writes()).toHaveLength(1);
+});
+
+test("slash commands filter actual offers, select by keyboard and send supported commands verbatim", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request);
+	const scripted = new Scripted(workspace);
+	scripted.session = sessionRead({
+		commands: [
+			{
+				name: "compact",
+				description: "Compact the conversation",
+				input_hint: "/compact [instructions]",
+			},
+			{ name: "review", description: "Review changes", input_hint: "/review [path]" },
+		],
+	});
+	await scripted.install(page);
+	await identified(page.context(), "jack");
+	await visiting(page, workspace);
+	const input = page.getByRole("textbox", { name: "Post", exact: true });
+	await input.fill("/rev");
+	const commands = page.getByRole("listbox", { name: "Harness commands" });
+	await expect(commands.getByRole("option")).toHaveCount(1);
+	await expect(commands.getByRole("option")).toContainText("/review [path]");
+	const axe = await new AxeBuilder({ page }).include("[data-composer]").analyze();
+	expect(
+		axe.violations.filter(({ impact }) => impact === "serious" || impact === "critical"),
+	).toEqual([]);
+	await input.press("ArrowDown");
+	await input.press("Enter");
+	await expect(input).toHaveValue("/review ");
+	await expect(input).toBeFocused();
+	await expect(commands).toHaveCount(0);
+	await input.fill("/review  src/  ");
+	await page.getByRole("button", { name: "Post", exact: true }).click();
+	expect(scripted.requests.at(-1)?.body).toEqual({
+		participant: "jack",
+		message: "/review  src/  ",
+	});
+	await expect(input).toHaveValue("");
+	// "changes" is in a description and "path" in a hint, and neither names a command.
+	await input.fill("/changes");
+	await expect(commands).toHaveCount(0);
+	await input.press("Enter");
+	await expect(input).toHaveValue("");
+	expect(scripted.requests.at(-1)?.body).toEqual({ participant: "jack", message: "/changes" });
+	await input.fill("/unsupported ordinary text");
+	await expect(commands).toHaveCount(0);
+	await page.getByRole("button", { name: "Post", exact: true }).click();
+	expect(scripted.requests.at(-1)?.body).toEqual({
+		participant: "jack",
+		message: "/unsupported ordinary text",
+	});
+});
+
+test("Session controls and actual context belong to the composer footer, leaving a quiet header", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request);
+	const scripted = new Scripted(workspace);
+	scripted.workspace = workspaceRead(workspace, {
+		held_messages: [
+			{
+				id: 11,
+				participant: "jack",
+				message: "Please include the keyboard path in the review.",
+				posted_at: "2026-10-01T10:00:00Z",
+				edited_at: null,
+			},
+			{
+				id: 12,
+				participant: "river",
+				message: "Check the narrow layout too.",
+				posted_at: "2026-10-01T10:00:00Z",
+				edited_at: null,
+			},
+		],
+	});
+	scripted.session = sessionRead({
+		options: [option({ warns_cache: false }), modeOption(false)],
+		usage: { context_used: 1200, context_size: 200000, cost: { amount: 0.42, currency: "USD" } },
+	});
+	await scripted.install(page);
+	await identified(page.context(), "jack");
+	await visiting(page, workspace);
+	const composer = page.getByRole("form", { name: "Session composer" });
+	await expect(composer.getByRole("button", { name: "Model: scripted-mini" })).toBeVisible();
+	await expect(composer.getByRole("button", { name: /Context: 0.6%/ })).toBeVisible();
+	await composer.getByRole("button", { name: /Context: 0.6%/ }).click();
+	await expect(page.getByText("1,200 of 200,000 tokens", { exact: true })).toBeVisible();
+	await expect(page.getByText("0.42 USD", { exact: true })).toBeVisible();
+	await expect(composer.getByRole("button", { name: "Interrupt", exact: true })).toBeDisabled();
+	await expect(page.locator("[data-session-header]").getByRole("button")).toHaveCount(0);
+	await expect(page.locator("[data-session-header]")).not.toContainText("/compact");
+	await page.setViewportSize({ width: 375, height: 800 });
+	await expect(composer.getByRole("button", { name: "Model: scripted-mini" })).toBeVisible();
+	await expect
+		.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+		.toBe(true);
+});
+
+test("authors can amend and withdraw Held Messages before the Brief is ready", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request, false);
+	const scripted = new Scripted(workspace);
+	scripted.session = sessionRead({ state: "unbriefed", options: [option({ warns_cache: false })] });
+	scripted.workspace = workspaceRead(workspace, {
+		held_messages: [
+			{
+				id: 7,
+				participant: "jack",
+				message: "my held message",
+				posted_at: new Date().toISOString(),
+				edited_at: null,
+			},
+			{
+				id: 8,
+				participant: "river",
+				message: "another held message",
+				posted_at: new Date().toISOString(),
+				edited_at: null,
+			},
+		],
+	});
+	await scripted.install(page);
+	await identified(page.context(), "jack");
+	await page.goto(`/organizations/${ORGANIZATION}/workspaces/${workspace}`);
+	await expect(
+		page
+			.getByRole("form", { name: "Brief composer" })
+			.getByRole("button", { name: "Model: scripted-mini" }),
+	).toBeVisible();
+	const held = page.getByRole("list", { name: "Held Messages" });
+	const mine = held.getByRole("listitem").filter({ hasText: "my held message" });
+	await expect(
+		held.getByRole("listitem").filter({ hasText: "another held message" }).getByRole("button"),
+	).toHaveCount(0);
+	await mine.getByRole("button", { name: "Edit" }).click();
+	await expect(page.getByRole("textbox", { name: "Edit the held message" })).toBeFocused();
+	await page.getByRole("textbox", { name: "Edit the held message" }).fill("edited before ready");
+	scripted.workspace = workspaceRead(workspace, {
+		held_messages: [
+			{
+				id: 7,
+				participant: "jack",
+				message: "edited before ready",
+				posted_at: new Date().toISOString(),
+				edited_at: new Date().toISOString(),
+			},
+		],
+	});
+	await page.getByRole("button", { name: "Save", exact: true }).click();
+	await expect(held.getByText("edited before ready", { exact: true })).toBeVisible();
+	await expect(held.getByRole("button", { name: "Withdraw" })).toBeEnabled();
+	scripted.workspace = workspaceRead(workspace);
+	await held.getByRole("button", { name: "Withdraw" }).click();
+	await expect(held).toHaveCount(0);
+	await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeFocused();
+	expect(scripted.requests).toContainEqual({
+		method: "DELETE",
+		path: `/operator/organizations/${ORGANIZATION}/workspaces/${workspace}/messages/7`,
+		body: { participant: "jack" },
+	});
+});
+
+test("Interrupt exposes pending and refused states and stays unavailable outside a working Turn", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request);
+	const scripted = new Scripted(workspace);
+	scripted.session = sessionRead({ state: "working" });
+	const gate = Promise.withResolvers<void>();
+	scripted.interruptGate = gate.promise;
+	scripted.interrupt = {
+		status: 409,
+		body: conflict("The Turn could not be interrupted", "working"),
+	};
+	await scripted.install(page);
+	await identified(page.context(), "jack");
+	await visiting(page, workspace);
+	await page.getByRole("button", { name: "Interrupt", exact: true }).click();
+	await expect(page.getByRole("button", { name: "Interrupting…", exact: true })).toBeDisabled();
+	gate.resolve();
+	await expect(
+		page.getByRole("alert").filter({ hasText: "The Turn could not be interrupted" }),
+	).toBeVisible();
+	await expect(page.getByRole("button", { name: "Interrupt", exact: true })).toBeEnabled();
+	scripted.session = sessionRead({
+		state: "working",
+		interrupting: { participant: "river", requested_at: new Date().toISOString() },
+	});
+	await page.reload();
+	await expect(page.getByRole("button", { name: "Interrupting…", exact: true })).toBeDisabled();
+	const unavailable = async (state: string) => {
+		scripted.session = sessionRead({ state, options: [option({ warns_cache: false })] });
+		await page.reload();
+		await expect(page.getByRole("button", { name: "Interrupt", exact: true })).toBeDisabled();
+		if (state === "ended" || state === "unreachable")
+			await expect(modelChoice(page)).toBeDisabled();
+	};
+	await unavailable("waiting");
+	await unavailable("trailing");
+	await unavailable("ended");
+	await unavailable("unreachable");
+
+	scripted.workspace = workspaceRead(workspace, { state: "sealed" });
+	await page.reload();
+	await expect(page.getByRole("form", { name: "Session composer" })).toHaveCount(0);
+});
+
+test("thought-level choices in the footer retain the offered values and option-write semantics", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request);
+	const scripted = new Scripted(workspace);
+	scripted.session = sessionRead({
+		options: [
+			option({
+				id: "reasoning",
+				name: "Thought level",
+				category: "thought_level",
+				current: "low",
+				values: [
+					{ value: "low", name: "Low", description: null },
+					{ value: "high", name: "High", description: null },
+				],
+				warns_cache: false,
+			}),
+		],
+	});
+	await scripted.install(page);
+	await identified(page.context(), "jack");
+	await visiting(page, workspace);
+	await page
+		.getByRole("form", { name: "Session composer" })
+		.getByRole("button", { name: "High", exact: true })
+		.click();
+	expect(scripted.requests).toContainEqual({
+		method: "POST",
+		path: `/operator/organizations/${ORGANIZATION}/sessions/${SESSION_ID}/options`,
+		body: { participant: "jack", category: "thought_level", value: "high" },
+	});
 });

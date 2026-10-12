@@ -8,6 +8,7 @@ import type {
 } from "./generated";
 import { operator, workspaceKey } from "./queries";
 import { operatorPath, type Transport } from "./transport";
+import type { DiffScope } from "./work-view";
 
 // Under the Workspace prefix so a Workspace change notice refetches the Work pane.
 export const instanceKey = (organization: string, workspace: string) =>
@@ -17,14 +18,22 @@ function instancePath(organization: string, workspace: string, ...segments: stri
 	return operatorPath("organizations", organization, "workspaces", workspace, ...segments);
 }
 
-export const changesQuery = (organization: string, workspace: string, scope: string) =>
+export const changesQuery = (
+	organization: string,
+	workspace: string,
+	scope: DiffScope,
+	paths: string[] = [],
+) =>
 	queryOptions({
-		queryKey: [...instanceKey(organization, workspace), "changes", scope],
-		queryFn: ({ signal }) =>
-			operator.read<WorkspaceChanges>(
-				`${instancePath(organization, workspace, "changes")}?${new URLSearchParams({ scope })}`,
+		queryKey: [...instanceKey(organization, workspace), "changes", scope, ...paths],
+		queryFn: ({ signal }) => {
+			const query = new URLSearchParams({ scope });
+			for (const path of paths) query.append("path", path);
+			return operator.read<WorkspaceChanges>(
+				`${instancePath(organization, workspace, "changes")}?${query}`,
 				{ signal },
-			),
+			);
+		},
 	});
 
 export const commitsQuery = (organization: string, workspace: string) =>

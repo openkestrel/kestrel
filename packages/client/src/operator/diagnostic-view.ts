@@ -408,6 +408,21 @@ export function stepOf(action: Action, origin: string): Step {
 
 export type Fact = [term: string, detail: string];
 
+const FRAME = /^\s*at\s.+:\d+:\d+\)?$/;
+const PYTHON_FRAME = /^\s*File ".+", line \d+/;
+
+// A stack opens with what was thrown; a lone frame or prose with a line starting "at" is not one.
+export function isStack(evidence: string): boolean {
+	const [, ...rest] = evidence.split("\n");
+	return rest.some((line) => FRAME.test(line) || PYTHON_FRAME.test(line));
+}
+
+// Stack Trace draws only "at" frames, so any other line would be dropped unless the text is shown whole.
+export function isFramesOnly(stack: string): boolean {
+	const [, ...rest] = stack.split("\n").filter((line) => line.trim() !== "");
+	return rest.length > 0 && rest.every((line) => FRAME.test(line));
+}
+
 function spaced(code: string): string {
 	return code.replaceAll("_", " ");
 }

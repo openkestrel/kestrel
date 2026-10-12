@@ -1,13 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
+import { ChevronRight } from "lucide-react";
 import { Refusal } from "#/components/refusal";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "#/components/ui/collapsible";
 import { Skeleton } from "#/components/ui/skeleton";
-import { ago } from "#/operator/format";
-import type { Workspace } from "#/operator/generated";
+import { useNow } from "#/lib/use-now";
+import { ago, absoluteTime } from "#/operator/format";
+import type { WorkRepository, Workspace } from "#/operator/generated";
 import { workQuery } from "#/operator/queries";
 import {
 	changesText,
 	commitsText,
+	priorReports,
 	pushedText,
+	reportedBy,
 	repositoryName,
 	stashedText,
 	untrackedText,
@@ -24,6 +29,7 @@ export function WorkTab({
 	record: Workspace | undefined;
 }) {
 	const work = useQuery(workQuery(organization, workspace));
+	const now = useNow(15_000);
 	const pull = record ? learnedPullRequest(record) : undefined;
 	const unavailable = record ? pullRequestsUnavailable(record) : false;
 
@@ -37,6 +43,7 @@ export function WorkTab({
 	}
 
 	const summary = work.data;
+	const history = priorReports(summary);
 
 	return (
 		<div className="grid gap-4 p-4 text-sm">
@@ -63,37 +70,70 @@ export function WorkTab({
 			) : (
 				<>
 					<span className="text-muted-foreground text-xs" data-reported>
-						reported {ago(summary.reported_at)}
+						reported {ago(summary.reported_at, now)}
 					</span>
-					{summary.repositories.map((repository) => (
-						<article key={repository.repository} className="grid gap-2 rounded-md border p-3">
-							<header className="flex flex-wrap items-baseline gap-2">
-								<h3 className="font-medium">{repositoryName(repository)}</h3>
-							</header>
-							{repository.git === "unreadable" ? (
-								<p className="text-muted-foreground text-xs">{repository.because}</p>
-							) : (
-								<dl className="grid grid-cols-key-value gap-x-3 gap-y-1">
-									<dt className="text-muted-foreground">Branch</dt>
-									<dd data-work="branch">{repository.branch ?? "detached"}</dd>
-									<dt className="text-muted-foreground">Pushed</dt>
-									<dd data-work="pushed">{pushedText(repository.pushed)}</dd>
-									<dt className="text-muted-foreground">Committed</dt>
-									<dd data-work="committed">{commitsText(repository.committed)}</dd>
-									<dt className="text-muted-foreground">Staged</dt>
-									<dd data-work="staged">{changesText(repository.staged)}</dd>
-									<dt className="text-muted-foreground">Changed</dt>
-									<dd data-work="changed">{changesText(repository.changed)}</dd>
-									<dt className="text-muted-foreground">Untracked</dt>
-									<dd data-work="untracked">{untrackedText(repository.untracked)}</dd>
-									<dt className="text-muted-foreground">Stashed</dt>
-									<dd data-work="stashed">{stashedText(repository.stashed)}</dd>
-								</dl>
-							)}
-						</article>
-					))}
+					<Repositories repositories={summary.repositories} />
 				</>
 			)}
+
+			{history.missing && <p data-work-history="none">No work report received.</p>}
+			{history.reports.map((report, index) => (
+				<Collapsible
+					key={report.instance}
+					defaultOpen={index === 0 && summary.state !== "reported"}
+					data-work-history={report.instance}
+				>
+					<CollapsibleTrigger className="group w-full">
+						<span className="flex items-center gap-1 text-left text-muted-foreground text-xs group-hover:text-foreground">
+							<ChevronRight
+								aria-hidden
+								className="size-3 shrink-0 transition-transform group-data-[panel-open]:rotate-90"
+							/>
+							{reportedBy(report, now)}
+						</span>
+					</CollapsibleTrigger>
+					<CollapsibleContent>
+						<div className="grid gap-2 pt-2">
+							<p className="text-muted-foreground text-xs">
+								Reported{" "}
+								<time dateTime={report.reported_at}>{absoluteTime(report.reported_at)}</time>. This
+								is history, not the work as it is now.
+							</p>
+							<Repositories repositories={report.repositories} />
+						</div>
+					</CollapsibleContent>
+				</Collapsible>
+			))}
 		</div>
 	);
+}
+
+function Repositories({ repositories }: { repositories: WorkRepository[] }) {
+	return repositories.map((repository) => (
+		<article key={repository.repository} className="grid gap-2 rounded-md border p-3">
+			<header className="flex flex-wrap items-baseline gap-2">
+				<h3 className="font-medium">{repositoryName(repository)}</h3>
+			</header>
+			{repository.git === "unreadable" ? (
+				<p className="text-muted-foreground text-xs">{repository.because}</p>
+			) : (
+				<dl className="grid grid-cols-key-value gap-x-3 gap-y-1">
+					<dt className="text-muted-foreground">Branch</dt>
+					<dd data-work="branch">{repository.branch ?? "detached"}</dd>
+					<dt className="text-muted-foreground">Pushed</dt>
+					<dd data-work="pushed">{pushedText(repository.pushed)}</dd>
+					<dt className="text-muted-foreground">Committed</dt>
+					<dd data-work="committed">{commitsText(repository.committed)}</dd>
+					<dt className="text-muted-foreground">Staged</dt>
+					<dd data-work="staged">{changesText(repository.staged)}</dd>
+					<dt className="text-muted-foreground">Changed</dt>
+					<dd data-work="changed">{changesText(repository.changed)}</dd>
+					<dt className="text-muted-foreground">Untracked</dt>
+					<dd data-work="untracked">{untrackedText(repository.untracked)}</dd>
+					<dt className="text-muted-foreground">Stashed</dt>
+					<dd data-work="stashed">{stashedText(repository.stashed)}</dd>
+				</dl>
+			)}
+		</article>
+	));
 }

@@ -93,7 +93,7 @@ test("selection and focus survive a change of area", async ({ page, request }) =
 	const panes = page.getByRole("tablist", { name: "Panes" });
 	await panes.getByRole("tab", { name: "Work", exact: true }).click();
 	const work = page.getByRole("region", { name: "Work", exact: true });
-	await work.getByRole("tab", { name: "Diff" }).click();
+	await work.getByRole("tab", { name: "Changes" }).click();
 	await work.getByRole("button", { name: "Changed" }).click();
 	await expect(work.getByRole("button", { name: "Changed" })).toHaveAttribute(
 		"aria-pressed",
@@ -107,7 +107,7 @@ test("selection and focus survive a change of area", async ({ page, request }) =
 	await panes.getByRole("tab", { name: "Work", exact: true }).focus();
 	await page.keyboard.press("Enter");
 	await expect(panes.getByRole("tab", { name: "Work", exact: true })).toBeFocused();
-	await expect(work.getByRole("tab", { name: "Diff" })).toHaveAttribute("aria-selected", "true");
+	await expect(work.getByRole("tab", { name: "Changes" })).toHaveAttribute("aria-selected", "true");
 	await expect(work.getByRole("button", { name: "Changed" })).toHaveAttribute(
 		"aria-pressed",
 		"true",

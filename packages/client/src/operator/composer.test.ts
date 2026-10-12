@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	offeredCommands,
 	amendable,
 	cacheWarning,
 	mayWriteOptions,
@@ -151,5 +152,34 @@ describe("send now's two writes", () => {
 		);
 		expect(partialReport(true, true)).toBeUndefined();
 		expect(partialReport(false, false)).toBeUndefined();
+	});
+});
+
+describe("the slash menu", () => {
+	const commands = [
+		{
+			name: "compact",
+			description: "Compact the conversation",
+			input_hint: "/compact [instructions]",
+		},
+		{ name: "review", description: "Review changes", input_hint: "/review [path]" },
+	];
+	const offered = (draft: string) => offeredCommands(commands, draft).map(({ name }) => name);
+
+	it("offers the commands whose names the entry begins", () => {
+		expect(offered("/")).toEqual(["compact", "review"]);
+		expect(offered("/rev")).toEqual(["review"]);
+		expect(offered("/REV")).toEqual(["review"]);
+	});
+
+	it("leaves an entry that only a description or hint matches as ordinary text", () => {
+		expect(offered("/changes")).toEqual([]);
+		expect(offered("/path")).toEqual([]);
+		expect(offered("/view")).toEqual([]);
+	});
+
+	it("offers nothing once the entry carries an argument, or is no slash entry", () => {
+		expect(offered("/review src")).toEqual([]);
+		expect(offered("review")).toEqual([]);
 	});
 });

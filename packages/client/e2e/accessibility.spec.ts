@@ -62,7 +62,7 @@ test("every Work pane view has no serious violation", async ({ page, request }) 
 	await noSeriousViolation(page);
 
 	const work = page.getByRole("region", { name: "Work", exact: true });
-	for (const tab of ["Diff", "Files", "Sessions", "People"]) {
+	for (const tab of ["Changes", "Files", "Sessions", "People"]) {
 		// oxlint-disable-next-line no-await-in-loop -- each view is audited after its tab is chosen.
 		await auditView(work, page, tab);
 	}
@@ -305,13 +305,13 @@ test("expanded tool payloads scroll by keyboard and the populated Transcript has
 	const activity = page.locator('[data-activity="61"]');
 	const call = activity.locator('[data-seq="61"]');
 	await expect(call).toBeVisible();
-	await call.getByRole("button", { name: "More" }).click();
-	const input = call.locator("pre").first();
+	await call.getByRole("button", { name: /^tool 61, completed/ }).click();
+	const input = call.getByRole("region", { name: "Input" });
 	await expect(input).toContainText("input line 0");
 	await scrollsByKeyboard(input);
 
 	await page.getByRole("button", { name: "Full" }).click();
-	const result = call.locator("pre").nth(1);
+	const result = call.getByRole("region", { name: "Output" });
 	await expect(result).toContainText("output line 0");
 	await scrollsByKeyboard(result);
 

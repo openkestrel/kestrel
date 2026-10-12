@@ -97,11 +97,26 @@ ever live, so an unreachable stream never reads as an empty Transcript. `src/ope
 is the one mapping from Transcript entries to what a component takes, for the flow and for an opened
 Activity alike: a message `said` under a Session's id is the Agent's and is unframed Markdown, anyone
 else's is a bubble under their name, and a Session-ended entry says how it went and why it failed.
+An Activity (`src/components/workbench/transcript/activity-row.tsx`) is one folded line, open while
+the Session works in it, whose entries are read only when it is opened: a slow, empty or failed read
+each says which it is, and a failed one keeps the rows it had. A running call is a row from
+`session_state` keyed by its `call_id`, which the recorded entry replaces where it stands.
 `MessageResponse` (`src/components/ai-elements/message.tsx`) renders the Markdown with Streamdown; no
 AI SDK runtime is a dependency. Every queue reader shares
 one read (`src/components/workbench/queue-read.tsx`) that says when it is slow, and on failure
 names the error, offers a retry and keeps the last known queue. About five tabs fit HTTP/1.1's six connections per origin; nothing detects a
 sixth. Browser sign-in progress polls its state read rather than opening a second stream.
+
+A trailing Session's status line (`src/components/workbench/session-status.tsx`) reads its
+`observation`, the follow's snapshot before the Session read once it names that Session: a current
+one names its open tools and Adapter Units or says it is checking that background work has settled,
+and an unavailable one says so and shows any last snapshot as history, never as quiet. The Work tab
+keeps `last_report` and `earlier_reports` as history under the Instance that sent each, beside
+whatever the live reading says, and says when no report was received. A lease is worded as a
+deadline; once the shown deadline passes the Sessions tab re-reads the Organization's Sessions every
+15 s, so only the control plane's answer changes a phase or a deadline. A Diagnostic fact that is a
+stack, frames with a line and column under what was thrown, opens in AI Elements' Stack Trace
+(`src/components/ai-elements/stack-trace.tsx`); any other evidence stays text.
 
 `/setup` names the Operator through the shared producer, then shows saved prerequisites and the
 readiness read’s typed gaps, warnings and failed inspections in Questionnaire. The root route resumes

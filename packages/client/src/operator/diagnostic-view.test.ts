@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { factsOf, stepOf } from "./diagnostic-view";
+import { factsOf, isFramesOnly, isStack, stepOf } from "./diagnostic-view";
 import type { Action, Diagnostic } from "./generated";
 
 const ORIGIN = "https://kestrel.example";
@@ -612,5 +612,39 @@ describe("a recovery command", () => {
 				organization: "acme",
 			}),
 		).toBe(`kestrel session show 'it'"'"'s here' --organization acme ${at}`);
+	});
+});
+
+describe("evidence that is a stack", () => {
+	it("is told from prose by frames that name a line and column", () => {
+		expect(
+			isStack(
+				"TypeError: session is undefined\n    at render (src/app.js:10:5)\n    at src/main.js:3:1",
+			),
+		).toBe(true);
+		expect(isStack("the agent refused the request")).toBe(false);
+		expect(isStack("meet the reviewer\nat the end of the Turn")).toBe(false);
+		expect(isStack("    at render (src/app.js:10:5)")).toBe(false);
+	});
+
+	const javascript =
+		"TypeError: session is undefined\n    at render (src/app.js:10:5)\n    at src/main.js:3:1";
+	const python =
+		'Traceback (most recent call last):\n  File "app.py", line 3, in <module>\n    main()\nValueError: bad';
+	const rust =
+		"thread 'main' panicked at src/main.rs:4:5:\nboom\nstack backtrace:\n   0: rust_begin_unwind\n             at /rustc/abc/library/std/src/panicking.rs:652:5";
+
+	it("is recognised in Python's and Rust's shapes too", () => {
+		expect(isStack(python)).toBe(true);
+		expect(isStack(rust)).toBe(true);
+		expect(isStack('see the manual\nFile "notes.txt" is missing')).toBe(false);
+	});
+
+	it("is frames alone only when every line after the first is a frame", () => {
+		expect(isFramesOnly(javascript)).toBe(true);
+		expect(isFramesOnly(`${javascript}\n`)).toBe(true);
+		expect(isFramesOnly(python)).toBe(false);
+		expect(isFramesOnly(rust)).toBe(false);
+		expect(isFramesOnly("Error: two\nlines of message\n    at src/main.js:3:1")).toBe(false);
 	});
 });
