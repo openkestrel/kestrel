@@ -30,8 +30,7 @@ export function wait(attempt: number): number {
 - [x] \`follow.test.ts\` covers the cap
 - [ ] the outage page still polls on its own schedule`;
 
-// A continued Workspace: two people and an Agent across one failed and one succeeded Session.
-export function conversation(workspace: string): string {
+export function continuedTranscript(workspace: string): string {
 	let seq = 0;
 	const recorded = (
 		entry: Record<string, unknown>,

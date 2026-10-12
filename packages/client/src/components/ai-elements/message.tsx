@@ -11,7 +11,6 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
 const streamdownPlugins = { cjk, code };
 
-// A Transcript keeps a code block's copy and leaves every other control out of a message.
 const streamdownControls = { code: { download: false }, table: false };
 
 // Streamdown's own strong is a styled span, which assistive technology reads as plain text, and

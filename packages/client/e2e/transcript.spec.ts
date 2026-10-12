@@ -1,6 +1,6 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { conversation, FIRST_SESSION, wire } from "./conversation";
+import { continuedTranscript, FIRST_SESSION, wire } from "./continued-workspace";
 import { Streamed } from "./streamed";
 
 test.beforeAll(async ({ request }) => {
@@ -29,9 +29,9 @@ async function opened(request: APIRequestContext): Promise<Workspace> {
 	return body.workspace;
 }
 
-async function conversing(page: Page, request: APIRequestContext): Promise<void> {
+async function reading(page: Page, request: APIRequestContext): Promise<void> {
 	const workspace = await opened(request);
-	await new Streamed({ transcript: () => conversation(workspace.id) }).install(page);
+	await new Streamed({ transcript: () => continuedTranscript(workspace.id) }).install(page);
 	await page.goto(`/organizations/acme/workspaces/${workspace.name}`);
 	await expect(page.getByRole("heading", { name: workspace.name })).toBeVisible();
 	await expect(page.getByRole("log").getByText("Session succeeded")).toBeVisible();
@@ -41,7 +41,7 @@ test("each message is attributed to its Participant, in the Transcript's order",
 	page,
 	request,
 }) => {
-	await conversing(page, request);
+	await reading(page, request);
 	const log = page.getByRole("log");
 
 	await expect(log.getByRole("article", { name: "priya" })).toHaveText([
@@ -56,17 +56,29 @@ test("each message is attributed to its Participant, in the Transcript's order",
 		/Backoff for the follow/,
 	]);
 
-	const order = await log
-		.locator("[data-seq]")
-		.evaluateAll((rows) => rows.map((row) => Number(row.getAttribute("data-seq"))));
-	expect(order).toEqual(Array.from({ length: 13 }, (_, index) => index + 1));
+	const read = await log.innerText();
+	const positions = [
+		"jack joined",
+		"builder started",
+		"I'll start with",
+		"priya joined",
+		"Keep the cap",
+		"Session failed",
+		"Try again",
+		"And add a test",
+		"Backoff for the follow",
+		"Pull request 705",
+		"Session succeeded",
+	].map((text) => read.indexOf(text));
+	expect(positions).not.toContain(-1);
+	expect(positions).toEqual(positions.toSorted((one, other) => one - other));
 });
 
 test("an agent's Markdown reads as a heading, emphasis, code and a table", async ({
 	page,
 	request,
 }) => {
-	await conversing(page, request);
+	await reading(page, request);
 	const answer = page.getByRole("log").getByRole("article", { name: "builder" }).last();
 
 	await expect(answer.getByRole("heading", { name: "Backoff for the follow" })).toBeVisible();
@@ -90,13 +102,13 @@ test("a Session-ended row says how the Session went, and why it failed", async (
 	page,
 	request,
 }) => {
-	await conversing(page, request);
+	await reading(page, request);
 	const log = page.getByRole("log");
 
-	await expect(log.locator('[data-seq="7"]')).toHaveText(
-		"Session failed: the harness exited with status 1",
-	);
-	await expect(log.locator('[data-seq="13"]')).toHaveText("Session succeeded");
+	await expect(
+		log.getByText("Session failed: the harness exited with status 1", { exact: true }),
+	).toBeVisible();
+	await expect(log.getByText("Session succeeded", { exact: true })).toBeVisible();
 	await expect(log.getByText("Session ended")).toHaveCount(0);
 });
 
@@ -104,13 +116,13 @@ test("shared-state entries, a tombstone and the disclosure control keep their pl
 	page,
 	request,
 }) => {
-	await conversing(page, request);
+	await reading(page, request);
 	const log = page.getByRole("log");
 
-	await expect(log.locator('[data-seq="1"]')).toHaveText("jack joined");
-	await expect(log.locator('[data-seq="2"]').getByRole("strong")).toHaveText("back off");
-	await expect(log.locator('[data-seq="3"]')).toHaveText("builder started");
-	await expect(log.locator('[data-seq="8"]')).toContainText("expired");
+	await expect(log.getByText("jack joined", { exact: true })).toBeVisible();
+	await expect(log.getByRole("strong").filter({ hasText: "back off" })).toBeVisible();
+	await expect(log.getByText("builder started", { exact: true })).toHaveCount(2);
+	await expect(log.getByText(/^expired /)).toBeVisible();
 	await expect(
 		log.getByRole("link", { name: "Pull request 705: Back off between Transcript follow retries" }),
 	).toHaveAttribute("href", "https://github.com/openkestrel/kestrel/pull/705");
@@ -121,11 +133,11 @@ test("shared-state entries, a tombstone and the disclosure control keep their pl
 	await expect(log.getByRole("article", { name: "builder" })).toHaveCount(2);
 });
 
-test("the conversation is reachable by keyboard and has no serious violation", async ({
+test("the Transcript is reachable by keyboard and has no serious violation", async ({
 	page,
 	request,
 }) => {
-	await conversing(page, request);
+	await reading(page, request);
 
 	await page.getByRole("button", { name: "Full", exact: true }).focus();
 	await page.keyboard.press("Tab");
@@ -204,7 +216,8 @@ test("a thought opened inside an Activity renders its Markdown", async ({ page, 
 	await page.goto(`/organizations/acme/workspaces/${workspace.name}`);
 
 	await page.getByRole("button", { name: "Full", exact: true }).click();
-	const row = page.locator('[data-activity="2"] [data-seq="2"]');
-	await expect(row.getByRole("strong")).toHaveText("never");
-	await expect(row.getByRole("code")).toHaveText("wait()");
+	const log = page.getByRole("log");
+	await expect(log.getByRole("strong")).toHaveText("never");
+	await expect(log.getByRole("code")).toHaveText("wait()");
+	await expect(log.getByRole("button", { name: "Less" })).toHaveAttribute("aria-expanded", "true");
 });

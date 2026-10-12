@@ -5,6 +5,7 @@ import { MessageResponse } from "#/components/ai-elements/message";
 import { Button } from "#/components/ui/button";
 import { ScrollablePre } from "#/components/workbench/scrollable-pre";
 import { cn } from "#/lib/utils";
+import type { Exit } from "#/operator/generated";
 import type { Delivered } from "#/operator/transcript";
 import {
 	at,
@@ -96,16 +97,12 @@ function content(entry: Delivered, mode: Disclosure, row: Row): ReactNode {
 			return (
 				<Expandable
 					mode={mode}
-					summary={(open) =>
-						open ? (
-							<div className="text-muted-foreground">
-								<MessageResponse>{text}</MessageResponse>
-							</div>
-						) : (
-							<p className="text-muted-foreground italic">{firstLine(text)}</p>
-						)
+					summary={<p className="text-muted-foreground italic">{firstLine(text)}</p>}
+					detail={
+						<div className="border-l pl-2 text-muted-foreground">
+							<MessageResponse>{text}</MessageResponse>
+						</div>
 					}
-					detail={null}
 				/>
 			);
 		}
@@ -176,11 +173,7 @@ function Message({ message, appendedAt, ...row }: { message: Spoken; appendedAt:
 	);
 }
 
-function SessionEnded({
-	exit,
-}: {
-	exit: Extract<Delivered["entry"], { type: "session_ended" }>["exit"];
-}) {
+function SessionEnded({ exit }: { exit: Exit }) {
 	const failed = exit.status === "failed";
 	const Icon = failed ? CircleXIcon : CircleCheckIcon;
 	return (
@@ -198,7 +191,7 @@ function Expandable({
 	detail,
 }: {
 	mode: Disclosure;
-	summary: ReactNode | ((open: boolean) => ReactNode);
+	summary: ReactNode;
 	detail: ReactNode;
 }) {
 	const [override, setOverride] = useState<boolean | undefined>(undefined);
@@ -207,9 +200,7 @@ function Expandable({
 	return (
 		<div className="grid gap-1">
 			<div className="flex items-start gap-2">
-				<div className="min-w-0 flex-1">
-					{typeof summary === "function" ? summary(open) : summary}
-				</div>
+				<div className="min-w-0 flex-1">{summary}</div>
 				<Button
 					type="button"
 					variant="ghost"

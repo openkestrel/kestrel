@@ -221,7 +221,7 @@ test("a dropped stream resumes the Transcript from its cursor without a gap or d
 	await page.goto(`/organizations/acme/workspaces/${name}`);
 	await expect(page.getByRole("heading", { name })).toBeVisible();
 	await expect(
-		page.getByRole("log").getByRole("article", { name: ACTOR }).filter({ hasText: `one` }),
+		page.getByRole("log").getByRole("article", { name: ACTOR }).filter({ hasText: "one" }),
 	).toBeVisible({ timeout: 20_000 });
 
 	await resumed.promise;
@@ -229,12 +229,12 @@ test("a dropped stream resumes the Transcript from its cursor without a gap or d
 	cut.resolve();
 
 	await expect(
-		page.getByRole("log").getByRole("article", { name: ACTOR }).filter({ hasText: `two` }),
+		page.getByRole("log").getByRole("article", { name: ACTOR }).filter({ hasText: "two" }),
 	).toBeVisible({ timeout: 20_000 });
 	await expect(
-		page.getByRole("log").getByRole("article", { name: ACTOR }).filter({ hasText: `one` }),
+		page.getByRole("log").getByRole("article", { name: ACTOR }).filter({ hasText: "one" }),
 	).toHaveCount(1);
 	await expect(
-		page.getByRole("log").getByRole("article", { name: ACTOR }).filter({ hasText: `two` }),
+		page.getByRole("log").getByRole("article", { name: ACTOR }).filter({ hasText: "two" }),
 	).toHaveCount(1);
 });

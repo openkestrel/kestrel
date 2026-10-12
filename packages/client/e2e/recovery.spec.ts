@@ -216,7 +216,7 @@ test.describe("a Transcript follow", () => {
 		await page.keyboard.press("Enter");
 
 		await expect(
-			page.getByRole("log").getByRole("article", { name: ACTOR }).filter({ hasText: `one` }),
+			page.getByRole("log").getByRole("article", { name: ACTOR }).filter({ hasText: "one" }),
 		).toBeVisible({
 			timeout: 20_000,
 		});
@@ -273,20 +273,20 @@ test.describe("a Transcript follow", () => {
 			.filter({ hasText: "Reconnecting to the Transcript" });
 		await expect(reconnecting).toBeVisible({ timeout: 20_000 });
 		await expect(
-			log.getByRole("article", { name: ACTOR }).filter({ hasText: `one` }),
+			log.getByRole("article", { name: ACTOR }).filter({ hasText: "one" }),
 		).toBeVisible();
 
 		await posting(request, workspace, "two");
 		resumed.resolve();
 
-		await expect(log.getByRole("article", { name: ACTOR }).filter({ hasText: `two` })).toBeVisible({
+		await expect(log.getByRole("article", { name: ACTOR }).filter({ hasText: "two" })).toBeVisible({
 			timeout: 20_000,
 		});
 		await expect(reconnecting).toHaveCount(0);
-		await expect(log.getByRole("article", { name: ACTOR }).filter({ hasText: `one` })).toHaveCount(
+		await expect(log.getByRole("article", { name: ACTOR }).filter({ hasText: "one" })).toHaveCount(
 			1,
 		);
-		await expect(log.getByRole("article", { name: ACTOR }).filter({ hasText: `two` })).toHaveCount(
+		await expect(log.getByRole("article", { name: ACTOR }).filter({ hasText: "two" })).toHaveCount(
 			1,
 		);
 	});
