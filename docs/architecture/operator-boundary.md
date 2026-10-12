@@ -32,7 +32,8 @@ Domain code refuses with the typed `declined::Reason`, which the boundary maps t
 kind-specific record (a missing reference's resource and scope, an invalid field's name,
 constraint and allowed values, a state conflict's resource, current state and holding Session);
 `next_steps` is an ordered list of typed `Action`s, never a shell command or a browser route. A
-`Reason` about a request field is wrapped in `declined::Concerning`, which sets `field`. `message`
+`Reason` about a request field is wrapped in `declined::Concerning`, which sets `field`;
+`declined::Within` also names the record the field is in, and the boundary joins the two. `message`
 is display only: nothing classifies it, so rewording one cannot change a status or a step. Tokens
 in `context` (`declined::Constraint`, a state such as `session_in_flight`, `sealed`,
 `no_instance` or a Session's phase) are short and stable, never the display sentence.

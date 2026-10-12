@@ -171,6 +171,18 @@ pub fn invalid(
     .into()
 }
 
+/// Names the record a refused field was read from, for a caller that holds many of one kind.
+fn under(record: String, error: anyhow::Error) -> anyhow::Error {
+    match error.downcast::<Invalid>() {
+        Ok(invalid) => Invalid {
+            record: Some(record),
+            ..invalid
+        }
+        .into(),
+        Err(error) => error,
+    }
+}
+
 /// Where a refused field lives: the single-record routes name it bare, the document and a
 /// start prefix it with the record.
 #[derive(Debug, Clone, Copy)]
@@ -195,11 +207,11 @@ impl Prefix {
 /// Gives a module error its route: stamps the caller's operation onto a field refusal and
 /// names the record its field is in, and leaves the rest alone.
 pub fn scoped(prefix: Prefix, operation: &'static str, error: anyhow::Error) -> anyhow::Error {
-    let prefix = prefix.record().map(str::to_owned);
+    let record = prefix.record().map(str::to_owned);
     let error = match error.downcast::<Invalid>() {
         Ok(invalid) => {
             return within(
-                invalid.record.or(prefix),
+                invalid.record.or(record),
                 None,
                 Reason::InvalidField {
                     field: invalid.field,
@@ -221,7 +233,7 @@ pub fn scoped(prefix: Prefix, operation: &'static str, error: anyhow::Error) -> 
             ..
         }) => {
             return within(
-                prefix,
+                record,
                 None,
                 Reason::InvalidField {
                     field,
@@ -236,7 +248,7 @@ pub fn scoped(prefix: Prefix, operation: &'static str, error: anyhow::Error) -> 
         Err(error) => error,
     };
     match error.downcast::<Concerning>() {
-        Ok(concerning) => within(prefix, Some(concerning.field), concerning.reason),
+        Ok(concerning) => within(record, Some(concerning.field), concerning.reason),
         Err(error) => error,
     }
 }
@@ -484,13 +496,14 @@ fn check_trigger_links(document: &Document) -> Result<()> {
 pub fn check_trigger(fields: &TriggerFields<'_>) -> Result<CheckedTrigger> {
     check_name(fields.name)?;
     let fires = parse_fires(&fields.forms)?;
-    check_parsed_trigger(TriggerProposal {
+    check_budget(&fires)?;
+    Ok(CheckedTrigger {
         name: fields.name.to_owned(),
         fires,
         templates: parse_templates(&fields.templates)?,
         project: fields.project.to_owned(),
         agent: fields.agent.to_owned(),
-        declared: fields.declared.clone(),
+        declared: Declared::named(fields.declared.clone()),
         allows: fields.allows.to_vec(),
         profile: fields.profile.map(str::to_owned),
     })

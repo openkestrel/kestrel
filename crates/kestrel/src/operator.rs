@@ -26,8 +26,7 @@ use tracing::warn;
 
 use crate::agent;
 use crate::capability::{self, Capability, Images};
-use crate::declaration;
-use crate::declaration::triggers as apply;
+use crate::declaration::{self, triggers};
 use crate::declined::{
     self as declined, Again, Concerning, Consequence, Constraint, Declined, Locator, Reason,
     Resource, Step, Within,
@@ -633,7 +632,7 @@ struct TriggerTest {
     issue: Option<i64>,
     instruction: Option<String>,
     agent: Option<String>,
-    declared: Option<apply::File>,
+    declared: Option<triggers::File>,
 }
 
 #[derive(Deserialize)]
@@ -2657,7 +2656,7 @@ async fn test_trigger(
     };
     let tested = match tested.declared {
         Some(file) => {
-            let declarations = apply::declarations(file)
+            let declarations = triggers::declarations(file)
                 .map_err(|error| {
                     declaration::scoped(declaration::Prefix::Root, "test_trigger", error)
                 })
@@ -2810,35 +2809,35 @@ async fn dispatch_trigger(
 async fn apply_triggers(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    file: Result<Json<apply::File>, JsonRejection>,
-) -> Result<Json<apply::Applied>, Refused> {
+    file: Result<Json<triggers::File>, JsonRejection>,
+) -> Result<Json<triggers::Applied>, Refused> {
     applied_triggers(control_plane, organization, file, false).await
 }
 
 async fn preview_applied_triggers(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    file: Result<Json<apply::File>, JsonRejection>,
-) -> Result<Json<apply::Applied>, Refused> {
+    file: Result<Json<triggers::File>, JsonRejection>,
+) -> Result<Json<triggers::Applied>, Refused> {
     applied_triggers(control_plane, organization, file, true).await
 }
 
 async fn applied_triggers(
     control_plane: ControlPlane,
     organization: String,
-    file: Result<Json<apply::File>, JsonRejection>,
+    file: Result<Json<triggers::File>, JsonRejection>,
     dry_run: bool,
-) -> Result<Json<apply::Applied>, Refused> {
+) -> Result<Json<triggers::Applied>, Refused> {
     let Json(file) = file?;
     let operation = if dry_run {
         "preview_applied_triggers"
     } else {
         "apply_triggers"
     };
-    let declarations = apply::declarations(file)
+    let declarations = triggers::declarations(file)
         .map_err(|error| declaration::scoped(declaration::Prefix::Root, operation, error))
         .map_err(named_refusal)?;
-    let applied = apply::apply(&control_plane.store, &organization, &declarations, dry_run)
+    let applied = triggers::apply(&control_plane.store, &organization, &declarations, dry_run)
         .await
         .map_err(named_refusal)?;
 

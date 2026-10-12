@@ -7,8 +7,8 @@ use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CheckedTrigger, Difference, Invalid, Provenance, ScheduleForms, TemplateFields, TriggerFields,
-    check_trigger, place_trigger,
+    CheckedTrigger, Difference, Provenance, ScheduleForms, TemplateFields, TriggerFields,
+    check_trigger, place_trigger, under,
 };
 use crate::domain::Declared;
 use crate::store::Store;
@@ -90,14 +90,7 @@ pub fn declarations(file: File) -> Result<Vec<CheckedTrigger>> {
                 allows: &entry.allows,
                 profile: entry.profile.as_deref(),
             })
-            .map_err(|error| match error.downcast::<Invalid>() {
-                Ok(invalid) => Invalid {
-                    record: Some(format!("triggers.{name}")),
-                    ..invalid
-                }
-                .into(),
-                Err(error) => error,
-            })
+            .map_err(|error| under(format!("triggers.{name}"), error))
         })
         .collect()
 }
