@@ -79,6 +79,10 @@ pub const PROFILE_FILE: &str =
     "/operator/organizations/{organization}/profiles/{profile}/files/{path}";
 pub const SIGN_INS: &str = "/operator/organizations/{organization}/sign-ins";
 pub const SIGN_IN: &str = "/operator/organizations/{organization}/sign-ins/{harness}/{method}";
+pub const SIGN_IN_TESTS: &str =
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}/tests";
+pub const SIGN_IN_TEST: &str =
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}/tests/{test}";
 pub const GITHUB_APP: &str = "/operator/organizations/{organization}/github-app";
 pub const INTEGRATIONS: &str = "/operator/organizations/{organization}/integrations";
 pub const INTEGRATION: &str = "/operator/organizations/{organization}/integrations/{integration}";
@@ -374,6 +378,8 @@ pub fn router(
         )
         .route(SIGN_INS, get(sign_ins))
         .route(SIGN_IN, put(save_sign_in))
+        .route(SIGN_IN_TESTS, post(test_sign_in))
+        .route(SIGN_IN_TEST, get(sign_in_test))
         .route(INTEGRATIONS, get(integrations).post(register_integration))
         .route(INTEGRATION, get(show_integration).patch(change_integration))
         .route(INTEGRATION_DISABLE, post(disable_integration))
@@ -1928,6 +1934,7 @@ impl From<sign_in::SignIn> for wire::SavedSignIn {
                     }
                     sign_in::Source::Refresh => wire::AuthenticationEvidenceSource::Refresh,
                     sign_in::Source::Session => wire::AuthenticationEvidenceSource::Session,
+                    sign_in::Source::ModelTest => wire::AuthenticationEvidenceSource::ModelTest,
                 },
                 observed_at: authentication.observed_at.to_string(),
                 provider_check: authentication
@@ -2042,6 +2049,81 @@ async fn save_sign_in(
             },
         )),
     })
+}
+
+impl From<sign_in::model_test::Test> for wire::SignInTest {
+    fn from(test: sign_in::model_test::Test) -> Self {
+        Self {
+            id: test.id,
+            harness: test.harness,
+            method: test.method,
+            revision: test.revision,
+            requested_model: test.requested_model,
+            model: test.model,
+            image: test.image,
+            state: match test.state {
+                sign_in::TestState::Pending => wire::SignInTestState::Pending,
+                sign_in::TestState::Running => wire::SignInTestState::Running,
+                sign_in::TestState::Completed => wire::SignInTestState::Completed,
+                sign_in::TestState::Failed => wire::SignInTestState::Failed,
+                sign_in::TestState::Interrupted => wire::SignInTestState::Interrupted,
+            },
+            outcome: test.outcome.map(|outcome| match outcome {
+                sign_in::TestOutcome::Worked => wire::SignInTestOutcome::Worked,
+                sign_in::TestOutcome::AuthenticationFailed => {
+                    wire::SignInTestOutcome::AuthenticationFailed
+                }
+                sign_in::TestOutcome::NotCovered => wire::SignInTestOutcome::NotCovered,
+                sign_in::TestOutcome::Unavailable => wire::SignInTestOutcome::Unavailable,
+                sign_in::TestOutcome::HarnessFailed => wire::SignInTestOutcome::HarnessFailed,
+                sign_in::TestOutcome::MaterialReplaced => wire::SignInTestOutcome::MaterialReplaced,
+            }),
+            message: test.message,
+            created_at: test.created_at.to_string(),
+            started_at: test.started_at.map(|at| at.to_string()),
+            finished_at: test.finished_at.map(|at| at.to_string()),
+        }
+    }
+}
+
+/// A body is optional: no model named tests the harness's own default.
+async fn test_sign_in(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, harness, method)): Path<(String, String, String)>,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, Json<wire::SignInTest>), Refused> {
+    let asked: wire::SignInTestRequest = if body.is_empty() {
+        wire::SignInTestRequest::default()
+    } else {
+        serde_json::from_slice(&body).map_err(|error| malformed(None, error.to_string()))?
+    };
+    let test = sign_in::model_test::start(
+        &control_plane.store,
+        &control_plane.images,
+        &organization,
+        &harness,
+        &method,
+        asked.model.as_deref(),
+    )
+    .await?;
+
+    Ok((StatusCode::ACCEPTED, Json(test.into())))
+}
+
+async fn sign_in_test(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, harness, method, test)): Path<(String, String, String, String)>,
+) -> Result<Json<wire::SignInTest>, Refused> {
+    let test = sign_in::model_test::read(
+        &control_plane.store,
+        &organization,
+        &harness,
+        &method,
+        &test,
+    )
+    .await?;
+
+    Ok(Json(test.into()))
 }
 
 #[derive(Deserialize)]
@@ -4457,6 +4539,7 @@ const fn wire_resource(resource: Resource) -> wire::Resource {
         Resource::Instance => wire::Resource::Instance,
         Resource::HeldMessage => wire::Resource::HeldMessage,
         Resource::TranscriptPayload => wire::Resource::TranscriptPayload,
+        Resource::SignInTest => wire::Resource::SignInTest,
     }
 }
 
@@ -5360,6 +5443,8 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("DELETE", PROFILE_FILE) => "forget_subscription_profile_file",
         ("GET", SIGN_INS) => "list_sign_ins",
         ("PUT", SIGN_IN) => "save_sign_in",
+        ("POST", SIGN_IN_TESTS) => sign_in::model_test::TEST,
+        ("GET", SIGN_IN_TEST) => sign_in::model_test::READ,
         ("GET", INTEGRATIONS) => "list_integrations",
         ("POST", INTEGRATIONS) => "register_integration",
         ("GET", INTEGRATION) => "show_integration",

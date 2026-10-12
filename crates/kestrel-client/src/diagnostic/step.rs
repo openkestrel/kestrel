@@ -577,7 +577,7 @@ fn listing(resource: &wire::Resource, organization: Option<&str>) -> (Vec<Word>,
         R::Organization => return (given(&["organization", "list"]), None),
         R::Project => "project",
         R::Agent => "agent",
-        R::SubscriptionProfile => "profile",
+        R::SubscriptionProfile | R::SignInTest => "profile",
         R::ProviderCredential => "credential",
         R::Integration => "integration",
         R::Trigger => "trigger",
@@ -604,6 +604,7 @@ fn noun(resource: &wire::Resource) -> &'static str {
         R::Instance => "Instance",
         R::HeldMessage => "Held Message",
         R::TranscriptPayload => "Transcript payload",
+        R::SignInTest => "Sign-in test",
     }
 }
 

@@ -30,6 +30,7 @@ mod interrupt;
 mod lease;
 mod link;
 mod maintenance;
+mod model_test;
 mod observation;
 mod on_open_workspace;
 mod one_supervisor;

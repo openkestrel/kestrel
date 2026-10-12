@@ -7,7 +7,7 @@ use anyhow::{Result, bail};
 use kestrel_operator_types::{SignInMethod, SignInMethodOwnership};
 use tracing::info;
 
-use super::{Source, State, UseResult, filled};
+use super::{Source, State, UseResult, UseSource, filled};
 use crate::catalogue;
 use crate::declined::{Constraint, Next, Reason, Resource};
 use crate::domain::{Organization, Session, SubscriptionProfile, Supplied};
@@ -355,6 +355,8 @@ pub(crate) async fn refused(tx: &mut Tx<'_>, session: &Session) -> Result<()> {
                 &session.agent.harness,
                 model,
                 UseResult::AuthenticationFailed,
+                UseSource::Session,
+                None,
             )
             .await?;
     }
@@ -367,6 +369,13 @@ pub(crate) async fn worked(tx: &mut Tx<'_>, session: &Session) -> Result<()> {
         return Ok(());
     };
     tx.sign_ins()
-        .record_use(revision, &session.agent.harness, model, UseResult::Worked)
+        .record_use(
+            revision,
+            &session.agent.harness,
+            model,
+            UseResult::Worked,
+            UseSource::Session,
+            None,
+        )
         .await
 }

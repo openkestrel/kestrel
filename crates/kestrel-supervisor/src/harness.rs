@@ -52,6 +52,8 @@ pub struct Harness {
     pub thought_level: Option<String>,
     pub interrupt_deadline: Duration,
     pub quiet_period: Duration,
+    /// False where a prompt must never be sent twice, so a lost agent ends the conversation.
+    pub recover: bool,
     pub stderr: mpsc::UnboundedSender<String>,
 }
 
@@ -384,6 +386,9 @@ async fn conversing(
             Ok(Ended::Lost(because)) => because,
             Err(error) => described(&error),
         };
+        if !harness.recover {
+            break Failure::unevidenced(format!("the agent's process was lost ({lost})"));
+        }
         match continuity.recovering(lost.clone()) {
             Ok(()) => {
                 let _ = harness.stderr.send(format!(

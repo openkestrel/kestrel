@@ -6805,6 +6805,8 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::PROFILE_FILE, "delete"),
         (operator::SIGN_INS, "get"),
         (operator::SIGN_IN, "put"),
+        (operator::SIGN_IN_TESTS, "post"),
+        (operator::SIGN_IN_TEST, "get"),
         (operator::INTEGRATIONS, "get"),
         (operator::INTEGRATIONS, "post"),
         (operator::GITHUB_APP, "post"),

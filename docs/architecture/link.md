@@ -246,6 +246,12 @@ with no branch on which harness it drives.
 - The `start`'s auth names an ACP auth method for harnesses that require a login.
 - `KESTREL_`-prefixed variables, the Instance credential among them, are removed from the harness's
   environment.
+- A supervisor started with `KESTREL_PROBE` dials no link (`probe.rs`): it writes the login files
+  the probe names, opens one ACP session in its working directory, sends one prompt and says
+  what happened as JSON lines on stdout, `ready` with the resolved model before the prompt and
+  `finished` after, giving up at the deadline it was handed. A lost harness is never brought
+  back, so the prompt is never sent twice.
+  [A sign-in test](operator-setup.md#testing-a-saved-sign-in) is its only caller.
 - Every `initialize` declares `clientCapabilities._meta.jetbrains.air = {version: 1, capabilities:
   ["asyncTasks", "nativeSubagentSessions"]}`, whatever the harness; one that doesn't know the key
   ignores it.

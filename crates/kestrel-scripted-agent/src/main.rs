@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
@@ -61,11 +61,31 @@ struct Cli {
     /// Plays as an adapter that knows none of the declarations a client makes
     #[arg(long)]
     unaware: bool,
+    /// Appends what each prompt found in this process's environment and home, one JSON line each
+    #[arg(long)]
+    witness: Option<PathBuf>,
+    /// Where `refreshes` keeps its login, beneath its home
+    #[arg(long, default_value = LOGIN)]
+    login: PathBuf,
+    /// A third model to offer a client
+    #[arg(long)]
+    offers: Option<String>,
 }
+
+static LOGIN_AT: OnceLock<PathBuf> = OnceLock::new();
+static ALSO_OFFERED: OnceLock<Option<String>> = OnceLock::new();
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    let Cli { script, unaware } = Cli::parse();
+    let Cli {
+        script,
+        unaware,
+        witness,
+        login,
+        offers,
+    } = Cli::parse();
+    LOGIN_AT.get_or_init(|| login);
+    ALSO_OFFERED.get_or_init(|| offers);
     let prompted_so_far: Arc<Mutex<Vec<String>>> = Arc::default();
     let cancelled: Arc<AtomicBool> = Arc::default();
     let opened_against: Arc<Mutex<Option<PathBuf>>> = Arc::default();
@@ -286,6 +306,9 @@ async fn main() -> Result<()> {
                         _ => None,
                     })
                     .collect();
+                if let Some(witness) = &witness {
+                    witnessed(witness, &prompted)?;
+                }
                 // The turn asks the client a question of its own, so it cannot run inside the
                 // dispatch loop that would have to carry the answer.
                 connection.clone().spawn(async move {
@@ -1035,7 +1058,7 @@ fn refreshed() -> String {
     let Some(home) = std::env::var_os("HOME") else {
         return "this agent has no home".to_owned();
     };
-    let login = std::path::Path::new(&home).join(LOGIN);
+    let login = std::path::Path::new(&home).join(LOGIN_AT.get().expect("the login path"));
 
     match std::fs::read_to_string(&login) {
         Ok(found) => match std::fs::write(&login, format!("{found}{REFRESHED}")) {
@@ -1043,6 +1066,47 @@ fn refreshed() -> String {
             Err(error) => format!("logged in as {found}, and could not refresh it: {error}"),
         },
         Err(_) => "no login was found".to_owned(),
+    }
+}
+
+fn witnessed(witness: &std::path::Path, prompted: &str) -> Result<()> {
+    use std::io::Write as _;
+
+    let environment: serde_json::Map<String, serde_json::Value> = std::env::vars()
+        .map(|(name, value)| (name, value.into()))
+        .collect();
+    let mut home = serde_json::Map::new();
+    if let Some(root) = std::env::var_os("HOME").map(PathBuf::from) {
+        beneath(&root, &root, &mut home);
+    }
+    let line = serde_json::json!({
+        "prompt": prompted,
+        "environment": environment,
+        "home": home,
+    });
+
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(witness)
+        .and_then(|mut file| writeln!(file, "{line}"))
+        .map_err(Error::into_internal_error)
+}
+
+fn beneath(
+    root: &std::path::Path,
+    directory: &std::path::Path,
+    found: &mut serde_json::Map<String, serde_json::Value>,
+) {
+    for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            beneath(root, &path, found);
+        } else if let (Ok(relative), Ok(contents)) =
+            (path.strip_prefix(root), std::fs::read_to_string(&path))
+        {
+            found.insert(relative.to_string_lossy().into_owned(), contents.into());
+        }
     }
 }
 
@@ -1173,10 +1237,11 @@ fn models(current: impl Into<SessionConfigValueId>) -> SessionConfigOption {
         "Model",
         SessionConfigKind::Select(SessionConfigSelect::new(
             current,
-            vec![
-                SessionConfigSelectOption::new(DEFAULT_MODEL, DEFAULT_MODEL),
-                SessionConfigSelectOption::new(OTHER_MODEL, OTHER_MODEL),
-            ],
+            [DEFAULT_MODEL, OTHER_MODEL]
+                .into_iter()
+                .chain(ALSO_OFFERED.get().and_then(Option::as_deref))
+                .map(|model| SessionConfigSelectOption::new(model.to_owned(), model.to_owned()))
+                .collect::<Vec<_>>(),
         )),
     )
     .category(SessionConfigOptionCategory::Model)

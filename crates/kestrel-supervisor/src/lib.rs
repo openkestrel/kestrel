@@ -8,6 +8,7 @@ pub mod harness;
 pub mod link;
 pub mod login;
 pub mod permission;
+mod probe;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, Write as _};
@@ -138,6 +139,10 @@ impl Carrying {
 pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, String>) -> i32 {
     diagnostics.info("supervisor started");
 
+    if let Some(asked) = set(variables, probe::VARIABLE) {
+        let home = set(variables, "HOME").map(PathBuf::from);
+        return probe::run(asked, home.as_deref(), diagnostics).await;
+    }
     let Some(link) = dialled(variables) else {
         diagnostics.info(
             "no link to dial: set KESTREL_LINK, KESTREL_INSTANCE and KESTREL_INSTANCE_CREDENTIAL",
@@ -802,6 +807,7 @@ async fn start_carrying(
             thought_level: harness.thought_level,
             interrupt_deadline: supervising.interrupt_deadline,
             quiet_period: supervising.quiet_period,
+            recover: true,
             stderr: stderr.clone(),
         },
         conversation: None,

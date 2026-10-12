@@ -89,6 +89,8 @@ The data in `crates/kestrel/src/catalogue/harnesses.json` supplies both the oper
 unconfigured dispatch commands; explicit harness-command configuration remains authoritative.
 Subscriptions name Operator ownership and keys Organization ownership. Each method names its
 accepted token/file input, a typed variable/file fill target, and any relay or console link.
+`test_providers` is on a method of a harness that routes by provider: a model test of it names
+its model as `provider/model`, the provider one of those listed.
 Metadata needs no credentials. Each row's `availability` comes from inspecting the configured
 image's `dev.kestrel.harnesses` label at that read (ADR-0048): `available` or `not_carried` after a
 successful inspection, `unavailable` with an `unavailable` diagnostic when the image is missing or
@@ -147,10 +149,50 @@ null. A Turn answered on an established current revision records `model_use` `wo
 model it ran on; a refusal records `authentication_failed` for that model alone, and leaves the
 revision's `provider_check` as it was. Neither rewrites another model's result.
 
+## Testing a saved sign-in
+
+`POST …/sign-ins/{harness}/{method}/tests` takes an optional `{model}` and answers 202 with a
+test in `pending` (`sign_in/model_test.rs`); `GET …/tests/{test}` reads it, 200 whatever it
+found. Saving never starts one, and nothing else spends model usage on a sign-in.
+
+- **Before it is accepted.** The method must be catalogued and its material saved, a
+  subscription in exactly one of the Operator's own Profiles (409 `sign_in_not_saved`, or
+  `several_operator_profiles`). A method with `test_providers` needs a compatible
+  `provider/model` (422); any other tests the model named, or the harness's default. The image
+  is inspected then, never pulled: `Images::read` gates as `admit` does, and its identity is
+  kept on the test. Profile-held material takes a `credential_use` hold in the transaction that
+  writes the test, so a login in use is a 409 `credential_in_use` and no test waits behind it.
+- **Running.** The work role claims a pending test in its dispatch loop and gives it two
+  minutes. It reads the one entry the method fills, refusing `material_replaced` when the
+  revision is no longer the one selected, provisions an Instance named
+  `kestrel-sign-in-test-<id>` and starts the supervisor in
+  [probe mode](link.md#harness-side). That Instance has no checkout, no link and no
+  Workspace; its harness is handed that entry alone, plus the variable that enables only the
+  named provider (`catalogue::confining`). `model` is recorded when the probe says it is
+  ready, before the prompt. The probe gives up at the deadline itself, so a login it refreshed
+  by then is still handed back; one that says nothing five seconds later is stopped.
+- **Ending** is one transaction: a login file the harness rewrote is kept by compare-and-set
+  against the tested revision, evidence is recorded, the hold is released and the test ends.
+
+  | Outcome | State | Recorded |
+  | --- | --- | --- |
+  | `worked` | `completed` | `model_use` `worked` for the harness and model, from `model_test`, with the image |
+  | `authentication_failed` | `failed` | The revision's `authentication`, from `model_test`; `model_use` when the model is known |
+  | `not_covered` | `failed` | `model_use` `not_covered` for that model alone: the harness did not offer it, and no prompt was sent |
+  | `unavailable` | `failed` | Nothing: the deadline, an Instance that could not start, or a work role with nowhere to run one |
+  | `harness_failed`, `material_replaced` | `failed` | Nothing |
+
+  Evidence goes to the revision a kept refresh minted, otherwise to the one tested. A test
+  that records nothing leaves earlier evidence and its `observed_at` as they were.
+- **Stopping.** The Instance is destroyed however the test ends. A control plane that stops
+  ends its running tests `interrupted`, and a login refreshed in one of those is lost with it; one that starts ends every unfinished test
+  `interrupted` and destroys the Instance its name gives, beside clearing every
+  `credential_use`. Nothing resumes a test, since that would send a second prompt.
+
 ## Image capabilities
 
 `capability.rs` resolves the configured image reference again on every read, through
-`docker image inspect` and never a pull, and caches only parsed labels, keyed by the image ID the
+`docker image inspect` and never a pull (the driver creates containers with `--pull never`), and caches only parsed labels, keyed by the image ID the
 reference resolved to. A failed inspection is `Unavailable`; it never falls back to an earlier
 positive result. `Images::admit` gates declaring an Agent, previewing or applying a declaration,
 and a start. It runs before any transaction opens, so a refusal writes nothing. A harness the

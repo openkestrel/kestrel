@@ -263,6 +263,7 @@ pub struct Provisions {
     harnesses: Vec<HarnessCommand>,
     max_active_sessions: NonZeroUsize,
     interrupt_deadline: Duration,
+    sign_in_test_deadline: Duration,
 }
 
 /// The harness an Agent names unless a test says otherwise, spawned as whatever the test plays.
@@ -389,6 +390,23 @@ impl Kestrel {
             harnesses: spawning(harnesses),
             max_active_sessions: NonZeroUsize::new(maximum).expect("at least one active session"),
             interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
+            sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
+        }))
+        .await
+    }
+
+    /// A sign-in test here is given up on after `deadline`, not the two minutes a real one gets.
+    pub async fn dispatching_harnesses_testing_sign_ins_within(
+        supervisor: &Path,
+        harnesses: &[(&str, &str)],
+        deadline: Duration,
+    ) -> Self {
+        Self::booted(Some(Provisions {
+            driver: Driver::LocalExec(LocalExec::running(supervisor)),
+            harnesses: spawning(harnesses),
+            max_active_sessions: NonZeroUsize::new(2).expect("at least one active session"),
+            interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
+            sign_in_test_deadline: deadline,
         }))
         .await
     }
@@ -403,6 +421,7 @@ impl Kestrel {
             harnesses: spawning(&[(HARNESS, command)]),
             max_active_sessions: NonZeroUsize::new(2).expect("at least one active session"),
             interrupt_deadline: deadline,
+            sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
         }))
         .await
     }
@@ -425,6 +444,7 @@ impl Kestrel {
                 harnesses: spawning(harnesses),
                 max_active_sessions: NonZeroUsize::new(2).unwrap(),
                 interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
+                sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
             }),
             kestrel::presence::LEASE,
         )
@@ -541,6 +561,7 @@ impl Kestrel {
             serialized: vec![SERIALIZED.to_owned()],
             interrupt_deadline: provisions.interrupt_deadline,
             quiet_period: Some(QUIET_PERIOD),
+            sign_in_test_deadline: provisions.sign_in_test_deadline,
         });
         let roles = tokio::spawn(all_in_one.run(dispatch, shutdown.clone()));
 
@@ -2489,6 +2510,7 @@ impl Stopped {
                 max_active_sessions: NonZeroUsize::new(maximum)
                     .expect("at least one active session"),
                 interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
+                sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
             }),
             self.follow_lease,
         )
