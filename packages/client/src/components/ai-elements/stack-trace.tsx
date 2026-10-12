@@ -196,7 +196,10 @@ export const StackTraceHeader = memo(({ className, children, ...props }: StackTr
 export type StackTraceErrorProps = ComponentProps<"span">;
 
 export const StackTraceError = memo(({ className, children, ...props }: StackTraceErrorProps) => (
-	<span className={cn("flex flex-1 items-center gap-2 overflow-hidden", className)} {...props}>
+	<span
+		className={cn("flex min-w-0 flex-1 items-center gap-2 overflow-hidden", className)}
+		{...props}
+	>
 		<AlertTriangleIcon aria-hidden className="size-4 shrink-0 text-destructive" />
 		{children}
 	</span>
@@ -318,7 +321,7 @@ export const StackTraceFrames = memo(
 				{framesToShow.map((frame) => (
 					<div
 						className={cn(
-							"text-xs",
+							"whitespace-nowrap text-xs",
 							frame.isInternal ? "text-muted-foreground/50" : "text-foreground/90",
 						)}
 						key={frame.raw}

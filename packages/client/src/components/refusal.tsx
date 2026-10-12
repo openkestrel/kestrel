@@ -98,12 +98,21 @@ function Facts({ facts }: { facts: Fact[] }) {
 	if (facts.length === 0) return null;
 	return (
 		<dl className="grid grid-cols-key-value gap-x-3">
-			{facts.map(([term, detail]) => (
-				<div key={`${term}:${detail}`} className="contents">
-					<dt>{term}</dt>
-					<dd>{isStack(detail) ? <Stack trace={detail} /> : detail}</dd>
-				</div>
-			))}
+			{facts.map(([term, detail]) =>
+				isStack(detail) ? (
+					<div key={`${term}:${detail}`} className="col-span-full grid min-w-0 gap-1">
+						<dt>{term}</dt>
+						<dd className="min-w-0">
+							<Stack trace={detail} />
+						</dd>
+					</div>
+				) : (
+					<div key={`${term}:${detail}`} className="contents">
+						<dt>{term}</dt>
+						<dd>{detail}</dd>
+					</div>
+				),
+			)}
 		</dl>
 	);
 }

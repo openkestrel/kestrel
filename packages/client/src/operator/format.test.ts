@@ -7,7 +7,9 @@ describe("a moment", () => {
 		expect(ago("2026-09-30T09:59:55Z", now)).toBe("just now");
 		expect(ago("2026-09-30T09:59:00Z", now)).toBe("a minute ago");
 		expect(ago("2026-09-30T09:58:00Z", now)).toBe("2 minutes ago");
+		expect(ago("2026-09-30T09:00:00Z", now)).toBe("an hour ago");
 		expect(ago("2026-09-30T07:00:00Z", now)).toBe("3 hours ago");
+		expect(ago("2026-09-29T08:00:00Z", now)).toBe("a day ago");
 		expect(ago("2026-09-27T10:00:00Z", now)).toBe("3 days ago");
 		expect(ago("not a time", now)).toBe("at an unknown time");
 	});

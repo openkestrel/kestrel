@@ -28,8 +28,10 @@ function span(seconds: number): string {
 	const minutes = Math.round(seconds / 60);
 	if (minutes < 60) return `${minutes} minutes`;
 	const hours = Math.round(minutes / 60);
+	if (hours === 1) return "an hour";
 	if (hours < 24) return `${hours} hours`;
-	return `${Math.round(hours / 24)} days`;
+	const days = Math.round(hours / 24);
+	return days === 1 ? "a day" : `${days} days`;
 }
 
 export function size(bytes: number): string {
