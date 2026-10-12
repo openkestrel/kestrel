@@ -11,6 +11,7 @@
 		"build": "bun run generate && vite build",
 		"typecheck": "bun run generate && tsc --noEmit",
 		"test": "vitest run",
+		"test:components": "playwright test --config component-tests/playwright.config.ts",
 		"e2e": "bun run build && playwright test",
 		"check": "oxlint --type-aware --deny-warnings && oxfmt --check"
 	},
