@@ -93,8 +93,15 @@ test("the Options disclosure opens by keyboard and holds the override, Profile a
 	await expect(options).toHaveAttribute("aria-expanded", "true");
 
 	await expect(page.getByLabel("Branch")).toHaveAttribute("placeholder", "kestrel/<workspace>");
+	await expect(page.locator("[data-model-line]")).toHaveText("Uses the harness's default.");
 	await page.getByLabel("Model").fill("scripted-max");
 	await expect(page.getByText("scripted-max", { exact: true })).toBeVisible();
+	await expect(page.locator("[data-model-line]")).toContainText(
+		"Overrides the harness's default with scripted-max",
+	);
+	await page.getByRole("button", { name: "Use the harness's default" }).click();
+	await expect(page.getByLabel("Model")).toHaveValue("");
+	await expect(page.getByText("scripted-max", { exact: true })).toHaveCount(0);
 });
 
 test("a refusal lands next to its field, opens the disclosure, and keeps every input", async ({

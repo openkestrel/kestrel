@@ -849,7 +849,7 @@ struct SessionRecord {
     sign_in_method: Option<String>,
     supplied: Vec<wire::SuppliedMaterial>,
     title: Option<String>,
-    options: Vec<SessionOptionRecord>,
+    options: Vec<wire::SessionOption>,
     changing_options: Vec<domain::ChangingOption>,
     commands: Vec<domain::SessionCommand>,
     interrupting: Option<domain::Interrupting>,
@@ -1098,11 +1098,50 @@ struct SessionReferenceRecord {
     name: String,
 }
 
-#[derive(Serialize)]
-struct SessionOptionRecord {
-    #[serde(flatten)]
-    option: domain::SessionOption,
-    warns_cache: bool,
+// The contract carries both lists on every option, which the domain's boolean has none of.
+fn shown_option(option: domain::SessionOption, harness: &str) -> wire::SessionOption {
+    let offered = |value: domain::SessionOptionValue| wire::SessionOptionValue {
+        value: value.value,
+        name: value.name,
+        description: value.description,
+    };
+    let warns_cache = warns_cache(harness, option.category.as_deref());
+    let (kind, current, values, groups) = match option.kind {
+        domain::SessionOptionKind::Select {
+            current,
+            values,
+            groups,
+        } => (
+            wire::SessionOptionKind::Select,
+            wire::SessionOptionCurrent::SelectedOptionValue(current),
+            values.into_iter().map(offered).collect(),
+            groups
+                .into_iter()
+                .map(|group| wire::SessionOptionGroup {
+                    group: group.group,
+                    name: group.name,
+                    values: group.values.into_iter().map(offered).collect(),
+                })
+                .collect(),
+        ),
+        domain::SessionOptionKind::Boolean { current } => (
+            wire::SessionOptionKind::Boolean,
+            wire::SessionOptionCurrent::ToggleOptionValue(current),
+            Vec::new(),
+            Vec::new(),
+        ),
+    };
+    wire::SessionOption {
+        id: option.id,
+        name: option.name,
+        description: option.description,
+        category: option.category,
+        kind,
+        current,
+        values,
+        groups,
+        warns_cache,
+    }
 }
 
 /// ADR-0041: no adapter reports which option categories keep the prompt cache, so kestrel lists
@@ -1280,10 +1319,7 @@ impl SessionRecord {
         let options = session
             .options
             .into_iter()
-            .map(|option| SessionOptionRecord {
-                warns_cache: warns_cache(&harness, option.category.as_deref()),
-                option,
-            })
+            .map(|option| shown_option(option, &harness))
             .collect();
         Self {
             id: session.id.to_string(),

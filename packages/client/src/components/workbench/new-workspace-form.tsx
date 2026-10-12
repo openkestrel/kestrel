@@ -1,12 +1,13 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
-import { type FormEvent, type ReactNode, useState } from "react";
-import { NextSteps, Refusal } from "#/components/refusal";
+import { type FormEvent, useState } from "react";
+import { described, Field, placement } from "#/components/field";
+import { ModelChoice } from "#/components/model-choice";
+import { Refusal } from "#/components/refusal";
 import { Button } from "#/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "#/components/ui/collapsible";
 import { Input } from "#/components/ui/input";
-import { Label } from "#/components/ui/label";
 import { NativeSelect } from "#/components/ui/native-select";
 import { Skeleton } from "#/components/ui/skeleton";
 import { Textarea } from "#/components/ui/textarea";
@@ -18,6 +19,7 @@ import {
 	type NewWorkspaceDraft,
 } from "#/lib/new-workspace-draft";
 import type { WorkspaceDeclaration } from "#/operator/generated";
+import { HARNESS_DEFAULT } from "#/operator/model-choice";
 import {
 	agentsQuery,
 	newWorkspaceDeclaration,
@@ -34,16 +36,6 @@ import { openingQueueLine } from "#/operator/queue-line";
 import { knownQueue } from "#/operator/queue-read";
 import { diagnosisOf } from "#/operator/transport";
 import { PaneHeading } from "./workbench";
-
-const PLACED_FIELDS = new Set([
-	"project",
-	"agent",
-	"profile",
-	"branch",
-	"model",
-	"brief",
-	"participant",
-]);
 
 const OPTION_FIELDS = new Set(["profile", "branch", "model"]);
 
@@ -103,18 +95,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 	});
 
 	const refused = opening.isError ? diagnosisOf(opening.error) : undefined;
-	const placed = (field: string): string | undefined =>
-		refused?.field === field ? refused.message : missing[field];
-	const at_the_top = refused !== undefined && !PLACED_FIELDS.has(refused.field ?? "");
-	// The error already stands at its field; the rest are repairs, such as declaring what is missing.
-	const repair = (field: string) =>
-		refused?.field === field ? (
-			<NextSteps
-				steps={refused.next_steps.filter(
-					(step) => !(step.action === "correct_field" && step.field === field),
-				)}
-			/>
-		) : undefined;
+	const { placed, atTheTop, repair, correct } = placement(opening.error, missing, FIELD_IDS);
 
 	if (draft === undefined || projects.isPending || agents.isPending || profiles.isPending) {
 		return (
@@ -157,6 +138,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 			absent.participant = "Your name is needed before sending.";
 		}
 		setMissing(absent);
+		opening.reset();
 		if (Object.keys(absent).length > 0) return;
 
 		opening.mutate(declaration);
@@ -166,7 +148,7 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 		<>
 			<PaneHeading level={1}>New Workspace</PaneHeading>
 			<form onSubmit={submit} className="grid gap-4 p-4">
-				{at_the_top && <Refusal error={opening.error} correct={correct} />}
+				{atTheTop && <Refusal error={opening.error} correct={correct} />}
 
 				<Field
 					label="Project"
@@ -216,6 +198,19 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 							</option>
 						))}
 					</NativeSelect>
+					{agents.data.length === 0 && (
+						<p className="text-xs" data-no-agents>
+							No Agent is declared yet.{" "}
+							<Link
+								className="underline"
+								to="/organizations/$organization/settings/agents"
+								params={{ organization }}
+							>
+								Declare one in Agents settings
+							</Link>
+							.
+						</p>
+					)}
 				</Field>
 
 				<Collapsible open={draft.options} onOpenChange={(options) => hold({ options })}>
@@ -230,16 +225,16 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 								htmlFor="new-workspace-model"
 								error={placed("model")}
 								repair={repair("model")}
-								hint="Without one, the Agent's, then the harness's default."
 							>
-								<Input
+								<ModelChoice
 									id="new-workspace-model"
 									value={draft.model}
-									onChange={(event) => hold({ model: event.target.value })}
+									onChange={(model) => hold({ model })}
+									fallback={agent?.model ? `the Agent's ${agent.model}` : HARNESS_DEFAULT}
 									aria-invalid={placed("model") !== undefined}
 									aria-describedby={described(
 										"new-workspace-model",
-										true,
+										false,
 										placed("model") !== undefined,
 									)}
 								/>
@@ -377,47 +372,4 @@ export function NewWorkspaceForm({ organization }: { organization: string }) {
 			</form>
 		</>
 	);
-}
-
-function correct(field: string) {
-	document.getElementById(FIELD_IDS[field] ?? "")?.focus();
-}
-
-function Field({
-	label,
-	htmlFor,
-	error,
-	repair,
-	hint,
-	children,
-}: {
-	label: string;
-	htmlFor: string;
-	error?: string;
-	repair?: ReactNode;
-	hint?: string;
-	children: ReactNode;
-}) {
-	return (
-		<div className="grid gap-1.5">
-			<Label htmlFor={htmlFor}>{label}</Label>
-			{children}
-			{hint && (
-				<p id={`${htmlFor}-hint`} className="text-muted-foreground text-xs">
-					{hint}
-				</p>
-			)}
-			{error && (
-				<p id={`${htmlFor}-error`} role="alert" className="text-destructive text-xs">
-					{error}
-				</p>
-			)}
-			{repair}
-		</div>
-	);
-}
-
-function described(id: string, hint: boolean, error: boolean): string | undefined {
-	const ids = [hint ? `${id}-hint` : undefined, error ? `${id}-error` : undefined].filter(Boolean);
-	return ids.length > 0 ? ids.join(" ") : undefined;
 }

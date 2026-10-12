@@ -1,8 +1,10 @@
+import { ModelChoice } from "#/components/model-choice";
 import { Refusal } from "#/components/refusal";
 import { Badge } from "#/components/ui/badge";
 import { Button } from "#/components/ui/button";
 import { mayWriteOptions, nameToChangeOptions, optionValues } from "#/operator/composer";
 import type { Presence, Session, TranscriptSessionState, Workspace } from "#/operator/generated";
+import { changingModel, modelOption } from "#/operator/model-choice";
 import { useParticipant } from "#/operator/participant";
 import { sessionPhase } from "#/operator/session-state";
 import {
@@ -41,6 +43,8 @@ export function SessionHeader({
 	const interrupting = interruptingLabel(session);
 	const options = session?.options ?? [];
 	const canWrite = mayWriteOptions(session?.state) && name !== null;
+	const model = modelOption(options);
+	const changing = changingModel(session);
 
 	return (
 		<header className="shrink-0 border-b px-4 py-2" data-session-header>
@@ -96,22 +100,34 @@ export function SessionHeader({
 							data-option={option.id}
 						>
 							<span className="text-muted-foreground">{option.name}:</span>
-							<span data-option-current>{optionCurrent(option)}</span>
-							{optionValues(option)
-								.filter((value) => value.value !== String(option.current))
-								.map((value) => (
-									<Button
-										key={value.value}
-										data-option-value={value.value}
-										disabled={!canWrite || optionWrite.writing}
-										onClick={() => optionWrite.choose({ option, value: value.value })}
-										size="xs"
-										type="button"
-										variant="outline"
-									>
-										{value.name}
-									</Button>
-								))}
+							{option === model ? (
+								<ModelChoice
+									id="session-model"
+									offered={option}
+									value={String(option.current)}
+									disabled={!canWrite || optionWrite.writing || changing !== undefined}
+									onChange={(value) => optionWrite.choose({ option, value })}
+								/>
+							) : (
+								<>
+									<span data-option-current>{optionCurrent(option)}</span>
+									{optionValues(option)
+										.filter((value) => value.value !== String(option.current))
+										.map((value) => (
+											<Button
+												key={value.value}
+												data-option-value={value.value}
+												disabled={!canWrite || optionWrite.writing}
+												onClick={() => optionWrite.choose({ option, value: value.value })}
+												size="xs"
+												type="button"
+												variant="outline"
+											>
+												{value.name}
+											</Button>
+										))}
+								</>
+							)}
 							{option.kind === "boolean" && (
 								<Button
 									data-option-toggle

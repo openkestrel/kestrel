@@ -23,6 +23,7 @@
 		"@tanstack/react-router": "1.170.40",
 		"@tanstack/react-start": "1.168.59",
 		"class-variance-authority": "0.7.1",
+		"cmdk": "1.1.1",
 		"cn": "0.4.0",
 		"lucide-react": "0.577.0",
 		"react": "19.2.0",

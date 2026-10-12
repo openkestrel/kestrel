@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
+import { Page, PageTitle } from "#/components/page";
 import { Diagnosis, Refusal, RetryFallback } from "#/components/refusal";
 import { Button } from "#/components/ui/button";
 import { Label } from "#/components/ui/label";
@@ -38,13 +39,10 @@ export function Setup({ organization }: { organization?: string }) {
 
 	const error = install.isError ? install.error : readiness.isError ? readiness.error : null;
 	return (
-		<main className="mx-auto grid min-h-dvh w-full max-w-2xl content-start gap-6 px-6 py-12 sm:py-20">
-			<Link to="/" className="w-fit font-medium">
-				kestrel
-			</Link>
+		<Page>
 			{error !== null ? (
 				<>
-					<h1 className="text-xl font-semibold">Setup unavailable</h1>
+					<PageTitle>Setup unavailable</PageTitle>
 					<Refusal error={error} retry={() => void refresh()} />
 					<RetryFallback error={error} retry={() => void refresh()} label="Read again" />
 				</>
@@ -52,9 +50,7 @@ export function Setup({ organization }: { organization?: string }) {
 				<Skeleton className="h-24 w-full" />
 			) : install.data.initial_setup_complete ? (
 				<>
-					<h1 ref={heading} tabIndex={-1} className="text-xl font-semibold">
-						Current readiness
-					</h1>
+					<PageTitle ref={heading}>Current readiness</PageTitle>
 					<p className="text-sm text-muted-foreground">
 						Initial setup is complete. Repair any current gaps below.
 					</p>
@@ -63,9 +59,7 @@ export function Setup({ organization }: { organization?: string }) {
 				</>
 			) : (
 				<>
-					<h1 ref={heading} tabIndex={-1} className="text-xl font-semibold">
-						{naming ? "Set up kestrel" : "Continue setup"}
-					</h1>
+					<PageTitle ref={heading}>{naming ? "Set up kestrel" : "Continue setup"}</PageTitle>
 					<Questionnaire
 						item={naming ? "name" : "remaining"}
 						items={[{ name: "name" }, { name: "remaining" }]}
@@ -118,7 +112,7 @@ export function Setup({ organization }: { organization?: string }) {
 					</Questionnaire>
 				</>
 			)}
-		</main>
+		</Page>
 	);
 }
 
@@ -278,8 +272,17 @@ function OrganizationLink({ organization }: { organization: string | null }) {
 	return organization === null ? (
 		<Link to="/">Choose an Organization</Link>
 	) : (
-		<Link className="w-fit underline" to="/organizations/$organization" params={{ organization }}>
-			Open Workspaces
-		</Link>
+		<nav aria-label="Organization" className="flex flex-wrap gap-x-4 gap-y-1">
+			<Link className="underline" to="/organizations/$organization" params={{ organization }}>
+				Open Workspaces
+			</Link>
+			<Link
+				className="underline"
+				to="/organizations/$organization/settings/agents"
+				params={{ organization }}
+			>
+				Agents
+			</Link>
+		</nav>
 	);
 }

@@ -187,8 +187,8 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   `docker compose --env-file compose.source.env up -d` is the path that runs.
 
 - **Typed next steps** ([ADR-0052](../adr/0052-a-refusal-carries-its-next-steps.md)): the CLI
-  still reads refusal sentences for corrections, and the browser has no sign-in or settings
-  screen to bind those steps to; Integration and GitHub App refusals still answer a plain
+  still reads refusal sentences for corrections, and the browser has Agents settings but no sign-in
+  or repository screen to bind those steps to; Integration and GitHub App refusals still answer a plain
   `Refusal`. Readiness carries the shared contract, but its `sign_in` and `connect_github`
   steps render as sentences until `kestrel login` and `kestrel integration github connect`
   exist, and only bare `kestrel` reads it: `kestrel status` and `kestrel start` do not yet. A
