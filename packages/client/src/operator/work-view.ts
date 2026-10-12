@@ -1,4 +1,5 @@
 import type { BundledLanguage } from "shiki";
+import type { CodeLanguage } from "#/components/ai-elements/code-block";
 import { ago } from "./format";
 import type { FileEntry, Session, WorkInstanceReport, WorkspaceWork } from "./generated";
 import type { Delivered } from "./transcript";
@@ -134,17 +135,11 @@ const LANGUAGES: Record<string, BundledLanguage> = {
 	yml: "yaml",
 };
 
-export function languageFor(path: string): BundledLanguage {
+export function languageFor(path: string): CodeLanguage {
 	const { name } = splitPath(path);
 	const dot = name.lastIndexOf(".");
-	if (dot <= 0) return plain();
-	return LANGUAGES[name.slice(dot + 1).toLowerCase()] ?? plain();
-}
-
-// Shiki reads "text" as plain text, but does not list it among its bundled languages.
-function plain(): BundledLanguage {
-	// oxlint-disable-next-line typescript/no-unsafe-type-assertion
-	return "text" as BundledLanguage;
+	if (dot <= 0) return "plaintext";
+	return LANGUAGES[name.slice(dot + 1).toLowerCase()] ?? "plaintext";
 }
 
 export function sessionOutcome(session: Session): string | undefined {

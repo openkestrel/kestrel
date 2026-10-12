@@ -125,7 +125,7 @@ describe("a file's language", () => {
 		expect(languageFor("src/components/workbench/work-pane.tsx")).toBe("tsx");
 		expect(languageFor("README.md")).toBe("markdown");
 		expect(languageFor("scripts/run.sh")).toBe("shellscript");
-		expect(languageFor("Dockerfile")).toBe("text");
+		expect(languageFor("Dockerfile")).toBe("plaintext");
 	});
 });
 
