@@ -97,6 +97,10 @@ ever live, so an unreachable stream never reads as an empty Transcript. `src/ope
 is the one mapping from Transcript entries to what a component takes, for the flow and for an opened
 Activity alike: a message `said` under a Session's id is the Agent's and is unframed Markdown, anyone
 else's is a bubble under their name, and a Session-ended entry says how it went and why it failed.
+An Activity (`src/components/workbench/transcript/activity-row.tsx`) is one folded line, open while
+the Session works in it, whose entries are read only when it is opened: a slow, empty or failed read
+each says which it is, and a failed one keeps the rows it had. A running call is a row from
+`session_state` keyed by its `call_id`, which the recorded entry replaces where it stands.
 `MessageResponse` (`src/components/ai-elements/message.tsx`) renders the Markdown with Streamdown; no
 AI SDK runtime is a dependency. Every queue reader shares
 one read (`src/components/workbench/queue-read.tsx`) that says when it is slow, and on failure
