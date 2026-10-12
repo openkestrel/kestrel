@@ -15,3 +15,5 @@ src/operator/generated
 src/routeTree.gen.ts
 test-results
 playwright-report
+.playwright-cli
+evidence

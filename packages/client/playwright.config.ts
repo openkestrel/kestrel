@@ -36,7 +36,8 @@ export default defineConfig({
 			env: {
 				XDG_DATA_HOME: mkdtempSync(join(tmpdir(), "kestrel-client-e2e-caddy-")),
 				KESTREL_CLIENT_LISTEN_PORT: String(client),
-				KESTREL_CLIENT_ROOT: resolve(import.meta.dirname, "dist/client"),
+				KESTREL_CLIENT_ROOT:
+					process.env.KESTREL_CLIENT_ROOT ?? resolve(import.meta.dirname, "dist/client"),
 				KESTREL_CONTROL_PLANE: `http://127.0.0.1:${operator}`,
 			},
 		},

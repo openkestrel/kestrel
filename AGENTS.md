@@ -73,6 +73,13 @@ the user supplies another baseline. The test seams documented in
 [conventions](docs/architecture/conventions.md#tests) are pre-agreed; confirm a new seam before
 writing tests against it.
 
+### Visual evidence
+
+A pull request that changes what the browser Client shows carries screenshots, and a recording when
+something moves, in its Evidence section. [Visual evidence](docs/agents/visual-evidence.md) says
+what to show, how to capture it with `playwright-cli` from a paused e2e spec, and how to upload it
+with `gh pr edit --attach`.
+
 ### Debug info
 
 Workspace code builds with line-tables-only debuginfo and dependencies with none, so builds are
