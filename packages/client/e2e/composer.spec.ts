@@ -168,6 +168,9 @@ function sessionRead(overrides: Record<string, unknown> = {}) {
 		mode: null,
 		thought_level: null,
 		worked_model: "scripted-mini",
+		sign_in_method: null,
+		supplied: [],
+		diagnostic: null,
 		title: null,
 		options: [],
 		changing_options: [],
@@ -183,6 +186,10 @@ function sessionRead(overrides: Record<string, unknown> = {}) {
 		supervisor_version: null,
 		usage: { context_used: 1_200, context_size: 200_000, cost: null },
 		tools: [],
+		units: [],
+		last_activity_at: null,
+		observation: { availability: "unavailable", last: null },
+		depends_on: [],
 		message_buffering: false,
 		thought_buffering: false,
 		...overrides,
@@ -1014,9 +1021,9 @@ test("Session controls and actual context belong to the composer footer, leaving
 	await expect(page.locator("[data-session-header]")).not.toContainText("/compact");
 	await page.setViewportSize({ width: 375, height: 800 });
 	await expect(composer.getByRole("button", { name: "Model: scripted-mini" })).toBeVisible();
-	expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
-		true,
-	);
+	await expect
+		.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+		.toBe(true);
 });
 
 test("authors can amend and withdraw Held Messages before the Brief is ready", async ({
