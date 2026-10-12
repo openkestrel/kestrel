@@ -163,6 +163,9 @@ async fn sweeping_leases(
     while !shutdown.is_cancelled() {
         // The database being busy is not a reason to stop keeping time: the same due times
         // are still there to be found on the next sweep.
+        if let Err(error) = integration::manifest::expire(store).await {
+            warn!(%error, "GitHub App setup expiry could not be swept");
+        }
         match sweep(store, summaries).await {
             Ok(expired) => {
                 for (session, exit) in expired {

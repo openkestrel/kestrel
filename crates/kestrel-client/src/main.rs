@@ -298,8 +298,6 @@ enum IntegrationCommand {
         /// Create the private App under this GitHub organization instead of your personal account
         #[arg(long)]
         app_organization: Option<String>,
-        #[arg(long)]
-        repository: String,
         /// Browser-reachable loopback origin (defaults to the control-plane URL)
         #[arg(long)]
         callback_base: Option<String>,
@@ -1304,7 +1302,6 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
         Command::Integration(IntegrationCommand::CreateGithubApp {
             name,
             app_organization,
-            repository,
             callback_base,
             webhook_base,
             api: github_api,
@@ -1313,14 +1310,21 @@ async fn run(client: Client, matches: &clap::ArgMatches, invocation: &Invocation
             let result = api
                 .post(
                     &["organizations", &organization, "github-app"],
-                    &json!({
-                        "name": name, "repository": repository,
-                        "callback_base": callback_base.unwrap_or_else(|| control_plane.to_string()),
-                        "webhook_base": webhook_base, "api": github_api, "app_organization": app_organization,
-                    }),
+                    &wire::GithubAppStart {
+                        name,
+                        callback_base: callback_base.unwrap_or_else(|| control_plane.to_string()),
+                        webhook_base: webhook_base.map(Some),
+                        api: github_api.map(Some),
+                        app_organization: app_organization.map(Some),
+                    },
                 )
                 .await?;
-            show(&presentation, &view::View::Value("url"), &result)?;
+            let started: wire::GithubAppStarted = serde_json::from_value(result)?;
+            show(
+                &presentation,
+                &view::View::Value("url"),
+                &serde_json::to_value(started)?,
+            )?;
         }
         Command::Integration(IntegrationCommand::Github(GithubCommand::Register {
             name,

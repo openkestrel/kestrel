@@ -205,11 +205,8 @@ impl<'a> Database<'a> {
     }
 
     pub async fn expire_github_app_flows(&self) {
-        self.execute(
-            "UPDATE github_app_flow SET phase = 'ready', expires_at = '2000-01-01'",
-            &[],
-        )
-        .await;
+        self.execute("UPDATE github_app_flow SET expires_at = '2000-01-01'", &[])
+            .await;
     }
 
     /// Records `count` labelled Events as already received and checkpointed, because recording
@@ -389,12 +386,13 @@ impl<'a> Database<'a> {
 
     pub async fn sealed_github_app_configuration(&self) -> String {
         let pool = self.pool().await;
-        let sealed = sqlx::query_scalar("SELECT configuration_sealed FROM github_app_flow")
-            .fetch_one(&pool)
-            .await
-            .expect("the app flow should read");
+        let sealed: Option<String> =
+            sqlx::query_scalar("SELECT configuration_sealed FROM github_app_flow")
+                .fetch_one(&pool)
+                .await
+                .expect("the app flow should read");
         pool.close().await;
-        sealed
+        sealed.unwrap_or_default()
     }
 
     pub async fn github_integration_at_rest(&self) -> GithubIntegrationAtRest {

@@ -61,18 +61,18 @@ docker compose --env-file compose.source.env up -d
 After creating an organization (for example with `kestrel operator name`), run:
 
 ```sh
-kestrel integration create-github-app origin --repository OWNER/REPOSITORY
+kestrel integration create-github-app origin
 ```
 
 For a repository owned by a GitHub organization, add `--app-organization OWNER` so the private App belongs to that organization. You need permission to create and install Apps there.
 
-Open the printed URL in your browser, click **Create GitHub App**, and confirm its name on GitHub. Then follow the installation link and select the requested repository. GitHub returns you to Kestrel, which verifies the installation and registers the Integration. `kestrel integration list` shows it when setup is complete. You never download or paste the private key; Kestrel seals it and the generated webhook secret beside its database.
+Open the printed URL in your browser, click **Create GitHub App**, and confirm its name on GitHub. Then follow the installation link and grant access to the repositories you want to choose from. GitHub returns you to Kestrel, which verifies that the installation belongs to the created App. Explicitly choose one accessible repository to register the Integration; installation alone grants no work authority. The server setup tab also provides installation discovery and repository selection while the browser Client picker is developed. `kestrel integration list` shows it when setup is complete. You never download or paste the private key; Kestrel seals it and the generated webhook secret beside its database.
 
-Complete setup within one hour. The callback uses the browser, so localhost works without exposing the operator API. If you reach Kestrel through a tunnel or the browser Client, pass its loopback origin, for example `--callback-base http://localhost:7719`. Keep that address reachable until setup finishes. If GitHub does not return after installation, use the **finish setup after installing** link in the setup tab.
+Complete setup within one hour. The callback uses the browser, so localhost works without exposing the operator API. If you reach Kestrel through a tunnel or the browser Client, pass its loopback origin, for example `--callback-base http://localhost:7719`. Keep that address reachable until setup finishes. If GitHub does not return after installation, use the **discover installations and choose one repository** link in the setup tab.
 
 The App subscribes to issues, issue comments, and pull requests, and Kestrel polls the App's delivery log every minute. Polling learns everything a webhook does, about a minute later and back as far as GitHub keeps deliveries (three days); a poll that has been away longer reports what it lost on `kestrel integration list`. If GitHub can reach your webhook listener, add `--webhook-base https://hooks.example.com` and Kestrel fills in the webhook path: deliveries then arrive at once, and the poll recognises them. Without one, the App's hook points at an address that never resolves, because GitHub refuses a localhost URL. Expose the webhook listener (7717), keeping the operator listener private. The App requests contents, issues, and pull requests read/write, and metadata read. Each Kestrel installation creates its own App.
 
-A refused or interrupted code exchange cannot be replayed. Start a new flow if it fails; delete any unused App in GitHub's developer settings. A pending successful exchange survives a control-plane restart; revisit the setup tab's finish link within the hour.
+A refused or interrupted code exchange cannot be replayed. Start a new flow if it fails; delete any unused App in GitHub's developer settings. A pending successful exchange survives a control-plane restart; revisit the setup tab within the hour. Empty repository lists can be retried after granting installation access, and repository pages include GitHub's default branches. Completion, cancellation, and expiry erase the temporary local credentials; completed setup retains a safe outcome for status and repeated finish requests within the hour. Cancel with `DELETE /operator/github-app/flows/{flow}` using the flow reference returned when setup started. Cancellation and expiry never uninstall or delete the external App; perform abandoned-App cleanup manually in GitHub settings.
 
 ## Start work in a repository
 

@@ -160,3 +160,29 @@ the image and then retry the capability read. Label membership admits a harness 
 configured command alone; a command still missing at spawn fails the Session with
 `executable_missing` evidence. The serve role logs one inspection at startup and serves either
 way. `Images::read` is the one capability read for any later consumer.
+
+## GitHub App setup
+
+`POST …/github-app` starts a one-hour manifest flow without a repository and returns its setup
+`url` and safe `flow` reference. A pending flow is separate from an Integration and lends no work
+authority. App conversion is claimed once, sealed across restart, and followed by authenticated
+installation discovery. The installation callback verifies the supplied ID through the created
+App before returning to the configured Client's `/setup` route with `github_app_flow`.
+
+`GET /operator/github-app/flows/{flow}` exposes the phase, expiry, selected installation and safe
+completed outcome, never App material. Its `installations` and `repositories` reads page GitHub's
+current installation-scoped access; repository rows include default branches. `POST …/finish`
+requires an explicit repository, rechecks installation ownership and repository access, then saves
+one single-repository Integration and its safe outcome in the same transaction. Repeated or
+concurrent finishes for that repository return the same result. Changing the installation,
+cancelling or expiring while a check runs fences its commit.
+
+The server setup pages remain an independent fallback for installation discovery, repository
+selection and explicit completion. Browser-integrated picker behavior belongs to the browser
+setup owner. The authored operator document supplies all JSON request and response types.
+
+Completion and `DELETE …/flows/{flow}` erase temporary sealed material; the timer and reads erase
+expired material. Safe completion remains readable and idempotent until the original expiry.
+Failed or uncertain one-time conversion cannot replay its code: status explains restart and manual
+cleanup. No flow action deletes or uninstalls a remote App. Without a public webhook base the active
+hook stays at `https://unreachable.invalid`; registered Integrations always poll Deliveries.
