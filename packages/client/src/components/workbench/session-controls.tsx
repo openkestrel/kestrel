@@ -38,8 +38,10 @@ export function SessionControls({
 				)
 			: "0%";
 	return (
+		// oxlint-disable jsx-a11y/prefer-tag-over-role -- A fieldset's box and legend would fight the footer's flex row; only a name is wanted.
 		<div
 			className="flex w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs"
+			role="group"
 			aria-label="Session controls"
 		>
 			{usage && (
@@ -162,5 +164,6 @@ export function SessionControls({
 				</div>
 			)}
 		</div>
+		// oxlint-enable jsx-a11y/prefer-tag-over-role
 	);
 }
