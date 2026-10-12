@@ -62,7 +62,7 @@ test("every Work pane view has no serious violation", async ({ page, request }) 
 	await noSeriousViolation(page);
 
 	const work = page.getByRole("region", { name: "Work", exact: true });
-	for (const tab of ["Diff", "Files", "Sessions", "People"]) {
+	for (const tab of ["Changes", "Files", "Sessions", "People"]) {
 		// oxlint-disable-next-line no-await-in-loop -- each view is audited after its tab is chosen.
 		await auditView(work, page, tab);
 	}

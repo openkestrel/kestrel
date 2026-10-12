@@ -64,10 +64,16 @@ test("a Workspace with no Instance says so, and shows its Session and joined Par
 	await expect(work.getByText("pull requests unavailable")).toBeVisible();
 	await expect(work.locator("[data-work-unavailable]")).toContainText("No Instance is running");
 
-	await work.getByRole("tab", { name: "Diff" }).click();
-	await expect(work.getByRole("tabpanel", { name: "Diff" }).getByRole("alert")).toContainText(
-		"has no Instance to read",
-	);
+	await work.getByRole("tab", { name: "Changes" }).click();
+	const changes = work.getByRole("tabpanel", { name: "Changes" });
+	// The Commits read is refused too, so the Changes refusal is named by position.
+	const refused = changes.getByRole("alert").first();
+	await expect(refused).toContainText("has no Instance to read");
+	const inspection = refused.locator('[data-step="inspect_resource"]');
+	await expect(inspection).toBeVisible();
+	await expect(inspection.getByRole("link", { name: /^Inspect the Workspace/ })).toBeVisible();
+	await expect(inspection.getByRole("code")).toHaveText(/^kestrel workspace show /);
+	await expect(inspection.getByRole("button", { name: /^Copy the command/ })).toBeVisible();
 
 	await work.getByRole("tab", { name: "Files" }).click();
 	await expect(work.getByRole("tabpanel", { name: "Files" }).getByRole("alert")).toContainText(
@@ -156,6 +162,10 @@ class Reads {
 	work: Record<string, unknown> | undefined;
 	sessions: unknown[] | undefined;
 	changes = new Map<string, unknown>();
+	changeReads: string[] = [];
+	changesDelay = 0;
+	changesFailure: { status: number; body: unknown } | undefined;
+	changesUnavailable = false;
 	commits: unknown = { repositories: [] };
 	stashes: unknown = { repositories: [] };
 	files = new Map<string, unknown>();
@@ -210,11 +220,32 @@ class Reads {
 		await page.route(
 			(url) => url.pathname === `${base}/${this.workspaceName}/changes`,
 			async (route) => {
-				const scope = new URL(route.request().url()).searchParams.get("scope") ?? "";
+				const parameters = new URL(route.request().url()).searchParams;
+				const scope = parameters.get("scope") ?? "";
+				const paths = parameters.getAll("path");
+				this.changeReads.push(route.request().url());
+				if (this.changesDelay > 0) {
+					await new Promise((waited) => setTimeout(waited, this.changesDelay));
+				}
+				if (this.changesUnavailable) {
+					await route.continue();
+					return;
+				}
+				if (this.changesFailure) {
+					await route.fulfill({
+						status: this.changesFailure.status,
+						contentType: "application/json",
+						body: JSON.stringify(this.changesFailure.body),
+					});
+					return;
+				}
 				await route.fulfill({
 					status: 200,
 					contentType: "application/json",
-					body: JSON.stringify(this.changes.get(scope) ?? { repositories: [] }),
+					body: JSON.stringify(
+						this.changes.get(`${scope}|${paths.join(",")}`) ??
+							this.changes.get(scope) ?? { repositories: [] },
+					),
 				});
 			},
 		);
@@ -394,25 +425,40 @@ test("committed-but-unpushed, changed and untracked work show separately", async
 	await expect(work.locator("[data-reported]")).toContainText("reported just now");
 });
 
-test("the Diff reads each scope and one file reads safely", async ({ page, request }) => {
+test("the Changes read each scope, and a file expands in place to its diff", async ({
+	page,
+	request,
+}) => {
 	const workspace = await opened(request, "an opening brief");
 	const reads = new Reads(workspace.name);
+	const repository = "https://github.com/openkestrel/kestrel";
 	reads.changes.set("unpublished", {
 		repositories: [
 			{
-				repository: "https://github.com/openkestrel/kestrel",
-				diff: "diff --git a/x b/x\n+one\n",
-				files: [{ path: "x", added: 1, removed: 0 }],
+				repository,
+				diff: "diff --git a/one.rs b/one.rs\n+one\n",
+				files: [{ path: "one.rs", added: 1, removed: 0 }],
 				truncated: true,
+			},
+		],
+	});
+	// The operator filters patch text by the literal path it is asked for.
+	reads.changes.set("unpublished|one.rs", {
+		repositories: [
+			{
+				repository,
+				diff: "diff --git a/one.rs b/one.rs\n+one only\n",
+				files: [{ path: "one.rs", added: 1, removed: 0 }],
+				truncated: false,
 			},
 		],
 	});
 	reads.changes.set("changed", {
 		repositories: [
 			{
-				repository: "https://github.com/openkestrel/kestrel",
-				diff: "changed diff",
-				files: [],
+				repository,
+				diff: "diff --git a/two.rs b/two.rs\n+changed diff\n",
+				files: [{ path: "two.rs", added: 2, removed: 0 }],
 				truncated: false,
 			},
 		],
@@ -420,9 +466,9 @@ test("the Diff reads each scope and one file reads safely", async ({ page, reque
 	reads.changes.set("staged", {
 		repositories: [
 			{
-				repository: "https://github.com/openkestrel/kestrel",
-				diff: "staged diff",
-				files: [],
+				repository,
+				diff: "diff --git a/three.rs b/three.rs\n+staged diff\n",
+				files: [{ path: "three.rs", added: 3, removed: 0 }],
 				truncated: false,
 			},
 		],
@@ -430,20 +476,18 @@ test("the Diff reads each scope and one file reads safely", async ({ page, reque
 	reads.changes.set("commit:abc1234", {
 		repositories: [
 			{
-				repository: "https://github.com/openkestrel/kestrel",
-				diff: "commit diff",
-				files: [],
+				repository,
+				diff: "diff --git a/four.rs b/four.rs\n+commit diff\n",
+				files: [{ path: "four.rs", added: 4, removed: 0 }],
 				truncated: false,
 			},
 		],
 	});
 	reads.commits = {
-		repositories: [
-			{ repository: "https://github.com/openkestrel/kestrel", text: "abc1234 do a thing" },
-		],
+		repositories: [{ repository, text: "abc1234 do a thing" }],
 	};
 	reads.stashes = {
-		repositories: [{ repository: "https://github.com/openkestrel/kestrel", text: "stash@{0} wip" }],
+		repositories: [{ repository, text: "stash@{0} wip" }],
 	};
 	reads.files.set("", {
 		path: "",
@@ -486,47 +530,70 @@ test("the Diff reads each scope and one file reads safely", async ({ page, reque
 	await viewing(page, workspace.name);
 	const work = workPane(page);
 
-	await work.getByRole("tab", { name: "Diff" }).click();
-	const diff = work.locator('[data-diff="https://github.com/openkestrel/kestrel"]');
-	await expect(diff).toContainText("+one");
+	await work.getByRole("tab", { name: "Changes" }).click();
+	const changes = work.getByRole("tabpanel", { name: "Changes" });
+	const diff = changes.locator(`[data-diff="${repository}"]`);
+
+	await expect(diff.locator("[data-diff-total]")).toHaveText("+1 −0");
 	await expect(diff.locator("[data-truncated]")).toBeVisible();
 
-	await work.getByRole("button", { name: "Changed" }).click();
-	await expect(diff).toContainText("changed diff");
+	const one = changes.getByRole("button", { name: /one\.rs/ });
+	await expect(one).toHaveAttribute("aria-expanded", "false");
+	await one.click();
+	await expect(one).toHaveAttribute("aria-expanded", "true");
+	await expect(one).toBeFocused();
+	await expect(changes.locator('[data-file-diff="one.rs"]')).toContainText("+one only");
+	expect(reads.changeReads.some((read) => read.includes("path=one.rs"))).toBe(true);
 
-	await work.getByRole("button", { name: "Staged" }).click();
-	await expect(diff).toContainText("staged diff");
+	await one.click();
+	await expect(one).toHaveAttribute("aria-expanded", "false");
 
-	await work.getByRole("button", { name: "Commit", exact: true }).click();
-	await work.getByLabel("Commit revision").fill("abc1234");
-	await work.getByRole("button", { name: "Read commit" }).click();
-	await expect(diff).toContainText("commit diff");
+	await changes.getByRole("button", { name: "Changed" }).click();
+	await changes.getByRole("button", { name: /two\.rs/ }).click();
+	await expect(changes.locator('[data-file-diff="two.rs"]')).toContainText("changed diff");
 
-	await work.getByRole("button", { name: "Commits" }).click();
-	await expect(work.getByText("abc1234 do a thing")).toBeVisible();
-	await work.getByRole("button", { name: "Stashes" }).click();
-	await expect(work.getByText("stash@{0} wip")).toBeVisible();
+	await changes.getByRole("button", { name: "Staged" }).click();
+	await changes.getByRole("button", { name: /three\.rs/ }).click();
+	await expect(changes.locator('[data-file-diff="three.rs"]')).toContainText("staged diff");
+
+	await changes.getByRole("button", { name: "Commit", exact: true }).click();
+	await changes.getByLabel("Commit revision").fill("abc1234");
+	await changes.getByRole("button", { name: "Read commit" }).click();
+	await changes.getByRole("button", { name: /four\.rs/ }).click();
+	await expect(changes.locator('[data-file-diff="four.rs"]')).toContainText("commit diff");
+
+	await expect(changes.getByRole("region", { name: "Commits" })).toContainText(
+		"abc1234 do a thing",
+	);
+	await changes.getByRole("button", { name: "Stashes" }).click();
+	await expect(changes.getByText("stash@{0} wip")).toBeVisible();
 
 	await work.getByRole("tab", { name: "Files" }).click();
-	await work.getByRole("button", { name: "kestrel" }).click();
-	await expect(work.getByRole("button", { name: /README\.md/ })).toBeVisible();
-	await work.getByRole("button", { name: /README\.md/ }).click();
-	await expect(work.locator("[data-file]")).toContainText("# readme");
+	const files = work.getByRole("tabpanel", { name: "Files" });
+	const tree = files.getByRole("tree");
+	await expect(tree).toBeVisible();
+	const kestrel = files.locator('[data-path="kestrel"]');
+	await expect(kestrel).toHaveAttribute("aria-expanded", "false");
+	await tree.getByRole("button", { name: "kestrel", exact: true }).click();
+	await expect(kestrel).toHaveAttribute("aria-expanded", "true");
 
-	await work.getByRole("button", { name: "Raw" }).click();
-	await expect(work.locator("[data-file]")).toContainText("# readme raw");
+	const readme = files.locator('[data-path="kestrel/README.md"]');
+	await expect(readme).toHaveAttribute("role", "treeitem");
+	await readme.click();
+	await expect(readme).toBeFocused();
+	await expect(files.locator("[data-file]")).toContainText("# readme");
 
-	await work.getByRole("button", { name: /logo\.png/ }).click();
-	await expect(work.locator("[data-file]")).toContainText("binary content · 4 B");
+	await files.getByRole("button", { name: "Raw" }).click();
+	await expect(files.locator("[data-file]")).toContainText("# readme raw");
 
-	await work.getByRole("button", { name: "src" }).click();
-	await expect(work.locator("[data-truncated]")).toContainText("showing 1 of 5 entries");
+	await files.locator('[data-path="kestrel/logo.png"]').click();
+	await expect(files.locator("[data-file]")).toContainText("binary content · 4 B");
+
+	await tree.getByRole("button", { name: "src", exact: true }).click();
+	await expect(files.locator("[data-truncated]")).toContainText("showing 1 of 5 entries");
 });
 
-test("a long diff and a long file are scrollable regions a keyboard can reach", async ({
-	page,
-	request,
-}) => {
+test("a long diff and a long file stay keyboard-reachable", async ({ page, request }) => {
 	const workspace = await opened(request, "an opening brief");
 	const reads = new Reads(workspace.name);
 	const long = Array.from({ length: 200 }, (_, index) => `+line ${index}`).join("\n");
@@ -535,7 +602,7 @@ test("a long diff and a long file are scrollable regions a keyboard can reach", 
 			{
 				repository: "https://github.com/openkestrel/kestrel",
 				diff: long,
-				files: [{ path: "x", added: 200, removed: 0 }],
+				files: [{ path: "long.rs", added: 200, removed: 0 }],
 				truncated: false,
 			},
 		],
@@ -561,15 +628,97 @@ test("a long diff and a long file are scrollable regions a keyboard can reach", 
 	await viewing(page, workspace.name);
 	const work = workPane(page);
 
-	await work.getByRole("tab", { name: "Diff" }).click();
-	await expect(work.locator("[data-diff] pre")).toContainText("+line 199");
+	await work.getByRole("tab", { name: "Changes" }).click();
+	const changes = work.getByRole("tabpanel", { name: "Changes" });
+	await changes.getByRole("button", { name: /long\.rs/ }).click();
+	await expect(changes.locator('[data-file-diff="long.rs"]')).toContainText("+line 199");
 	await reachable(page);
 
 	await work.getByRole("tab", { name: "Files" }).click();
-	await work.getByRole("button", { name: "kestrel" }).click();
-	await work.getByRole("button", { name: /README\.md/ }).click();
-	await expect(work.locator("[data-file] pre")).toContainText("+line 199");
+	const files = work.getByRole("tabpanel", { name: "Files" });
+	await files.getByRole("button", { name: "kestrel", exact: true }).click();
+	await files.locator('[data-path="kestrel/README.md"]').click();
+	await expect(files.locator("[data-file]")).toContainText("+line 199");
 	await reachable(page);
+});
+
+test("the Changes read says when it is loading, empty and failed", async ({ page, request }) => {
+	const workspace = await opened(request, "an opening brief");
+	const reads = new Reads(workspace.name);
+	reads.changesDelay = 300;
+	reads.changes.set("unpublished", {
+		repositories: [
+			{
+				repository: "https://github.com/openkestrel/kestrel",
+				diff: "",
+				files: [],
+				truncated: false,
+			},
+		],
+	});
+	await reads.install(page);
+	await viewing(page, workspace.name);
+	const work = workPane(page);
+	await work.getByRole("tab", { name: "Changes" }).click();
+	const changes = work.getByRole("tabpanel", { name: "Changes" });
+	const reading = changes.locator("[data-changes]");
+
+	await expect(reading).toHaveAttribute("aria-busy", "true");
+	await expect(reading).toContainText("no changes");
+	await expect(reading).toHaveAttribute("aria-busy", "false");
+
+	// A scope with nothing to read says so, rather than showing a stale list.
+	await changes.getByRole("button", { name: "Changed" }).click();
+	await expect(changes.locator("[data-no-changes]")).toHaveText("No repository to read.");
+
+	// A failed read names the error and offers the typed recovery.
+	reads.changesFailure = { status: 422, body: { message: "the diff read blew up" } };
+	await changes.getByRole("button", { name: "Staged" }).click();
+	const alert = changes.getByRole("alert");
+	await expect(alert).toContainText("the diff read blew up");
+	await expect(alert.locator('[data-step="retry_read"]')).toBeVisible();
+	await expect(alert.getByRole("button", { name: "Read again" })).toBeVisible();
+});
+
+test("a live Changes read never falls back to the last repository summary", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request, "an opening brief");
+	const reads = new Reads(workspace.name);
+	reads.work = {
+		state: "reported",
+		reported_at: new Date().toISOString(),
+		last_report: { report: "none" },
+		earlier_reports: [],
+		repositories: [
+			{
+				repository: "https://github.com/openkestrel/kestrel",
+				git: "read",
+				branch: "kestrel/work",
+				changed: { files: 4, added: 12, removed: 3 },
+				staged: { files: 0, added: 0, removed: 0 },
+				committed: { commits: 0, added: 0, removed: 0 },
+				pushed: null,
+				untracked: 0,
+				stashed: 0,
+			},
+		],
+	};
+	// The live read is refused: this Workspace has no Instance to read.
+	reads.changesUnavailable = true;
+	await reads.install(page);
+	await viewing(page, workspace.name);
+	const work = workPane(page);
+
+	// The Work tab keeps showing the report it was last given, as history.
+	await expect(work.locator('[data-work="changed"]')).toHaveText("4 files +12 −3");
+
+	await work.getByRole("tab", { name: "Changes" }).click();
+	const changes = work.getByRole("tabpanel", { name: "Changes" });
+	await expect(changes.getByRole("alert").first()).toContainText("has no Instance to read");
+	await expect(changes.locator('[data-step="inspect_resource"]')).toBeVisible();
+	await expect(changes).not.toContainText("4 files +12 −3");
 });
 
 // Chromium lets a keyboard into any overflowing scroller, so only axe's rule tells the region
