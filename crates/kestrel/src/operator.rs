@@ -27,9 +27,10 @@ use tracing::warn;
 use crate::agent;
 use crate::capability::{self, Capability, Images};
 use crate::declaration;
+use crate::declaration::triggers as apply;
 use crate::declined::{
     self as declined, Again, Concerning, Consequence, Constraint, Declined, Locator, Reason,
-    Resource, Step,
+    Resource, Step, Within,
 };
 use crate::domain::{
     self, Agent, Connection, Declared, Direction, EventRecordId, Fires, Firing, HeldMessage,
@@ -52,7 +53,7 @@ use crate::start_readiness;
 use crate::store::workspace::HeldMessageRefusal;
 use crate::store::{self, Declared as DeclaredRecord, Store};
 use crate::stream::{self, Emitted};
-use crate::trigger::{self, apply};
+use crate::trigger;
 use crate::{instance, pull_request, start, work, workspace};
 
 pub const ROOT: &str = "/";
@@ -2551,35 +2552,28 @@ async fn declare_trigger(
     declaration: Result<Json<TriggerDeclaration>, JsonRejection>,
 ) -> Result<(StatusCode, Json<TriggerRecord>), Refused> {
     let Json(declaration) = declaration?;
-    declaration::check_name(&declaration.name).map_err(|error| {
-        declaration::scoped(declaration::Prefix::Root, "declare_trigger", error)
-    })?;
-    let (fires, templates) = declaration::parse_trigger(
-        &declaration::ScheduleForms {
+    let checked = declaration::check_trigger(&declaration::TriggerFields {
+        name: &declaration.name,
+        forms: declaration::ScheduleForms {
             filter: declaration.filter.as_ref(),
             every: declaration.every.as_deref(),
             cron: declaration.cron.as_deref(),
             zone: declaration.zone.as_deref(),
         },
-        &declaration::TemplateFields {
+        templates: declaration::TemplateFields {
             brief: &declaration.brief,
             branch: declaration.branch.as_deref(),
             correlation: declaration.correlation.as_deref(),
             on_miss: declaration.on_miss.as_deref(),
             on_open_workspace: declaration.on_open_workspace.as_deref(),
         },
-    )
-    .map_err(|error| declaration::scoped(declaration::Prefix::Root, "declare_trigger", error))?;
-    let checked = declaration::CheckedTrigger::new(declaration::TriggerProposal {
-        name: declaration.name.clone(),
-        fires,
-        templates,
-        project: declaration.project.clone(),
-        agent: declaration.agent.clone(),
+        project: &declaration.project,
+        agent: &declaration.agent,
         declared: declaration.declared(),
-        allows: declaration.allows.clone(),
-        profile: declaration.profile.clone(),
-    });
+        allows: &declaration.allows,
+        profile: declaration.profile.as_deref(),
+    })
+    .map_err(|error| declaration::scoped(declaration::Prefix::Root, "declare_trigger", error))?;
     let mut tx = control_plane.store.begin().await?;
     let organization = tx.organizations().named(&organization).await?;
     let placed = declaration::place_trigger(
@@ -2670,7 +2664,7 @@ async fn test_trigger(
                 .map_err(named_refusal)?;
             let declared = declarations
                 .iter()
-                .find(|declared| declared.name == name)
+                .find(|declared| declared.name() == name)
                 .ok_or_else(|| {
                     named_refusal(
                         Reason::MissingReference {
@@ -2854,7 +2848,7 @@ async fn applied_triggers(
 /// An untyped refusal here is about what the request named, never a control plane that could
 /// not answer.
 fn named_refusal(error: anyhow::Error) -> Refused {
-    if error.is::<Reason>() || error.is::<Concerning>() {
+    if error.is::<Reason>() || error.is::<Concerning>() || error.is::<Within>() {
         return error.into();
     }
     Refused::Unprocessable(error.to_string())
@@ -4735,7 +4729,7 @@ async fn name_operator(
     Ok(answered::<_, wire::Operator>(declared))
 }
 
-fn diagnosed(reason: Reason, field: Option<&'static str>) -> Refused {
+fn diagnosed(reason: Reason, field: Option<String>) -> Refused {
     let (status, diagnostic) = diagnosis(reason, field);
     Refused::Diagnosed {
         status,
@@ -4743,9 +4737,8 @@ fn diagnosed(reason: Reason, field: Option<&'static str>) -> Refused {
     }
 }
 
-fn diagnosis(reason: Reason, field: Option<&'static str>) -> (StatusCode, wire::Diagnostic) {
-    let request_field = field;
-    let field = field.map(str::to_owned);
+fn diagnosis(reason: Reason, field: Option<String>) -> (StatusCode, wire::Diagnostic) {
+    let request_field = field.clone();
     match reason {
         Reason::MissingOperator { operation } => (
             if operation == "show_operator" {
@@ -5119,7 +5112,7 @@ fn invalid_field(
 
 fn invalid_value(
     operation: &'static str,
-    field: &'static str,
+    field: &str,
     constraint: Constraint,
     allowed: Option<Vec<String>>,
     message: String,
@@ -5154,7 +5147,36 @@ impl From<anyhow::Error> for Refused {
             Err(error) => error,
         };
         let error = match error.downcast::<Concerning>() {
-            Ok(concerning) => return diagnosed(concerning.reason, Some(concerning.field)),
+            Ok(concerning) => {
+                return diagnosed(concerning.reason, Some(concerning.field.to_owned()));
+            }
+            Err(error) => error,
+        };
+        let error = match error.downcast::<Within>() {
+            Ok(Within {
+                record,
+                field,
+                reason,
+            }) => {
+                let path = |field: &str| format!("{record}.{field}");
+                return match reason {
+                    Reason::InvalidField {
+                        field,
+                        operation,
+                        constraint,
+                        allowed,
+                        message,
+                    } => {
+                        let (status, diagnostic) =
+                            invalid_value(operation, &path(field), constraint, allowed, message);
+                        Refused::Diagnosed {
+                            status,
+                            diagnostic: Box::new(diagnostic),
+                        }
+                    }
+                    reason => diagnosed(reason, field.map(path)),
+                };
+            }
             Err(error) => error,
         };
         match error.downcast::<Declined>() {

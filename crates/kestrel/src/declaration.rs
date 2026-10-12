@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::capability::Images;
 use crate::cron::Cron;
-use crate::declined::{Concerning, Constraint, Reason};
+use crate::declined::{Concerning, Constraint, Reason, Within};
 use crate::domain::{
     Correlation, Declared, Fires, FiringBudget, Organization, Schedule, Templates, Trigger,
 };
@@ -14,6 +14,8 @@ use crate::integration::github::Github;
 use crate::repository::{self, Declarable, Declaring, Selecting};
 use crate::store::{Declared as DeclaredRecord, Store, Tx};
 use crate::template::Template;
+
+pub mod triggers;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -99,7 +101,7 @@ pub struct Declaration {
     pub differences: Vec<Difference>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Difference {
     pub field: &'static str,
     pub was: Option<String>,
@@ -138,12 +140,13 @@ impl ApplyMode {
 }
 
 /// A declaration refusal before it knows its route: the record-relative field, the constraint
-/// it broke and why. The caller stamps its operation and prefixes the field.
+/// it broke and why. The caller stamps its operation and names the record the field is in.
 #[derive(Debug)]
 pub struct Invalid {
-    pub field: &'static str,
-    pub constraint: Constraint,
-    pub message: String,
+    record: Option<String>,
+    field: &'static str,
+    constraint: Constraint,
+    message: String,
 }
 
 impl fmt::Display for Invalid {
@@ -160,6 +163,7 @@ pub fn invalid(
     message: impl Into<String>,
 ) -> anyhow::Error {
     Invalid {
+        record: None,
         field,
         constraint,
         message: message.into(),
@@ -177,52 +181,34 @@ pub enum Prefix {
     Trigger,
 }
 
-pub fn prefixed(prefix: Prefix, field: &'static str) -> &'static str {
-    match (prefix, field) {
-        (Prefix::Root, field) => field,
-        (Prefix::Project, "name") => "project.name",
-        (Prefix::Project, "repositories") => "project.repositories",
-        (Prefix::Project, "integrations") => "project.integrations",
-        (Prefix::Project, "branch") => "project.branch",
-        (Prefix::Agent, "name") => "agent.name",
-        (Prefix::Agent, "harness") => "agent.harness",
-        (Prefix::Agent, "model") => "agent.model",
-        (Prefix::Agent, "mode") => "agent.mode",
-        (Prefix::Agent, "thought level") => "agent.thought level",
-        (Prefix::Trigger, "name") => "trigger.name",
-        (Prefix::Trigger, "filter") => "trigger.filter",
-        (Prefix::Trigger, "every") => "trigger.every",
-        (Prefix::Trigger, "cron") => "trigger.cron",
-        (Prefix::Trigger, "zone") => "trigger.zone",
-        (Prefix::Trigger, "brief") => "trigger.brief",
-        (Prefix::Trigger, "branch") => "trigger.branch",
-        (Prefix::Trigger, "correlation") => "trigger.correlation",
-        (Prefix::Trigger, "on_miss") => "trigger.on_miss",
-        (Prefix::Trigger, "on_open_workspace") => "trigger.on_open_workspace",
-        (Prefix::Trigger, "project") => "trigger.project",
-        (Prefix::Trigger, "agent") => "trigger.agent",
-        (Prefix::Trigger, "allows") => "trigger.allows",
-        (Prefix::Trigger, "profile") => "trigger.profile",
-        (Prefix::Trigger, "model") => "trigger.model",
-        (Prefix::Trigger, "mode") => "trigger.mode",
-        (Prefix::Trigger, "thought level") => "trigger.thought level",
-        (_, field) => field,
+impl Prefix {
+    const fn record(self) -> Option<&'static str> {
+        match self {
+            Prefix::Root => None,
+            Prefix::Project => Some("project"),
+            Prefix::Agent => Some("agent"),
+            Prefix::Trigger => Some("trigger"),
+        }
     }
 }
 
-/// Gives a module error its route: stamps the caller's operation onto an [`Invalid`], prefixes
-/// the record-relative field of a reason the module raised with it, and leaves the rest alone.
+/// Gives a module error its route: stamps the caller's operation onto a field refusal and
+/// names the record its field is in, and leaves the rest alone.
 pub fn scoped(prefix: Prefix, operation: &'static str, error: anyhow::Error) -> anyhow::Error {
+    let prefix = prefix.record().map(str::to_owned);
     let error = match error.downcast::<Invalid>() {
         Ok(invalid) => {
-            return Reason::InvalidField {
-                field: prefixed(prefix, invalid.field),
-                operation,
-                constraint: invalid.constraint,
-                allowed: None,
-                message: invalid.message,
-            }
-            .into();
+            return within(
+                invalid.record.or(prefix),
+                None,
+                Reason::InvalidField {
+                    field: invalid.field,
+                    operation,
+                    constraint: invalid.constraint,
+                    allowed: None,
+                    message: invalid.message,
+                },
+            );
         }
         Err(error) => error,
     };
@@ -234,25 +220,37 @@ pub fn scoped(prefix: Prefix, operation: &'static str, error: anyhow::Error) -> 
             message,
             ..
         }) => {
-            return Reason::InvalidField {
-                field: prefixed(prefix, field),
-                operation,
-                constraint,
-                allowed,
-                message,
-            }
-            .into();
+            return within(
+                prefix,
+                None,
+                Reason::InvalidField {
+                    field,
+                    operation,
+                    constraint,
+                    allowed,
+                    message,
+                },
+            );
         }
         Ok(reason) => return reason.into(),
         Err(error) => error,
     };
     match error.downcast::<Concerning>() {
-        Ok(concerning) => Concerning {
-            field: prefixed(prefix, concerning.field),
-            reason: concerning.reason,
+        Ok(concerning) => within(prefix, Some(concerning.field), concerning.reason),
+        Err(error) => error,
+    }
+}
+
+fn within(record: Option<String>, field: Option<&'static str>, reason: Reason) -> anyhow::Error {
+    match (record, field) {
+        (Some(record), field) => Within {
+            record,
+            field,
+            reason,
         }
         .into(),
-        Err(error) => error,
+        (None, Some(field)) => reason.concerning(field).into(),
+        (None, None) => reason.into(),
     }
 }
 
@@ -279,28 +277,40 @@ impl Provenance {
     }
 }
 
+/// Only the checks below build a checked declaration, and only a checked one is written.
 pub struct CheckedProject {
-    pub name: String,
-    pub declarable: Declarable,
+    name: String,
+    declarable: Declarable,
 }
 
 pub struct CheckedAgent {
-    pub name: String,
-    pub harness: String,
-    pub declared: Declared,
+    name: String,
+    harness: String,
+    declared: Declared,
 }
 
 pub struct CheckedTrigger {
-    pub name: String,
-    pub fires: Fires,
-    pub templates: Templates,
-    pub project: String,
-    pub agent: String,
-    pub declared: Declared,
-    pub allows: Vec<String>,
-    pub profile: Option<String>,
+    name: String,
+    fires: Fires,
+    templates: Templates,
+    project: String,
+    agent: String,
+    declared: Declared,
+    allows: Vec<String>,
+    profile: Option<String>,
 }
 
+impl CheckedTrigger {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn admits_outsiders(&self) -> bool {
+        matches!(&self.fires, Fires::On(filter) if filter.admits_outsiders())
+    }
+}
+
+/// A Trigger whose schedule and templates a caller already holds as values.
 pub struct TriggerProposal {
     pub name: String,
     pub fires: Fires,
@@ -312,19 +322,16 @@ pub struct TriggerProposal {
     pub profile: Option<String>,
 }
 
-impl CheckedTrigger {
-    pub fn new(proposal: TriggerProposal) -> Self {
-        Self {
-            name: proposal.name,
-            fires: proposal.fires,
-            templates: proposal.templates,
-            project: proposal.project,
-            agent: proposal.agent,
-            declared: Declared::named(proposal.declared),
-            allows: proposal.allows,
-            profile: proposal.profile,
-        }
-    }
+/// A Trigger as a route received it, before anything is parsed.
+pub struct TriggerFields<'a> {
+    pub name: &'a str,
+    pub forms: ScheduleForms<'a>,
+    pub templates: TemplateFields<'a>,
+    pub project: &'a str,
+    pub agent: &'a str,
+    pub declared: Declared,
+    pub allows: &'a [String],
+    pub profile: Option<&'a str>,
 }
 
 /// The schedule half of a Trigger declaration: exactly one of a filter, an interval or a cron
@@ -336,6 +343,19 @@ pub struct ScheduleForms<'a> {
     pub zone: Option<&'a str>,
 }
 
+impl<'a> ScheduleForms<'a> {
+    /// The document and the applied-Triggers file declare event Triggers only; their schemas
+    /// refuse a schedule.
+    pub const fn filter(filter: &'a serde_json::Value) -> Self {
+        Self {
+            filter: Some(filter),
+            every: None,
+            cron: None,
+            zone: None,
+        }
+    }
+}
+
 pub struct TemplateFields<'a> {
     pub brief: &'a str,
     pub branch: Option<&'a str>,
@@ -344,7 +364,7 @@ pub struct TemplateFields<'a> {
     pub on_open_workspace: Option<&'a str>,
 }
 
-pub fn check_name(name: &str) -> Result<()> {
+fn check_name(name: &str) -> Result<()> {
     if name.is_empty() {
         return Err(invalid(
             "name",
@@ -355,7 +375,7 @@ pub fn check_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn check_branch(branch: &str) -> Result<()> {
+fn check_branch(branch: &str) -> Result<()> {
     if branch.is_empty() {
         return Err(invalid(
             "branch",
@@ -366,7 +386,7 @@ pub fn check_branch(branch: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn check_harness(harness: &str) -> Result<()> {
+fn check_harness(harness: &str) -> Result<()> {
     if harness.is_empty() {
         return Err(invalid(
             "harness",
@@ -430,26 +450,30 @@ pub async fn check_agent(
 }
 
 /// A document Trigger names the Project and Agent the same document declares.
-pub fn check_trigger_links(
-    trigger_project: &str,
-    trigger_agent: &str,
-    project: &str,
-    agent: &str,
-) -> Result<()> {
-    if trigger_project != project {
+fn check_trigger_links(document: &Document) -> Result<()> {
+    let (trigger, project, agent) = (
+        &document.trigger,
+        &document.project.name,
+        &document.agent.name,
+    );
+    if &trigger.project != project {
         return Err(invalid(
             "project",
             Constraint::MatchesDeclared,
             format!(
-                "the trigger names project {trigger_project}, not the declared project {project}"
+                "the trigger names project {}, not the declared project {project}",
+                trigger.project
             ),
         ));
     }
-    if trigger_agent != agent {
+    if &trigger.agent != agent {
         return Err(invalid(
             "agent",
             Constraint::MatchesDeclared,
-            format!("the trigger names agent {trigger_agent}, not the declared agent {agent}"),
+            format!(
+                "the trigger names agent {}, not the declared agent {agent}",
+                trigger.agent
+            ),
         ));
     }
     Ok(())
@@ -457,29 +481,34 @@ pub fn check_trigger_links(
 
 /// The one Trigger parser: a filter, an interval or a cron expression, and only one, with the
 /// firing-budget check wherever a schedule arrives.
-pub fn parse_trigger(
-    forms: &ScheduleForms<'_>,
-    fields: &TemplateFields<'_>,
-) -> Result<(Fires, Templates)> {
-    let fires = parse_fires(forms)?;
-    check_budget(&fires)?;
-    Ok((fires.clone(), parse_templates(fields)?))
+pub fn check_trigger(fields: &TriggerFields<'_>) -> Result<CheckedTrigger> {
+    check_name(fields.name)?;
+    let fires = parse_fires(&fields.forms)?;
+    check_parsed_trigger(TriggerProposal {
+        name: fields.name.to_owned(),
+        fires,
+        templates: parse_templates(&fields.templates)?,
+        project: fields.project.to_owned(),
+        agent: fields.agent.to_owned(),
+        declared: fields.declared.clone(),
+        allows: fields.allows.to_vec(),
+        profile: fields.profile.map(str::to_owned),
+    })
 }
 
-/// The document and the applied-Triggers file declare event Triggers only; a schedule in their
-/// shape is refused by their schema, and what arrives here meets the same template rules.
-pub fn parse_filter_trigger(
-    filter: &serde_json::Value,
-    fields: &TemplateFields<'_>,
-) -> Result<(Filter, Templates)> {
-    let filter = Filter::from_json(filter).map_err(|error| {
-        invalid(
-            "filter",
-            Constraint::WellFormed,
-            format!("a trigger filter: {error}"),
-        )
-    })?;
-    Ok((filter, parse_templates(fields)?))
+pub fn check_parsed_trigger(proposal: TriggerProposal) -> Result<CheckedTrigger> {
+    check_name(&proposal.name)?;
+    check_budget(&proposal.fires)?;
+    Ok(CheckedTrigger {
+        name: proposal.name,
+        fires: proposal.fires,
+        templates: proposal.templates,
+        project: proposal.project,
+        agent: proposal.agent,
+        declared: Declared::named(proposal.declared),
+        allows: proposal.allows,
+        profile: proposal.profile,
+    })
 }
 
 fn parse_fires(forms: &ScheduleForms<'_>) -> Result<Fires> {
@@ -586,7 +615,7 @@ fn parse_templates(fields: &TemplateFields<'_>) -> Result<Templates> {
     })
 }
 
-pub fn check_budget(fires: &Fires) -> Result<()> {
+fn check_budget(fires: &Fires) -> Result<()> {
     let Fires::Scheduled(schedule) = fires else {
         return Ok(());
     };
@@ -611,49 +640,106 @@ pub fn check_budget(fires: &Fires) -> Result<()> {
     Ok(())
 }
 
-pub fn project_change(
+type Described = Vec<(&'static str, Option<String>)>;
+
+fn described_project(
+    repositories: &[String],
+    mut selected: Vec<(&str, &str)>,
+    branch: &str,
+) -> Described {
+    selected.sort();
+    vec![
+        ("repositories", Some(repositories.join("\n"))),
+        (
+            "integrations",
+            (!selected.is_empty()).then(|| {
+                selected
+                    .iter()
+                    .map(|(repository, integration)| format!("{repository} as {integration}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }),
+        ),
+        ("branch", Some(branch.to_owned())),
+    ]
+}
+
+fn described_agent(harness: &str, declared: &Declared) -> Described {
+    vec![
+        ("harness", Some(harness.to_owned())),
+        ("model", declared.model.clone()),
+        ("mode", declared.mode.clone()),
+        ("thought level", declared.thought_level.clone()),
+    ]
+}
+
+struct TriggerDescription<'a> {
+    fires: &'a Fires,
+    templates: &'a Templates,
+    project: &'a str,
+    agent: &'a str,
+    declared: &'a Declared,
+    allows: Vec<&'a str>,
+    profile: Option<&'a str>,
+}
+
+fn described_trigger(mut trigger: TriggerDescription<'_>) -> Described {
+    trigger.allows.sort_unstable();
+    trigger.allows.dedup();
+    let correlation = &trigger.templates.correlation;
+    vec![
+        ("matches", Some(trigger.fires.to_string())),
+        ("project", Some(trigger.project.to_owned())),
+        ("agent", Some(trigger.agent.to_owned())),
+        (
+            "allows",
+            (!trigger.allows.is_empty()).then(|| trigger.allows.join(", ")),
+        ),
+        ("profile", trigger.profile.map(str::to_owned)),
+        (
+            "branch",
+            trigger.templates.branch.as_ref().map(ToString::to_string),
+        ),
+        (
+            "correlation",
+            correlation.template().map(ToString::to_string),
+        ),
+        (
+            "on miss",
+            correlation.on_miss().map(|miss| miss.to_string()),
+        ),
+        (
+            "on open workspace",
+            Some(correlation.on_open_workspace().to_string()),
+        ),
+        ("brief", Some(trigger.templates.brief.to_string())),
+        ("model", trigger.declared.model.clone()),
+        ("mode", trigger.declared.mode.clone()),
+        ("thought level", trigger.declared.thought_level.clone()),
+    ]
+}
+
+fn project_change(
     existing: Option<&crate::domain::Project>,
     checked: &CheckedProject,
 ) -> Declaration {
-    let selected = |mut selected: Vec<(&str, &str)>| {
-        selected.sort();
-        (!selected.is_empty()).then(|| {
-            selected
-                .iter()
-                .map(|(repository, integration)| format!("{repository} as {integration}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-    };
-    let becomes = vec![
-        (
-            "repositories",
-            Some(checked.declarable.repositories().join("\n")),
-        ),
-        (
-            "integrations",
-            selected(checked.declarable.selected().collect()),
-        ),
-        ("branch", Some(checked.declarable.branch().to_owned())),
-    ];
     let (action, differences) = compared(
         existing.map(|project| {
-            vec![
-                ("repositories", Some(project.repositories.join("\n"))),
-                (
-                    "integrations",
-                    selected(
-                        project
-                            .integrations
-                            .iter()
-                            .map(|selected| (selected.repository.as_str(), selected.name.as_str()))
-                            .collect(),
-                    ),
-                ),
-                ("branch", Some(project.branch.clone())),
-            ]
+            described_project(
+                &project.repositories,
+                project
+                    .integrations
+                    .iter()
+                    .map(|selected| (selected.repository.as_str(), selected.name.as_str()))
+                    .collect(),
+                &project.branch,
+            )
         }),
-        becomes,
+        described_project(
+            checked.declarable.repositories(),
+            checked.declarable.selected().collect(),
+            checked.declarable.branch(),
+        ),
     );
     Declaration {
         kind: Kind::Project,
@@ -663,25 +749,10 @@ pub fn project_change(
     }
 }
 
-pub fn agent_change(
-    existing: Option<&crate::domain::Agent>,
-    checked: &CheckedAgent,
-) -> Declaration {
+fn agent_change(existing: Option<&crate::domain::Agent>, checked: &CheckedAgent) -> Declaration {
     let (action, differences) = compared(
-        existing.map(|agent| {
-            vec![
-                ("harness", Some(agent.harness.clone())),
-                ("model", agent.declared.model.clone()),
-                ("mode", agent.declared.mode.clone()),
-                ("thought level", agent.declared.thought_level.clone()),
-            ]
-        }),
-        vec![
-            ("harness", Some(checked.harness.clone())),
-            ("model", checked.declared.model.clone()),
-            ("mode", checked.declared.mode.clone()),
-            ("thought level", checked.declared.thought_level.clone()),
-        ],
+        existing.map(|agent| described_agent(&agent.harness, &agent.declared)),
+        described_agent(&checked.harness, &checked.declared),
     );
     Declaration {
         kind: Kind::Agent,
@@ -691,52 +762,36 @@ pub fn agent_change(
     }
 }
 
-pub fn trigger_change(existing: Option<&Trigger>, checked: &CheckedTrigger) -> Declaration {
-    let mut allows = checked.allows.clone();
-    allows.sort();
-    allows.dedup();
-    let becomes = vec![
-        ("matches", Some(checked.fires.to_string())),
-        ("project", Some(checked.project.clone())),
-        ("agent", Some(checked.agent.clone())),
-        ("allows", (!allows.is_empty()).then(|| allows.join(", "))),
-        ("profile", checked.profile.clone()),
-        (
-            "branch",
-            checked.templates.branch.as_ref().map(ToString::to_string),
-        ),
-        (
-            "correlation",
-            checked
-                .templates
-                .correlation
-                .template()
-                .map(ToString::to_string),
-        ),
-        (
-            "on miss",
-            checked
-                .templates
-                .correlation
-                .on_miss()
-                .map(|miss| miss.to_string()),
-        ),
-        (
-            "on open workspace",
-            Some(
-                checked
-                    .templates
-                    .correlation
-                    .on_open_workspace()
-                    .to_string(),
-            ),
-        ),
-        ("brief", Some(checked.templates.brief.to_string())),
-        ("model", checked.declared.model.clone()),
-        ("mode", checked.declared.mode.clone()),
-        ("thought level", checked.declared.thought_level.clone()),
-    ];
-    let (action, differences) = compared(existing.map(described_trigger), becomes);
+fn trigger_change(existing: Option<&Trigger>, checked: &CheckedTrigger) -> Declaration {
+    let (action, differences) = compared(
+        existing.map(|trigger| {
+            described_trigger(TriggerDescription {
+                fires: &trigger.fires,
+                templates: &trigger.templates,
+                project: &trigger.project.name,
+                agent: &trigger.agent.name,
+                declared: &trigger.declared,
+                allows: trigger
+                    .allows
+                    .iter()
+                    .map(|agent| agent.name.as_str())
+                    .collect(),
+                profile: trigger
+                    .profile
+                    .as_ref()
+                    .map(|profile| profile.name.as_str()),
+            })
+        }),
+        described_trigger(TriggerDescription {
+            fires: &checked.fires,
+            templates: &checked.templates,
+            project: &checked.project,
+            agent: &checked.agent,
+            declared: &checked.declared,
+            allows: checked.allows.iter().map(String::as_str).collect(),
+            profile: checked.profile.as_deref(),
+        }),
+    );
     Declaration {
         kind: Kind::Trigger,
         name: checked.name.clone(),
@@ -745,64 +800,7 @@ pub fn trigger_change(existing: Option<&Trigger>, checked: &CheckedTrigger) -> D
     }
 }
 
-fn described_trigger(trigger: &Trigger) -> Vec<(&'static str, Option<String>)> {
-    let mut allows = trigger
-        .allows
-        .iter()
-        .map(|agent| agent.name.clone())
-        .collect::<Vec<_>>();
-    allows.sort();
-    allows.dedup();
-    vec![
-        ("matches", Some(trigger.fires.to_string())),
-        ("project", Some(trigger.project.name.clone())),
-        ("agent", Some(trigger.agent.name.clone())),
-        ("allows", (!allows.is_empty()).then(|| allows.join(", "))),
-        (
-            "profile",
-            trigger.profile.as_ref().map(|profile| profile.name.clone()),
-        ),
-        (
-            "branch",
-            trigger.templates.branch.as_ref().map(ToString::to_string),
-        ),
-        (
-            "correlation",
-            trigger
-                .templates
-                .correlation
-                .template()
-                .map(ToString::to_string),
-        ),
-        (
-            "on miss",
-            trigger
-                .templates
-                .correlation
-                .on_miss()
-                .map(|miss| miss.to_string()),
-        ),
-        (
-            "on open workspace",
-            Some(
-                trigger
-                    .templates
-                    .correlation
-                    .on_open_workspace()
-                    .to_string(),
-            ),
-        ),
-        ("brief", Some(trigger.templates.brief.to_string())),
-        ("model", trigger.declared.model.clone()),
-        ("mode", trigger.declared.mode.clone()),
-        ("thought level", trigger.declared.thought_level.clone()),
-    ]
-}
-
-fn compared(
-    was: Option<Vec<(&'static str, Option<String>)>>,
-    becomes: Vec<(&'static str, Option<String>)>,
-) -> (Action, Vec<Difference>) {
+fn compared(was: Option<Described>, becomes: Described) -> (Action, Vec<Difference>) {
     let added = was.is_none();
     let differences: Vec<Difference> = was.map_or_else(
         || {
@@ -839,7 +837,7 @@ fn compared(
 
 /// A start refuses what would change a declaration: the module's difference, reported on its
 /// first differing field so the caller prefixes it.
-pub fn refuse_on_change(change: &Declaration, message: String) -> Result<()> {
+fn refuse_on_change(change: &Declaration, message: String) -> Result<()> {
     if matches!(change.action, Action::Add | Action::Unchanged) {
         return Ok(());
     }
@@ -851,49 +849,24 @@ pub fn refuse_on_change(change: &Declaration, message: String) -> Result<()> {
     Err(invalid(field, Constraint::Immutable, message))
 }
 
-/// Only a checked declaration can be written, in the caller's transaction, so preview and
-/// dry-run stay the caller not committing.
-pub async fn write_project(
-    tx: &mut Tx<'_>,
-    organization: &Organization,
-    checked: &CheckedProject,
-) -> Result<DeclaredRecord<crate::domain::Project>> {
-    checked
-        .declarable
-        .declare(tx, organization, &checked.name)
-        .await
+struct TriggerRefs {
+    project: crate::domain::Project,
+    agent: crate::domain::Agent,
+    allows: Vec<crate::domain::Agent>,
+    profile: Option<crate::domain::SubscriptionProfile>,
 }
 
-pub async fn write_agent(
-    tx: &mut Tx<'_>,
-    organization: &Organization,
-    checked: &CheckedAgent,
-) -> Result<DeclaredRecord<crate::domain::Agent>> {
-    tx.agents()
-        .declare(
-            organization,
-            &checked.name,
-            &checked.harness,
-            &checked.declared,
-        )
-        .await
-}
-
-pub struct TriggerRefs {
-    pub project: crate::domain::Project,
-    pub agent: crate::domain::Agent,
-    pub allows: Vec<crate::domain::Agent>,
-    pub profile: Option<crate::domain::SubscriptionProfile>,
-}
-
-pub async fn resolve_trigger_refs(
+async fn trigger_refs(
     tx: &mut Tx<'_>,
     organization: &Organization,
     checked: &CheckedTrigger,
 ) -> Result<TriggerRefs> {
     let project = tx.projects().named(organization, &checked.project).await?;
     let agent = tx.agents().named(organization, &checked.agent).await?;
-    let allows = crate::trigger::allowed(tx, organization, &checked.allows).await?;
+    let mut allows = Vec::with_capacity(checked.allows.len());
+    for name in &checked.allows {
+        allows.push(tx.agents().named(organization, name).await?);
+    }
     let profile = match &checked.profile {
         Some(profile) => Some(tx.profiles().named(organization, profile).await?),
         None => None,
@@ -906,49 +879,31 @@ pub async fn resolve_trigger_refs(
     })
 }
 
-pub async fn insert_trigger(
+/// The Trigger a checked declaration would write, for testing one a file declares without
+/// writing it.
+pub async fn unwritten_trigger(
     tx: &mut Tx<'_>,
-    organization: &Organization,
-    refs: &TriggerRefs,
+    organization: Organization,
     checked: &CheckedTrigger,
-    provenance: Provenance,
 ) -> Result<Trigger> {
-    tx.triggers()
-        .declare(
-            organization,
-            &checked.name,
-            &checked.fires,
-            &checked.templates,
-            &refs.project,
-            &refs.agent,
-            &checked.declared,
-            &refs.allows,
-            refs.profile.as_ref(),
-            provenance.applied(),
-        )
-        .await
-}
-
-pub async fn update_trigger(
-    tx: &mut Tx<'_>,
-    existing: &Trigger,
-    refs: &TriggerRefs,
-    checked: &CheckedTrigger,
-    provenance: Provenance,
-) -> Result<Trigger> {
-    tx.triggers()
-        .redeclare(
-            existing,
-            &checked.fires,
-            &checked.templates,
-            &refs.project,
-            &refs.agent,
-            &checked.declared,
-            &refs.allows,
-            refs.profile.as_ref(),
-            provenance.applied(),
-        )
-        .await
+    let refs = trigger_refs(tx, &organization, checked).await?;
+    Ok(Trigger {
+        id: crate::domain::TriggerId::generate(),
+        organization,
+        name: checked.name.clone(),
+        fires: checked.fires.clone(),
+        templates: checked.templates.clone(),
+        project: refs.project,
+        agent: refs.agent,
+        declared: checked.declared.clone(),
+        allows: refs.allows,
+        profile: refs.profile,
+        state: crate::domain::TriggerState::Enabled,
+        disabled_because: None,
+        firing_budget: FiringBudget::default(),
+        applied: true,
+        declared_at: jiff::Timestamp::now(),
+    })
 }
 
 pub struct PlacedTrigger {
@@ -956,31 +911,54 @@ pub struct PlacedTrigger {
     pub change: Declaration,
 }
 
+/// Writes take the caller's transaction, so preview and dry-run stay the caller not committing.
 pub async fn place_trigger(
     tx: &mut Tx<'_>,
     organization: &Organization,
     checked: &CheckedTrigger,
     provenance: Provenance,
 ) -> Result<PlacedTrigger> {
-    let refs = resolve_trigger_refs(tx, organization, checked).await?;
-    let existing = tx.triggers().all(organization).await?;
-    let change = trigger_change(
-        existing.iter().find(|trigger| trigger.name == checked.name),
-        checked,
-    );
-    let trigger = match change.action {
-        Action::Add => insert_trigger(tx, organization, &refs, checked, provenance).await?,
-        Action::Change => {
-            let existing = existing
-                .iter()
-                .find(|trigger| trigger.name == checked.name)
-                .expect("a changed trigger was listed");
-            update_trigger(tx, existing, &refs, checked, provenance).await?
+    let refs = trigger_refs(tx, organization, checked).await?;
+    let existing = tx
+        .triggers()
+        .all(organization)
+        .await?
+        .into_iter()
+        .find(|trigger| trigger.name == checked.name);
+    let change = trigger_change(existing.as_ref(), checked);
+    let trigger = match (change.action, existing) {
+        (Action::Change, Some(existing)) => {
+            tx.triggers()
+                .redeclare(
+                    &existing,
+                    &checked.fires,
+                    &checked.templates,
+                    &refs.project,
+                    &refs.agent,
+                    &checked.declared,
+                    &refs.allows,
+                    refs.profile.as_ref(),
+                    provenance.applied(),
+                )
+                .await?
         }
-        Action::Unchanged | Action::Remove => existing
-            .into_iter()
-            .find(|trigger| trigger.name == checked.name)
-            .expect("an unchanged trigger was listed"),
+        (_, Some(existing)) => existing,
+        (_, None) => {
+            tx.triggers()
+                .declare(
+                    organization,
+                    &checked.name,
+                    &checked.fires,
+                    &checked.templates,
+                    &refs.project,
+                    &refs.agent,
+                    &checked.declared,
+                    &refs.allows,
+                    refs.profile.as_ref(),
+                    provenance.applied(),
+                )
+                .await?
+        }
     };
     Ok(PlacedTrigger { trigger, change })
 }
@@ -999,7 +977,10 @@ pub async fn place_project(
     {
         refuse_on_change(&change, project_refusal(found))?;
     }
-    let placed = write_project(tx, organization, checked).await?;
+    let placed = checked
+        .declarable
+        .declare(tx, organization, &checked.name)
+        .await?;
     Ok((placed, change))
 }
 
@@ -1030,7 +1011,15 @@ pub async fn place_agent(
             ),
         )?;
     }
-    let placed = write_agent(tx, organization, checked).await?;
+    let placed = tx
+        .agents()
+        .declare(
+            organization,
+            &checked.name,
+            &checked.harness,
+            &checked.declared,
+        )
+        .await?;
     Ok((placed, change))
 }
 
@@ -1066,29 +1055,29 @@ pub async fn apply(
     mode: ApplyMode,
 ) -> Result<Applied> {
     let operation = mode.operation();
+    let in_trigger = |error| scoped(Prefix::Trigger, operation, error);
     check_name(&document.project.name)
         .map_err(|error| scoped(Prefix::Project, operation, error))?;
     check_name(&document.agent.name).map_err(|error| scoped(Prefix::Agent, operation, error))?;
-    check_name(&document.trigger.name)
-        .map_err(|error| scoped(Prefix::Trigger, operation, error))?;
-    check_trigger_links(
-        &document.trigger.project,
-        &document.trigger.agent,
-        &document.project.name,
-        &document.agent.name,
-    )
-    .map_err(|error| scoped(Prefix::Trigger, operation, error))?;
-    let (filter, templates) = parse_filter_trigger(
-        &document.trigger.filter,
-        &TemplateFields {
+    check_name(&document.trigger.name).map_err(in_trigger)?;
+    check_trigger_links(document).map_err(in_trigger)?;
+    let trigger = check_trigger(&TriggerFields {
+        name: &document.trigger.name,
+        forms: ScheduleForms::filter(&document.trigger.filter),
+        templates: TemplateFields {
             brief: &document.trigger.brief,
             branch: document.trigger.branch.as_deref(),
             correlation: document.trigger.correlation.as_deref(),
             on_miss: document.trigger.on_miss.as_deref(),
             on_open_workspace: document.trigger.on_open_workspace.as_deref(),
         },
-    )
-    .map_err(|error| scoped(Prefix::Trigger, operation, error))?;
+        project: &document.trigger.project,
+        agent: &document.trigger.agent,
+        declared: document.trigger.declared(),
+        allows: &document.trigger.allows,
+        profile: document.trigger.profile.as_deref(),
+    })
+    .map_err(in_trigger)?;
     let agent = check_agent(
         images,
         &document.agent.name,
@@ -1101,62 +1090,23 @@ pub async fn apply(
     let project = check_project(store, github, organization, &document.project, operation)
         .await
         .map_err(|error| scoped(Prefix::Project, operation, error))?;
-    let trigger = CheckedTrigger::new(TriggerProposal {
-        name: document.trigger.name.clone(),
-        fires: Fires::On(filter),
-        templates,
-        project: document.trigger.project.clone(),
-        agent: document.trigger.agent.clone(),
-        declared: document.trigger.declared(),
-        allows: document.trigger.allows.clone(),
-        profile: document.trigger.profile.clone(),
-    });
 
     let mut tx = store.begin().await?;
     let organization = tx.organizations().named(organization).await?;
-    let (project_record, project_change) =
-        place_project(&mut tx, &organization, &project, OnExisting::Change).await?;
-    let (agent_record, agent_change) =
-        place_agent(&mut tx, &organization, &agent, OnExisting::Change).await?;
-    let refs = TriggerRefs {
-        project: project_record.record,
-        agent: agent_record.record,
-        allows: crate::trigger::allowed(&mut tx, &organization, &trigger.allows).await?,
-        profile: match &trigger.profile {
-            Some(profile) => Some(tx.profiles().named(&organization, profile).await?),
-            None => None,
-        },
-    };
-    let existing = tx.triggers().all(&organization).await?;
-    let trigger_change = trigger_change(
-        existing
-            .iter()
-            .find(|trigger| trigger.name == document.trigger.name),
-        &trigger,
-    );
-    match trigger_change.action {
-        Action::Add => {
-            insert_trigger(&mut tx, &organization, &refs, &trigger, Provenance::File).await?;
-        }
-        Action::Change => {
-            let existing = existing
-                .iter()
-                .find(|trigger| trigger.name == document.trigger.name)
-                .expect("a changed trigger was listed");
-            update_trigger(&mut tx, existing, &refs, &trigger, Provenance::File).await?;
-        }
-        Action::Unchanged | Action::Remove => {}
-    }
+    let (_, project) = place_project(&mut tx, &organization, &project, OnExisting::Change).await?;
+    let (_, agent) = place_agent(&mut tx, &organization, &agent, OnExisting::Change).await?;
+    let placed = place_trigger(&mut tx, &organization, &trigger, Provenance::File).await?;
 
     if matches!(mode, ApplyMode::Apply) {
         tx.commit().await?;
     }
 
     Ok(Applied {
-        declarations: vec![project_change, agent_change, trigger_change],
-        admitting_outsiders: match &trigger.fires {
-            Fires::On(filter) if filter.admits_outsiders() => vec![trigger.name.clone()],
-            _ => Vec::new(),
+        declarations: vec![project, agent, placed.change],
+        admitting_outsiders: if trigger.admits_outsiders() {
+            vec![trigger.name]
+        } else {
+            Vec::new()
         },
     })
 }
