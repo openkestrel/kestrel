@@ -4,7 +4,7 @@ import { Refusal } from "#/components/refusal";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "#/components/ui/collapsible";
 import { Skeleton } from "#/components/ui/skeleton";
 import { useNow } from "#/lib/use-now";
-import { ago, moment } from "#/operator/format";
+import { ago, absoluteTime } from "#/operator/format";
 import type { WorkRepository, Workspace } from "#/operator/generated";
 import { workQuery } from "#/operator/queries";
 import {
@@ -95,8 +95,9 @@ export function WorkTab({
 					<CollapsibleContent>
 						<div className="grid gap-2 pt-2">
 							<p className="text-muted-foreground text-xs">
-								Reported <time dateTime={report.reported_at}>{moment(report.reported_at)}</time>.
-								This is history, not the work as it is now.
+								Reported{" "}
+								<time dateTime={report.reported_at}>{absoluteTime(report.reported_at)}</time>. This
+								is history, not the work as it is now.
 							</p>
 							<Repositories repositories={report.repositories} />
 						</div>

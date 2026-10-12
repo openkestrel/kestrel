@@ -16,6 +16,7 @@ import { workspaceKey } from "#/operator/queries";
 import { HeldMessages } from "./held-messages";
 import type { OptionWrite } from "./option-write";
 import { SessionControls } from "./session-controls";
+import { useComposerInput } from "./workbench";
 
 export function BriefComposer({
 	organization,
@@ -36,6 +37,7 @@ export function BriefComposer({
 	const queryClient = useQueryClient();
 	const knownName = useParticipant();
 	const input = useRef<HTMLTextAreaElement>(null);
+	useComposerInput(input, !briefed && record?.state === "open");
 	const [message, setMessage] = useState("");
 	const [name, setName] = useState(() => participant.name() ?? "");
 

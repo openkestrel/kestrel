@@ -441,6 +441,18 @@ test("a failed Session's stack opens as a stack, and its prose evidence stays pr
 	).toBeVisible();
 	await expect(work.getByRole("alert")).toHaveCount(0);
 
+	// A backtrace Stack Trace cannot draw as frames is shown whole, so no line of it is lost.
+	reads.session = failed(
+		"thread 'main' panicked at src/main.rs:4:5:\nboom\nstack backtrace:\n   0: rust_begin_unwind\n             at /rustc/abc/library/std/src/panicking.rs:652:5",
+	);
+	await page.reload();
+	await work.getByRole("tab", { name: "Sessions" }).click();
+	const backtrace = why.getByRole("button", { name: /panicked at src\/main\.rs:4:5/ });
+	await backtrace.click();
+	await expect(backtrace).toHaveAttribute("aria-expanded", "true");
+	await expect(why.getByText("0: rust_begin_unwind")).toBeVisible();
+	await expect(why.getByText("boom")).toBeVisible();
+
 	reads.session = failed("the model refused the request");
 	await page.reload();
 	await work.getByRole("tab", { name: "Sessions" }).click();

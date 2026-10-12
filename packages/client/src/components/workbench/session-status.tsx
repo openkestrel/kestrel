@@ -3,7 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { Button } from "#/components/ui/button";
 import { AN_EMPTY_DRAFT, holdDraft } from "#/lib/new-workspace-draft";
 import { useNow } from "#/lib/use-now";
-import { ago, moment } from "#/operator/format";
+import { ago, absoluteTime } from "#/operator/format";
 import type { TranscriptSessionState, Workspace } from "#/operator/generated";
 import { continueDraft, sessionStatusLine } from "#/operator/getting-ready";
 import { workspaceSessionsQuery } from "#/operator/queries";
@@ -87,8 +87,10 @@ function TrailingWork({ trailing }: { trailing: Trailing }) {
 				<div data-trailing-last className="grid gap-1">
 					<p>
 						Last observed {ago(trailing.last.observedAt, now)} ·{" "}
-						<time dateTime={trailing.last.observedAt}>{moment(trailing.last.observedAt)}</time>.
-						This is history, not what is open now.
+						<time dateTime={trailing.last.observedAt}>
+							{absoluteTime(trailing.last.observedAt)}
+						</time>
+						. This is history, not what is open now.
 					</p>
 					{trailing.last.work.length === 0 ? (
 						<p>Nothing was open then.</p>

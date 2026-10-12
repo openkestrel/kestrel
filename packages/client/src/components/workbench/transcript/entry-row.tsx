@@ -6,8 +6,9 @@ import { cn } from "#/lib/utils";
 import type { Exit } from "#/operator/generated";
 import type { Delivered } from "#/operator/transcript";
 import { at, exitLine, spoken, type Spoken } from "#/operator/transcript-view";
+import type { Row } from "../row";
 import { PayloadText } from "./payload-text";
-import { type Disclosure, PlanStep, type Row, ThoughtStep, ToolStep } from "./step-row";
+import { type Disclosure, PlanStep, ThoughtStep, ToolStep } from "./step-row";
 
 export type { Disclosure };
 

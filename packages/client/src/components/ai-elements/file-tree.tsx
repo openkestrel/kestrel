@@ -5,7 +5,7 @@
 
 import { ChevronRightIcon, FileIcon, FolderIcon, FolderOpenIcon } from "lucide-react";
 import type { HTMLAttributes, ReactNode } from "react";
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
+import { Children, createContext, useCallback, useContext, useMemo, useState } from "react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "#/components/ui/collapsible";
 import { cn } from "#/lib/utils";
 
@@ -16,7 +16,6 @@ interface FileTreeContextType {
 	onSelect?: (path: string) => void;
 }
 
-// Default noop for context default value
 // oxlint-disable-next-line eslint(no-empty-function)
 const noop = () => {};
 
@@ -114,11 +113,13 @@ const FileTreeFolderContext = createContext<FileTreeFolderContextType>({
 export type FileTreeFolderProps = HTMLAttributes<HTMLDivElement> & {
 	path: string;
 	name: string;
+	status?: ReactNode;
 };
 
 export const FileTreeFolder = ({
 	path,
 	name,
+	status,
 	className,
 	children,
 	...props
@@ -185,9 +186,13 @@ export const FileTreeFolder = ({
 						</button>
 					</div>
 					<CollapsibleContent>
-						<div className="ml-4 border-l pl-2" role="group">
-							{children}
-						</div>
+						{Children.toArray(children).length > 0 && (
+							<div className="ml-4 border-l pl-2" role="group">
+								{children}
+							</div>
+						)}
+						{/* A group holds only treeitems, so what a folder says about itself stands beside it. */}
+						{status && <div className="ml-4 border-l pl-2">{status}</div>}
 					</CollapsibleContent>
 				</div>
 			</Collapsible>
@@ -253,7 +258,6 @@ export const FileTreeFile = ({
 			>
 				{children ?? (
 					<>
-						{/* Spacer for alignment */}
 						<span className="size-4 shrink-0" />
 						<FileTreeIcon>
 							{icon ?? <FileIcon className="size-4 text-muted-foreground" />}

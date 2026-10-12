@@ -11,7 +11,6 @@ import {
 	commitsText,
 	fileKindLabel,
 	filesTotals,
-	languageFor,
 	joinedParticipants,
 	optionSummary,
 	parentPath,
@@ -116,16 +115,6 @@ describe("a changed file's row", () => {
 			]),
 		).toEqual({ added: 12, removed: 3 });
 		expect(filesTotals([{ added: null, removed: null }])).toEqual({ added: 0, removed: 0 });
-	});
-});
-
-describe("a file's language", () => {
-	it("reads it from the extension, and falls back to plain text", () => {
-		expect(languageFor("crates/kestrel/src/operator.rs")).toBe("rust");
-		expect(languageFor("src/components/workbench/work-pane.tsx")).toBe("tsx");
-		expect(languageFor("README.md")).toBe("markdown");
-		expect(languageFor("scripts/run.sh")).toBe("shellscript");
-		expect(languageFor("Dockerfile")).toBe("plaintext");
 	});
 });
 

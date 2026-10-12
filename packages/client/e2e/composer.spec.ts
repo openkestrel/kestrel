@@ -970,6 +970,12 @@ test("slash commands filter actual offers, select by keyboard and send supported
 		message: "/review  src/  ",
 	});
 	await expect(input).toHaveValue("");
+	// "changes" is in a description and "path" in a hint, and neither names a command.
+	await input.fill("/changes");
+	await expect(commands).toHaveCount(0);
+	await input.press("Enter");
+	await expect(input).toHaveValue("");
+	expect(scripted.requests.at(-1)?.body).toEqual({ participant: "jack", message: "/changes" });
 	await input.fill("/unsupported ordinary text");
 	await expect(commands).toHaveCount(0);
 	await page.getByRole("button", { name: "Post", exact: true }).click();

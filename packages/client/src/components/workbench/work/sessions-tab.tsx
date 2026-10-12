@@ -4,7 +4,7 @@ import { Diagnosis, Refusal } from "#/components/refusal";
 import { Skeleton } from "#/components/ui/skeleton";
 import { QueuedSessions } from "#/components/workbench/queue-read";
 import { useNow } from "#/lib/use-now";
-import { ago, leaseLine, moment } from "#/operator/format";
+import { ago, leaseLine, absoluteTime } from "#/operator/format";
 import { sessionsKey, workspaceSessionsQuery } from "#/operator/queries";
 import { sessionPhase } from "#/operator/session-state";
 import { optionSummary, sessionContinuity, sessionOutcome, usageText } from "#/operator/work-view";
@@ -135,7 +135,7 @@ function Lease({ organization, deadline }: { organization: string; deadline: str
 
 	return (
 		<dd data-session-lease={passed ? "expired" : "ahead"}>
-			{leaseLine(deadline, now)} · <time dateTime={deadline}>{moment(deadline)}</time>
+			{leaseLine(deadline, now)} · <time dateTime={deadline}>{absoluteTime(deadline)}</time>
 		</dd>
 	);
 }

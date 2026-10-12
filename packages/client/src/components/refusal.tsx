@@ -20,6 +20,7 @@ import {
 	type Collected,
 	type Fact,
 	factsOf,
+	isFramesOnly,
 	isStack,
 	type Step,
 	stepOf,
@@ -128,7 +129,7 @@ function Stack({ trace }: { trace: string }) {
 				<StackTraceExpandButton />
 			</StackTraceHeader>
 			<StackTraceContent>
-				<StackTraceFrames />
+				{isFramesOnly(trace) ? <StackTraceFrames /> : <pre className="p-3 text-xs">{trace}</pre>}
 			</StackTraceContent>
 		</StackTrace>
 	);

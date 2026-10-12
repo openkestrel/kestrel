@@ -163,7 +163,7 @@ class Reads {
 	sessions: unknown[] | undefined;
 	changes = new Map<string, unknown>();
 	changeReads: string[] = [];
-	changesDelay = 0;
+	changesHeld: Promise<void> | undefined;
 	changesFailure: { status: number; body: unknown } | undefined;
 	changesUnavailable = false;
 	commits: unknown = { repositories: [] };
@@ -172,6 +172,12 @@ class Reads {
 	file = new Map<string, { status: number; contentType: string; body: string | Buffer }>();
 
 	constructor(private readonly workspaceName: string) {}
+
+	holdChanges(): () => void {
+		const held = Promise.withResolvers<void>();
+		this.changesHeld = held.promise;
+		return held.resolve;
+	}
 
 	async install(page: Page): Promise<void> {
 		const base = `/operator/organizations/${ORGANIZATION}/workspaces`;
@@ -224,9 +230,7 @@ class Reads {
 				const scope = parameters.get("scope") ?? "";
 				const paths = parameters.getAll("path");
 				this.changeReads.push(route.request().url());
-				if (this.changesDelay > 0) {
-					await new Promise((waited) => setTimeout(waited, this.changesDelay));
-				}
+				await this.changesHeld;
 				if (this.changesUnavailable) {
 					await route.continue();
 					return;
@@ -593,6 +597,49 @@ test("the Changes read each scope, and a file expands in place to its diff", asy
 	await expect(files.locator("[data-truncated]")).toContainText("showing 1 of 5 entries");
 });
 
+test("what a nested directory says about itself stands outside the tree's groups", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request, "an opening brief");
+	const reads = new Reads(workspace.name);
+	reads.files.set("", {
+		path: "",
+		entries: [
+			{ name: "bare", kind: "directory" },
+			{ name: "full", kind: "directory" },
+		],
+		total: 2,
+		truncated: false,
+	});
+	reads.files.set("full", {
+		path: "full",
+		entries: [{ name: "main.rs", kind: "file", size: 512, git: "tracked" }],
+		total: 5,
+		truncated: true,
+	});
+	await reads.install(page);
+	await viewing(page, workspace.name);
+	const work = workPane(page);
+	await work.getByRole("tab", { name: "Files" }).click();
+	const tree = work.getByRole("tabpanel", { name: "Files" }).getByRole("tree");
+
+	await tree.getByRole("button", { name: "bare", exact: true }).click();
+	const bare = tree.getByRole("treeitem", { expanded: true });
+	await expect(bare.getByText("This directory is empty.")).toBeVisible();
+	await expect(bare.getByRole("group")).toHaveCount(0);
+
+	await tree.getByRole("button", { name: "Collapse bare" }).click();
+	await tree.getByRole("button", { name: "full", exact: true }).click();
+	const full = tree.getByRole("treeitem", { expanded: true });
+	await expect(full.getByRole("group").getByRole("treeitem")).toHaveCount(1);
+	await expect(full.getByText("showing 1 of 5 entries")).toBeVisible();
+	await expect(full.getByRole("group").getByText("showing 1 of 5 entries")).toHaveCount(0);
+
+	const { violations } = await new AxeBuilder({ page }).include('[role="tree"]').analyze();
+	expect(violations.map(({ id }) => id)).toEqual([]);
+});
+
 test("a long diff and a long file stay keyboard-reachable", async ({ page, request }) => {
 	const workspace = await opened(request, "an opening brief");
 	const reads = new Reads(workspace.name);
@@ -642,10 +689,13 @@ test("a long diff and a long file stay keyboard-reachable", async ({ page, reque
 	await reachable(page);
 });
 
-test("the Changes read says when it is loading, empty and failed", async ({ page, request }) => {
+test("the Changes read says when it is loading, idle, empty and failed", async ({
+	page,
+	request,
+}) => {
 	const workspace = await opened(request, "an opening brief");
 	const reads = new Reads(workspace.name);
-	reads.changesDelay = 300;
+	const release = reads.holdChanges();
 	reads.changes.set("unpublished", {
 		repositories: [
 			{
@@ -664,7 +714,12 @@ test("the Changes read says when it is loading, empty and failed", async ({ page
 	const reading = changes.locator("[data-changes]");
 
 	await expect(reading).toHaveAttribute("aria-busy", "true");
+	release();
 	await expect(reading).toContainText("no changes");
+	await expect(reading).toHaveAttribute("aria-busy", "false");
+
+	await changes.getByRole("button", { name: "Commit", exact: true }).click();
+	await expect(changes.getByText("Name a revision to read its diff.")).toBeVisible();
 	await expect(reading).toHaveAttribute("aria-busy", "false");
 
 	// A scope with nothing to read says so, rather than showing a stale list.

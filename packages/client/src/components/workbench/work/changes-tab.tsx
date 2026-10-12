@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { CodeBlock } from "#/components/ai-elements/code-block";
-import { Refusal } from "#/components/refusal";
 import { Button } from "#/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "#/components/ui/collapsible";
 import { Input } from "#/components/ui/input";
@@ -13,41 +12,44 @@ import type { RepositoryDiff } from "#/operator/generated";
 import { changesQuery, commitsQuery, stashesQuery } from "#/operator/work-queries";
 import {
 	DIFF_SCOPES,
+	type DiffScope,
 	filesTotals,
 	repositoryName,
 	scopeLabel,
 	splitPath,
 	statText,
 } from "#/operator/work-view";
+import type { Row } from "../row";
+import { WorkRead } from "./work-read";
 
-export function ChangesTab({
-	organization,
-	workspace,
-}: {
-	organization: string;
-	workspace: string;
-}) {
-	const [scope, setScope] = useState<string>("unpublished");
+const CHOICES = [...DIFF_SCOPES, "commit"] as const;
+
+type Choice = (typeof CHOICES)[number];
+
+export function ChangesTab(row: Row) {
+	const [choice, setChoice] = useState<Choice>("unpublished");
+	const [draft, setDraft] = useState("");
 	const [revision, setRevision] = useState("");
-	const [asked, setAsked] = useState("");
 	const [open, setOpen] = useState<string | null>(null);
-	const applied = scope === "commit" ? `commit:${asked}` : scope;
+	const scope: DiffScope = choice === "commit" ? `commit:${revision}` : choice;
+	const named = choice !== "commit" || revision !== "";
 	const changes = useQuery({
-		...changesQuery(organization, workspace, applied),
-		enabled: scope !== "commit" || asked !== "",
+		...changesQuery(row.organization, row.workspace, scope),
+		enabled: named,
 	});
 
 	return (
-		<div className="grid gap-4 p-4 text-sm" data-changes aria-busy={changes.isPending}>
+		// A read that is not asked for stays pending for good, so only a loading one is busy.
+		<div className="grid gap-4 p-4 text-sm" data-changes aria-busy={changes.isLoading}>
 			<div className="flex flex-wrap items-center gap-2">
 				<ToggleGroup
 					aria-label="Diff scope"
 					size="sm"
-					value={[scope]}
+					value={[choice]}
 					onValueChange={(values) => {
-						const next = values.at(-1);
+						const next = CHOICES.find((value) => value === values.at(-1));
 						if (next) {
-							setScope(next);
+							setChoice(next);
 							setOpen(null);
 						}
 					}}
@@ -59,20 +61,20 @@ export function ChangesTab({
 					))}
 					<ToggleGroupItem value="commit">Commit</ToggleGroupItem>
 				</ToggleGroup>
-				{scope === "commit" && (
+				{choice === "commit" && (
 					<form
 						className="flex items-center gap-2"
 						onSubmit={(event) => {
 							event.preventDefault();
-							setAsked(revision.trim());
+							setRevision(draft.trim());
 							setOpen(null);
 						}}
 					>
 						<Input
 							aria-label="Commit revision"
 							placeholder="revision"
-							value={revision}
-							onChange={(event) => setRevision(event.target.value)}
+							value={draft}
+							onChange={(event) => setDraft(event.target.value)}
 						/>
 						<Button type="submit" size="sm" variant="outline">
 							Read commit
@@ -81,34 +83,33 @@ export function ChangesTab({
 				)}
 			</div>
 
-			{changes.isPending ? (
-				asked === "" && scope === "commit" ? (
-					<p className="text-muted-foreground">Name a revision to read its diff.</p>
-				) : (
-					<Skeleton className="h-8 w-full" />
-				)
-			) : changes.isError ? (
-				<Refusal error={changes.error} retry={() => void changes.refetch()} />
-			) : changes.data.repositories.length === 0 ? (
-				<p className="text-muted-foreground text-xs" data-no-changes>
-					No repository to read.
-				</p>
+			{named ? (
+				<WorkRead read={changes}>
+					{({ repositories }) =>
+						repositories.length === 0 ? (
+							<p className="text-muted-foreground text-xs" data-no-changes>
+								No repository to read.
+							</p>
+						) : (
+							repositories.map((repository) => (
+								<RepositoryChanges
+									key={repository.repository}
+									repository={repository}
+									scope={scope}
+									open={open}
+									onOpen={setOpen}
+									{...row}
+								/>
+							))
+						)
+					}
+				</WorkRead>
 			) : (
-				changes.data.repositories.map((repository) => (
-					<RepositoryChanges
-						key={repository.repository}
-						repository={repository}
-						scope={applied}
-						open={open}
-						onOpen={setOpen}
-						organization={organization}
-						workspace={workspace}
-					/>
-				))
+				<p className="text-muted-foreground">Name a revision to read its diff.</p>
 			)}
 
-			<Commits organization={organization} workspace={workspace} />
-			<Stashes organization={organization} workspace={workspace} />
+			<Commits {...row} />
+			<Stashes {...row} />
 		</div>
 	);
 }
@@ -118,16 +119,13 @@ function RepositoryChanges({
 	scope,
 	open,
 	onOpen,
-	organization,
-	workspace,
+	...row
 }: {
 	repository: RepositoryDiff;
-	scope: string;
+	scope: DiffScope;
 	open: string | null;
 	onOpen: (path: string | null) => void;
-	organization: string;
-	workspace: string;
-}) {
+} & Row) {
 	const totals = filesTotals(repository.files);
 
 	return (
@@ -174,12 +172,7 @@ function RepositoryChanges({
 								</button>
 								{expanded && (
 									<div className="px-1 pb-2" data-file-diff={file.path}>
-										<FileDiff
-											organization={organization}
-											workspace={workspace}
-											scope={scope}
-											path={file.path}
-										/>
+										<FileDiff scope={scope} path={file.path} {...row} />
 									</div>
 								)}
 							</li>
@@ -197,58 +190,52 @@ function FileDiff({
 	workspace,
 	scope,
 	path,
-}: {
-	organization: string;
-	workspace: string;
-	scope: string;
-	path: string;
-}) {
+}: { scope: DiffScope; path: string } & Row) {
 	const diff = useQuery(changesQuery(organization, workspace, scope, [path]));
 
-	if (diff.isPending) return <Skeleton className="h-16 w-full" />;
-	if (diff.isError) return <Refusal error={diff.error} retry={() => void diff.refetch()} />;
-
 	return (
-		<>
-			{diff.data.repositories.map((repository) => (
-				<CodeBlock
-					key={repository.repository}
-					className="text-xs"
-					code={repository.diff === "" ? "no changes" : repository.diff}
-					language="diff"
-				/>
-			))}
-		</>
+		<WorkRead read={diff} loading={<Skeleton className="h-16 w-full" />}>
+			{({ repositories }) =>
+				repositories.map((repository) => (
+					<CodeBlock
+						key={repository.repository}
+						className="text-xs"
+						code={repository.diff === "" ? "no changes" : repository.diff}
+						language="diff"
+					/>
+				))
+			}
+		</WorkRead>
 	);
 }
 
-function Commits({ organization, workspace }: { organization: string; workspace: string }) {
+function Commits({ organization, workspace }: Row) {
 	const read = useQuery(commitsQuery(organization, workspace));
 
 	return (
 		<section aria-label="Commits" className="grid gap-1">
 			<h3 className="text-muted-foreground text-xs">Commits</h3>
-			{read.isPending ? (
-				<Skeleton className="h-6 w-full" />
-			) : read.isError ? (
-				<Refusal error={read.error} retry={() => void read.refetch()} />
-			) : read.data.repositories.length === 0 ? (
-				<p className="text-muted-foreground text-xs" data-no-commits>
-					No repository to read.
-				</p>
-			) : (
-				read.data.repositories.map((repository) => (
-					<div key={repository.repository} className="grid gap-0.5">
-						<span className="text-muted-foreground text-xs">{repositoryName(repository)}</span>
-						<TextLines text={repository.text} empty="no commits" />
-					</div>
-				))
-			)}
+			<WorkRead read={read} loading={<Skeleton className="h-6 w-full" />}>
+				{({ repositories }) =>
+					repositories.length === 0 ? (
+						<p className="text-muted-foreground text-xs" data-no-commits>
+							No repository to read.
+						</p>
+					) : (
+						repositories.map((repository) => (
+							<div key={repository.repository} className="grid gap-0.5">
+								<span className="text-muted-foreground text-xs">{repositoryName(repository)}</span>
+								<TextLines text={repository.text} empty="no commits" />
+							</div>
+						))
+					)
+				}
+			</WorkRead>
 		</section>
 	);
 }
 
-function Stashes({ organization, workspace }: { organization: string; workspace: string }) {
+function Stashes({ organization, workspace }: Row) {
 	const [open, setOpen] = useState(false);
 	const read = useQuery({ ...stashesQuery(organization, workspace), enabled: open });
 
@@ -266,20 +253,18 @@ function Stashes({ organization, workspace }: { organization: string; workspace:
 				</CollapsibleTrigger>
 				<CollapsibleContent>
 					<div className="border-t p-3">
-						{read.isPending ? (
-							<Skeleton className="h-6 w-full" />
-						) : read.isError ? (
-							<Refusal error={read.error} retry={() => void read.refetch()} />
-						) : (
-							read.data.repositories.map((repository) => (
-								<div key={repository.repository} className="grid gap-1">
-									<span className="text-muted-foreground text-xs">
-										{repositoryName(repository)}
-									</span>
-									<TextLines text={repository.text} empty="no stashes" />
-								</div>
-							))
-						)}
+						<WorkRead read={read} loading={<Skeleton className="h-6 w-full" />}>
+							{({ repositories }) =>
+								repositories.map((repository) => (
+									<div key={repository.repository} className="grid gap-1">
+										<span className="text-muted-foreground text-xs">
+											{repositoryName(repository)}
+										</span>
+										<TextLines text={repository.text} empty="no stashes" />
+									</div>
+								))
+							}
+						</WorkRead>
 					</div>
 				</CollapsibleContent>
 			</div>

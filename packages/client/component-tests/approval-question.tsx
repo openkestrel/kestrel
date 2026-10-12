@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Confirmation, type ApprovalState } from "#/components/ai-elements/confirmation";
-import { Question, type QuestionState } from "#/components/ui/question";
+import type { ApprovalState } from "#/components/ai-elements/confirmation";
+import { Approval } from "#/components/workbench/approval";
+import { Question, type QuestionState } from "#/components/workbench/question";
 // oxlint-disable-next-line import/no-unassigned-import -- stories use the application's shared fonts and theme.
 import "#/styles.css";
 
@@ -42,7 +43,7 @@ function Stories() {
 			<p className="text-xs text-muted-foreground">
 				Examples only. No Session or operator requests.
 			</p>
-			<Confirmation
+			<Approval
 				action="Push the branch"
 				arguments="git push --force-with-lease origin jack/flaky-usage"
 				policy="protected-push"

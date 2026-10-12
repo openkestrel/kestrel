@@ -12,7 +12,7 @@ import { Alert, AlertTitle } from "#/components/ui/alert";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
-import { modeStep, partialReport, postLabel } from "#/operator/composer";
+import { modeStep, offeredCommands, partialReport, postLabel } from "#/operator/composer";
 import type { Session, TranscriptSessionState, Workspace } from "#/operator/generated";
 import { participant, useParticipant } from "#/operator/participant";
 import { operator, sessionsKey, workspaceKey } from "#/operator/queries";
@@ -21,7 +21,7 @@ import { interruptTurn, postTurn } from "#/operator/turns";
 import { HeldMessages } from "./held-messages";
 import type { OptionWrite } from "./option-write";
 import { SessionControls } from "./session-controls";
-import { useWorkbenchChrome } from "./workbench";
+import { useComposerInput } from "./workbench";
 
 export function Composer({
 	organization,
@@ -40,7 +40,6 @@ export function Composer({
 }) {
 	const name = useParticipant();
 	const queryClient = useQueryClient();
-	const chrome = useWorkbenchChrome();
 	const input = useRef<HTMLTextAreaElement>(null);
 	const nameInput = useRef<HTMLInputElement>(null);
 	const [draft, setDraft] = useState("");
@@ -48,11 +47,7 @@ export function Composer({
 	useEffect(() => {
 		if (asking) nameInput.current?.focus();
 	}, [asking]);
-	// The workbench's skip links reach this input, from the top of the page or from the Work pane.
-	useEffect(() => {
-		chrome?.registerComposer(input.current);
-		return () => chrome?.registerComposer(null);
-	}, [chrome]);
+	useComposerInput(input, !asking);
 	const [draftName, setDraftName] = useState("");
 	const [nameProblem, setNameProblem] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
@@ -63,14 +58,7 @@ export function Composer({
 
 	const [commandIndex, setCommandIndex] = useState(0);
 	const [commandsDismissed, setCommandsDismissed] = useState(false);
-	const matches =
-		!commandsDismissed && /^\/[^\s]*$/.test(draft)
-			? (session?.commands ?? []).filter((command) =>
-					`${command.name} ${command.description} ${command.input_hint ?? ""}`
-						.toLowerCase()
-						.includes(draft.slice(1).toLowerCase()),
-				)
-			: [];
+	const matches = commandsDismissed ? [] : offeredCommands(session?.commands ?? [], draft);
 	function selectCommand(index: number) {
 		const command = matches.at(index);
 		if (!command) return;

@@ -20,9 +20,12 @@ test.afterEach(async ({ page }) => {
 	await page.unrouteAll({ behavior: "ignoreErrors" });
 });
 
-async function opened(request: APIRequestContext): Promise<{ id: string; name: string }> {
+async function opened(
+	request: APIRequestContext,
+	briefed = true,
+): Promise<{ id: string; name: string }> {
 	const response = await request.post(`/operator/organizations/${ORGANIZATION}/workspaces`, {
-		data: { project: "kestrel", agent: "builder", brief: "an opening brief" },
+		data: { project: "kestrel", agent: "builder", brief: briefed ? "an opening brief" : undefined },
 	});
 	expect(response.ok(), await response.text()).toBe(true);
 	// oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the control plane's opened shape.
@@ -347,7 +350,12 @@ test("Command-B folds the Workspaces pane and Command-Option-B the Work pane, in
 	await expect(workspaces).toHaveAttribute("aria-expanded", "true");
 	await expect(workspacesPane).toBeVisible();
 
-	await page.keyboard.press("Meta+b");
+	// Only the platform's own modifier folds: Control on an Apple keyboard is another shortcut's.
+	await page.keyboard.press(`${process.platform === "darwin" ? "Control" : "Meta"}+b`);
+	await expect(workspaces).toHaveAttribute("aria-expanded", "true");
+	await expect(page.locator("[data-workbench-announcement]")).toHaveText("");
+
+	await page.keyboard.press("ControlOrMeta+b");
 	const workspacesRail = page.locator('[data-sidebar="rail"][data-side="workspaces"]');
 	await expect(workspacesRail).toBeVisible();
 	await expect(workspacesRail).toHaveAccessibleName("Toggle the Workspaces pane");
@@ -358,7 +366,7 @@ test("Command-B folds the Workspaces pane and Command-Option-B the Work pane, in
 		"Workspaces pane collapsed",
 	);
 
-	await page.keyboard.press("Meta+Alt+b");
+	await page.keyboard.press("ControlOrMeta+Alt+b");
 	const workRail = page.locator('[data-sidebar="rail"][data-side="work"]');
 	await expect(workRail).toBeVisible();
 	await expect(workRail).toHaveAttribute("aria-expanded", "false");
@@ -388,7 +396,7 @@ test("folding a pane a reader is inside leaves their focus on its toggle", async
 	await changes.focus();
 	await expect(changes).toBeFocused();
 
-	await page.keyboard.press("Meta+Alt+b");
+	await page.keyboard.press("ControlOrMeta+Alt+b");
 	const rail = page.locator('[data-sidebar="rail"][data-side="work"]');
 	await expect(rail).toBeVisible();
 	await expect(rail).toBeFocused();
@@ -413,6 +421,47 @@ test("the skip link is the first stop and lands on the composer", async ({ page,
 
 	await page.keyboard.press("Enter");
 	await expect(page.locator("[data-composer-input]")).toBeFocused();
+});
+
+test("the skip link lands on the Brief composer while a Workspace has no Brief", async ({
+	page,
+	request,
+}) => {
+	await page.setViewportSize({ width: 1280, height: 800 });
+	const workspace = await opened(request, false);
+	await page.goto(`/organizations/${ORGANIZATION}/workspaces/${workspace.name}`);
+	const message = page.getByRole("textbox", { name: "Message", exact: true });
+	await expect(message).toBeVisible();
+
+	await page.keyboard.press("Tab");
+	await expect(page.getByRole("link", { name: "Skip to the composer", exact: true })).toBeFocused();
+	await page.keyboard.press("Enter");
+	await expect(message).toBeFocused();
+});
+
+test("a sealed Workspace has no composer, so it offers no link to one", async ({
+	page,
+	request,
+}) => {
+	await page.setViewportSize({ width: 1280, height: 800 });
+	const workspace = await opened(request);
+	await page.route(
+		(url) =>
+			url.pathname === `/operator/organizations/${ORGANIZATION}/workspaces/${workspace.name}`,
+		async (route) => {
+			const record = await route.fetch();
+			await route.fulfill({
+				response: record,
+				json: { ...(await record.json()), state: "sealed", sealed_at: "2026-09-30T11:00:00Z" },
+			});
+		},
+	);
+	await page.goto(`/organizations/${ORGANIZATION}/workspaces/${workspace.name}`);
+	await expect(page.getByRole("heading", { name: workspace.name })).toBeVisible();
+	await expect(page.getByRole("region", { name: "Work", exact: true })).toBeVisible();
+
+	await expect(page.getByRole("textbox", { name: /^(Post|Message)$/ })).toHaveCount(0);
+	await expect(page.getByRole("link", { name: /composer/ })).toHaveCount(0);
 });
 
 test("Changes reaches the composer in one Tab", async ({ page, request }) => {
@@ -456,6 +505,10 @@ test("at 375 px the sidebars are tabs, with no sideways scroll, and the skip lin
 		viewport: window.innerWidth,
 	}));
 	expect(width.document, "the page scrolls horizontally").toBeLessThanOrEqual(width.viewport);
+
+	await page.keyboard.press("ControlOrMeta+b");
+	await page.keyboard.press("ControlOrMeta+Alt+b");
+	await expect(page.locator("[data-workbench-announcement]")).toHaveText("");
 
 	await page.keyboard.press("Tab");
 	const skip = page.getByRole("link", { name: "Skip to the composer", exact: true });

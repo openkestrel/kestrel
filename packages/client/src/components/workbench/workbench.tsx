@@ -1,6 +1,7 @@
 import { PanelLeft, PanelRight } from "lucide-react";
 import {
 	type ReactNode,
+	type RefObject,
 	createContext,
 	useCallback,
 	useContext,
@@ -20,22 +21,31 @@ const PANES = [
 
 type Pane = (typeof PANES)[number]["value"];
 
-/** The two panes that can fold away beside the Transcript. */
 type Side = Exclude<Pane, "transcript">;
 
 type Collapsed = Partial<Record<Side, boolean>>;
 
-type Chrome = {
+type Controls = {
 	collapsed: Collapsed;
 	toggle: (side: Side) => void;
+	hasComposer: boolean;
 	focusComposer: () => void;
 	registerComposer: (input: HTMLTextAreaElement | null) => void;
 };
 
-const ChromeContext = createContext<Chrome | null>(null);
+const ControlsContext = createContext<Controls | null>(null);
 
-export function useWorkbenchChrome(): Chrome | null {
-	return useContext(ChromeContext);
+function useWorkbenchControls(): Controls | null {
+	return useContext(ControlsContext);
+}
+
+export function useComposerInput(input: RefObject<HTMLTextAreaElement | null>, shown = true) {
+	const register = useWorkbenchControls()?.registerComposer;
+	useEffect(() => {
+		if (!shown || !register) return undefined;
+		register(input.current);
+		return () => register(null);
+	}, [register, input, shown]);
 }
 
 const SIDE_LABEL: Record<Side, string> = { workspaces: "Workspaces", work: "Work" };
@@ -53,7 +63,9 @@ const SKIP =
 	"absolute left-2 top-2 z-50 h-px w-px overflow-hidden whitespace-nowrap focus:h-auto focus:w-auto focus:overflow-visible focus:whitespace-normal focus:rounded-md focus:border focus:bg-background focus:px-3 focus:py-2 focus:text-sm focus:shadow-md focus:ring-2 focus:ring-ring/50";
 
 export function ComposerSkipLink({ name = "Skip to the composer" }: { name?: string }) {
-	const chrome = useWorkbenchChrome();
+	const controls = useWorkbenchControls();
+	// A skip link that lands nowhere is worse than none, so it shows only while there is a composer.
+	if (!controls?.hasComposer) return null;
 	return (
 		<a
 			data-composer-skip
@@ -61,7 +73,7 @@ export function ComposerSkipLink({ name = "Skip to the composer" }: { name?: str
 			className={SKIP}
 			onClick={(event) => {
 				event.preventDefault();
-				chrome?.focusComposer();
+				controls.focusComposer();
 			}}
 		>
 			{name}
@@ -74,9 +86,11 @@ export function Workbench(panes: Record<Pane, ReactNode> & { initial?: Pane }) {
 	const [collapsed, setCollapsed] = useState<Collapsed>({});
 	const [notice, setNotice] = useState("");
 	const composer = useRef<HTMLTextAreaElement | null>(null);
+	const [hasComposer, setHasComposer] = useState(false);
 
 	const registerComposer = useCallback((input: HTMLTextAreaElement | null) => {
 		composer.current = input;
+		setHasComposer(input !== null);
 	}, []);
 
 	const focusComposer = useCallback(() => {
@@ -102,22 +116,25 @@ export function Workbench(panes: Record<Pane, ReactNode> & { initial?: Pane }) {
 		function onKeyDown(event: KeyboardEvent) {
 			// Option+B is "∫" on macOS, so the physical key is what names the shortcut.
 			if (event.repeat || (event.code !== "KeyB" && event.key.toLowerCase() !== "b")) return;
-			if (!(event.metaKey || event.ctrlKey)) return;
+			if (!(onApplePlatform() ? event.metaKey : event.ctrlKey)) return;
+			const side = event.altKey ? "work" : "workspaces";
+			// Below the breakpoint the panes are tabs with no toggle, so there is nothing to fold.
+			if (!shownToggle(side)) return;
 			event.preventDefault();
-			toggle(event.altKey ? "work" : "workspaces");
+			toggle(side);
 		}
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
 	}, [toggle]);
 
-	const chrome = useMemo(
-		() => ({ collapsed, toggle, focusComposer, registerComposer }),
-		[collapsed, toggle, focusComposer, registerComposer],
+	const controls = useMemo(
+		() => ({ collapsed, toggle, hasComposer, focusComposer, registerComposer }),
+		[collapsed, toggle, hasComposer, focusComposer, registerComposer],
 	);
 
 	return (
 		<main className="flex h-dvh flex-col">
-			<ChromeContext.Provider value={chrome}>
+			<ControlsContext.Provider value={controls}>
 				<ComposerSkipLink />
 				<Tabs
 					value={shown}
@@ -171,7 +188,7 @@ export function Workbench(panes: Record<Pane, ReactNode> & { initial?: Pane }) {
 				<p aria-live="polite" className="sr-only" data-workbench-announcement>
 					{notice}
 				</p>
-			</ChromeContext.Provider>
+			</ControlsContext.Provider>
 		</main>
 	);
 }
@@ -199,19 +216,19 @@ export function PaneHeading({
 }
 
 function SidebarToggle({ side, where }: { side: Side; where: "heading" | "rail" }) {
-	const chrome = useWorkbenchChrome();
-	if (chrome === null) return null;
+	const controls = useWorkbenchControls();
+	if (controls === null) return null;
 	const Icon = side === "workspaces" ? PanelLeft : PanelRight;
 	return (
 		<button
 			type="button"
 			data-sidebar={where}
 			data-side={side}
-			aria-expanded={chrome.collapsed[side] !== true}
+			aria-expanded={controls.collapsed[side] !== true}
 			aria-controls={`pane-${side}`}
-			aria-keyshortcuts={side === "workspaces" ? "Meta+B" : "Meta+Alt+B"}
+			aria-keyshortcuts={`${onApplePlatform() ? "Meta" : "Control"}+${side === "work" ? "Alt+" : ""}B`}
 			aria-label={`Toggle the ${SIDE_LABEL[side]} pane`}
-			onClick={() => chrome.toggle(side)}
+			onClick={() => controls.toggle(side)}
 			className="hidden size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring workbench:inline-flex"
 		>
 			<Icon aria-hidden className="size-4" />
@@ -224,6 +241,16 @@ function columns(collapsed: Collapsed): keyof typeof COLUMNS {
 	if (collapsed.workspaces) return "left";
 	if (collapsed.work) return "right";
 	return "open";
+}
+
+function onApplePlatform(): boolean {
+	return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+}
+
+function shownToggle(side: Side): boolean {
+	return (["heading", "rail"] as const).some(
+		(where) => sidebarToggle(side, where)?.checkVisibility() === true,
+	);
 }
 
 function holdsFocus(side: Side): boolean {

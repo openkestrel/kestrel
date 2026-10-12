@@ -8,6 +8,7 @@ import type {
 } from "./generated";
 import { operator, workspaceKey } from "./queries";
 import { operatorPath, type Transport } from "./transport";
+import type { DiffScope } from "./work-view";
 
 // Under the Workspace prefix so a Workspace change notice refetches the Work pane.
 export const instanceKey = (organization: string, workspace: string) =>
@@ -20,7 +21,7 @@ function instancePath(organization: string, workspace: string, ...segments: stri
 export const changesQuery = (
 	organization: string,
 	workspace: string,
-	scope: string,
+	scope: DiffScope,
 	paths: string[] = [],
 ) =>
 	queryOptions({

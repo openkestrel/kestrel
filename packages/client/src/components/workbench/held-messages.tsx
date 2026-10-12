@@ -36,13 +36,12 @@ export function HeldMessages({
 		await queryClient.invalidateQueries({ queryKey: workspaceKey(organization, workspace) });
 		await queryClient.invalidateQueries({ queryKey: sessionsKey(organization) });
 	}
-	async function saveEdit(message: HeldMessage) {
-		if (name === null || !editing) return;
+	async function run(write: (name: string) => Promise<unknown>) {
+		if (name === null) return;
 		setBusy(true);
 		setRefusal(null);
 		try {
-			await editHeldMessage(operator, organization, workspace, message.id, name, editing.message);
-			setEditing(null);
+			await write(name);
 			await refresh();
 			onDone();
 		} catch (error) {
@@ -52,20 +51,14 @@ export function HeldMessages({
 		}
 	}
 
-	async function withdraw(message: HeldMessage) {
-		if (name === null) return;
-		setBusy(true);
-		setRefusal(null);
-		try {
-			await withdrawHeldMessage(operator, organization, workspace, message.id, name);
-			await refresh();
-			onDone();
-		} catch (error) {
-			setRefusal(error);
-		} finally {
-			setBusy(false);
-		}
-	}
+	const saveEdit = (message: HeldMessage, text: string) =>
+		run(async (by) => {
+			await editHeldMessage(operator, organization, workspace, message.id, by, text);
+			setEditing(null);
+		});
+
+	const withdraw = (message: HeldMessage) =>
+		run((by) => withdrawHeldMessage(operator, organization, workspace, message.id, by));
 
 	return (
 		<>
@@ -119,7 +112,7 @@ export function HeldMessages({
 										<div className="flex gap-1">
 											<Button
 												disabled={busy || editing.message.trim().length === 0}
-												onClick={() => void saveEdit(message)}
+												onClick={() => void saveEdit(message, editing.message)}
 												size="xs"
 												type="button"
 											>

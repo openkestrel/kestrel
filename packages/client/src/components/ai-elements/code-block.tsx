@@ -42,7 +42,6 @@ const isUnderline = (fontStyle: number | undefined) =>
 	// oxlint-disable-next-line eslint(no-bitwise)
 	fontStyle && fontStyle & 4;
 
-// Transform tokens to include pre-computed keys to avoid noArrayIndexKey lint
 interface KeyedToken {
 	token: ThemedToken;
 	key: string;
@@ -61,7 +60,6 @@ const addKeysToTokens = (lines: ThemedToken[][]): KeyedLine[] =>
 		})),
 	}));
 
-// Token rendering component
 const TokenSpan = ({ token }: { token: ThemedToken }) => (
 	<span
 		className={cn(
@@ -77,7 +75,6 @@ const TokenSpan = ({ token }: { token: ThemedToken }) => (
 	</span>
 );
 
-// Line number styles using CSS counters
 const LINE_NUMBER_CLASSES = cn(
 	"block",
 	"before:content-[counter(line)]",
@@ -91,7 +88,6 @@ const LINE_NUMBER_CLASSES = cn(
 	"before:select-none",
 );
 
-// Line rendering component
 const LineSpan = ({
 	keyedLine,
 	showLineNumbers,
@@ -106,7 +102,6 @@ const LineSpan = ({
 	</span>
 );
 
-// Types
 type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
 	code: string;
 	language: CodeLanguage;
@@ -123,21 +118,17 @@ interface CodeBlockContextType {
 	code: string;
 }
 
-// Context
 const CodeBlockContext = createContext<CodeBlockContextType>({
 	code: "",
 });
 
-// Highlighter cache (singleton per language)
 const highlighterCache = new Map<
 	string,
 	Promise<HighlighterGeneric<BundledLanguage, BundledTheme>>
 >();
 
-// Token cache
 const tokensCache = new Map<string, TokenizedCode>();
 
-// Subscribers for async token updates
 const subscribers = new Map<string, Set<(result: TokenizedCode) => void>>();
 
 const getTokensCacheKey = (code: string, language: CodeLanguage) => {
@@ -163,7 +154,6 @@ const getHighlighter = (
 	return highlighterPromise;
 };
 
-// Create raw tokens for immediate display while highlighting loads
 const createRawTokens = (code: string): TokenizedCode => ({
 	bg: "transparent",
 	fg: "inherit",
@@ -180,7 +170,6 @@ const createRawTokens = (code: string): TokenizedCode => ({
 	),
 });
 
-// Synchronous highlight with callback for async results
 export const highlightCode = (
 	code: string,
 	language: CodeLanguage,
@@ -189,13 +178,11 @@ export const highlightCode = (
 ): TokenizedCode | null => {
 	const tokensCacheKey = getTokensCacheKey(code, language);
 
-	// Return cached result if available
 	const cached = tokensCache.get(tokensCacheKey);
 	if (cached) {
 		return cached;
 	}
 
-	// Subscribe callback if provided
 	if (callback) {
 		if (!subscribers.has(tokensCacheKey)) {
 			subscribers.set(tokensCacheKey, new Set());
@@ -203,7 +190,6 @@ export const highlightCode = (
 		subscribers.get(tokensCacheKey)?.add(callback);
 	}
 
-	// Start highlighting in background - fire-and-forget async pattern
 	getHighlighter(language)
 		// oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-then)
 		.then((highlighter) => {
@@ -224,10 +210,8 @@ export const highlightCode = (
 				tokens: result.tokens,
 			};
 
-			// Cache the result
 			tokensCache.set(tokensCacheKey, tokenized);
 
-			// Notify all subscribers
 			const subs = subscribers.get(tokensCacheKey);
 			if (subs) {
 				for (const sub of subs) {
@@ -359,10 +343,8 @@ export const CodeBlockContent = ({
 	language: CodeLanguage;
 	showLineNumbers?: boolean;
 }) => {
-	// Memoized raw tokens for immediate display
 	const rawTokens = useMemo(() => createRawTokens(code), [code]);
 
-	// Synchronous cache lookup — avoids setState in effect for cached results
 	const syncTokens = useMemo(
 		() => highlightCode(code, language) ?? rawTokens,
 		[code, language, rawTokens],

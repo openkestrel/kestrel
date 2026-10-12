@@ -1,5 +1,3 @@
-import type { BundledLanguage } from "shiki";
-import type { CodeLanguage } from "#/components/ai-elements/code-block";
 import { ago } from "./format";
 import type { FileEntry, Session, WorkInstanceReport, WorkspaceWork } from "./generated";
 import type { Delivered } from "./transcript";
@@ -54,7 +52,9 @@ export function reportedBy(report: WorkInstanceReport, now: number = Date.now())
 
 export const DIFF_SCOPES = ["unpublished", "changed", "staged"] as const;
 
-export function scopeLabel(scope: string): string {
+export type DiffScope = (typeof DIFF_SCOPES)[number] | `commit:${string}`;
+
+export function scopeLabel(scope: DiffScope): string {
 	switch (scope) {
 		case "unpublished":
 			return "Unpublished";
@@ -63,7 +63,7 @@ export function scopeLabel(scope: string): string {
 		case "staged":
 			return "Staged";
 		default:
-			return scope.startsWith("commit:") ? `Commit ${shortRevision(scope.slice(7))}` : scope;
+			return `Commit ${shortRevision(scope.slice("commit:".length))}`;
 	}
 }
 
@@ -113,33 +113,6 @@ export function filesTotals(files: { added: number | null; removed: number | nul
 		}),
 		{ added: 0, removed: 0 },
 	);
-}
-
-const LANGUAGES: Record<string, BundledLanguage> = {
-	css: "css",
-	go: "go",
-	html: "html",
-	js: "javascript",
-	json: "json",
-	jsx: "jsx",
-	md: "markdown",
-	mjs: "javascript",
-	py: "python",
-	rs: "rust",
-	sh: "shellscript",
-	sql: "sql",
-	toml: "toml",
-	ts: "typescript",
-	tsx: "tsx",
-	yaml: "yaml",
-	yml: "yaml",
-};
-
-export function languageFor(path: string): CodeLanguage {
-	const { name } = splitPath(path);
-	const dot = name.lastIndexOf(".");
-	if (dot <= 0) return "plaintext";
-	return LANGUAGES[name.slice(dot + 1).toLowerCase()] ?? "plaintext";
 }
 
 export function sessionOutcome(session: Session): string | undefined {

@@ -91,3 +91,13 @@ export function partialReport(posted: boolean, interrupted: boolean): string | u
 	}
 	return undefined;
 }
+
+// Only a name counts, so an entry that merely echoes a description stays ordinary text.
+export function offeredCommands<Command extends { name: string }>(
+	commands: Command[],
+	draft: string,
+): Command[] {
+	if (!/^\/\S*$/.test(draft)) return [];
+	const typed = draft.slice(1).toLowerCase();
+	return commands.filter(({ name }) => name.toLowerCase().startsWith(typed));
+}

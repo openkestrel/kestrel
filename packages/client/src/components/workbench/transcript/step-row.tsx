@@ -8,7 +8,7 @@ import {
 	WrenchIcon,
 	XIcon,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useState } from "react";
 import { CodeBlockContainer, CodeBlockContent } from "#/components/ai-elements/code-block";
 import { MessageResponse } from "#/components/ai-elements/message";
 import {
@@ -20,6 +20,7 @@ import {
 import { Shimmer } from "#/components/ai-elements/shimmer";
 import { Terminal, TerminalContent } from "#/components/ai-elements/terminal";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "#/components/ui/collapsible";
+import { useNow } from "#/lib/use-now";
 import { cn } from "#/lib/utils";
 import type { Entry, RunningTool } from "#/operator/generated";
 import {
@@ -32,11 +33,10 @@ import {
 	toolOutput,
 	toolState,
 } from "#/operator/transcript-view";
+import type { Row } from "../row";
 import { PayloadText } from "./payload-text";
 
 export type Disclosure = "line" | "steps" | "full";
-
-export type Row = { organization: string; workspace: string };
 
 type Recorded<Type extends Entry["type"]> = Extract<Entry, { type: Type }>;
 
@@ -119,11 +119,7 @@ export function ToolStep({
 }
 
 function RunningStep({ tool }: { tool: RunningTool }) {
-	const [now, setNow] = useState(() => Date.now());
-	useEffect(() => {
-		const timer = setInterval(() => setNow(Date.now()), 1000);
-		return () => clearInterval(timer);
-	}, []);
+	const now = useNow(1000);
 
 	return (
 		<Line

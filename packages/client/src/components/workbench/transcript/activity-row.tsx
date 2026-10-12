@@ -21,8 +21,7 @@ import { type Disclosure, ToolStep } from "./step-row";
 
 const DELAYED_AFTER_MS = 2_000;
 
-// `activity` is undefined while the Session's first calls run and nothing is recorded yet;
-// `live` is the Session's state for the one Activity it is still working in.
+// `live` is the Session's state, given only to the one Activity it is still working in.
 export function ActivityRow({
 	activity,
 	live,
@@ -183,8 +182,7 @@ function Buffering({ children }: { children: string }) {
 	);
 }
 
-// The Session's state drops a call before the entry that records it is read, so the row is held
-// until then: otherwise it would vanish and come back.
+// The Session's state drops a call before its entry is read, so the row is held rather than flickering.
 function useUnrecorded(
 	running: RunningTool[],
 	entries: Delivered[],

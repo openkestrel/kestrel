@@ -7,7 +7,7 @@ export function ago(timestamp: string, now: number = Date.now()): string {
 	return seconds < 45 ? "just now" : `${span(seconds)} ago`;
 }
 
-export function moment(timestamp: string): string {
+export function absoluteTime(timestamp: string): string {
 	const at = new Date(timestamp);
 	return Number.isNaN(at.getTime())
 		? timestamp
