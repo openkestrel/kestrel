@@ -87,8 +87,6 @@ export function TranscriptPane({
 	return (
 		<>
 			<SessionHeader
-				live={transcript.sessionState}
-				optionWrite={optionWrite}
 				presence={transcript.presence}
 				read={read}
 				session={session}
@@ -166,10 +164,18 @@ export function TranscriptPane({
 			{read.state === "open" && (
 				<>
 					<div hidden={!briefing}>
-						<BriefComposer briefed={!briefing} organization={organization} record={read} />
+						<BriefComposer
+							briefed={!briefing}
+							organization={organization}
+							record={read}
+							session={session}
+							usage={transcript.sessionState?.usage ?? session?.usage}
+							optionWrite={optionWrite}
+						/>
 					</div>
 					{!briefing && (
 						<Composer
+							live={transcript.sessionState}
 							optionWrite={optionWrite}
 							organization={organization}
 							read={read}

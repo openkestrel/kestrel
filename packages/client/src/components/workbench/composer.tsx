@@ -1,48 +1,78 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { type KeyboardEvent, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import {
+	PromptInput,
+	PromptInputBody,
+	PromptInputTextarea,
+	PromptInputFooter,
+	PromptInputHeader,
+} from "#/components/ai-elements/prompt-input";
 import { Refusal } from "#/components/refusal";
 import { Alert, AlertTitle } from "#/components/ui/alert";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Label } from "#/components/ui/label";
-import { Textarea } from "#/components/ui/textarea";
-import { amendable, modeStep, partialReport, postLabel, wasAmended } from "#/operator/composer";
-import { ago } from "#/operator/format";
-import type { HeldMessage, Session, Workspace } from "#/operator/generated";
+import { modeStep, partialReport, postLabel } from "#/operator/composer";
+import type { Session, TranscriptSessionState, Workspace } from "#/operator/generated";
 import { participant, useParticipant } from "#/operator/participant";
 import { operator, sessionsKey, workspaceKey } from "#/operator/queries";
 import { mayInterrupt } from "#/operator/session-view";
-import { editHeldMessage, interruptTurn, postTurn, withdrawHeldMessage } from "#/operator/turns";
+import { interruptTurn, postTurn } from "#/operator/turns";
+import { HeldMessages } from "./held-messages";
 import type { OptionWrite } from "./option-write";
+import { SessionControls } from "./session-controls";
 
 export function Composer({
 	organization,
 	workspace,
 	read,
 	session,
+	live,
 	optionWrite,
 }: {
 	organization: string;
 	workspace: string;
 	read: Workspace;
 	session: Session | undefined;
+	live: TranscriptSessionState | undefined;
 	optionWrite: OptionWrite;
 }) {
 	const name = useParticipant();
 	const queryClient = useQueryClient();
 	const input = useRef<HTMLTextAreaElement>(null);
+	const nameInput = useRef<HTMLInputElement>(null);
 	const [draft, setDraft] = useState("");
 	const [asking, setAsking] = useState(false);
+	useEffect(() => {
+		if (asking) nameInput.current?.focus();
+	}, [asking]);
 	const [draftName, setDraftName] = useState("");
 	const [nameProblem, setNameProblem] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
+	const [interruptPending, setInterruptPending] = useState(false);
 	const [refusal, setRefusal] = useState<unknown>(null);
 	const [partial, setPartial] = useState<string | null>(null);
 	const [notice, setNotice] = useState("");
-	const [editing, setEditing] = useState<{ id: number; message: string } | null>(null);
+
+	const [commandIndex, setCommandIndex] = useState(0);
+	const [commandsDismissed, setCommandsDismissed] = useState(false);
+	const matches =
+		!commandsDismissed && /^\/[^\s]*$/.test(draft)
+			? (session?.commands ?? []).filter((command) =>
+					`${command.name} ${command.description} ${command.input_hint ?? ""}`
+						.toLowerCase()
+						.includes(draft.slice(1).toLowerCase()),
+				)
+			: [];
+	function selectCommand(index: number) {
+		const command = matches.at(index);
+		if (!command) return;
+		setDraft(`/${command.name} `);
+		setCommandsDismissed(true);
+		input.current?.focus();
+	}
 
 	const label = postLabel(session?.state);
-	const held = read.held_messages;
 
 	function announce(text: string) {
 		setNotice(text);
@@ -65,6 +95,7 @@ export function Composer({
 		if (problem) return;
 		setAsking(false);
 		setDraftName("");
+		requestAnimationFrame(() => input.current?.focus());
 	}
 
 	async function post(): Promise<boolean> {
@@ -73,7 +104,20 @@ export function Composer({
 		setRefusal(null);
 		setPartial(null);
 		try {
-			const posted = await postTurn(operator, organization, workspace, name, draft.trim());
+			const posted = await postTurn(
+				operator,
+				organization,
+				workspace,
+				name,
+				(session?.commands ?? []).some(
+					(command) =>
+						draft.startsWith(`/${command.name}`) &&
+						(draft.length === command.name.length + 1 ||
+							/\s/.test(draft[command.name.length + 1] ?? "")),
+				)
+					? draft
+					: draft.trim(),
+			);
 			setDraft("");
 			announce(posted.held_message ? "Message held for the next turn" : "Message sent");
 			await refresh();
@@ -91,12 +135,14 @@ export function Composer({
 		if (!(await post())) return;
 		setBusy(true);
 		try {
+			setInterruptPending(true);
 			await interruptTurn(operator, organization, session.id, name);
 			await refresh();
 		} catch (error) {
 			setRefusal(error);
 			setPartial(partialReport(true, false) ?? null);
 		} finally {
+			setInterruptPending(false);
 			setBusy(false);
 		}
 	}
@@ -107,40 +153,13 @@ export function Composer({
 		setRefusal(null);
 		setPartial(null);
 		try {
+			setInterruptPending(true);
 			await interruptTurn(operator, organization, session.id, name);
 			await refresh();
 		} catch (error) {
 			setRefusal(error);
 		} finally {
-			setBusy(false);
-		}
-	}
-
-	async function saveEdit(message: HeldMessage) {
-		if (name === null || !editing) return;
-		setBusy(true);
-		setRefusal(null);
-		try {
-			await editHeldMessage(operator, organization, workspace, message.id, name, editing.message);
-			setEditing(null);
-			await refresh();
-		} catch (error) {
-			setRefusal(error);
-		} finally {
-			setBusy(false);
-		}
-	}
-
-	async function withdraw(message: HeldMessage) {
-		if (name === null) return;
-		setBusy(true);
-		setRefusal(null);
-		try {
-			await withdrawHeldMessage(operator, organization, workspace, message.id, name);
-			await refresh();
-		} catch (error) {
-			setRefusal(error);
-		} finally {
+			setInterruptPending(false);
 			setBusy(false);
 		}
 	}
@@ -160,6 +179,27 @@ export function Composer({
 	}
 
 	function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+		if (event.nativeEvent.isComposing) return;
+		if (matches.length > 0) {
+			if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+				event.preventDefault();
+				setCommandIndex(
+					(index) =>
+						(index + (event.key === "ArrowDown" ? 1 : -1) + matches.length) % matches.length,
+				);
+				return;
+			}
+			if (event.key === "Enter" && !event.shiftKey) {
+				event.preventDefault();
+				selectCommand(commandIndex);
+				return;
+			}
+			if (event.key === "Escape") {
+				event.preventDefault();
+				setCommandsDismissed(true);
+				return;
+			}
+		}
 		if (event.key === "Escape") {
 			event.preventDefault();
 			input.current?.blur();
@@ -173,8 +213,9 @@ export function Composer({
 	}
 
 	return (
-		<form
-			className="shrink-0 border-t px-4 py-2"
+		<PromptInput
+			aria-label="Session composer"
+			className="shrink-0 px-3 pb-3 pt-2"
 			data-composer
 			onSubmit={(event) => {
 				event.preventDefault();
@@ -182,153 +223,138 @@ export function Composer({
 				void post();
 			}}
 		>
-			{held.length > 0 && (
-				<ul aria-label="Held Messages" className="mb-2 grid gap-1" data-held-messages>
-					{held.map((message) => (
-						<li
-							key={message.id}
-							className="border border-border p-2 text-xs"
-							data-held-message={message.id}
-						>
-							<div className="flex flex-wrap items-center gap-2">
-								<span className="font-medium">{message.participant}</span>
-								<span className="text-muted-foreground">{ago(message.posted_at)}</span>
-								{wasAmended(message) && <span className="text-muted-foreground">edited</span>}
-								{amendable(message, name) && (
-									<span className="ml-auto flex gap-1">
-										<Button
-											onClick={() => setEditing({ id: message.id, message: message.message })}
-											size="xs"
-											type="button"
-											variant="outline"
-										>
-											Edit
-										</Button>
-										<Button
-											disabled={busy}
-											onClick={() => void withdraw(message)}
-											size="xs"
-											type="button"
-											variant="outline"
-										>
-											Withdraw
-										</Button>
-									</span>
-								)}
-							</div>
-							{editing?.id === message.id ? (
-								<div className="mt-1 grid gap-1">
-									<Textarea
-										aria-label="Edit the held message"
-										onChange={(event) =>
-											setEditing({ id: message.id, message: event.target.value })
-										}
-										value={editing.message}
-									/>
-									<div className="flex gap-1">
-										<Button
-											disabled={busy}
-											onClick={() => void saveEdit(message)}
-											size="xs"
-											type="button"
-										>
-											Save
-										</Button>
-										<Button
-											onClick={() => setEditing(null)}
-											size="xs"
-											type="button"
-											variant="ghost"
-										>
-											Cancel
-										</Button>
-									</div>
-								</div>
-							) : (
-								<p className="mt-1" data-held-text>
-									{message.message}
-								</p>
-							)}
-						</li>
-					))}
-				</ul>
-			)}
+			<HeldMessages
+				organization={organization}
+				workspace={workspace}
+				held={read.held_messages}
+				onDone={() => input.current?.focus()}
+			/>
 			{asking ? (
-				<div className="grid gap-1" data-name-gate>
-					<Label htmlFor="composer-name">Your name</Label>
-					<div className="flex gap-1">
-						<Input
-							id="composer-name"
-							onChange={(event) => setDraftName(event.target.value)}
-							onKeyDown={(event) => {
-								if (event.key !== "Enter") return;
-								event.preventDefault();
-								remember();
-							}}
-							placeholder="jack"
-							value={draftName}
-						/>
-						<Button onClick={remember} type="button">
-							Use this name
-						</Button>
-					</div>
-					{nameProblem && (
-						<p className="text-destructive text-xs" role="alert">
-							{nameProblem}
+				<PromptInputHeader className="block">
+					<div className="grid gap-1" data-name-gate>
+						<Label htmlFor="composer-name">Your name</Label>
+						<div className="flex gap-1">
+							<Input
+								id="composer-name"
+								ref={nameInput}
+								onChange={(event) => setDraftName(event.target.value)}
+								onKeyDown={(event) => {
+									if (event.key !== "Enter") return;
+									event.preventDefault();
+									remember();
+								}}
+								placeholder="jack"
+								value={draftName}
+							/>
+							<Button onClick={remember} type="button">
+								Use this name
+							</Button>
+						</div>
+						{nameProblem && (
+							<p className="text-destructive text-xs" role="alert">
+								{nameProblem}
+							</p>
+						)}
+						<p className="text-muted-foreground text-xs">
+							The name is remembered in this browser and is never a password.
 						</p>
-					)}
-					<p className="text-muted-foreground text-xs">
-						The name is remembered in this browser and is never a password.
-					</p>
-				</div>
+					</div>
+				</PromptInputHeader>
 			) : (
 				<>
-					<Textarea
-						aria-label={label}
-						data-composer-input
-						onChange={(event) => setDraft(event.target.value)}
-						onKeyDown={onKeyDown}
-						placeholder={label}
-						ref={input}
-						value={draft}
-					/>
-					<div className="mt-1 flex flex-wrap items-center gap-1">
-						<Button disabled={busy || draft.trim().length === 0} type="submit">
-							{label}
-						</Button>
-						{mayInterrupt(session) && (
+					{/* oxlint-disable jsx-a11y/prefer-tag-over-role -- The textarea retains focus while the listbox exposes command hints through its active descendant. */}
+					{matches.length > 0 && (
+						<div
+							id="harness-commands"
+							role="listbox"
+							aria-label="Harness commands"
+							className="mb-2 w-full max-h-48 overflow-y-auto rounded-md border p-1"
+						>
+							{matches.map((command, index) => (
+								<button
+									type="button"
+									tabIndex={-1}
+									key={command.name}
+									id={`harness-command-${index}`}
+									role="option"
+									aria-selected={index === commandIndex}
+									className="block w-full rounded-sm px-2 py-1.5 text-left aria-selected:bg-accent"
+									onMouseDown={(event) => event.preventDefault()}
+									onClick={() => selectCommand(index)}
+								>
+									<span className="font-mono text-xs">/{command.name}</span>{" "}
+									<span className="text-muted-foreground text-xs">{command.description}</span>
+									{command.input_hint && (
+										<p className="font-mono text-muted-foreground text-xs">{command.input_hint}</p>
+									)}
+								</button>
+							))}
+						</div>
+					)}
+					{/* oxlint-enable jsx-a11y/prefer-tag-over-role */}
+					<PromptInputBody>
+						<PromptInputTextarea
+							aria-controls={matches.length > 0 ? "harness-commands" : undefined}
+							aria-activedescendant={
+								matches.length > 0 ? `harness-command-${commandIndex}` : undefined
+							}
+							aria-label={label}
+							data-composer-input
+							onChange={(event) => {
+								setDraft(event.target.value);
+								setCommandIndex(0);
+								setCommandsDismissed(false);
+							}}
+							onKeyDown={onKeyDown}
+							placeholder={`${label} — / for commands`}
+							ref={input}
+							value={draft}
+						/>
+					</PromptInputBody>
+					<PromptInputFooter className="flex-wrap">
+						<SessionControls
+							session={session}
+							usage={live?.usage ?? session?.usage}
+							optionWrite={optionWrite}
+						/>
+						<div className="flex w-full flex-wrap items-center gap-1">
+							<Button disabled={busy || draft.trim().length === 0} type="submit">
+								{label}
+							</Button>
+							{mayInterrupt(session) && (
+								<Button
+									disabled={busy || draft.trim().length === 0 || Boolean(session?.interrupting)}
+									onClick={() => void sendNow()}
+									type="button"
+									variant="outline"
+								>
+									Send now
+								</Button>
+							)}
 							<Button
-								disabled={busy || draft.trim().length === 0}
-								onClick={() => void sendNow()}
+								disabled={busy || !mayInterrupt(session) || Boolean(session?.interrupting)}
+								onClick={() => void interrupt()}
 								type="button"
 								variant="outline"
 							>
-								Send now
+								{interruptPending || session?.interrupting ? "Interrupting…" : "Interrupt"}
 							</Button>
-						)}
-						<Button
-							disabled={busy || !mayInterrupt(session)}
-							onClick={() => void interrupt()}
-							type="button"
-							variant="outline"
-						>
-							Interrupt
-						</Button>
-						<span className="ml-auto text-muted-foreground text-xs" data-composer-name>
-							{name === null ? "no name yet" : `writing as ${name}`}{" "}
-							<Button
-								onClick={() => {
-									setAsking(true);
-									setDraftName(name ?? "");
-								}}
-								size="xs"
-								type="button"
-								variant="link"
-							>
-								change
-							</Button>
-						</span>
-					</div>
+							<span className="ml-auto text-muted-foreground text-xs" data-composer-name>
+								{name === null ? "no name yet" : `writing as ${name}`}{" "}
+								<Button
+									onClick={() => {
+										setAsking(true);
+										setDraftName(name ?? "");
+									}}
+									size="xs"
+									type="button"
+									variant="link"
+								>
+									change
+								</Button>
+							</span>
+						</div>
+					</PromptInputFooter>
 				</>
 			)}
 			{partial && (
@@ -344,6 +370,6 @@ export function Composer({
 			<p aria-live="polite" className="sr-only" data-announcement>
 				{notice}
 			</p>
-		</form>
+		</PromptInput>
 	);
 }
