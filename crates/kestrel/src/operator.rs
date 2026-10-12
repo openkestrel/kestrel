@@ -26,10 +26,10 @@ use tracing::warn;
 
 use crate::agent;
 use crate::capability::{self, Capability, Images};
-use crate::declaration;
+use crate::declaration::{self, triggers};
 use crate::declined::{
     self as declined, Again, Concerning, Consequence, Constraint, Declined, Locator, Reason,
-    Resource, Step,
+    Resource, Step, Within,
 };
 use crate::domain::{
     self, Agent, Connection, Declared, Direction, EventRecordId, Fires, Firing, HeldMessage,
@@ -52,7 +52,7 @@ use crate::start_readiness;
 use crate::store::workspace::HeldMessageRefusal;
 use crate::store::{self, Declared as DeclaredRecord, Store};
 use crate::stream::{self, Emitted};
-use crate::trigger::{self, apply};
+use crate::trigger;
 use crate::{instance, pull_request, start, work, workspace};
 
 pub const ROOT: &str = "/";
@@ -79,6 +79,10 @@ pub const PROFILE_FILE: &str =
     "/operator/organizations/{organization}/profiles/{profile}/files/{path}";
 pub const SIGN_INS: &str = "/operator/organizations/{organization}/sign-ins";
 pub const SIGN_IN: &str = "/operator/organizations/{organization}/sign-ins/{harness}/{method}";
+pub const SIGN_IN_TESTS: &str =
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}/tests";
+pub const SIGN_IN_TEST: &str =
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}/tests/{test}";
 pub const GITHUB_APP: &str = "/operator/organizations/{organization}/github-app";
 pub const INTEGRATIONS: &str = "/operator/organizations/{organization}/integrations";
 pub const INTEGRATION: &str = "/operator/organizations/{organization}/integrations/{integration}";
@@ -376,6 +380,8 @@ pub fn router(
         )
         .route(SIGN_INS, get(sign_ins))
         .route(SIGN_IN, put(save_sign_in))
+        .route(SIGN_IN_TESTS, post(test_sign_in))
+        .route(SIGN_IN_TEST, get(sign_in_test))
         .route(INTEGRATIONS, get(integrations).post(register_integration))
         .route(INTEGRATION, get(show_integration).patch(change_integration))
         .route(INTEGRATION_DISABLE, post(disable_integration))
@@ -651,7 +657,7 @@ struct TriggerTest {
     issue: Option<i64>,
     instruction: Option<String>,
     agent: Option<String>,
-    declared: Option<apply::File>,
+    declared: Option<triggers::File>,
 }
 
 #[derive(Deserialize)]
@@ -1947,6 +1953,7 @@ impl From<sign_in::SignIn> for wire::SavedSignIn {
                     }
                     sign_in::Source::Refresh => wire::AuthenticationEvidenceSource::Refresh,
                     sign_in::Source::Session => wire::AuthenticationEvidenceSource::Session,
+                    sign_in::Source::ModelTest => wire::AuthenticationEvidenceSource::ModelTest,
                 },
                 observed_at: authentication.observed_at.to_string(),
                 provider_check: authentication
@@ -2061,6 +2068,81 @@ async fn save_sign_in(
             },
         )),
     })
+}
+
+impl From<sign_in::model_test::Test> for wire::SignInTest {
+    fn from(test: sign_in::model_test::Test) -> Self {
+        Self {
+            id: test.id,
+            harness: test.harness,
+            method: test.method,
+            revision: test.revision,
+            requested_model: test.requested_model,
+            model: test.model,
+            image: test.image,
+            state: match test.state {
+                sign_in::TestState::Pending => wire::SignInTestState::Pending,
+                sign_in::TestState::Running => wire::SignInTestState::Running,
+                sign_in::TestState::Completed => wire::SignInTestState::Completed,
+                sign_in::TestState::Failed => wire::SignInTestState::Failed,
+                sign_in::TestState::Interrupted => wire::SignInTestState::Interrupted,
+            },
+            outcome: test.outcome.map(|outcome| match outcome {
+                sign_in::TestOutcome::Worked => wire::SignInTestOutcome::Worked,
+                sign_in::TestOutcome::AuthenticationFailed => {
+                    wire::SignInTestOutcome::AuthenticationFailed
+                }
+                sign_in::TestOutcome::NotCovered => wire::SignInTestOutcome::NotCovered,
+                sign_in::TestOutcome::Unavailable => wire::SignInTestOutcome::Unavailable,
+                sign_in::TestOutcome::HarnessFailed => wire::SignInTestOutcome::HarnessFailed,
+                sign_in::TestOutcome::MaterialReplaced => wire::SignInTestOutcome::MaterialReplaced,
+            }),
+            message: test.message,
+            created_at: test.created_at.to_string(),
+            started_at: test.started_at.map(|at| at.to_string()),
+            finished_at: test.finished_at.map(|at| at.to_string()),
+        }
+    }
+}
+
+/// A body is optional: no model named tests the harness's own default.
+async fn test_sign_in(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, harness, method)): Path<(String, String, String)>,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, Json<wire::SignInTest>), Refused> {
+    let asked: wire::SignInTestRequest = if body.is_empty() {
+        wire::SignInTestRequest::default()
+    } else {
+        serde_json::from_slice(&body).map_err(|error| malformed(None, error.to_string()))?
+    };
+    let test = sign_in::model_test::start(
+        &control_plane.store,
+        &control_plane.images,
+        &organization,
+        &harness,
+        &method,
+        asked.model.as_deref(),
+    )
+    .await?;
+
+    Ok((StatusCode::ACCEPTED, Json(test.into())))
+}
+
+async fn sign_in_test(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, harness, method, test)): Path<(String, String, String, String)>,
+) -> Result<Json<wire::SignInTest>, Refused> {
+    let test = sign_in::model_test::read(
+        &control_plane.store,
+        &organization,
+        &harness,
+        &method,
+        &test,
+    )
+    .await?;
+
+    Ok(Json(test.into()))
 }
 
 #[derive(Deserialize)]
@@ -2703,35 +2785,28 @@ async fn declare_trigger(
     declaration: Result<Json<TriggerDeclaration>, JsonRejection>,
 ) -> Result<(StatusCode, Json<TriggerRecord>), Refused> {
     let Json(declaration) = declaration?;
-    declaration::check_name(&declaration.name).map_err(|error| {
-        declaration::scoped(declaration::Prefix::Root, "declare_trigger", error)
-    })?;
-    let (fires, templates) = declaration::parse_trigger(
-        &declaration::ScheduleForms {
+    let checked = declaration::check_trigger(&declaration::TriggerFields {
+        name: &declaration.name,
+        forms: declaration::ScheduleForms {
             filter: declaration.filter.as_ref(),
             every: declaration.every.as_deref(),
             cron: declaration.cron.as_deref(),
             zone: declaration.zone.as_deref(),
         },
-        &declaration::TemplateFields {
+        templates: declaration::TemplateFields {
             brief: &declaration.brief,
             branch: declaration.branch.as_deref(),
             correlation: declaration.correlation.as_deref(),
             on_miss: declaration.on_miss.as_deref(),
             on_open_workspace: declaration.on_open_workspace.as_deref(),
         },
-    )
-    .map_err(|error| declaration::scoped(declaration::Prefix::Root, "declare_trigger", error))?;
-    let checked = declaration::CheckedTrigger::new(declaration::TriggerProposal {
-        name: declaration.name.clone(),
-        fires,
-        templates,
-        project: declaration.project.clone(),
-        agent: declaration.agent.clone(),
+        project: &declaration.project,
+        agent: &declaration.agent,
         declared: declaration.declared(),
-        allows: declaration.allows.clone(),
-        profile: declaration.profile.clone(),
-    });
+        allows: &declaration.allows,
+        profile: declaration.profile.as_deref(),
+    })
+    .map_err(|error| declaration::scoped(declaration::Prefix::Root, "declare_trigger", error))?;
     let mut tx = control_plane.store.begin().await?;
     let organization = tx.organizations().named(&organization).await?;
     let placed = declaration::place_trigger(
@@ -2815,14 +2890,14 @@ async fn test_trigger(
     };
     let tested = match tested.declared {
         Some(file) => {
-            let declarations = apply::declarations(file)
+            let declarations = triggers::declarations(file)
                 .map_err(|error| {
                     declaration::scoped(declaration::Prefix::Root, "test_trigger", error)
                 })
                 .map_err(named_refusal)?;
             let declared = declarations
                 .iter()
-                .find(|declared| declared.name == name)
+                .find(|declared| declared.name() == name)
                 .ok_or_else(|| {
                     named_refusal(
                         Reason::MissingReference {
@@ -2968,35 +3043,35 @@ async fn dispatch_trigger(
 async fn apply_triggers(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    file: Result<Json<apply::File>, JsonRejection>,
-) -> Result<Json<apply::Applied>, Refused> {
+    file: Result<Json<triggers::File>, JsonRejection>,
+) -> Result<Json<triggers::Applied>, Refused> {
     applied_triggers(control_plane, organization, file, false).await
 }
 
 async fn preview_applied_triggers(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    file: Result<Json<apply::File>, JsonRejection>,
-) -> Result<Json<apply::Applied>, Refused> {
+    file: Result<Json<triggers::File>, JsonRejection>,
+) -> Result<Json<triggers::Applied>, Refused> {
     applied_triggers(control_plane, organization, file, true).await
 }
 
 async fn applied_triggers(
     control_plane: ControlPlane,
     organization: String,
-    file: Result<Json<apply::File>, JsonRejection>,
+    file: Result<Json<triggers::File>, JsonRejection>,
     dry_run: bool,
-) -> Result<Json<apply::Applied>, Refused> {
+) -> Result<Json<triggers::Applied>, Refused> {
     let Json(file) = file?;
     let operation = if dry_run {
         "preview_applied_triggers"
     } else {
         "apply_triggers"
     };
-    let declarations = apply::declarations(file)
+    let declarations = triggers::declarations(file)
         .map_err(|error| declaration::scoped(declaration::Prefix::Root, operation, error))
         .map_err(named_refusal)?;
-    let applied = apply::apply(&control_plane.store, &organization, &declarations, dry_run)
+    let applied = triggers::apply(&control_plane.store, &organization, &declarations, dry_run)
         .await
         .map_err(named_refusal)?;
 
@@ -3006,7 +3081,7 @@ async fn applied_triggers(
 /// An untyped refusal here is about what the request named, never a control plane that could
 /// not answer.
 fn named_refusal(error: anyhow::Error) -> Refused {
-    if error.is::<Reason>() || error.is::<Concerning>() {
+    if error.is::<Reason>() || error.is::<Concerning>() || error.is::<Within>() {
         return error.into();
     }
     Refused::Unprocessable(error.to_string())
@@ -4616,6 +4691,7 @@ const fn wire_resource(resource: Resource) -> wire::Resource {
         Resource::Instance => wire::Resource::Instance,
         Resource::HeldMessage => wire::Resource::HeldMessage,
         Resource::TranscriptPayload => wire::Resource::TranscriptPayload,
+        Resource::SignInTest => wire::Resource::SignInTest,
     }
 }
 
@@ -4887,7 +4963,7 @@ async fn name_operator(
     Ok(answered::<_, wire::Operator>(declared))
 }
 
-fn diagnosed(reason: Reason, field: Option<&'static str>) -> Refused {
+fn diagnosed(reason: Reason, field: Option<String>) -> Refused {
     let (status, diagnostic) = diagnosis(reason, field);
     Refused::Diagnosed {
         status,
@@ -4895,9 +4971,8 @@ fn diagnosed(reason: Reason, field: Option<&'static str>) -> Refused {
     }
 }
 
-fn diagnosis(reason: Reason, field: Option<&'static str>) -> (StatusCode, wire::Diagnostic) {
-    let request_field = field;
-    let field = field.map(str::to_owned);
+fn diagnosis(reason: Reason, field: Option<String>) -> (StatusCode, wire::Diagnostic) {
+    let request_field = field.clone();
     match reason {
         Reason::MissingOperator { operation } => (
             if operation == "show_operator" {
@@ -5271,7 +5346,7 @@ fn invalid_field(
 
 fn invalid_value(
     operation: &'static str,
-    field: &'static str,
+    field: &str,
     constraint: Constraint,
     allowed: Option<Vec<String>>,
     message: String,
@@ -5306,7 +5381,36 @@ impl From<anyhow::Error> for Refused {
             Err(error) => error,
         };
         let error = match error.downcast::<Concerning>() {
-            Ok(concerning) => return diagnosed(concerning.reason, Some(concerning.field)),
+            Ok(concerning) => {
+                return diagnosed(concerning.reason, Some(concerning.field.to_owned()));
+            }
+            Err(error) => error,
+        };
+        let error = match error.downcast::<Within>() {
+            Ok(Within {
+                record,
+                field,
+                reason,
+            }) => {
+                let path = |field: &str| format!("{record}.{field}");
+                return match reason {
+                    Reason::InvalidField {
+                        field,
+                        operation,
+                        constraint,
+                        allowed,
+                        message,
+                    } => {
+                        let (status, diagnostic) =
+                            invalid_value(operation, &path(field), constraint, allowed, message);
+                        Refused::Diagnosed {
+                            status,
+                            diagnostic: Box::new(diagnostic),
+                        }
+                    }
+                    reason => diagnosed(reason, field.map(path)),
+                };
+            }
             Err(error) => error,
         };
         match error.downcast::<Declined>() {
@@ -5491,6 +5595,8 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("DELETE", PROFILE_FILE) => "forget_subscription_profile_file",
         ("GET", SIGN_INS) => "list_sign_ins",
         ("PUT", SIGN_IN) => "save_sign_in",
+        ("POST", SIGN_IN_TESTS) => sign_in::model_test::TEST,
+        ("GET", SIGN_IN_TEST) => sign_in::model_test::READ,
         ("GET", INTEGRATIONS) => "list_integrations",
         ("POST", INTEGRATIONS) => "register_integration",
         ("GET", INTEGRATION) => "show_integration",

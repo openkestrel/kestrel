@@ -14,7 +14,6 @@ use std::os::fd::AsRawFd as _;
 use std::os::unix::process::CommandExt as _;
 
 use super::{Exited, IdleHint, Instance, Provisioned, Streaming, Supervising, Supervisor};
-use crate::domain::SessionId;
 
 #[derive(Debug, Clone)]
 pub struct LocalExec {
@@ -34,12 +33,12 @@ impl LocalExec {
         }
     }
 
-    pub(super) fn provision(&self, session: SessionId) -> io::Result<Instance> {
+    pub(super) fn provision(&self, holder: &str) -> io::Result<Instance> {
         let lifecycle = self
             .lifecycle
             .lock()
             .map_err(|_| io::Error::other("instance lock poisoned"))?;
-        let name = format!("kestrel-{session}");
+        let name = super::named_after(&holder);
         if lifecycle.contains(&name) {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -400,6 +399,7 @@ mod tests {
 
     use super::super::Driver;
     use super::*;
+    use crate::domain::SessionId;
 
     fn process_exists(pid: i32) -> bool {
         #[allow(unsafe_code)]

@@ -43,6 +43,7 @@ const RESOURCES: Record<Resource, [one: string, many: string]> = {
 	instance: ["Instance", "Instances"],
 	held_message: ["Held Message", "Held Messages"],
 	transcript_payload: ["Transcript payload", "Transcript payloads"],
+	sign_in_test: ["Sign-in test", "Sign-in tests"],
 };
 
 export function resourceName(resource: Resource): string {
@@ -107,6 +108,7 @@ const LISTED: Record<Resource, string> = {
 	session: "workspace",
 	held_message: "workspace",
 	transcript_payload: "workspace",
+	sign_in_test: "profile",
 };
 
 const SHOWN = new Set<Resource>(["workspace", "session", "trigger", "event"]);

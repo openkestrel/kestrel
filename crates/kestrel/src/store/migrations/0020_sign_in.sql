@@ -5,7 +5,7 @@ CREATE TABLE authentication_evidence (
         'not_covered'
     )),
     source TEXT NOT NULL CHECK (source IN (
-        'import', 'provider_check', 'relay', 'generic_write', 'refresh', 'session'
+        'import', 'provider_check', 'relay', 'generic_write', 'refresh', 'session', 'model_test'
     )),
     observed_at TEXT NOT NULL,
     provider_check TEXT

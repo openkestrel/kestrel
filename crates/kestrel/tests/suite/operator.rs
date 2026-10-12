@@ -3461,10 +3461,10 @@ async fn applied_triggers_reach_the_declaration_module(operation: &str, path: &s
 
     says_the_field(
         &refusal,
-        "filter",
+        "triggers.nightly.filter",
         "well_formed",
-        "the trigger nightly: a trigger filter: bogus is not a filter kestrel knows: use exact, \
-         prefix, suffix, all, any or not",
+        "a trigger filter: bogus is not a filter kestrel knows: use exact, prefix, suffix, all, \
+         any or not",
         operation,
     );
     assert!(listed_nothing(&kestrel, &triggers_of("acme")).await);
@@ -6805,6 +6805,8 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::PROFILE_FILE, "delete"),
         (operator::SIGN_INS, "get"),
         (operator::SIGN_IN, "put"),
+        (operator::SIGN_IN_TESTS, "post"),
+        (operator::SIGN_IN_TEST, "get"),
         (operator::INTEGRATIONS, "get"),
         (operator::INTEGRATIONS, "post"),
         (operator::GITHUB_APP, "post"),

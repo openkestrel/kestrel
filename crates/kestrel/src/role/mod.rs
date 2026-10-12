@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::capability::Images;
 use crate::sign_in::check::Providers;
 use crate::sign_in::credential_use;
+use crate::sign_in::model_test;
 use crate::store::Store;
 use crate::timer::Wake;
 use std::time::Duration;
@@ -58,6 +59,11 @@ impl AllInOne {
         shutdown: CancellationToken,
     ) -> Result<()> {
         credential_use::release_all(&self.store).await?;
+        model_test::interrupt_unfinished(
+            &self.store,
+            dispatch.as_ref().map(|dispatch| &dispatch.driver),
+        )
+        .await?;
         let summaries = self.listening.live.summaries.clone();
         let listening = match &dispatch {
             Some(dispatch) => self.listening.inspecting(Images::of(&dispatch.driver)),

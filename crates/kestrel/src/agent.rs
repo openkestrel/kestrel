@@ -2,37 +2,8 @@
 
 use anyhow::Result;
 
-use crate::capability::Images;
-use crate::declaration;
-use crate::domain::{Agent, Declared};
-use crate::store::{Declared as DeclaredRecord, Store};
-
-pub async fn declare(
-    store: &Store,
-    organization: &str,
-    name: &str,
-    harness: &str,
-    declared: &Declared,
-) -> Result<DeclaredRecord<Agent>> {
-    let checked =
-        declaration::check_agent(&Images::default(), name, harness, declared, "declare_agent")
-            .await
-            .map_err(|error| {
-                declaration::scoped(declaration::Prefix::Root, "declare_agent", error)
-            })?;
-    let mut tx = store.begin().await?;
-    let organization = tx.organizations().named(organization).await?;
-    let (declared, _) = declaration::place_agent(
-        &mut tx,
-        &organization,
-        &checked,
-        declaration::OnExisting::Change,
-    )
-    .await?;
-    tx.commit().await?;
-
-    Ok(declared)
-}
+use crate::domain::Agent;
+use crate::store::Store;
 
 pub async fn set_model(
     store: &Store,

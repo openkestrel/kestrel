@@ -38,6 +38,7 @@ pub enum Resource {
     Instance,
     HeldMessage,
     TranscriptPayload,
+    SignInTest,
 }
 
 impl Resource {
@@ -56,6 +57,7 @@ impl Resource {
             Resource::Instance => "instance",
             Resource::HeldMessage => "held message",
             Resource::TranscriptPayload => "transcript payload",
+            Resource::SignInTest => "sign-in test",
         }
     }
 }
@@ -349,3 +351,20 @@ impl fmt::Display for Concerning {
 }
 
 impl std::error::Error for Concerning {}
+
+/// A refusal raised inside one record of a larger declaration; the boundary joins `record` onto
+/// the field, so `branch` in `project` answers `project.branch`.
+#[derive(Debug)]
+pub struct Within {
+    pub record: String,
+    pub field: Option<&'static str>,
+    pub reason: Reason,
+}
+
+impl fmt::Display for Within {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.reason.fmt(f)
+    }
+}
+
+impl std::error::Error for Within {}

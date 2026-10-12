@@ -141,8 +141,8 @@ The rest of `crates/kestrel/src`, grouped by the page that covers them:
 | --- | --- |
 | Sessions | `work.rs`, `workspace.rs`, `instance.rs`, `scheduling.rs`, `role/work.rs` |
 | Link | `link/`, `provider.rs`, `profile.rs`, `keyring.rs` |
-| Triggers | `trigger.rs`, `trigger/apply.rs`, `filter.rs`, `template.rs`, `cron.rs`, `readiness.rs`, `follow_up.rs`, `pull_request.rs`, `integration/` |
-| Operator | `operator.rs`, `operator_identity.rs`, `declaration.rs`, `start.rs`, `start_readiness.rs`, `agent.rs`, `reference.rs`, `declined.rs`, `capability.rs` |
+| Triggers | `trigger.rs`, `filter.rs`, `template.rs`, `cron.rs`, `readiness.rs`, `follow_up.rs`, `pull_request.rs`, `integration/` |
+| Operator | `operator.rs`, `operator_identity.rs`, `declaration.rs`, `declaration/triggers.rs`, `start.rs`, `start_readiness.rs`, `agent.rs`, `reference.rs`, `declined.rs`, `capability.rs` |
 | Shared | `domain.rs` (every record type), `log.rs`, `store/`, `timer.rs`, `cli.rs`, `telemetry.rs`, `shutdown.rs`, `hex.rs`, `participant.rs` (the one rule a declared name obeys) |
 
 ## Trust boundaries
@@ -168,6 +168,7 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   [ADR-0048](../adr/0048-the-environment-image-carries-every-catalogued-harness.md),
   [ADR-0049](../adr/0049-an-install-has-one-operator-and-by-default-one-organization.md)):
   the sign-in catalogue and image capability labels are implemented, but the sign-in relay is not.
+  A saved sign-in can be tested at the operator boundary, and no Client starts a test yet.
   The Operator's defaults apply at the boundary and in the CLI, but nothing marks initial setup
   complete yet. The browser resumes unfinished setup from install and readiness reads; its workbench
   still asks for a browser-local Participant name.

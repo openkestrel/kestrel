@@ -1139,6 +1139,104 @@ pub struct StartPlanCredentialsItem {
     ///Constraint: minLength=1
     pub variable: String,
 }
+///One explicit test of saved material. What it established is specific to the revision, harness, model and image named here, and to no aliased harness or other model.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SignInTest {
+    pub created_at: String,
+    pub finished_at: Option<String>,
+    pub harness: String,
+    pub id: String,
+    ///The identity of the image inspected when the test started; null where the compute driver runs no image.
+    pub image: Option<String>,
+    ///Display only, with the material redacted.
+    pub message: Option<String>,
+    pub method: String,
+    ///The model the harness resolved, known before the prompt is sent; null until then, and for a harness that reports none.
+    pub model: Option<String>,
+    ///Null until the test ends, and for an interrupted one.
+    pub outcome: Option<SignInTestOutcome>,
+    pub requested_model: Option<String>,
+    ///The material revision selected when the test started; material replaced before it was handed over fails the test rather than being tested instead.
+    pub revision: i64,
+    pub started_at: Option<String>,
+    ///`completed` only when the model answered. `interrupted` is a test the control plane stopped under, which a restart never resumes.
+    pub state: SignInTestState,
+}
+///`completed` only when the model answered. `interrupted` is a test the control plane stopped under, which a restart never resumes.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum SignInTestState {
+    #[default]
+    #[serde(rename = "pending")]
+    Pending,
+    #[serde(rename = "running")]
+    Running,
+    #[serde(rename = "completed")]
+    Completed,
+    #[serde(rename = "failed")]
+    Failed,
+    #[serde(rename = "interrupted")]
+    Interrupted,
+}
+impl SignInTestState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
+        }
+    }
+}
+impl ::std::fmt::Display for SignInTestState {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for SignInTestState {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+///`authentication_failed` and `not_covered` are recorded as evidence against the revision, the latter for this harness and model alone. `unavailable` (the two-minute deadline, or nowhere to run an Instance), `harness_failed` and `material_replaced` record nothing and leave earlier evidence and its time as they were.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum SignInTestOutcome {
+    #[default]
+    #[serde(rename = "worked")]
+    Worked,
+    #[serde(rename = "authentication_failed")]
+    AuthenticationFailed,
+    #[serde(rename = "not_covered")]
+    NotCovered,
+    #[serde(rename = "unavailable")]
+    Unavailable,
+    #[serde(rename = "harness_failed")]
+    HarnessFailed,
+    #[serde(rename = "material_replaced")]
+    MaterialReplaced,
+}
+impl SignInTestOutcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Worked => "worked",
+            Self::AuthenticationFailed => "authentication_failed",
+            Self::NotCovered => "not_covered",
+            Self::Unavailable => "unavailable",
+            Self::HarnessFailed => "harness_failed",
+            Self::MaterialReplaced => "material_replaced",
+        }
+    }
+}
+impl ::std::fmt::Display for SignInTestOutcome {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for SignInTestOutcome {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RepositoryResolutionRequest {
     ///As a Project declaration selects them. Only a `declaration` takes any.
@@ -2958,6 +3056,9 @@ pub struct SignInMethod {
     pub ownership: SignInMethodOwnership,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relay: Option<SignInMethodRelay>,
+    ///The providers a model test of this method may name as the `provider/` prefix of its model. Present where a test requires a model; absent where the harness's own default is tested when none is named.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub test_providers: Option<Vec<String>>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
 pub enum SignInMethodRelay {
@@ -10499,6 +10600,8 @@ pub enum AuthenticationEvidenceSource {
     Refresh,
     #[serde(rename = "session")]
     Session,
+    #[serde(rename = "model_test")]
+    ModelTest,
 }
 impl AuthenticationEvidenceSource {
     pub fn as_str(&self) -> &'static str {
@@ -10509,6 +10612,7 @@ impl AuthenticationEvidenceSource {
             Self::GenericWrite => "generic_write",
             Self::Refresh => "refresh",
             Self::Session => "session",
+            Self::ModelTest => "model_test",
         }
     }
 }
@@ -11098,6 +11202,7 @@ impl<'de> Deserialize<'de> for Action {
                             | "\"instance\""
                             | "\"held_message\""
                             | "\"transcript_payload\""
+                            | "\"sign_in_test\""
                     )
             })
         }) {
@@ -11141,6 +11246,7 @@ impl<'de> Deserialize<'de> for Action {
                             | "\"instance\""
                             | "\"held_message\""
                             | "\"transcript_payload\""
+                            | "\"sign_in_test\""
                     )
             })
         }) {
@@ -11746,6 +11852,8 @@ pub enum Resource {
     HeldMessage,
     #[serde(rename = "transcript_payload")]
     TranscriptPayload,
+    #[serde(rename = "sign_in_test")]
+    SignInTest,
 }
 impl Resource {
     pub fn as_str(&self) -> &'static str {
@@ -11763,6 +11871,7 @@ impl Resource {
             Self::Instance => "instance",
             Self::HeldMessage => "held_message",
             Self::TranscriptPayload => "transcript_payload",
+            Self::SignInTest => "sign_in_test",
         }
     }
 }
@@ -12148,6 +12257,12 @@ pub struct SessionInterrupt {
 pub struct SignInMaterial {
     ///The token or key, or the login file's whole contents, as the method's input says.
     pub value: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct SignInTestRequest {
+    ///The model to test, as the harness names it. Required, as `provider/model`, by a method listing `test_providers`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 ///The event's name and `data` are those of the per-resource stream the subscription follows: an `Event` for a Transcript, a `ChangesEvent` for notices.
 #[derive(Debug, Clone, Deserialize, Serialize)]

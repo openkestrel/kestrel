@@ -7,7 +7,10 @@ use sqlx::{Row, SqliteConnection};
 use crate::domain::{Session, SessionId, SubscriptionProfile};
 use crate::profile::{Entry, Kind};
 use crate::sign_in::credential_use::CredentialUse;
-use crate::sign_in::{Authentication, ModelUse, Source, State, UseResult, UseSource};
+use crate::sign_in::model_test::Test;
+use crate::sign_in::{
+    Authentication, ModelUse, Source, State, TestOutcome, TestState, UseResult, UseSource,
+};
 use crate::store::workspace::occupying;
 
 pub struct SignIns<'a> {
@@ -140,25 +143,30 @@ impl<'a> SignIns<'a> {
         Ok(())
     }
 
+    /// `image` is what a model test ran in; a Session records none.
     pub async fn record_use(
         &mut self,
         revision: i64,
         harness: &str,
         model: &str,
         result: UseResult,
+        source: UseSource,
+        image: Option<&str>,
     ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO model_use_evidence (revision, harness, model, result, source, observed_at)
-             VALUES (?, ?, ?, ?, ?, ?)
+            "INSERT INTO model_use_evidence
+                 (revision, harness, model, image, result, source, observed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (revision, harness, model)
-             DO UPDATE SET image = NULL, result = excluded.result, source = excluded.source,
-                           observed_at = excluded.observed_at",
+             DO UPDATE SET image = excluded.image, result = excluded.result,
+                           source = excluded.source, observed_at = excluded.observed_at",
         )
         .bind(revision)
         .bind(harness)
         .bind(model)
+        .bind(image)
         .bind(result.as_str())
-        .bind(UseSource::Session.as_str())
+        .bind(source.as_str())
         .bind(Timestamp::now().to_string())
         .execute(&mut *self.connection)
         .await
@@ -318,4 +326,134 @@ impl<'a> SignIns<'a> {
 
         Ok(())
     }
+
+    pub async fn open_test(&mut self, test: &Test) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO sign_in_test
+                 (id, organization_id, harness, method, profile_id, revision, requested_model,
+                  model, image, state, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&test.id)
+        .bind(test.organization.to_string())
+        .bind(&test.harness)
+        .bind(&test.method)
+        .bind(test.profile.map(|profile| profile.to_string()))
+        .bind(test.revision)
+        .bind(&test.requested_model)
+        .bind(&test.model)
+        .bind(&test.image)
+        .bind(test.state.as_str())
+        .bind(test.created_at.to_string())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("opening the sign-in test {}", test.id))?;
+
+        Ok(())
+    }
+
+    pub async fn test(&mut self, id: &str) -> Result<Option<Test>> {
+        sqlx::query("SELECT * FROM sign_in_test WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut *self.connection)
+            .await?
+            .as_ref()
+            .map(test)
+            .transpose()
+    }
+
+    pub async fn unfinished_tests(&mut self) -> Result<Vec<Test>> {
+        sqlx::query(
+            "SELECT * FROM sign_in_test
+             WHERE state IN ('pending', 'running') ORDER BY created_at, id",
+        )
+        .fetch_all(&mut *self.connection)
+        .await?
+        .iter()
+        .map(test)
+        .collect()
+    }
+
+    /// The oldest pending test, now running: claimed here so two passes never run one twice.
+    pub async fn claim_test(&mut self) -> Result<Option<Test>> {
+        sqlx::query(
+            "UPDATE sign_in_test SET state = 'running', started_at = ?
+             WHERE id = (SELECT id FROM sign_in_test WHERE state = 'pending'
+                         ORDER BY created_at, id LIMIT 1)
+             RETURNING *",
+        )
+        .bind(Timestamp::now().to_string())
+        .fetch_optional(&mut *self.connection)
+        .await?
+        .as_ref()
+        .map(test)
+        .transpose()
+    }
+
+    pub async fn resolve_test_model(&mut self, id: &str, model: &str) -> Result<()> {
+        sqlx::query("UPDATE sign_in_test SET model = ? WHERE id = ? AND state = 'running'")
+            .bind(model)
+            .bind(id)
+            .execute(&mut *self.connection)
+            .await?;
+
+        Ok(())
+    }
+
+    /// False when the test had already ended, which leaves how it ended as it was.
+    pub async fn end_test(
+        &mut self,
+        id: &str,
+        state: TestState,
+        outcome: Option<TestOutcome>,
+        message: Option<&str>,
+    ) -> Result<bool> {
+        let ended = sqlx::query(
+            "UPDATE sign_in_test SET state = ?, outcome = ?, message = ?, finished_at = ?
+             WHERE id = ? AND state IN ('pending', 'running')",
+        )
+        .bind(state.as_str())
+        .bind(outcome.map(TestOutcome::as_str))
+        .bind(message)
+        .bind(Timestamp::now().to_string())
+        .bind(id)
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("ending the sign-in test {id}"))?;
+
+        Ok(ended.rows_affected() > 0)
+    }
+}
+
+fn test(row: &sqlx::sqlite::SqliteRow) -> Result<Test> {
+    let at = |column: &str| -> Result<Option<Timestamp>> {
+        Ok(row
+            .get::<Option<String>, _>(column)
+            .map(|at| at.parse())
+            .transpose()?)
+    };
+
+    Ok(Test {
+        id: row.get("id"),
+        organization: row.get::<String, _>("organization_id").parse()?,
+        harness: row.get("harness"),
+        method: row.get("method"),
+        profile: row
+            .get::<Option<String>, _>("profile_id")
+            .map(|id| id.parse())
+            .transpose()?,
+        revision: row.get("revision"),
+        requested_model: row.get("requested_model"),
+        model: row.get("model"),
+        image: row.get("image"),
+        state: row.get::<String, _>("state").parse()?,
+        outcome: row
+            .get::<Option<String>, _>("outcome")
+            .map(|outcome| outcome.parse())
+            .transpose()?,
+        message: row.get("message"),
+        created_at: row.get::<String, _>("created_at").parse()?,
+        started_at: at("started_at")?,
+        finished_at: at("finished_at")?,
+    })
 }

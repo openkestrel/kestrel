@@ -285,6 +285,7 @@ impl Cli {
             quiet_period: self
                 .quiet_period
                 .map(|seconds| Duration::from_secs(seconds.get())),
+            sign_in_test_deadline: crate::sign_in::model_test::DEADLINE,
         })
     }
 

@@ -49,6 +49,7 @@ use jiff::{SignedDuration, Timestamp};
 use kestrel::agent;
 use kestrel::capability::Images;
 use kestrel::compute::{Docker, Driver, LocalExec};
+use kestrel::declaration::{self, triggers, triggers::Applied};
 use kestrel::domain::{
     Agent, Correlation, CorrelationMiss, Declared, Direction, Event, EventRecordId, Exit, Fires,
     HeldMessage, Integration, Occurrence, OnOpenWorkspace, Organization, Project, Schedule,
@@ -70,8 +71,7 @@ use kestrel::sign_in::check::Providers;
 use kestrel::sign_in::credential_use::{self, CredentialUse};
 use kestrel::store::Store;
 use kestrel::timer::Wake;
-use kestrel::trigger::apply::Applied;
-use kestrel::trigger::{self, Against, Asked, Declaration, Tested};
+use kestrel::trigger::{self, Against, Asked, Tested};
 use kestrel::work;
 use kestrel::workspace;
 use tempfile::TempDir;
@@ -263,6 +263,7 @@ pub struct Provisions {
     harnesses: Vec<HarnessCommand>,
     max_active_sessions: NonZeroUsize,
     interrupt_deadline: Duration,
+    sign_in_test_deadline: Duration,
 }
 
 /// The harness an Agent names unless a test says otherwise, spawned as whatever the test plays.
@@ -389,6 +390,23 @@ impl Kestrel {
             harnesses: spawning(harnesses),
             max_active_sessions: NonZeroUsize::new(maximum).expect("at least one active session"),
             interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
+            sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
+        }))
+        .await
+    }
+
+    /// A sign-in test here is given up on after `deadline`, not the two minutes a real one gets.
+    pub async fn dispatching_harnesses_testing_sign_ins_within(
+        supervisor: &Path,
+        harnesses: &[(&str, &str)],
+        deadline: Duration,
+    ) -> Self {
+        Self::booted(Some(Provisions {
+            driver: Driver::LocalExec(LocalExec::running(supervisor)),
+            harnesses: spawning(harnesses),
+            max_active_sessions: NonZeroUsize::new(2).expect("at least one active session"),
+            interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
+            sign_in_test_deadline: deadline,
         }))
         .await
     }
@@ -403,6 +421,7 @@ impl Kestrel {
             harnesses: spawning(&[(HARNESS, command)]),
             max_active_sessions: NonZeroUsize::new(2).expect("at least one active session"),
             interrupt_deadline: deadline,
+            sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
         }))
         .await
     }
@@ -425,6 +444,7 @@ impl Kestrel {
                 harnesses: spawning(harnesses),
                 max_active_sessions: NonZeroUsize::new(2).unwrap(),
                 interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
+                sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
             }),
             kestrel::presence::LEASE,
         )
@@ -541,6 +561,7 @@ impl Kestrel {
             serialized: vec![SERIALIZED.to_owned()],
             interrupt_deadline: provisions.interrupt_deadline,
             quiet_period: Some(QUIET_PERIOD),
+            sign_in_test_deadline: provisions.sign_in_test_deadline,
         });
         let roles = tokio::spawn(all_in_one.run(dispatch, shutdown.clone()));
 
@@ -732,10 +753,9 @@ impl Kestrel {
         harness: &str,
         declared: Declared,
     ) -> Agent {
-        agent::declare(&self.store, &organization.name, name, harness, &declared)
+        placed_agent(&self.store, &organization.name, name, harness, &declared)
             .await
             .expect("the agent should declare")
-            .record
     }
 
     pub async fn try_declare_agent(
@@ -745,7 +765,7 @@ impl Kestrel {
         harness: &str,
         model: Option<&str>,
     ) -> anyhow::Result<Agent> {
-        agent::declare(
+        placed_agent(
             &self.store,
             &organization.name,
             name,
@@ -756,7 +776,6 @@ impl Kestrel {
             },
         )
         .await
-        .map(|declared| declared.record)
     }
 
     pub async fn set_agent_model(
@@ -1020,7 +1039,7 @@ impl Kestrel {
         agent: &str,
         declared: Declared,
     ) -> Trigger {
-        trigger::declare(
+        placed_trigger(
             &self.store,
             Declaration {
                 organization,
@@ -1105,7 +1124,7 @@ impl Kestrel {
             on_miss,
             templates.correlation.on_open_workspace(),
         )?;
-        trigger::declare(
+        placed_trigger(
             &self.store,
             Declaration {
                 organization,
@@ -1132,7 +1151,7 @@ impl Kestrel {
         allows: &[&str],
         correlation: Option<&str>,
     ) -> Trigger {
-        trigger::declare(
+        placed_trigger(
             &self.store,
             Declaration {
                 organization,
@@ -1203,7 +1222,7 @@ impl Kestrel {
             templates.correlation.on_miss(),
             on_open_workspace,
         )?;
-        trigger::declare(
+        placed_trigger(
             &self.store,
             Declaration {
                 organization,
@@ -1224,10 +1243,10 @@ impl Kestrel {
     }
 
     pub async fn apply_triggers(&self, organization: &str, file: &str) -> Applied {
-        trigger::apply::apply(
+        triggers::apply(
             &self.store,
             organization,
-            &trigger::apply::parse(file).expect("the declaration file should parse"),
+            &triggers::parse(file).expect("the declaration file should parse"),
             false,
         )
         .await
@@ -1310,7 +1329,7 @@ impl Kestrel {
         schedule: Schedule,
         templates: &Templates,
     ) -> anyhow::Result<Trigger> {
-        trigger::declare(
+        placed_trigger(
             &self.store,
             Declaration {
                 organization,
@@ -1362,10 +1381,10 @@ impl Kestrel {
         name: &str,
         event: EventRecordId,
     ) -> Tested {
-        let declarations = trigger::apply::parse(file).expect("the declaration file should parse");
+        let declarations = triggers::parse(file).expect("the declaration file should parse");
         let declared = declarations
             .iter()
-            .find(|declared| declared.name == name)
+            .find(|declared| declared.name() == name)
             .expect("the declaration file should declare the trigger");
 
         trigger::test_declared(
@@ -2496,6 +2515,7 @@ impl Stopped {
                 max_active_sessions: NonZeroUsize::new(maximum)
                     .expect("at least one active session"),
                 interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
+                sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
             }),
             self.follow_lease,
         )
@@ -2536,4 +2556,68 @@ impl Stopped {
             .await
             .expect("the instruction should send");
     }
+}
+
+struct Declaration<'a> {
+    organization: &'a str,
+    name: &'a str,
+    fires: &'a Fires,
+    templates: &'a Templates,
+    project: &'a str,
+    agent: &'a str,
+    declared: &'a Declared,
+    allows: &'a [String],
+    profile: Option<&'a str>,
+}
+
+async fn placed_trigger(store: &Store, declaring: Declaration<'_>) -> anyhow::Result<Trigger> {
+    let checked = declaration::check_parsed_trigger(declaration::TriggerProposal {
+        name: declaring.name.to_owned(),
+        fires: declaring.fires.clone(),
+        templates: declaring.templates.clone(),
+        project: declaring.project.to_owned(),
+        agent: declaring.agent.to_owned(),
+        declared: declaring.declared.clone(),
+        allows: declaring.allows.to_vec(),
+        profile: declaring.profile.map(str::to_owned),
+    })?;
+    let mut tx = store.begin().await?;
+    let organization = tx.organizations().named(declaring.organization).await?;
+    let placed = declaration::place_trigger(
+        &mut tx,
+        &organization,
+        &checked,
+        declaration::Provenance::Flags,
+    )
+    .await?;
+    tx.commit().await?;
+
+    Ok(placed.trigger)
+}
+
+async fn placed_agent(
+    store: &Store,
+    organization: &str,
+    name: &str,
+    harness: &str,
+    declared: &Declared,
+) -> anyhow::Result<Agent> {
+    let checked =
+        declaration::check_agent(&Images::default(), name, harness, declared, "declare_agent")
+            .await
+            .map_err(|error| {
+                declaration::scoped(declaration::Prefix::Root, "declare_agent", error)
+            })?;
+    let mut tx = store.begin().await?;
+    let organization = tx.organizations().named(organization).await?;
+    let (declared, _) = declaration::place_agent(
+        &mut tx,
+        &organization,
+        &checked,
+        declaration::OnExisting::Change,
+    )
+    .await?;
+    tx.commit().await?;
+
+    Ok(declared.record)
 }

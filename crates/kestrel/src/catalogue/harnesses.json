@@ -10,7 +10,8 @@
         "ownership": "operator",
         "fills": { "kind": "variable", "variable": "OPENCODE_API_KEY" },
         "input": "token",
-        "console_url": "https://opencode.ai/auth"
+        "console_url": "https://opencode.ai/auth",
+        "test_providers": ["opencode", "opencode-go"]
       },
       {
         "id": "anthropic-api-key",
@@ -18,7 +19,8 @@
         "kind": "key",
         "ownership": "organization",
         "fills": { "kind": "variable", "variable": "ANTHROPIC_API_KEY" },
-        "input": "token"
+        "input": "token",
+        "test_providers": ["anthropic"]
       },
       {
         "id": "openai-api-key",
@@ -26,7 +28,8 @@
         "kind": "key",
         "ownership": "organization",
         "fills": { "kind": "variable", "variable": "OPENAI_API_KEY" },
-        "input": "token"
+        "input": "token",
+        "test_providers": ["openai"]
       }
     ]
   },
