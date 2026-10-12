@@ -11,6 +11,17 @@ pub fn harnesses() -> &'static [HarnessCatalogueEntry] {
     &HARNESSES
 }
 
+/// What confines a harness that routes by provider to the one a model test names, so no other
+/// provider it finds a credential for can answer in its place.
+pub fn confining(harness: &str, provider: &str) -> Option<(&'static str, String)> {
+    (harness == "opencode").then(|| {
+        (
+            "OPENCODE_CONFIG_CONTENT",
+            serde_json::json!({ "enabled_providers": [provider] }).to_string(),
+        )
+    })
+}
+
 pub fn sign_in_method(
     operation: &'static str,
     harness: &str,

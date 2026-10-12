@@ -25,6 +25,7 @@ erDiagram
     material_revision ||--o{ session_material : "was handed as"
     session ||--o{ session_material : "was spawned with"
     subscription_profile ||--o{ credential_use : "is lent as"
+    material_revision ||--o{ sign_in_test : "was tested as"
 
     trigger }o--|| project : "opens from"
     trigger }o--|| agent : "starts with"
@@ -70,6 +71,7 @@ erDiagram
 | `material_revision` | One write of a credential or Profile entry | `AUTOINCREMENT`, so a write after a delete never reuses a revision. Every write mints one, generic or catalogued, and both material tables carry their current `revision`. `refreshed_from` is set only when a harness's own refresh advanced an earlier revision. |
 | `session_material` | What a Session's harness was last spawned with | `(session_id, kind, name)` with the revision handed over; replaced by each spawn, advanced by the Session's own refresh, and kept after the material is replaced or forgotten. A revision is current while a material table still carries it. |
 | `credential_use` | A Profile's login lent to a non-Session holder | `(profile_id, harness)`; cleared when the roles start. |
+| `sign_in_test` | One explicit model test of saved material | The revision selected at its start, the model the harness resolved and the inspected image's identity. `pending` and `running` rows are ended `interrupted` when the roles start; a transition is guarded on those two states, so a test ends once. |
 | `authentication_evidence`, `model_use_evidence` | What a revision is known to do | Keyed by revision, so a late result attaches to the material it examined and never to its replacement. `provider_check` keeps a provider's status and error type, never its message. Model use is the latest result per harness and model; `image` is null for a Session's result. |
 | `integration` | GitHub or generic webhook | `CHECK`s tie columns to `kind`. GitHub's `signing_secret` and its App private key (`private_key_sealed`) are both sealed; a webhook keeps `shared_secret_digest`. The poll cursor (`deliveries_read_from`, GitHub's clock), `last_polled_at` (kestrel's), `repository_id` and the last refusal live here; a refusal with no `last_event_refusal_id` is Deliveries lost to GitHub's retention. `state`, `revision` and `maintained_at` are its lifecycle: every maintenance change bumps `revision`, which fences work begun before it. A `retired` row holds no secret and no poll due time, by `CHECK`, and is never deleted. |
 | `event` | Every recorded CloudEvent | `integration_id` null for minted Events. |

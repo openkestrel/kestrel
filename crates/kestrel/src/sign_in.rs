@@ -4,6 +4,7 @@
 pub mod check;
 pub mod credential_use;
 pub mod handoff;
+pub mod model_test;
 
 use std::str::FromStr;
 
@@ -64,6 +65,7 @@ vocabulary!(Source {
     GenericWrite => "generic_write",
     Refresh => "refresh",
     Session => "session",
+    ModelTest => "model_test",
 });
 
 vocabulary!(UseResult {
@@ -75,6 +77,23 @@ vocabulary!(UseResult {
 vocabulary!(UseSource {
     ModelTest => "model_test",
     Session => "session",
+});
+
+vocabulary!(TestState {
+    Pending => "pending",
+    Running => "running",
+    Completed => "completed",
+    Failed => "failed",
+    Interrupted => "interrupted",
+});
+
+vocabulary!(TestOutcome {
+    Worked => "worked",
+    AuthenticationFailed => "authentication_failed",
+    NotCovered => "not_covered",
+    Unavailable => "unavailable",
+    HarnessFailed => "harness_failed",
+    MaterialReplaced => "material_replaced",
 });
 
 /// Whether a revision's material authenticates, which says nothing of what a harness can do

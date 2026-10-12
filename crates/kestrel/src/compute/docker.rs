@@ -4,7 +4,6 @@ use std::io::{self, Write as _};
 use std::process::{Child, Command, Stdio};
 
 use super::{Exited, IdleHint, Instance, Provisioned, Streaming, Supervising, Supervisor};
-use crate::domain::SessionId;
 
 /// Where the image puts an Instance's checkouts, and so what every path an operation takes is
 /// relative to.
@@ -39,8 +38,8 @@ impl Docker {
         self
     }
 
-    pub(super) fn provision(&self, session: SessionId) -> io::Result<Instance> {
-        let container = format!("kestrel-{session}");
+    pub(super) fn provision(&self, holder: &str) -> io::Result<Instance> {
+        let container = super::named_after(&holder);
         let mut created = vec![
             "create".to_owned(),
             "--name".to_owned(),

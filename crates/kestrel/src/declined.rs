@@ -38,6 +38,7 @@ pub enum Resource {
     Instance,
     HeldMessage,
     TranscriptPayload,
+    SignInTest,
 }
 
 impl Resource {
@@ -56,6 +57,7 @@ impl Resource {
             Resource::Instance => "instance",
             Resource::HeldMessage => "held message",
             Resource::TranscriptPayload => "transcript payload",
+            Resource::SignInTest => "sign-in test",
         }
     }
 }

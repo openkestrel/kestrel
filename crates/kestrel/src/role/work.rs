@@ -18,6 +18,7 @@ use crate::link::{self, credential::Secret};
 use crate::profile;
 use crate::provider;
 use crate::scheduling::{self, Occupied};
+use crate::sign_in::model_test;
 use crate::store::{self, Store};
 use crate::timer;
 use crate::work;
@@ -37,6 +38,7 @@ pub struct Dispatch {
     pub serialized: Vec<String>,
     pub interrupt_deadline: Duration,
     pub quiet_period: Option<Duration>,
+    pub sign_in_test_deadline: Duration,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,7 +149,15 @@ pub async fn run(
                     dispatching(&store, dispatch, &summaries, &shutdown).await
                 }
                 None => {
-                    shutdown.cancelled().await;
+                    while !shutdown.is_cancelled() {
+                        if let Err(error) = model_test::nowhere_to_run(&store).await {
+                            warn!(%error, "a pass over sign-in tests found nothing it could do");
+                        }
+                        tokio::select! {
+                            () = tokio::time::sleep(POLL) => {}
+                            () = shutdown.cancelled() => {}
+                        }
+                    }
                     Ok(())
                 }
             }
@@ -205,6 +215,28 @@ async fn dispatching(
             Ok(None) => {}
             Err(error) => warn!(%error, "a dispatch found nothing it could do"),
         }
+        match model_test::claim(store).await {
+            Ok(Some(test)) => {
+                let store = store.clone();
+                let dispatch = dispatch.clone();
+                let shutdown = shutdown.clone();
+                active.spawn(async move {
+                    model_test::Running {
+                        store: &store,
+                        driver: &dispatch.driver,
+                        command: dispatch.spawns(&test.harness).ok(),
+                        auth: dispatch.auth.as_deref().filter(|method| !method.is_empty()),
+                        deadline: dispatch.sign_in_test_deadline,
+                        shutdown: &shutdown,
+                    }
+                    .run(test)
+                    .await;
+                });
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) => warn!(%error, "a pass over sign-in tests found nothing it could do"),
+        }
 
         tokio::select! {
             Some(finished) = active.join_next(), if !active.is_empty() => warn_if_it_panicked(finished),
@@ -222,7 +254,7 @@ async fn dispatching(
 
 fn warn_if_it_panicked(finished: Result<(), JoinError>) {
     if let Err(error) = finished {
-        warn!(%error, "a session's execution task ended without ending its session");
+        warn!(%error, "an execution task ended without recording how its work went");
     }
 }
 

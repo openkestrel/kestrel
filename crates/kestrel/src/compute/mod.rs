@@ -12,8 +12,6 @@ pub use local_exec::LocalExec;
 
 use jiff::Timestamp;
 
-use crate::domain::SessionId;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdleHint {
     pub instance: String,
@@ -61,11 +59,18 @@ impl Driver {
         }
     }
 
-    pub fn provision(&self, session: SessionId) -> io::Result<Instance> {
+    /// `holder` is the Session the Instance is provisioned for, or whatever else it is named after.
+    pub fn provision(&self, holder: impl fmt::Display) -> io::Result<Instance> {
+        let holder = holder.to_string();
         match self {
-            Driver::Docker(docker) => docker.provision(session),
-            Driver::LocalExec(local_exec) => local_exec.provision(session),
+            Driver::Docker(docker) => docker.provision(&holder),
+            Driver::LocalExec(local_exec) => local_exec.provision(&holder),
         }
+    }
+
+    /// The name `provision` gives the Instance it makes for `holder`.
+    pub fn names(&self, holder: impl fmt::Display) -> String {
+        format!("{}/{}", self.name(), named_after(&holder))
     }
 
     /// `None` when the Instance is gone, and with it whatever it held.
@@ -90,6 +95,10 @@ impl Driver {
             Driver::LocalExec(_) => local_exec::stop_named(supervisor),
         }
     }
+}
+
+fn named_after(holder: &dyn fmt::Display) -> String {
+    format!("kestrel-{holder}")
 }
 
 /// Outlives this handle: dropping one leaves the Instance where it is, for the next Session to
