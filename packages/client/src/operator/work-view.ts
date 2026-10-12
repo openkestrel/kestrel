@@ -1,5 +1,5 @@
 import { ago } from "./format";
-import type { FileEntry, Session } from "./generated";
+import type { FileEntry, Session, WorkInstanceReport, WorkspaceWork } from "./generated";
 import type { Delivered } from "./transcript";
 
 export function shortRevision(revision: string): string {
@@ -29,6 +29,25 @@ export function stashedText(count: number): string {
 export function repositoryName(repository: { repository: string }): string {
 	const parts = repository.repository.split("/");
 	return parts.at(-1) ?? repository.repository;
+}
+
+// The current Instance's last report is its live reading while that reading answers.
+export function priorReports(work: WorkspaceWork): {
+	missing: boolean;
+	reports: WorkInstanceReport[];
+} {
+	const last = work.last_report;
+	const live = work.state === "reported";
+	const latest = last.report === "none" || (live && last.current_instance) ? [] : [last];
+	return {
+		missing: !live && last.report === "none",
+		reports: [...latest, ...work.earlier_reports],
+	};
+}
+
+export function reportedBy(report: WorkInstanceReport, now: number = Date.now()): string {
+	const sender = report.current_instance ? "this Workspace's Instance" : "the earlier Instance";
+	return `Last reported ${ago(report.reported_at, now)} by ${sender} ${report.instance}`;
 }
 
 export const DIFF_SCOPES = ["unpublished", "changed", "staged"] as const;
@@ -86,7 +105,6 @@ export function sessionContinuity(session: Session): string {
 	parts.push(session.instance === null ? "no Instance" : `instance ${session.instance}`);
 	if (session.supervisor !== null) parts.push(`supervisor ${session.supervisor}`);
 	if (session.connected_at !== null) parts.push(`connected ${ago(session.connected_at)}`);
-	if (session.lease_expires_at !== null) parts.push(`lease ${ago(session.lease_expires_at)}`);
 	return parts.join(" · ");
 }
 

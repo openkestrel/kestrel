@@ -1,9 +1,13 @@
 import type {
 	ChangingOption,
 	Presence,
+	RunningTool,
+	RunningUnit,
 	Session,
 	SessionCommand,
+	SessionObservation,
 	SessionOption,
+	TranscriptSessionState,
 	Usage,
 	Workspace,
 } from "./generated";
@@ -71,4 +75,54 @@ export function interruptingLabel(session: Session | undefined): string | undefi
 
 export function mayInterrupt(session: Session | undefined): boolean {
 	return session?.state === "working";
+}
+
+export type OpenWork = {
+	key: string;
+	title: string;
+	kind: "tool" | "subagent" | "background task";
+};
+
+export type Trailing =
+	| { observed: "open"; work: OpenWork[] }
+	| { observed: "settling" }
+	| { observed: "unavailable"; last: { observedAt: string; work: OpenWork[] } | null };
+
+type Observed = {
+	observation: SessionObservation;
+	tools: RunningTool[];
+	units: RunningUnit[];
+};
+
+// The follow's snapshot is newer than the Session read, but only when it is about this Session.
+export function trailingOf(
+	session: Session | undefined,
+	live: TranscriptSessionState | undefined,
+): Trailing | undefined {
+	if (session?.state !== "trailing") return undefined;
+	const seen: Observed = live?.session_id === session.id ? live : session;
+	if (seen.observation.availability === "unavailable") {
+		const { last } = seen.observation;
+		return {
+			observed: "unavailable",
+			last: last && { observedAt: last.observed_at, work: openWork(last.tools, last.units) },
+		};
+	}
+	const work = openWork(seen.tools, seen.units);
+	return work.length > 0 ? { observed: "open", work } : { observed: "settling" };
+}
+
+function openWork(tools: RunningTool[], units: RunningUnit[]): OpenWork[] {
+	return [
+		...tools.map((tool): OpenWork => ({
+			key: `tool:${tool.call_id}`,
+			title: tool.title,
+			kind: "tool",
+		})),
+		...units.map((unit): OpenWork => ({
+			key: `unit:${unit.id}`,
+			title: unit.title,
+			kind: unit.kind === "subagent" ? "subagent" : "background task",
+		})),
+	];
 }

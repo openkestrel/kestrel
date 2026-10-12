@@ -105,17 +105,59 @@ function tool(workspace: Workspace, seq: number, overrides: Record<string, unkno
 	};
 }
 
+type RangeAnswer = string | { refused: number };
+
+const SESSION = "00000000-0000-0000-0000-0000000000ff";
+const COMPLETION = {
+	started_at: "2026-09-30T10:00:00Z",
+	finished_at: "2026-09-30T10:00:01Z",
+	turn_outcome: null,
+};
+
+function narrated(workspace: Workspace, seq: number, value: Record<string, unknown>): WireEvent {
+	return {
+		name: "entry",
+		id: `${workspace.id}:${seq}`,
+		data: {
+			kind: "narration",
+			session_id: SESSION,
+			seq,
+			appended_at: "2026-09-30T10:00:00Z",
+			entry: { session_id: SESSION, completion: COMPLETION, ...value },
+		},
+	};
+}
+
+const caughtUp: WireEvent = { name: "end", data: { because: "caught_up" } };
+
+function working(tools: unknown[], buffering: { thought?: boolean } = {}): WireEvent {
+	return {
+		name: "session_state",
+		data: {
+			session_id: SESSION,
+			tools,
+			units: [],
+			message_buffering: false,
+			thought_buffering: buffering.thought ?? false,
+			usage: null,
+			observation: { availability: "current" },
+		},
+	};
+}
+
+const stillOpen = () => new Promise<string>(() => {});
+
 class Scripted {
 	readonly ranges: { first: number; last: number; kinds: string | null }[] = [];
 	readonly payloads: string[] = [];
 	readonly streamed: Streamed;
 
-	private readonly range: (first: number, last: number) => string;
+	private readonly range: (first: number, last: number) => RangeAnswer | Promise<RangeAnswer>;
 	private readonly payload: (id: string) => { status: number; body?: string };
 
 	constructor(options: {
 		follow: (attempt: number) => string | Promise<string>;
-		range?: (first: number, last: number) => string;
+		range?: (first: number, last: number) => RangeAnswer | Promise<RangeAnswer>;
 		payload?: (id: string) => { status: number; body?: string };
 	}) {
 		this.streamed = new Streamed({ transcript: (_, attempt) => options.follow(attempt) });
@@ -136,11 +178,16 @@ class Scripted {
 					last: Number(last),
 					kinds: url.searchParams.get("kinds"),
 				});
-				await route.fulfill({
-					status: 200,
-					contentType: "text/event-stream",
-					body: this.range(Number(first), Number(last)),
-				});
+				const answer = await this.range(Number(first), Number(last));
+				if (typeof answer !== "string") {
+					await route.fulfill({
+						status: answer.refused,
+						contentType: "application/json",
+						body: JSON.stringify({ message: "the Transcript cannot be read" }),
+					});
+					return;
+				}
+				await route.fulfill({ status: 200, contentType: "text/event-stream", body: answer });
 			},
 		);
 		await page.route(
@@ -192,76 +239,80 @@ test("a late joiner reads one line per Activity and expands only the one it open
 					anomaly: true,
 				}),
 				entry(workspace, 252, { type: "said", participant: "jack", message: "all done" }),
-				summary(workspace, 253, 260, { counts: { thoughts: 3 } }),
+				summary(workspace, 253, 260, {
+					counts: { tool_calls: 0, failed_calls: 0, thoughts: 3, plans: 0, tombstones: 0 },
+				}),
 				entry(workspace, 261, { type: "said", participant: "jack", message: "later" }),
 				{ name: "end", data: { because: "sealed" } },
 			),
-		range: () => wire(...tools, { name: "end", data: { because: "caught_up" } }),
+		range: () => wire(...tools, caughtUp),
 	});
 	await scripted.install(page);
 	await visiting(page, workspace);
 
-	const first = page.locator('[data-activity="2"]');
-	await expect(first).toContainText("Activity 2–251");
-	await expect(first).toContainText("250 tools, 1 failed, 20 thoughts, 5 plans, 2 expired");
-	await expect(first).toContainText("interrupted or unresolved");
-	await expect(first).toContainText("cargo test · completed");
-	await expect(first.locator("[data-seq]")).toHaveCount(0);
+	const log = page.getByRole("log");
+	const first = log.getByRole("button", {
+		name: "Activity, 250 tool calls, 1 failed, 20 thoughts, 5 plans, 2 expired, interrupted or unresolved, 5m 0s",
+		exact: true,
+	});
+	const second = log.getByRole("button", { name: "Activity, 3 thoughts", exact: true });
+	await expect(first).toHaveAttribute("aria-expanded", "false");
+	await expect(second).toHaveAttribute("aria-expanded", "false");
+	await expect(log.getByRole("listitem")).toHaveCount(0);
 	await expect(
-		page.getByRole("log").getByRole("article", { name: "jack" }).filter({ hasText: "all done" }),
+		log.getByRole("article", { name: "jack" }).filter({ hasText: "all done" }),
 	).toBeVisible();
 	await expect(
-		page.getByRole("log").getByRole("article", { name: "jack" }).filter({ hasText: "later" }),
+		log.getByRole("article", { name: "jack" }).filter({ hasText: "later" }),
 	).toBeVisible();
-	await expect(page.locator('[data-activity="253"] [data-seq]')).toHaveCount(0);
+	expect(scripted.ranges).toEqual([]);
 
-	await first.getByRole("button").first().click();
+	await first.focus();
+	await page.keyboard.press("Enter");
 
-	await expect(first.locator("[data-seq]")).toHaveCount(250);
-	await expect(page.locator('[data-activity="253"] [data-seq]')).toHaveCount(0);
+	await expect(first).toHaveAttribute("aria-expanded", "true");
+	await expect(first).toBeFocused();
+	await expect(log.getByRole("list", { name: "Activity steps" }).getByRole("listitem")).toHaveCount(
+		250,
+	);
+	await expect(second).toHaveAttribute("aria-expanded", "false");
 	expect(scripted.ranges).toEqual([
 		{ first: 2, last: 251, kinds: "shared_state,narration,detail" },
 	]);
 });
 
-test("a running tool shows in the live line, and its completed call shows status, timing and exit", async ({
+test("a running call is a row with nothing to open, and its completed call replaces it in place", async ({
 	page,
 	request,
 }) => {
 	const workspace = await opened(request);
-	const session = "00000000-0000-0000-0000-0000000000ff";
-	const state = (tools: unknown[]) => ({
-		session_id: session,
-		tools,
-		message_buffering: false,
-		thought_buffering: false,
-	});
 	const held = Promise.withResolvers<void>();
 	const scripted = new Scripted({
 		follow: (attempt) => {
 			if (attempt === 1) {
-				return wire({
-					name: "session_state",
-					data: state([
+				return wire(
+					working([
 						{
 							call_id: "call-1",
 							title: "cargo test",
+							tool_kind: "execute",
 							status: "in_progress",
 							started_at: "2026-09-30T10:00:00Z",
 						},
 					]),
-				});
+				);
 			}
+			if (attempt > 2) return stillOpen();
 			return held.promise.then(() =>
 				wire(
 					summary(workspace, 1, 1, {
-						counts: { tool_calls: 1 },
+						counts: { tool_calls: 1, failed_calls: 0, thoughts: 0, plans: 0, tombstones: 0 },
 						latest: { kind: "detail", title: "cargo test", status: "completed" },
 						started_at: "2026-09-30T10:00:00Z",
 						finished_at: "2026-09-30T10:00:02.400Z",
+						closed: false,
 					}),
-					{ name: "session_state", data: state([]) },
-					{ name: "end", data: { because: "sealed" } },
+					working([]),
 				),
 			);
 		},
@@ -269,35 +320,53 @@ test("a running tool shows in the live line, and its completed call shows status
 			wire(
 				tool(workspace, 1, {
 					title: "cargo test",
-					status: "completed",
-					completion: {
-						started_at: "2026-09-30T10:00:00Z",
-						finished_at: "2026-09-30T10:00:02.400Z",
-						turn_outcome: null,
+					completion: { ...COMPLETION, finished_at: "2026-09-30T10:00:02.400Z" },
+					result: {
+						content: [{ type: "content", content: { type: "text", text: "test result: ok" } }],
+						output: { exit_code: 0 },
 					},
-					result: { content: [], output: { exit_code: 0 } },
 				}),
-				{ name: "end", data: { because: "caught_up" } },
+				caughtUp,
 			),
 	});
 	await scripted.install(page);
 	await visiting(page, workspace);
 
-	await expect(page.locator("[data-live]")).toContainText("cargo test · in_progress");
+	const log = page.getByRole("log");
+	await expect(log.getByRole("button", { name: "Activity, Working", exact: true })).toHaveAttribute(
+		"aria-expanded",
+		"true",
+	);
+	const rows = log.getByRole("list", { name: "Activity steps" }).getByRole("listitem");
+	await expect(rows).toHaveCount(1);
+	await expect(rows).toContainText("cargo test");
+	await expect(rows).toContainText("running");
+	await expect(rows.getByRole("button")).toHaveCount(0);
+	expect(scripted.ranges).toEqual([]);
+	const running = await rows.elementHandle();
+
 	held.resolve();
 
-	await page.getByRole("button", { name: "Steps" }).click();
+	const call = rows.getByRole("button", {
+		name: "cargo test, completed, exit 0, 2.4s",
+		exact: true,
+	});
+	await expect(call).toHaveAttribute("aria-expanded", "false");
+	await expect(rows).toHaveCount(1);
+	expect(await running.evaluate((row) => row.isConnected)).toBe(true);
+	await expect(
+		log.getByRole("button", { name: "Activity, Working, 1 tool call", exact: true }),
+	).toHaveAttribute("aria-expanded", "true");
 
-	const activity = page.locator('[data-activity="1"]');
-	const row = activity.locator('[data-seq="1"]');
-	await expect(row).toContainText("cargo test");
-	await expect(row).toContainText("completed");
-	await expect(row).toContainText("2.4s");
-	await expect(row).toContainText("exit 0");
-	await expect(page.locator("[data-live]")).toHaveCount(0);
+	await call.focus();
+	await page.keyboard.press("Enter");
+
+	await expect(call).toHaveAttribute("aria-expanded", "true");
+	await expect(call).toBeFocused();
+	await expect(rows.getByRole("region", { name: "Output" })).toContainText("test result: ok");
 });
 
-test("a failed, an interrupted and an unresolved call each show their word", async ({
+test("a failed, an interrupted and an unresolved call each say so, and a failure opens to its error", async ({
 	page,
 	request,
 }) => {
@@ -306,7 +375,7 @@ test("a failed, an interrupted and an unresolved call each show their word", asy
 		follow: () =>
 			wire(
 				summary(workspace, 1, 3, {
-					counts: { tool_calls: 3, failed_calls: 1 },
+					counts: { tool_calls: 3, failed_calls: 1, thoughts: 0, plans: 0, tombstones: 0 },
 					latest: { kind: "detail", title: "tool 3", status: "pending" },
 					anomaly: true,
 				}),
@@ -314,22 +383,228 @@ test("a failed, an interrupted and an unresolved call each show their word", asy
 			),
 		range: () =>
 			wire(
-				tool(workspace, 1, { status: "failed", result: { content: [], output: { exit_code: 1 } } }),
+				tool(workspace, 1, {
+					status: "failed",
+					result: {
+						content: [{ type: "content", content: { type: "text", text: "no such file" } }],
+						output: { exit_code: 1 },
+					},
+				}),
 				tool(workspace, 2, { status: "in_progress", closing_reason: "interrupted" }),
 				tool(workspace, 3, { status: "pending", closing_reason: "unresolved" }),
-				{ name: "end", data: { because: "caught_up" } },
+				caughtUp,
 			),
 	});
 	await scripted.install(page);
 	await visiting(page, workspace);
 
-	await page.getByRole("button", { name: "Full" }).click();
+	const log = page.getByRole("log");
+	await log
+		.getByRole("button", {
+			name: "Activity, 3 tool calls, 1 failed, interrupted or unresolved",
+			exact: true,
+		})
+		.click();
 
-	const activity = page.locator('[data-activity="1"]');
-	await expect(activity.locator('[data-seq="1"]')).toContainText("failed");
-	await expect(activity.locator('[data-seq="1"]')).toContainText("exit 1");
-	await expect(activity.locator('[data-seq="2"]')).toContainText("interrupted");
-	await expect(activity.locator('[data-seq="3"]')).toContainText("unresolved");
+	const failed = log.getByRole("button", { name: "tool 1, failed, exit 1, 1.0s", exact: true });
+	await expect(
+		log.getByRole("button", { name: "tool 2, interrupted, 1.0s", exact: true }),
+	).toBeVisible();
+	await expect(
+		log.getByRole("button", { name: "tool 3, unresolved, 1.0s", exact: true }),
+	).toBeVisible();
+
+	await failed.click();
+	await expect(log.getByRole("alert")).toHaveText("no such file");
+});
+
+test("thoughts are single lines that open to their Markdown, and a plan opens to its steps", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request);
+	const scripted = new Scripted({
+		follow: () =>
+			wire(
+				summary(workspace, 1, 2, {
+					counts: { tool_calls: 0, failed_calls: 0, thoughts: 1, plans: 1, tombstones: 0 },
+				}),
+				{ name: "end", data: { because: "sealed" } },
+			),
+		range: () =>
+			wire(
+				narrated(workspace, 1, {
+					type: "thought",
+					text: "The cap belongs in `wait()`.\n\nIt must **never** exceed the outage page's.",
+				}),
+				narrated(workspace, 2, {
+					type: "plan",
+					entries: [
+						{ content: "Write the test", priority: "high", status: "completed" },
+						{ content: "Cap the wait", priority: "high", status: "in_progress" },
+					],
+				}),
+				caughtUp,
+			),
+	});
+	await scripted.install(page);
+	await visiting(page, workspace);
+
+	const log = page.getByRole("log");
+	await log.getByRole("button", { name: "Activity, 1 thought, 1 plan", exact: true }).click();
+
+	const thought = log.getByRole("button", {
+		name: "Thought, The cap belongs in wait()., 1.0s",
+		exact: true,
+	});
+	await expect(thought).toHaveAttribute("aria-expanded", "false");
+	await expect(log.getByRole("strong")).toHaveCount(0);
+	await thought.focus();
+	await page.keyboard.press("Space");
+	await expect(thought).toHaveAttribute("aria-expanded", "true");
+	await expect(log.getByRole("strong")).toHaveText("never");
+
+	const plan = log.getByRole("button", { name: "Plan, 2 steps", exact: true });
+	await plan.click();
+	const steps = log.getByRole("list", { name: "Plan" }).getByRole("listitem");
+	await expect(steps).toHaveText(["completed: Write the test", "in progress: Cap the wait"]);
+});
+
+test("a slow Activity read says it is delayed, and a failed one is retried from where it failed", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request);
+	const slow = Promise.withResolvers<void>();
+	let reads = 0;
+	const scripted = new Scripted({
+		follow: () =>
+			wire(
+				summary(workspace, 1, 2, {
+					counts: { tool_calls: 2, failed_calls: 0, thoughts: 0, plans: 0, tombstones: 0 },
+				}),
+				{ name: "end", data: { because: "sealed" } },
+			),
+		range: async () => {
+			reads += 1;
+			if (reads > 1) return wire(tool(workspace, 1), tool(workspace, 2), caughtUp);
+			await slow.promise;
+			return { refused: 409 };
+		},
+	});
+	await scripted.install(page);
+	await visiting(page, workspace);
+
+	const log = page.getByRole("log");
+	const activity = log.getByRole("button", { name: "Activity, 2 tool calls", exact: true });
+	await activity.click();
+
+	await expect(log.getByRole("status")).toHaveText(
+		"Still reading the Activity; the Operator has not answered yet.",
+	);
+	await expect(log.getByText("This Activity has no entries.")).toHaveCount(0);
+
+	slow.resolve();
+
+	await expect(log.getByRole("alert")).toContainText("The Activity could not be read");
+	const again = log.getByRole("button", { name: "Read the Activity again" });
+	await again.focus();
+	await page.keyboard.press("Enter");
+
+	await expect(log.getByRole("list", { name: "Activity steps" }).getByRole("listitem")).toHaveCount(
+		2,
+	);
+	await expect(log.getByRole("alert")).toHaveCount(0);
+	await expect(activity).toBeFocused();
+});
+
+test("an Activity that grew keeps the rows it had when its next read fails", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request);
+	const grown = Promise.withResolvers<void>();
+	let refuse = true;
+	const scripted = new Scripted({
+		follow: (attempt) => {
+			if (attempt === 1) {
+				return wire(
+					summary(workspace, 1, 1, {
+						counts: { tool_calls: 1, failed_calls: 0, thoughts: 0, plans: 0, tombstones: 0 },
+						closed: false,
+					}),
+				);
+			}
+			if (attempt > 2) return stillOpen();
+			return grown.promise.then(() =>
+				wire(
+					summary(workspace, 1, 2, {
+						counts: { tool_calls: 2, failed_calls: 0, thoughts: 0, plans: 0, tombstones: 0 },
+						closed: false,
+					}),
+				),
+			);
+		},
+		range: (_, last) => {
+			if (last === 1) return wire(tool(workspace, 1), caughtUp);
+			if (refuse) return { refused: 409 };
+			return wire(tool(workspace, 1), tool(workspace, 2), caughtUp);
+		},
+	});
+	await scripted.install(page);
+	await visiting(page, workspace);
+
+	const log = page.getByRole("log");
+	await log.getByRole("button", { name: "Activity, 1 tool call", exact: true }).click();
+	const rows = log.getByRole("list", { name: "Activity steps" }).getByRole("listitem");
+	await expect(rows).toHaveCount(1);
+
+	grown.resolve();
+
+	await expect(log.getByRole("alert")).toContainText("The Activity could not be read");
+	await expect(rows).toHaveCount(1);
+	await expect(rows.getByRole("button", { name: /^tool 1, completed/ })).toBeVisible();
+
+	refuse = false;
+	await log.getByRole("button", { name: "Read the Activity again" }).click();
+
+	await expect(rows).toHaveCount(2);
+	await expect(log.getByRole("alert")).toHaveCount(0);
+});
+
+test("an Activity whose read answers with nothing says it is empty", async ({ page, request }) => {
+	const workspace = await opened(request);
+	const scripted = new Scripted({
+		follow: () => wire(summary(workspace, 1, 1), { name: "end", data: { because: "sealed" } }),
+		range: () => wire(caughtUp),
+	});
+	await scripted.install(page);
+	await visiting(page, workspace);
+
+	const log = page.getByRole("log");
+	await log.getByRole("button", { name: "Activity", exact: true }).click();
+
+	await expect(log.getByText("This Activity has no entries.")).toBeVisible();
+	await expect(log.getByRole("alert")).toHaveCount(0);
+});
+
+test("the live Activity says the agent is thinking while a thought is buffering", async ({
+	page,
+	request,
+}) => {
+	const workspace = await opened(request);
+	const scripted = new Scripted({
+		follow: (attempt) => (attempt === 1 ? wire(working([], { thought: true })) : stillOpen()),
+	});
+	await scripted.install(page);
+	await visiting(page, workspace);
+
+	const log = page.getByRole("log");
+	await expect(log.getByRole("button", { name: "Activity, Working", exact: true })).toHaveAttribute(
+		"aria-expanded",
+		"true",
+	);
+	await expect(log.getByRole("listitem")).toHaveText(["Thinking…"]);
 });
 
 test("an Activity is replaced as it grows, and a reconnect adds no duplicate entries", async ({
@@ -343,14 +618,14 @@ test("an Activity is replaced as it grows, and a reconnect adds no duplicate ent
 				? wire(
 						entry(workspace, 1, { type: "said", participant: "jack", message: "hello" }),
 						summary(workspace, 2, 3, {
-							counts: { tool_calls: 1 },
+							counts: { tool_calls: 1, failed_calls: 0, thoughts: 0, plans: 0, tombstones: 0 },
 							closed: false,
 							latest: { kind: "detail", title: "tool 2", status: "in_progress" },
 						}),
 					)
 				: wire(
 						summary(workspace, 2, 5, {
-							counts: { tool_calls: 2 },
+							counts: { tool_calls: 2, failed_calls: 0, thoughts: 0, plans: 0, tombstones: 0 },
 							latest: { kind: "detail", title: "tool 5", status: "completed" },
 						}),
 						entry(workspace, 6, { type: "said", participant: "jack", message: "done" }),
@@ -360,17 +635,20 @@ test("an Activity is replaced as it grows, and a reconnect adds no duplicate ent
 	await scripted.install(page);
 	await visiting(page, workspace);
 
+	const log = page.getByRole("log");
 	await expect(
-		page.getByRole("log").getByRole("article", { name: "jack" }).filter({ hasText: "done" }),
+		log.getByRole("article", { name: "jack" }).filter({ hasText: "done" }),
 	).toBeVisible();
-	await expect(page.locator('[data-activity="2"]')).toHaveCount(1);
-	await expect(page.locator('[data-activity="2"]')).toContainText("2 tools");
+	await expect(log.getByRole("button", { name: /^Activity/ })).toHaveCount(1);
 	await expect(
-		page.getByRole("log").getByRole("article", { name: "jack" }).filter({ hasText: "hello" }),
-	).toHaveCount(1);
-	await expect(
-		page.getByRole("log").getByRole("article", { name: "jack" }).filter({ hasText: "done" }),
-	).toHaveCount(1);
+		log.getByRole("button", { name: "Activity, 2 tool calls", exact: true }),
+	).toHaveAttribute("aria-expanded", "false");
+	await expect(log.getByRole("article", { name: "jack" }).filter({ hasText: "hello" })).toHaveCount(
+		1,
+	);
+	await expect(log.getByRole("article", { name: "jack" }).filter({ hasText: "done" })).toHaveCount(
+		1,
+	);
 
 	const resumed = scripted.streamed.subscriptions.filter(
 		(subscribed) => subscribed.kind === "transcript",
