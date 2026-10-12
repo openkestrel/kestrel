@@ -61,6 +61,8 @@ test.describe("a queue read", () => {
 	test("that fails names the error, stops reading, and recovers when read again", async ({
 		page,
 	}) => {
+		const held = Promise.withResolvers<string>();
+		await new Streamed({ notices: () => held.promise }).install(page);
 		const reads = await failingQueue(page);
 
 		await page.goto("/organizations/acme/new");
@@ -81,6 +83,7 @@ test.describe("a queue read", () => {
 
 		await expect(refusal).toHaveCount(0);
 		await expect(page.getByText("No dispatch configuration is recorded.")).toBeVisible();
+		held.resolve("");
 	});
 
 	test("that is slow says it is still reading, then shows the queue", async ({ page }) => {

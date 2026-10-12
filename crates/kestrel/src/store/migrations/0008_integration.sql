@@ -70,7 +70,9 @@ CREATE INDEX event_by_organization ON event (organization_id, time);
 
 CREATE TABLE github_app_flow (
     state TEXT PRIMARY KEY,
-    phase TEXT NOT NULL CHECK (phase IN ('ready', 'exchanging', 'converted')),
+    phase TEXT NOT NULL CHECK (phase IN ('ready', 'exchanging', 'converted', 'select_repository', 'completed', 'cancelled', 'expired', 'conversion_failed')),
     expires_at TEXT NOT NULL,
-    configuration_sealed TEXT NOT NULL
+    configuration_sealed TEXT,
+    outcome TEXT NOT NULL,
+    CHECK ((phase IN ('ready', 'exchanging', 'converted', 'select_repository')) = (configuration_sealed IS NOT NULL))
 ) STRICT;

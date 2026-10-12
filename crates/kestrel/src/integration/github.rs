@@ -94,6 +94,18 @@ pub struct InstalledRepository {
     pub private: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AppInstallation {
+    pub id: i64,
+    pub app_id: i64,
+    pub account: InstallationAccount,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InstallationAccount {
+    pub login: String,
+}
+
 pub struct Listing {
     /// Oldest first, one per `guid`, only this Integration's repository's.
     pub listed: Vec<Listed>,
@@ -157,39 +169,97 @@ impl Github {
         api: &str,
         app: &App,
         repository: &str,
-    ) -> Result<i64> {
+    ) -> Result<i64, Unproven> {
         #[derive(Deserialize)]
         struct Installation {
             id: i64,
             app_id: i64,
         }
-        let response = self
-            .as_app(
+        let installation: Installation = proven(
+            self.as_app(
                 reqwest::Method::GET,
                 app,
                 &format!(
                     "{}/repos/{repository}/installation",
                     api.trim_end_matches('/')
                 ),
-            )?
-            .send()
-            .await
-            .context("checking the App installation")?;
-        if !response.status().is_success() {
-            bail!(Declined::Unacceptable(
-                "install the App on the requested repository before finishing setup".into()
-            ));
-        }
-        let installation: Installation = response
-            .json()
-            .await
-            .context("reading the App installation")?;
+            )
+            .map_err(Unproven::Unanswered)?,
+            "the selected repository's App installation",
+            Unproven::Installation,
+        )
+        .await?;
         if installation.app_id != app.id || installation.id <= 0 {
-            bail!(Declined::Unacceptable(
-                "the repository installation does not belong to this App".into()
-            ));
+            return Err(Unproven::Installation);
         }
         Ok(installation.id)
+    }
+
+    pub async fn installations(
+        &self,
+        api: &str,
+        app: &App,
+        page: u32,
+        per_page: u32,
+    ) -> Result<Vec<AppInstallation>, Unproven> {
+        proven(
+            self.as_app(
+                reqwest::Method::GET,
+                app,
+                &format!("{}/app/installations", api.trim_end_matches('/')),
+            )
+            .map_err(Unproven::Unanswered)?
+            .query(&[("page", page), ("per_page", per_page)]),
+            "the App's installations",
+            Unproven::Installation,
+        )
+        .await
+    }
+
+    pub async fn installation(
+        &self,
+        api: &str,
+        app: &App,
+        id: i64,
+    ) -> Result<AppInstallation, Unproven> {
+        if id <= 0 {
+            return Err(Unproven::Installation);
+        }
+        let mut url = Url::parse(api).map_err(|error| Unproven::Unanswered(error.into()))?;
+        url.path_segments_mut()
+            .map_err(|()| Unproven::Installation)?
+            .pop_if_empty()
+            .extend(["app", "installations", &id.to_string()]);
+        let installation: AppInstallation = proven(
+            self.as_app(reqwest::Method::GET, app, url.as_str())
+                .map_err(Unproven::Unanswered)?,
+            "the App installation",
+            Unproven::Installation,
+        )
+        .await?;
+        if installation.app_id != app.id || installation.id != id || id <= 0 {
+            return Err(Unproven::Installation);
+        }
+        Ok(installation)
+    }
+
+    pub async fn installation_repository(
+        &self,
+        api: &str,
+        app: &App,
+        repository: &str,
+    ) -> Result<InstalledRepository, Unproven> {
+        let token = self.installation_token(api, app).await?;
+        proven(
+            self.with_token(
+                reqwest::Method::GET,
+                &token,
+                &format!("{}/repos/{repository}", api.trim_end_matches('/')),
+            ),
+            "the selected repository",
+            Unproven::Repository,
+        )
+        .await
     }
 
     /// Refuses a token to work begun before its Integration was disabled or changed.
@@ -432,18 +502,23 @@ impl Github {
         page: u32,
         per_page: u32,
     ) -> Result<Installed, Unproven> {
-        let token = self
-            .installation_token(&connection.api, &connection.credential)
-            .await?;
+        self.installation_repositories(&connection.api, &connection.credential, page, per_page)
+            .await
+    }
 
+    pub async fn installation_repositories(
+        &self,
+        api: &str,
+        app: &App,
+        page: u32,
+        per_page: u32,
+    ) -> Result<Installed, Unproven> {
+        let token = self.installation_token(api, app).await?;
         proven(
             self.with_token(
                 reqwest::Method::GET,
                 &token,
-                &format!(
-                    "{}/installation/repositories",
-                    connection.api.trim_end_matches('/')
-                ),
+                &format!("{}/installation/repositories", api.trim_end_matches('/')),
             )
             .query(&[("per_page", per_page), ("page", page)]),
             "the installation's repositories",

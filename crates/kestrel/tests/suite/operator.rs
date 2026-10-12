@@ -6811,6 +6811,7 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::INTEGRATIONS, "post"),
         (operator::GITHUB_APP, "post"),
         (kestrel::integration::manifest::PAGE, "get"),
+        (kestrel::integration::manifest::PAGE, "post"),
         (kestrel::integration::manifest::CALLBACK, "get"),
         (kestrel::integration::manifest::INSTALLED, "get"),
         (operator::INTEGRATION, "get"),
@@ -6862,6 +6863,11 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::STREAM, "get"),
         (operator::STREAM_SUBSCRIPTION, "put"),
         (operator::STREAM_SUBSCRIPTION, "delete"),
+        (kestrel::integration::manifest::FLOW, "get"),
+        (kestrel::integration::manifest::FLOW, "delete"),
+        (kestrel::integration::manifest::INSTALLATIONS, "get"),
+        (kestrel::integration::manifest::REPOSITORIES, "get"),
+        (kestrel::integration::manifest::FINISH, "post"),
     ];
     assert_eq!(
         described,

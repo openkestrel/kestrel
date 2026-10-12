@@ -1541,7 +1541,7 @@
     "/operator/organizations/{organization}/github-app": {
       "post": {
         "operationId": "startGithubApp",
-        "summary": "Start creation of a GitHub App for one repository",
+        "summary": "Start GitHub App creation before choosing a repository",
         "parameters": [
           {
             "name": "organization",
@@ -1557,39 +1557,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "required": [
-                  "name",
-                  "repository",
-                  "callback_base"
-                ],
-                "properties": {
-                  "name": {
-                    "type": "string"
-                  },
-                  "repository": {
-                    "type": "string"
-                  },
-                  "app_organization": { "type": ["string", "null"], "description": "GitHub organization that will own the private App; omit for your personal account" },
-                  "callback_base": {
-                    "type": "string",
-                    "description": "Browser-reachable loopback HTTP(S) origin"
-                  },
-                  "webhook_base": {
-                    "type": [
-                      "string",
-                      "null"
-                    ],
-                    "description": "Public HTTPS origin of the webhook listener; omit for polling"
-                  },
-                  "api": {
-                    "type": [
-                      "string",
-                      "null"
-                    ],
-                    "description": "GitHub API origin; defaults to https://api.github.com"
-                  }
-                }
+                "$ref": "#/components/schemas/GithubAppStart"
               }
             }
           }
@@ -1600,15 +1568,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "url"
-                  ],
-                  "properties": {
-                    "url": {
-                      "type": "string"
-                    }
-                  }
+                  "$ref": "#/components/schemas/GithubAppStarted"
                 }
               }
             }
@@ -1661,8 +1621,98 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "installation_id",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer" },
+            "description": "Server setup continuation; verified through the App before repository selection"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Browser setup page; no credentials",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "finishGithubAppSetup",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubAppFinish"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Browser setup page; no credentials",
@@ -1796,7 +1846,7 @@
     "/operator/github-app/installed": {
       "get": {
         "operationId": "githubAppInstalled",
-        "summary": "Verify repository installation and register the Integration",
+        "summary": "Discover and verify an installation, then return to Client repository selection",
         "parameters": [
           {
             "name": "state",
@@ -1804,6 +1854,14 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "installation_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
             }
           }
         ],
@@ -1854,6 +1912,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "303": {
+            "description": "Known Client setup route with a safe flow reference",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -3549,6 +3617,286 @@
           },
           "404": {
             "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/github-app/flows/{flow}": {
+      "get": {
+        "operationId": "showGithubAppFlow",
+        "parameters": [
+          {
+            "name": "flow",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Safe setup result; no App credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubAppFlow"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "cancelGithubAppFlow",
+        "parameters": [
+          {
+            "name": "flow",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Safe setup result; no App credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubAppFlow"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/github-app/flows/{flow}/installations": {
+      "get": {
+        "operationId": "listGithubAppInstallations",
+        "parameters": [
+          {
+            "name": "flow",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Safe setup result; no App credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubAppInstallations"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/github-app/flows/{flow}/repositories": {
+      "get": {
+        "operationId": "listGithubAppRepositories",
+        "parameters": [
+          {
+            "name": "flow",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Safe setup result; no App credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubAppRepositories"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/github-app/flows/{flow}/finish": {
+      "post": {
+        "operationId": "finishGithubAppFlow",
+        "parameters": [
+          {
+            "name": "flow",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Safe setup result; no App credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubAppFlow"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubAppFinish"
+              }
+            }
           }
         }
       }
@@ -9288,6 +9636,226 @@
             }
           ]
         }
+      },
+      "GithubAppStart": {
+        "type": "object",
+        "required": [
+          "name",
+          "callback_base"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "callback_base": {
+            "type": "string"
+          },
+          "webhook_base": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "api": {
+            "type": "string",
+            "enum": ["https://api.github.com"],
+            "description": "Manifest setup uses GitHub's public API; arbitrary upstream hosts are refused"
+          },
+          "app_organization": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "GithubAppStarted": {
+        "type": "object",
+        "required": [
+          "url",
+          "flow"
+        ],
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "flow": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GithubAppFlow": {
+        "type": "object",
+        "required": [
+          "flow",
+          "phase",
+          "organization",
+          "name",
+          "expires_at",
+          "installation_id",
+          "integration",
+          "repository",
+          "guidance"
+        ],
+        "properties": {
+          "flow": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "exchanging",
+              "converted",
+              "select_repository",
+              "completed",
+              "cancelled",
+              "expired",
+              "conversion_failed"
+            ]
+          },
+          "organization": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "installation_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "integration": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repository": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "guidance": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GithubAppFinish": {
+        "type": "object",
+        "required": [
+          "repository"
+        ],
+        "properties": {
+          "repository": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GithubAppInstallation": {
+        "type": "object",
+        "required": [
+          "id",
+          "account"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "account": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GithubAppInstallations": {
+        "type": "object",
+        "required": [
+          "installations",
+          "page",
+          "next_page"
+        ],
+        "properties": {
+          "installations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GithubAppInstallation"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "next_page": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "GithubAppRepository": {
+        "type": "object",
+        "required": [
+          "id",
+          "repository",
+          "default_branch",
+          "private"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "default_branch": {
+            "type": "string"
+          },
+          "private": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GithubAppRepositories": {
+        "type": "object",
+        "required": [
+          "repositories",
+          "page",
+          "total",
+          "next_page"
+        ],
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GithubAppRepository"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "next_page": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
       }
     }
   }

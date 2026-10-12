@@ -14,7 +14,7 @@ use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
-use axum::{BoxError, Json, Router};
+use axum::{BoxError, Form, Json, Router};
 use futures_core::Stream;
 use jiff::{SignedDuration, Timestamp};
 use kestrel_operator_types as wire;
@@ -170,6 +170,7 @@ struct ControlPlane {
     providers: sign_in::check::Providers,
     images: Images,
     client: url::Url,
+    github_app_api: String,
 }
 
 #[derive(Deserialize)]
@@ -346,6 +347,7 @@ pub fn router(
     images: Images,
     client: url::Url,
     providers: sign_in::check::Providers,
+    github_app_api: String,
 ) -> Router {
     let root = format!(
         "kestrel operator API\n\nClients reach this API under /operator. Open the browser Client at {client}\n"
@@ -391,9 +393,25 @@ pub fn router(
             put(replace_integration_private_key),
         )
         .route(GITHUB_APP, post(start_github_app))
-        .route(integration::manifest::PAGE, get(github_app_page))
+        .route(
+            integration::manifest::PAGE,
+            get(github_app_page).post(github_app_setup_finish),
+        )
         .route(integration::manifest::CALLBACK, get(github_app_callback))
         .route(integration::manifest::INSTALLED, get(github_app_installed))
+        .route(
+            integration::manifest::FLOW,
+            get(github_app_status).delete(github_app_cancel),
+        )
+        .route(
+            integration::manifest::INSTALLATIONS,
+            get(github_app_installations),
+        )
+        .route(
+            integration::manifest::REPOSITORIES,
+            get(github_app_repositories),
+        )
+        .route(integration::manifest::FINISH, post(github_app_finish))
         .route(EVENT_REFUSAL, delete(acknowledge_event_refusal))
         .route(EVENTS, get(events))
         .route(EVENT, get(event))
@@ -444,6 +462,7 @@ pub fn router(
             followers,
             streams,
             providers,
+            github_app_api,
             images,
             client,
         })
@@ -2130,25 +2149,33 @@ async fn sign_in_test(
 struct GithubAppQuery {
     state: String,
     code: Option<String>,
+    installation_id: Option<i64>,
+    page: Option<u32>,
 }
 
 async fn start_github_app(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    registration: Result<Json<integration::manifest::Start>, JsonRejection>,
-) -> Result<(StatusCode, Json<serde_json::Value>), Refused> {
+    registration: Result<Json<wire::GithubAppStart>, JsonRejection>,
+) -> Result<(StatusCode, Json<wire::GithubAppStarted>), Refused> {
     let Json(registration) = registration?;
     named("start_integration_manifest", &registration.name)?;
     Ok((
         StatusCode::CREATED,
         Json(
-            integration::manifest::start(&control_plane.store, &organization, registration).await?,
+            integration::manifest::start(
+                &control_plane.store,
+                &organization,
+                registration,
+                &control_plane.github_app_api,
+            )
+            .await?,
         ),
     ))
 }
 
 fn setup_page(html: String) -> Response {
-    const POLICY: &str = "default-src 'none'; form-action https://github.com; frame-ancestors 'none'; base-uri 'none'";
+    const POLICY: &str = "default-src 'none'; form-action 'self' https://github.com; frame-ancestors 'none'; base-uri 'none'";
     let headers = [
         ("cache-control", "no-store"),
         ("referrer-policy", "no-referrer"),
@@ -2161,8 +2188,12 @@ async fn github_app_page(
     State(cp): State<ControlPlane>,
     Query(query): Query<GithubAppQuery>,
 ) -> Result<Response, Refused> {
+    let github = Github::unfenced()?;
+    if let Some(installation) = query.installation_id {
+        integration::manifest::installed(&cp.store, &github, &query.state, installation).await?;
+    }
     Ok(setup_page(
-        integration::manifest::page(&cp.store, &query.state).await?,
+        integration::manifest::page(&cp.store, &github, &query.state, query.page).await?,
     ))
 }
 
@@ -2183,8 +2214,129 @@ async fn github_app_installed(
     State(cp): State<ControlPlane>,
     Query(query): Query<GithubAppQuery>,
 ) -> Result<Response, Refused> {
-    integration::manifest::installed(&cp.store, &Github::unfenced()?, &query.state).await?;
-    Ok(setup_page("<!doctype html><title>GitHub App ready</title><h1>The GitHub Integration is ready</h1><p>You can close this tab.</p>".into()))
+    let Some(installation) = query.installation_id else {
+        return Ok(setup_page(
+            integration::manifest::discovery_page(
+                &cp.store,
+                &Github::unfenced()?,
+                &query.state,
+                query.page,
+            )
+            .await?,
+        ));
+    };
+    let status = integration::manifest::installed(
+        &cp.store,
+        &Github::unfenced()?,
+        &query.state,
+        installation,
+    )
+    .await?;
+    let mut client = cp
+        .client
+        .join("/setup")
+        .map_err(|_| Refused::Unprocessable("The Client URL cannot return to setup".into()))?;
+    client
+        .query_pairs_mut()
+        .append_pair("organization", &status.organization)
+        .append_pair("github_app_flow", &query.state);
+    let mut response = setup_page(format!(
+        "<!doctype html><title>Choose a repository</title><h1>The App is installed</h1><p><a href=\"{}?state={}\">Choose one repository here</a> or return to the Client.</p>",
+        integration::manifest::PAGE,
+        query.state
+    ));
+    *response.status_mut() = StatusCode::SEE_OTHER;
+    response.headers_mut().insert(
+        "location",
+        client
+            .as_str()
+            .parse()
+            .map_err(|_| Refused::Unprocessable("The Client URL is invalid".into()))?,
+    );
+    Ok(response)
+}
+
+#[derive(Deserialize)]
+struct GithubAppPages {
+    page: Option<u32>,
+    per_page: Option<u32>,
+}
+
+async fn github_app_status(
+    State(cp): State<ControlPlane>,
+    Path(flow): Path<String>,
+) -> Result<Json<wire::GithubAppFlow>, Refused> {
+    Ok(Json(integration::manifest::status(&cp.store, &flow).await?))
+}
+
+async fn github_app_cancel(
+    State(cp): State<ControlPlane>,
+    Path(flow): Path<String>,
+) -> Result<Json<wire::GithubAppFlow>, Refused> {
+    Ok(Json(integration::manifest::cancel(&cp.store, &flow).await?))
+}
+
+async fn github_app_installations(
+    State(cp): State<ControlPlane>,
+    Path(flow): Path<String>,
+    Query(pages): Query<GithubAppPages>,
+) -> Result<Json<wire::GithubAppInstallations>, Refused> {
+    Ok(Json(
+        integration::manifest::installations(
+            &cp.store,
+            &Github::unfenced()?,
+            &flow,
+            pages.page,
+            pages.per_page,
+        )
+        .await?,
+    ))
+}
+
+async fn github_app_repositories(
+    State(cp): State<ControlPlane>,
+    Path(flow): Path<String>,
+    Query(pages): Query<GithubAppPages>,
+) -> Result<Json<wire::GithubAppRepositories>, Refused> {
+    Ok(Json(
+        integration::manifest::repositories(
+            &cp.store,
+            &Github::unfenced()?,
+            &flow,
+            pages.page,
+            pages.per_page,
+        )
+        .await?,
+    ))
+}
+
+async fn github_app_finish(
+    State(cp): State<ControlPlane>,
+    Path(flow): Path<String>,
+    request: Result<Json<wire::GithubAppFinish>, JsonRejection>,
+) -> Result<Json<wire::GithubAppFlow>, Refused> {
+    let Json(request) = request?;
+    Ok(Json(
+        integration::manifest::finish(&cp.store, &Github::unfenced()?, &flow, &request.repository)
+            .await?,
+    ))
+}
+
+async fn github_app_setup_finish(
+    State(cp): State<ControlPlane>,
+    Query(query): Query<GithubAppQuery>,
+    Form(request): Form<wire::GithubAppFinish>,
+) -> Result<Response, Refused> {
+    integration::manifest::finish(
+        &cp.store,
+        &Github::unfenced()?,
+        &query.state,
+        &request.repository,
+    )
+    .await?;
+    Ok(setup_page(
+        integration::manifest::page(&cp.store, &Github::unfenced()?, &query.state, None).await?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -5458,6 +5610,12 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("GET", integration::manifest::PAGE) => "github_app_setup",
         ("GET", integration::manifest::CALLBACK) => "github_app_callback",
         ("GET", integration::manifest::INSTALLED) => "github_app_installed",
+        ("POST", integration::manifest::PAGE) => "finish_github_app_setup",
+        ("GET", integration::manifest::FLOW) => "show_github_app_flow",
+        ("DELETE", integration::manifest::FLOW) => "cancel_github_app_flow",
+        ("GET", integration::manifest::INSTALLATIONS) => "list_github_app_installations",
+        ("GET", integration::manifest::REPOSITORIES) => "list_github_app_repositories",
+        ("POST", integration::manifest::FINISH) => "finish_github_app_flow",
         ("DELETE", EVENT_REFUSAL) => "acknowledge_event_refusal",
         ("GET", EVENTS) => "list_events",
         ("GET", EVENT) => "show_event",

@@ -3272,6 +3272,218 @@ impl AsRef<str> for Direction {
         self.as_str()
     }
 }
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GithubAppStart {
+    ///Manifest setup uses GitHub's public API; arbitrary upstream hosts are refused
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api: Option<GithubAppStartApi>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "tri_state_serde::deserialize"
+    )]
+    pub app_organization: Option<Option<String>>,
+    pub callback_base: String,
+    pub name: String,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "tri_state_serde::deserialize"
+    )]
+    pub webhook_base: Option<Option<String>>,
+}
+impl GithubAppStart {
+    /// Construct this request with every required wire field.
+    pub fn new(callback_base: String, name: String) -> Self {
+        Self {
+            callback_base,
+            name,
+            api: None,
+            app_organization: None,
+            webhook_base: None,
+        }
+    }
+    /// Start a dependency-free builder with every required wire field.
+    pub fn builder(callback_base: String, name: String) -> GithubAppStartBuilder {
+        GithubAppStartBuilder::new(callback_base, name)
+    }
+}
+/// Dependency-free builder for [`#struct_name`].
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct GithubAppStartBuilder {
+    value: GithubAppStart,
+}
+impl GithubAppStartBuilder {
+    /// Start a builder with every required wire field.
+    pub fn new(callback_base: String, name: String) -> Self {
+        Self {
+            value: GithubAppStart::new(callback_base, name),
+        }
+    }
+    #[doc = concat!("Set the optional `", "api", "` request field.")]
+    #[must_use]
+    pub fn api(mut self, api: GithubAppStartApi) -> Self {
+        self.value.api = Some(api);
+        self
+    }
+    #[doc = concat!(
+        "Set the optional nullable `", "app_organization", "` request field to a value."
+    )]
+    #[must_use]
+    pub fn app_organization(mut self, app_organization: String) -> Self {
+        self.value.app_organization = Some(Some(app_organization));
+        self
+    }
+    #[doc = concat!(
+        "Set the optional nullable `", "app_organization",
+        "` request field to JSON null."
+    )]
+    #[must_use]
+    pub fn app_organization_null(mut self) -> Self {
+        self.value.app_organization = Some(None);
+        self
+    }
+    #[doc = concat!(
+        "Omit the optional nullable `", "app_organization", "` request field."
+    )]
+    #[must_use]
+    pub fn app_organization_absent(mut self) -> Self {
+        self.value.app_organization = None;
+        self
+    }
+    #[doc = concat!(
+        "Set the optional nullable `", "webhook_base", "` request field to a value."
+    )]
+    #[must_use]
+    pub fn webhook_base(mut self, webhook_base: String) -> Self {
+        self.value.webhook_base = Some(Some(webhook_base));
+        self
+    }
+    #[doc = concat!(
+        "Set the optional nullable `", "webhook_base", "` request field to JSON null."
+    )]
+    #[must_use]
+    pub fn webhook_base_null(mut self) -> Self {
+        self.value.webhook_base = Some(None);
+        self
+    }
+    #[doc = concat!("Omit the optional nullable `", "webhook_base", "` request field.")]
+    #[must_use]
+    pub fn webhook_base_absent(mut self) -> Self {
+        self.value.webhook_base = None;
+        self
+    }
+    /// Finish building the request model.
+    pub fn build(self) -> GithubAppStart {
+        self.value
+    }
+}
+///Manifest setup uses GitHub's public API; arbitrary upstream hosts are refused
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum GithubAppStartApi {
+    #[default]
+    #[serde(rename = "https://api.github.com")]
+    HttpsApiGithubCom,
+}
+impl GithubAppStartApi {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::HttpsApiGithubCom => "https://api.github.com",
+        }
+    }
+}
+impl ::std::fmt::Display for GithubAppStartApi {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for GithubAppStartApi {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GithubAppRepositories {
+    pub next_page: Option<i64>,
+    pub page: i64,
+    pub repositories: Vec<GithubAppRepository>,
+    pub total: i64,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GithubAppRepository {
+    pub default_branch: String,
+    pub id: i64,
+    pub private: bool,
+    pub repository: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GithubAppInstallations {
+    pub installations: Vec<GithubAppInstallation>,
+    pub next_page: Option<i64>,
+    pub page: i64,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GithubAppInstallation {
+    pub account: String,
+    pub id: i64,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GithubAppFlow {
+    pub expires_at: String,
+    pub flow: String,
+    pub guidance: String,
+    pub installation_id: Option<i64>,
+    pub integration: Option<String>,
+    pub name: String,
+    pub organization: String,
+    pub phase: GithubAppFlowPhase,
+    pub repository: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum GithubAppFlowPhase {
+    #[default]
+    #[serde(rename = "ready")]
+    Ready,
+    #[serde(rename = "exchanging")]
+    Exchanging,
+    #[serde(rename = "converted")]
+    Converted,
+    #[serde(rename = "select_repository")]
+    SelectRepository,
+    #[serde(rename = "completed")]
+    Completed,
+    #[serde(rename = "cancelled")]
+    Cancelled,
+    #[serde(rename = "expired")]
+    Expired,
+    #[serde(rename = "conversion_failed")]
+    ConversionFailed,
+}
+impl GithubAppFlowPhase {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Exchanging => "exchanging",
+            Self::Converted => "converted",
+            Self::SelectRepository => "select_repository",
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::Expired => "expired",
+            Self::ConversionFailed => "conversion_failed",
+        }
+    }
+}
+impl ::std::fmt::Display for GithubAppFlowPhase {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for GithubAppFlowPhase {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
 #[derive(Debug, Clone)]
 pub enum Fired {
     FiredOpened(FiredOpened),
@@ -11702,6 +11914,15 @@ pub struct FileText {
     pub text: String,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GithubAppFinish {
+    pub repository: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GithubAppStarted {
+    pub flow: String,
+    pub url: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Install {
     ///Whether the first confirmed start has committed its Workspace and Session. Durable, and independent of current readiness, of the Operator's name and of what remains to declare: naming the Operator, saving a sign-in, opening a Workspace or enqueueing a Session never sets it, and no later failure clears it.
     pub initial_setup_complete: bool,
@@ -12042,144 +12263,6 @@ pub struct SignInTestRequest {
     ///The model to test, as the harness names it. Required, as `provider/model`, by a method listing `test_providers`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-}
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct StartGithubAppRequest {
-    ///GitHub API origin; defaults to https://api.github.com
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        default,
-        deserialize_with = "tri_state_serde::deserialize"
-    )]
-    pub api: Option<Option<String>>,
-    ///GitHub organization that will own the private App; omit for your personal account
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        default,
-        deserialize_with = "tri_state_serde::deserialize"
-    )]
-    pub app_organization: Option<Option<String>>,
-    ///Browser-reachable loopback HTTP(S) origin
-    pub callback_base: String,
-    pub name: String,
-    pub repository: String,
-    ///Public HTTPS origin of the webhook listener; omit for polling
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        default,
-        deserialize_with = "tri_state_serde::deserialize"
-    )]
-    pub webhook_base: Option<Option<String>>,
-}
-impl StartGithubAppRequest {
-    /// Construct this request with every required wire field.
-    pub fn new(callback_base: String, name: String, repository: String) -> Self {
-        Self {
-            callback_base,
-            name,
-            repository,
-            api: None,
-            app_organization: None,
-            webhook_base: None,
-        }
-    }
-    /// Start a dependency-free builder with every required wire field.
-    pub fn builder(
-        callback_base: String,
-        name: String,
-        repository: String,
-    ) -> StartGithubAppRequestBuilder {
-        StartGithubAppRequestBuilder::new(callback_base, name, repository)
-    }
-}
-/// Dependency-free builder for [`#struct_name`].
-#[derive(Debug, Clone)]
-#[must_use]
-pub struct StartGithubAppRequestBuilder {
-    value: StartGithubAppRequest,
-}
-impl StartGithubAppRequestBuilder {
-    /// Start a builder with every required wire field.
-    pub fn new(callback_base: String, name: String, repository: String) -> Self {
-        Self {
-            value: StartGithubAppRequest::new(callback_base, name, repository),
-        }
-    }
-    #[doc = concat!("Set the optional nullable `", "api", "` request field to a value.")]
-    #[must_use]
-    pub fn api(mut self, api: String) -> Self {
-        self.value.api = Some(Some(api));
-        self
-    }
-    #[doc = concat!(
-        "Set the optional nullable `", "api", "` request field to JSON null."
-    )]
-    #[must_use]
-    pub fn api_null(mut self) -> Self {
-        self.value.api = Some(None);
-        self
-    }
-    #[doc = concat!("Omit the optional nullable `", "api", "` request field.")]
-    #[must_use]
-    pub fn api_absent(mut self) -> Self {
-        self.value.api = None;
-        self
-    }
-    #[doc = concat!(
-        "Set the optional nullable `", "app_organization", "` request field to a value."
-    )]
-    #[must_use]
-    pub fn app_organization(mut self, app_organization: String) -> Self {
-        self.value.app_organization = Some(Some(app_organization));
-        self
-    }
-    #[doc = concat!(
-        "Set the optional nullable `", "app_organization",
-        "` request field to JSON null."
-    )]
-    #[must_use]
-    pub fn app_organization_null(mut self) -> Self {
-        self.value.app_organization = Some(None);
-        self
-    }
-    #[doc = concat!(
-        "Omit the optional nullable `", "app_organization", "` request field."
-    )]
-    #[must_use]
-    pub fn app_organization_absent(mut self) -> Self {
-        self.value.app_organization = None;
-        self
-    }
-    #[doc = concat!(
-        "Set the optional nullable `", "webhook_base", "` request field to a value."
-    )]
-    #[must_use]
-    pub fn webhook_base(mut self, webhook_base: String) -> Self {
-        self.value.webhook_base = Some(Some(webhook_base));
-        self
-    }
-    #[doc = concat!(
-        "Set the optional nullable `", "webhook_base", "` request field to JSON null."
-    )]
-    #[must_use]
-    pub fn webhook_base_null(mut self) -> Self {
-        self.value.webhook_base = Some(None);
-        self
-    }
-    #[doc = concat!("Omit the optional nullable `", "webhook_base", "` request field.")]
-    #[must_use]
-    pub fn webhook_base_absent(mut self) -> Self {
-        self.value.webhook_base = None;
-        self
-    }
-    /// Finish building the request model.
-    pub fn build(self) -> StartGithubAppRequest {
-        self.value
-    }
-}
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct StartGithubAppResponse201 {
-    pub url: String,
 }
 ///The event's name and `data` are those of the per-resource stream the subscription follows: an `Event` for a Transcript, a `ChangesEvent` for notices.
 #[derive(Debug, Clone, Deserialize, Serialize)]
