@@ -104,7 +104,6 @@ for (const colorScheme of ["light", "dark"] as const) {
 				await expect(page.getByRole("region", { name: "Question", exact: true })).toContainText(
 					questionText,
 				);
-				// oxlint-disable-next-line no-await-in-loop -- layout is inspected in each viewport and state.
 				// oxlint-disable-next-line no-await-in-loop -- layout is inspected before changing this fixture.
 				const fits = await page.evaluate(
 					() => document.documentElement.scrollWidth <= window.innerWidth,

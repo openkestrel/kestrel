@@ -39,7 +39,7 @@ export function Question({ parts, deadline, state, onAnswer }: QuestionProps) {
 	const title = useId();
 	const result = useRef<HTMLOutputElement>(null);
 	const previous = useRef(state.status);
-	const [own, setOwn] = useState("");
+	const [writtenAnswer, setWrittenAnswer] = useState("");
 	const input = useId();
 	const [choices, setChoices] = useState<Record<string, string>>({});
 	const [written, setWritten] = useState<Record<string, string>>({});
@@ -130,7 +130,7 @@ export function Question({ parts, deadline, state, onAnswer }: QuestionProps) {
 					className="flex flex-wrap gap-2"
 					onSubmit={(event) => {
 						event.preventDefault();
-						if (own.trim()) onAnswer({ [part.name]: own.trim() });
+						if (writtenAnswer.trim()) onAnswer({ [part.name]: writtenAnswer.trim() });
 					}}
 				>
 					{part.options.map((option, index) => (
@@ -150,11 +150,11 @@ export function Question({ parts, deadline, state, onAnswer }: QuestionProps) {
 						</label>
 						<Input
 							id={input}
-							value={own}
-							onChange={(event) => setOwn(event.target.value)}
+							value={writtenAnswer}
+							onChange={(event) => setWrittenAnswer(event.target.value)}
 							className="min-h-11 flex-1 sm:min-h-8"
 						/>
-						<Button type="submit" disabled={!own.trim()} className="min-h-11 sm:min-h-8">
+						<Button type="submit" disabled={!writtenAnswer.trim()} className="min-h-11 sm:min-h-8">
 							Send answer
 						</Button>
 					</div>
