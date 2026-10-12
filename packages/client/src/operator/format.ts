@@ -4,13 +4,34 @@ export function ago(timestamp: string, now: number = Date.now()): string {
 	const at = Date.parse(timestamp);
 	if (Number.isNaN(at)) return "at an unknown time";
 	const seconds = Math.max(0, Math.round((now - at) / 1000));
-	if (seconds < 45) return "just now";
-	if (seconds < 90) return "a minute ago";
+	return seconds < 45 ? "just now" : `${span(seconds)} ago`;
+}
+
+export function moment(timestamp: string): string {
+	const at = new Date(timestamp);
+	return Number.isNaN(at.getTime())
+		? timestamp
+		: at.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" });
+}
+
+// A lease is a deadline, so a passed one is never "just now".
+export function leaseLine(deadline: string, now: number = Date.now()): string {
+	const at = Date.parse(deadline);
+	if (Number.isNaN(at)) return "Lease deadline unknown";
+	const seconds = Math.round((at - now) / 1000);
+	return seconds > 0 ? `Lease expires in ${span(seconds)}` : `Lease expired ${span(-seconds)} ago`;
+}
+
+function span(seconds: number): string {
+	if (seconds < 45) return "less than a minute";
+	if (seconds < 90) return "a minute";
 	const minutes = Math.round(seconds / 60);
-	if (minutes < 60) return `${minutes} minutes ago`;
+	if (minutes < 60) return `${minutes} minutes`;
 	const hours = Math.round(minutes / 60);
-	if (hours < 24) return `${hours} hours ago`;
-	return `${Math.round(hours / 24)} days ago`;
+	if (hours === 1) return "an hour";
+	if (hours < 24) return `${hours} hours`;
+	const days = Math.round(hours / 24);
+	return days === 1 ? "a day" : `${days} days`;
 }
 
 export function size(bytes: number): string {

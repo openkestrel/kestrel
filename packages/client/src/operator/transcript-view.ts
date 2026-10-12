@@ -1,4 +1,4 @@
-import type { Activity, Entry, Exit, PayloadReference } from "./generated";
+import type { Activity, Entry, Exit, PayloadReference, RunningTool } from "./generated";
 import type { Delivered } from "./transcript";
 
 export type FlowItem =
@@ -17,15 +17,36 @@ function sequence(item: FlowItem): number {
 	return item.kind === "entry" ? item.entry.seq : item.activity.first_seq;
 }
 
-export function activityWindow(activity: Activity): string {
-	return `${activity.first_seq}–${activity.last_seq}`;
+export type ActivitySummary = {
+	counts: string;
+	outcome: string | undefined;
+	duration: string | undefined;
+	name: string;
+};
+
+// An Activity is undefined while its first calls are still running and nothing is recorded yet.
+export function activitySummary(activity: Activity | undefined, live: boolean): ActivitySummary {
+	const counts = activity ? activityCounts(activity) : "";
+	const outcome = activity?.anomaly ? "interrupted or unresolved" : undefined;
+	const duration = activity && !live ? activityDuration(activity) : undefined;
+	return {
+		counts,
+		outcome,
+		duration,
+		name: phrase("Activity", live && "Working", counts, outcome, duration),
+	};
 }
 
-export function activityCounts(activity: Activity): string {
+// Inline parts read as one run-together word to a screen reader unless the name separates them.
+export function phrase(...parts: (string | false | undefined)[]): string {
+	return parts.filter((part) => part !== false && part !== undefined && part !== "").join(", ");
+}
+
+function activityCounts(activity: Activity): string {
 	const counts = activity.counts;
 	const parts: string[] = [];
 	if (counts.tool_calls > 0)
-		parts.push(`${counts.tool_calls} ${counts.tool_calls === 1 ? "tool" : "tools"}`);
+		parts.push(`${counts.tool_calls} ${counts.tool_calls === 1 ? "tool call" : "tool calls"}`);
 	if (counts.failed_calls > 0) parts.push(`${counts.failed_calls} failed`);
 	if (counts.thoughts > 0)
 		parts.push(`${counts.thoughts} ${counts.thoughts === 1 ? "thought" : "thoughts"}`);
@@ -34,9 +55,58 @@ export function activityCounts(activity: Activity): string {
 	return parts.join(", ");
 }
 
-export function activityDuration(activity: Activity): string | undefined {
+function activityDuration(activity: Activity): string | undefined {
 	if (!activity.started_at || !activity.finished_at) return undefined;
 	return elapsed(Date.parse(activity.finished_at) - Date.parse(activity.started_at));
+}
+
+export type ActivityStep =
+	| { kind: "entry"; key: string; entry: Delivered }
+	| { kind: "running"; key: string; tool: RunningTool };
+
+// A call keeps one key from running to recorded, so its row is replaced where it stands.
+export function activitySteps(entries: Delivered[], running: RunningTool[]): ActivityStep[] {
+	const recorded = new Set<string>();
+	const steps = entries.map((entry): ActivityStep => {
+		const call = entry.entry.type === "tool_call" ? entry.entry.call_id : undefined;
+		if (call === undefined || recorded.has(call)) {
+			return { kind: "entry", key: `seq:${entry.seq}`, entry };
+		}
+		recorded.add(call);
+		return { kind: "entry", key: `call:${call}`, entry };
+	});
+	const open = running
+		.filter((tool) => !recorded.has(tool.call_id))
+		.toSorted((one, other) => Date.parse(one.started_at) - Date.parse(other.started_at));
+	return [
+		...steps,
+		...open.map((tool): ActivityStep => ({ kind: "running", key: `call:${tool.call_id}`, tool })),
+	];
+}
+
+export type ActivityRead =
+	| { kind: "reading"; delayed: boolean; known: Delivered[] }
+	| { kind: "failed"; error: unknown; known: Delivered[]; retrying: boolean }
+	| { kind: "empty" }
+	| { kind: "read"; entries: Delivered[] };
+
+export type ActivityQueryState = {
+	data: Delivered[] | undefined;
+	error: unknown;
+	fetching: boolean;
+};
+
+// `known` is the last range that was read, which a grown Activity's next read has not replaced yet.
+export function activityRead(
+	{ data, error, fetching }: ActivityQueryState,
+	known: Delivered[],
+	delayed: boolean,
+): ActivityRead {
+	if (error !== null && error !== undefined) {
+		return { kind: "failed", error, known: data ?? known, retrying: fetching };
+	}
+	if (data === undefined) return { kind: "reading", delayed, known };
+	return data.length === 0 ? { kind: "empty" } : { kind: "read", entries: data };
 }
 
 export function elapsed(milliseconds: number): string | undefined {
@@ -94,6 +164,46 @@ function codeIn(value: unknown): number | undefined {
 	if ("exit_code" in value && typeof value.exit_code === "number") return value.exit_code;
 	if ("exitCode" in value && typeof value.exitCode === "number") return value.exitCode;
 	return undefined;
+}
+
+export type ToolOutput = { format: "text" | "json"; text: string };
+
+// A result is `{ content, output }`: the ACP content blocks, then whatever the harness reported raw.
+export function toolOutput(result: unknown): ToolOutput | undefined {
+	if (typeof result !== "object" || result === null) return undefined;
+	const blocks = "content" in result && Array.isArray(result.content) ? result.content : [];
+	const texts = blocks.flatMap((block: unknown) => {
+		const text = blockText(block);
+		return text === undefined ? [] : [text];
+	});
+	if (texts.length > 0) return { format: "text", text: texts.join("\n") };
+	if (blocks.length > 0) return { format: "json", text: JSON.stringify(blocks, null, 2) };
+
+	const raw = "output" in result ? result.output : undefined;
+	if (typeof raw === "string") return raw === "" ? undefined : { format: "text", text: raw };
+	if (typeof raw !== "object" || raw === null) return undefined;
+	const streams = [field(raw, "stdout"), field(raw, "stderr")].filter(
+		(stream) => stream !== undefined && stream !== "",
+	);
+	if (streams.length > 0) return { format: "text", text: streams.join("") };
+	const rest = Object.entries(raw).filter(
+		([key]) => !["exit_code", "exitCode", "stdout", "stderr"].includes(key),
+	);
+	return rest.length === 0
+		? undefined
+		: { format: "json", text: JSON.stringify(Object.fromEntries(rest), null, 2) };
+}
+
+function blockText(block: unknown): string | undefined {
+	if (typeof block !== "object" || block === null || !("content" in block)) return undefined;
+	const content = block.content;
+	if (typeof content !== "object" || content === null) return undefined;
+	return field(content, "text");
+}
+
+function field(value: object, name: string): string | undefined {
+	const found: unknown = Object.entries(value).find(([key]) => key === name)?.[1];
+	return typeof found === "string" ? found : undefined;
 }
 
 export function payloadReference(value: unknown): PayloadReference | undefined {
@@ -172,6 +282,10 @@ export function entryText(entry: Entry): string {
 export function firstLine(text: string): string {
 	const line = text.split("\n")[0] ?? text;
 	return line.length > 160 ? `${line.slice(0, 159)}…` : line;
+}
+
+export function thoughtLine(text: string): string {
+	return firstLine(text).replace(/[`*]/g, "");
 }
 
 export type Spoken = {

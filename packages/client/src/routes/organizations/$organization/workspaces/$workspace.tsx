@@ -47,7 +47,11 @@ function WorkspaceView() {
 					) : (
 						<>
 							<SessionQueueLine organization={organization} workspace={shown.data.id} />
-							<SessionStatus organization={organization} record={shown.data} />
+							<SessionStatus
+								organization={organization}
+								record={shown.data}
+								live={transcript.sessionState}
+							/>
 							<TranscriptPane
 								transcript={transcript}
 								reconnect={reconnect}

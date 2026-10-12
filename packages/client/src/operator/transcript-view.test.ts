@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { Activity, Entry } from "./generated";
+import type { Activity, Entry, RunningTool } from "./generated";
 import { delivered, type Delivered } from "./transcript";
 import {
-	activityCounts,
-	activityWindow,
+	activityRead,
+	activitySteps,
+	activitySummary,
 	elapsed,
 	entryText,
 	exitCode,
@@ -12,6 +13,8 @@ import {
 	payloadReference,
 	planStep,
 	spoken,
+	thoughtLine,
+	toolOutput,
 	toolState,
 } from "./transcript-view";
 
@@ -56,18 +59,191 @@ describe("the flow", () => {
 });
 
 describe("an Activity summary line", () => {
-	it("names its window and counts", () => {
+	it("separates its counts, outcome and duration in the name a screen reader hears", () => {
 		const activity = summary(12, 48, {
-			counts: { tool_calls: 3, failed_calls: 1, thoughts: 2, plans: 1, tombstones: 1 },
+			counts: { tool_calls: 4, failed_calls: 1, thoughts: 2, plans: 1, tombstones: 1 },
+			started_at: "2026-09-30T10:00:00Z",
+			finished_at: "2026-09-30T10:02:14Z",
 			anomaly: true,
+			closed: true,
 		});
 
-		expect(activityWindow(activity)).toBe("12–48");
-		expect(activityCounts(activity)).toBe("3 tools, 1 failed, 2 thoughts, 1 plan, 1 expired");
+		expect(activitySummary(activity, false)).toEqual({
+			counts: "4 tool calls, 1 failed, 2 thoughts, 1 plan, 1 expired",
+			outcome: "interrupted or unresolved",
+			duration: "2m 14s",
+			name: "Activity, 4 tool calls, 1 failed, 2 thoughts, 1 plan, 1 expired, interrupted or unresolved, 2m 14s",
+		});
 	});
 
-	it("is empty when nothing was omitted", () => {
-		expect(activityCounts(summary(2, 5))).toBe("");
+	it("says a live Activity is working, with no duration yet", () => {
+		const activity = summary(2, 5, {
+			counts: { tool_calls: 1, failed_calls: 0, thoughts: 0, plans: 0, tombstones: 0 },
+			started_at: "2026-09-30T10:00:00Z",
+			finished_at: "2026-09-30T10:00:03Z",
+		});
+
+		expect(activitySummary(activity, true)).toEqual({
+			counts: "1 tool call",
+			outcome: undefined,
+			duration: undefined,
+			name: "Activity, Working, 1 tool call",
+		});
+	});
+
+	it("is still named when nothing was counted", () => {
+		expect(activitySummary(summary(2, 5, { closed: true }), false).name).toBe("Activity");
+		expect(activitySummary(undefined, true).name).toBe("Activity, Working");
+	});
+});
+
+function running(call: string, startedAt = "2026-09-30T10:00:00Z"): RunningTool {
+	return {
+		call_id: call,
+		title: `tool ${call}`,
+		tool_kind: "execute",
+		status: "in_progress",
+		started_at: startedAt,
+	};
+}
+
+function called(seq: number, call: string): Delivered {
+	return entry(seq, {
+		type: "tool_call",
+		session_id: "00000000-0000-0000-0000-0000000000ff",
+		call_id: call,
+		title: `tool ${call}`,
+		tool_kind: "execute",
+		status: "completed",
+		input: {},
+		result: {},
+		closing_reason: null,
+		completion: {
+			started_at: "2026-09-30T10:00:00Z",
+			finished_at: "2026-09-30T10:00:01Z",
+			turn_outcome: null,
+		},
+	});
+}
+
+describe("an Activity's steps", () => {
+	it("puts running calls after what is recorded, oldest first", () => {
+		const steps = activitySteps(
+			[called(4, "a")],
+			[running("c", "2026-09-30T10:00:09Z"), running("b", "2026-09-30T10:00:05Z")],
+		);
+
+		expect(steps.map((step) => [step.key, step.kind])).toEqual([
+			["call:a", "entry"],
+			["call:b", "running"],
+			["call:c", "running"],
+		]);
+	});
+
+	it("gives a completed call the key its running row had, and no second row", () => {
+		const before = activitySteps([], [running("a")]);
+		const after = activitySteps([called(4, "a")], [running("a")]);
+
+		expect(before.map((step) => step.key)).toEqual(["call:a"]);
+		expect(after.map((step) => [step.key, step.kind])).toEqual([["call:a", "entry"]]);
+	});
+
+	it("keys anything that is not a call by where it sits in the Transcript", () => {
+		const thought = entry(7, {
+			type: "thought",
+			session_id: "00000000-0000-0000-0000-0000000000ff",
+			text: "hm",
+			completion: {
+				started_at: "2026-09-30T10:00:00Z",
+				finished_at: "2026-09-30T10:00:01Z",
+				turn_outcome: null,
+			},
+		});
+
+		expect(activitySteps([thought], []).map((step) => step.key)).toEqual(["seq:7"]);
+	});
+});
+
+describe("reading an Activity's entries", () => {
+	const known = [called(4, "a")];
+
+	it("is delayed, not empty, while the Operator has not answered", () => {
+		const waiting = { data: undefined, error: null, fetching: true };
+
+		expect(activityRead(waiting, [], false)).toEqual({
+			kind: "reading",
+			delayed: false,
+			known: [],
+		});
+		expect(activityRead(waiting, known, true)).toEqual({ kind: "reading", delayed: true, known });
+	});
+
+	it("is empty only once a read answered with nothing", () => {
+		expect(activityRead({ data: [], error: null, fetching: false }, [], false)).toEqual({
+			kind: "empty",
+		});
+	});
+
+	it("keeps what was last read when a read fails", () => {
+		const error = new Error("refused");
+
+		expect(activityRead({ data: undefined, error, fetching: false }, known, false)).toEqual({
+			kind: "failed",
+			error,
+			known,
+			retrying: false,
+		});
+		expect(activityRead({ data: undefined, error, fetching: true }, known, false)).toMatchObject({
+			kind: "failed",
+			retrying: true,
+		});
+	});
+
+	it("is the entries once read", () => {
+		expect(activityRead({ data: known, error: null, fetching: false }, [], true)).toEqual({
+			kind: "read",
+			entries: known,
+		});
+	});
+});
+
+describe("a tool's output", () => {
+	it("is the text of its content blocks", () => {
+		expect(
+			toolOutput({
+				content: [
+					{ type: "content", content: { type: "text", text: "running 2 tests" } },
+					{ type: "content", content: { type: "text", text: "ok" } },
+				],
+				output: { exit_code: 0 },
+			}),
+		).toEqual({ format: "text", text: "running 2 tests\nok" });
+	});
+
+	it("falls back to what the harness reported raw", () => {
+		expect(toolOutput({ content: [], output: "plain" })).toEqual({ format: "text", text: "plain" });
+		expect(toolOutput({ content: [], output: { stdout: "out\n", stderr: "err" } })).toEqual({
+			format: "text",
+			text: "out\nerr",
+		});
+		expect(toolOutput({ content: [], output: { matches: 3 } })).toEqual({
+			format: "json",
+			text: '{\n  "matches": 3\n}',
+		});
+	});
+
+	it("is nothing when the call reported nothing", () => {
+		expect(toolOutput({ content: [], output: {} })).toBeUndefined();
+		expect(toolOutput({ content: [], output: { exit_code: 0 } })).toBeUndefined();
+		expect(toolOutput(null)).toBeUndefined();
+	});
+});
+
+describe("a thought's line", () => {
+	it("is its first line without the Markdown marks", () => {
+		expect(thoughtLine("The cap belongs in `wait()`.\n\nIt must **never** exceed it.")).toBe(
+			"The cap belongs in wait().",
+		);
 	});
 });
 

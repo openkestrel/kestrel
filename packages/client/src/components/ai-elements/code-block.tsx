@@ -1,10 +1,5 @@
 "use client";
 
-// Shiki hands back finished tokens: their colours and font styles are the highlight, not styling
-// kestrel chose, so they reach the DOM as inline style and are asserted to shiki's own token type.
-// Comparing the previous render's key inside the render is what invalidates stale async tokens.
-// oxlint-disable shadcn/no-inline-styles, typescript/no-unsafe-type-assertion, react/refs
-
 import { CheckIcon, CopyIcon } from "lucide-react";
 import type { ComponentProps, HTMLAttributes } from "react";
 import {
@@ -17,17 +12,26 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { BundledLanguage, BundledTheme, HighlighterGeneric, ThemedToken } from "shiki";
+import type {
+	BundledLanguage,
+	BundledTheme,
+	HighlighterGeneric,
+	SpecialLanguage,
+	ThemedToken,
+} from "shiki";
+
+// Tool output has no language to highlight, so plain text is a language here.
+export type CodeLanguage = BundledLanguage | SpecialLanguage;
 import { createHighlighter } from "shiki";
-import { Button } from "#/components/ui/button";
+import { Button } from "#/components/ui/button.tsx";
 import {
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
-} from "#/components/ui/select";
-import { cn } from "#/lib/utils";
+} from "#/components/ui/select.tsx";
+import { cn } from "#/lib/utils.ts";
 
 // Shiki uses bitflags for font styles: 1=italic, 2=bold, 4=underline
 // oxlint-disable-next-line eslint(no-bitwise)
@@ -60,15 +64,14 @@ const addKeysToTokens = (lines: ThemedToken[][]): KeyedLine[] =>
 // Token rendering component
 const TokenSpan = ({ token }: { token: ThemedToken }) => (
 	<span
-		className="dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)]"
-		style={{
-			backgroundColor: token.bgColor,
-			color: token.color,
-			fontStyle: isItalic(token.fontStyle) ? "italic" : undefined,
-			fontWeight: isBold(token.fontStyle) ? "bold" : undefined,
-			textDecoration: isUnderline(token.fontStyle) ? "underline" : undefined,
-			...token.htmlStyle,
-		}}
+		className={cn(
+			"dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)]",
+			isItalic(token.fontStyle) && "italic",
+			isBold(token.fontStyle) && "font-bold",
+			isUnderline(token.fontStyle) && "underline",
+		)}
+		// oxlint-disable-next-line shadcn/no-inline-styles -- shiki's token colours are data.
+		style={{ backgroundColor: token.bgColor, color: token.color, ...token.htmlStyle }}
 	>
 		{token.content}
 	</span>
@@ -106,7 +109,7 @@ const LineSpan = ({
 // Types
 type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
 	code: string;
-	language: BundledLanguage;
+	language: CodeLanguage;
 	showLineNumbers?: boolean;
 };
 
@@ -137,14 +140,14 @@ const tokensCache = new Map<string, TokenizedCode>();
 // Subscribers for async token updates
 const subscribers = new Map<string, Set<(result: TokenizedCode) => void>>();
 
-const getTokensCacheKey = (code: string, language: BundledLanguage) => {
+const getTokensCacheKey = (code: string, language: CodeLanguage) => {
 	const start = code.slice(0, 100);
 	const end = code.length > 100 ? code.slice(-100) : "";
 	return `${language}:${code.length}:${start}:${end}`;
 };
 
 const getHighlighter = (
-	language: BundledLanguage,
+	language: CodeLanguage,
 ): Promise<HighlighterGeneric<BundledLanguage, BundledTheme>> => {
 	const cached = highlighterCache.get(language);
 	if (cached) {
@@ -171,7 +174,8 @@ const createRawTokens = (code: string): TokenizedCode => ({
 					{
 						color: "inherit",
 						content: line,
-					} as ThemedToken,
+						offset: 0,
+					},
 				],
 	),
 });
@@ -179,7 +183,7 @@ const createRawTokens = (code: string): TokenizedCode => ({
 // Synchronous highlight with callback for async results
 export const highlightCode = (
 	code: string,
-	language: BundledLanguage,
+	language: CodeLanguage,
 	// oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-callbacks)
 	callback?: (result: TokenizedCode) => void,
 ): TokenizedCode | null => {
@@ -251,14 +255,6 @@ const CodeBlockBody = memo(
 		showLineNumbers: boolean;
 		className?: string;
 	}) => {
-		const preStyle = useMemo(
-			() => ({
-				backgroundColor: tokenized.bg,
-				color: tokenized.fg,
-			}),
-			[tokenized.bg, tokenized.fg],
-		);
-
 		const keyedLines = useMemo(() => addKeysToTokens(tokenized.tokens), [tokenized.tokens]);
 
 		return (
@@ -267,7 +263,8 @@ const CodeBlockBody = memo(
 					"dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)] m-0 p-4 text-sm",
 					className,
 				)}
-				style={preStyle}
+				// oxlint-disable-next-line shadcn/no-inline-styles -- shiki's theme colours are data.
+				style={{ backgroundColor: tokenized.bg, color: tokenized.fg }}
 			>
 				<code
 					className={cn(
@@ -293,20 +290,14 @@ CodeBlockBody.displayName = "CodeBlockBody";
 export const CodeBlockContainer = ({
 	className,
 	language,
-	style,
 	...props
 }: HTMLAttributes<HTMLDivElement> & { language: string }) => (
 	<div
 		className={cn(
-			"group relative w-full overflow-hidden rounded-md border bg-background text-foreground",
+			"group relative w-full overflow-hidden rounded-md border bg-background text-foreground [contain-intrinsic-size:auto_200px] [content-visibility:auto]",
 			className,
 		)}
 		data-language={language}
-		style={{
-			containIntrinsicSize: "auto 200px",
-			contentVisibility: "auto",
-			...style,
-		}}
 		{...props}
 	/>
 );
@@ -361,9 +352,11 @@ export const CodeBlockContent = ({
 	code,
 	language,
 	showLineNumbers = false,
-}: {
+	className,
+	...props
+}: HTMLAttributes<HTMLDivElement> & {
 	code: string;
-	language: BundledLanguage;
+	language: CodeLanguage;
 	showLineNumbers?: boolean;
 }) => {
 	// Memoized raw tokens for immediate display
@@ -375,22 +368,19 @@ export const CodeBlockContent = ({
 		[code, language, rawTokens],
 	);
 
-	// Async highlighting result (populated after shiki loads)
-	const [asyncTokens, setAsyncTokens] = useState<TokenizedCode | null>(null);
-	const asyncKeyRef = useRef({ code, language });
-
-	// Invalidate stale async tokens synchronously during render
-	if (asyncKeyRef.current.code !== code || asyncKeyRef.current.language !== language) {
-		asyncKeyRef.current = { code, language };
-		setAsyncTokens(null);
-	}
+	// Tokens are kept with what they highlight, so a stale result is never shown for new code.
+	const [highlighted, setHighlighted] = useState<{
+		code: string;
+		language: CodeLanguage;
+		tokens: TokenizedCode;
+	} | null>(null);
 
 	useEffect(() => {
 		let cancelled = false;
 
-		highlightCode(code, language, (result) => {
+		highlightCode(code, language, (tokens) => {
 			if (!cancelled) {
-				setAsyncTokens(result);
+				setHighlighted({ code, language, tokens });
 			}
 		});
 
@@ -399,10 +389,14 @@ export const CodeBlockContent = ({
 		};
 	}, [code, language]);
 
-	const tokenized = asyncTokens ?? syncTokens;
+	const tokenized =
+		highlighted?.code === code && highlighted.language === language
+			? highlighted.tokens
+			: syncTokens;
 
 	return (
-		<div className="relative overflow-auto">
+		// oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a scrollable region must be focusable for keyboard scrolling.
+		<div className={cn("relative overflow-auto", className)} tabIndex={0} {...props}>
 			<CodeBlockBody showLineNumbers={showLineNumbers} tokenized={tokenized} />
 		</div>
 	);

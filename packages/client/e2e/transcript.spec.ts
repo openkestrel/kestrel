@@ -219,5 +219,7 @@ test("a thought opened inside an Activity renders its Markdown", async ({ page, 
 	const log = page.getByRole("log");
 	await expect(log.getByRole("strong")).toHaveText("never");
 	await expect(log.getByRole("code")).toHaveText("wait()");
-	await expect(log.getByRole("button", { name: "Less" })).toHaveAttribute("aria-expanded", "true");
+	await expect(
+		log.getByRole("button", { name: /^Thought, The cap belongs in wait\(\)\./ }),
+	).toHaveAttribute("aria-expanded", "true");
 });

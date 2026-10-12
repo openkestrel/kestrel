@@ -10,6 +10,7 @@ bun run dev        # Vite on :3000, proxying /operator to 127.0.0.1:7718
 bun run build      # dist/client, which images/kestrel-client serves
 bun run typecheck
 bun run test       # the transport, the tab's stream, the change notices and the Transcript follow
+bun run test:components # fixture-only Approval and Question stories in a browser, without a control plane
 bun run e2e        # builds, then drives it over plain HTTP through images/kestrel-client/Caddyfile and `kestrel-control-plane serve`; needs caddy on PATH, and the first run compiles the control plane
 bun run check      # oxlint and oxfmt
 ```
@@ -24,3 +25,11 @@ bun run check      # oxlint and oxfmt
   (`src/components/ai-elements`), added with their CLIs and then owned here. The Model Selector's
   provider marks are bundled from `src/assets/provider-marks`, whose README carries their
   attribution; nothing is fetched from `models.dev` at runtime.
+
+Approval and Question are fixtures until the operator delivers them. Run
+`bunx --no-install vite --config component-tests/vite.config.ts --port 17828` and open
+`/component-tests/approval-question.html` for the pending examples. Add `?multipart` for
+Questionnaire, `?approval=allowed`, `?approval=rejected`, `?approval=refused` or
+`?approval=expired` for Approval outcomes, and `?question=responded` or `?question=expired`
+for Question outcomes. These stories live outside the application routes and make no operator
+requests; their state types describe presentation only.
