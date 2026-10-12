@@ -222,13 +222,17 @@ impl Github {
         app: &App,
         id: i64,
     ) -> Result<AppInstallation, Unproven> {
+        if id <= 0 {
+            return Err(Unproven::Installation);
+        }
+        let mut url = Url::parse(api).map_err(|error| Unproven::Unanswered(error.into()))?;
+        url.path_segments_mut()
+            .map_err(|()| Unproven::Installation)?
+            .pop_if_empty()
+            .extend(["app", "installations", &id.to_string()]);
         let installation: AppInstallation = proven(
-            self.as_app(
-                reqwest::Method::GET,
-                app,
-                &format!("{}/app/installations/{id}", api.trim_end_matches('/')),
-            )
-            .map_err(Unproven::Unanswered)?,
+            self.as_app(reqwest::Method::GET, app, url.as_str())
+                .map_err(Unproven::Unanswered)?,
             "the App installation",
             Unproven::Installation,
         )
