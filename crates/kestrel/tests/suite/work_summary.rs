@@ -25,6 +25,14 @@ async fn summary(kestrel: &Kestrel, workspace: &kestrel::domain::Workspace) -> V
     response.json().await.unwrap()
 }
 
+/// The boundary's answer is the generated type's own: it decodes and re-serializes unchanged.
+fn round_trip(answer: &Value) -> Value {
+    let decoded: kestrel_operator_types::WorkspaceWork =
+        serde_json::from_value(answer.clone()).expect("the answer is the published WorkspaceWork");
+
+    serde_json::to_value(&decoded).expect("the published WorkspaceWork serializes")
+}
+
 #[tokio::test]
 async fn a_workspace_with_no_instance_names_its_declared_branch_without_recording_the_read() {
     let kestrel = Kestrel::boot().await;
@@ -35,13 +43,15 @@ async fn a_workspace_with_no_instance_names_its_declared_branch_without_recordin
         .iter()
         .map(|entry| entry.seq)
         .collect::<Vec<_>>();
+    let answer = summary(&kestrel, &workspace).await;
     assert_eq!(
-        summary(&kestrel, &workspace).await,
+        answer,
         json!({
             "state": "no_instance", "branch": workspace.checkout.branch, "pull_request": null,
             "last_report": {"report": "none"}, "earlier_reports": []
         })
     );
+    assert_eq!(round_trip(&answer), answer);
     assert_eq!(
         kestrel
             .transcript(workspace.id)
@@ -149,6 +159,7 @@ async fn a_held_instance_reports_all_work_on_each_repository_and_the_cli_reads_i
     );
     assert_eq!(answer["repositories"][1]["repository"], "companion");
     assert_eq!(answer["repositories"][1]["committed"]["commits"], 0);
+    assert_eq!(round_trip(&answer), answer);
     let before = kestrel.transcript(workspace.id).await.len();
     let under_write_lock = kestrel
         .database()
@@ -281,6 +292,7 @@ async fn a_supervisor_off_the_link_never_presents_its_turn_close_report_as_curre
         if answer["state"] == "not_answering" {
             assert!(answer.get("repositories").is_none());
             assert_eq!(answer["message"], "the Instance isn't answering");
+            assert_eq!(round_trip(&answer), answer);
             break;
         }
         assert!(

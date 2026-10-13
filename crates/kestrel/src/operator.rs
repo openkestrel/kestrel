@@ -1080,6 +1080,156 @@ pub(crate) fn session_observation(
     }
 }
 
+/// What the Workspace's live work reads: a live report, no Instance, or an Instance that isn't
+/// answering, each carrying the last durable report and every earlier Instance's.
+pub(crate) fn workspace_work(work: crate::live_work::Work) -> wire::WorkspaceWork {
+    let crate::live_work::Work {
+        current,
+        last_report,
+        earlier_reports,
+    } = work;
+    let earlier = work_earlier_reports(earlier_reports);
+    match current {
+        crate::live_work::Current::Reported { summary } => {
+            wire::WorkspaceWork::WorkReported(wire::WorkReported {
+                state: serde_json::json!("reported"),
+                repositories: summary
+                    .repositories
+                    .into_iter()
+                    .map(work_repository)
+                    .collect(),
+                reported_at: summary.reported_at.to_string(),
+                last_report: work_last_report(last_report),
+                earlier_reports: earlier,
+            })
+        }
+        crate::live_work::Current::NoInstance {
+            branch,
+            pull_request,
+        } => wire::WorkspaceWork::WorkNoInstance(wire::WorkNoInstance {
+            state: serde_json::json!("no_instance"),
+            branch,
+            pull_request,
+            last_report: work_last_report(last_report),
+            earlier_reports: earlier,
+        }),
+        crate::live_work::Current::NotAnswering { message } => {
+            wire::WorkspaceWork::WorkNotAnswering(wire::WorkNotAnswering {
+                state: serde_json::json!("not_answering"),
+                message: message.to_owned(),
+                last_report: work_last_report(last_report),
+                earlier_reports: earlier,
+            })
+        }
+    }
+}
+
+fn work_last_report(report: crate::live_work::LastReport) -> wire::WorkLastReport {
+    match report {
+        crate::live_work::LastReport::None => {
+            wire::WorkLastReport::WorkNoReport(wire::WorkNoReport {
+                report: serde_json::json!("none"),
+            })
+        }
+        crate::live_work::LastReport::Received {
+            instance,
+            current_instance,
+            summary,
+        } => wire::WorkLastReport::WorkInstanceReport(work_instance_report(
+            instance,
+            current_instance,
+            summary,
+        )),
+    }
+}
+
+/// Every earlier report is one an Instance sent: `live_work::read` collects them from stored rows.
+fn work_earlier_reports(
+    reports: Vec<crate::live_work::LastReport>,
+) -> Vec<wire::WorkInstanceReport> {
+    reports
+        .into_iter()
+        .filter_map(|report| match report {
+            crate::live_work::LastReport::Received {
+                instance,
+                current_instance,
+                summary,
+            } => Some(work_instance_report(instance, current_instance, summary)),
+            crate::live_work::LastReport::None => None,
+        })
+        .collect()
+}
+
+fn work_instance_report(
+    instance: String,
+    current_instance: bool,
+    summary: crate::live_work::Summary,
+) -> wire::WorkInstanceReport {
+    wire::WorkInstanceReport {
+        report: serde_json::json!("received"),
+        instance,
+        current_instance,
+        repositories: summary
+            .repositories
+            .into_iter()
+            .map(work_repository)
+            .collect(),
+        reported_at: summary.reported_at.to_string(),
+    }
+}
+
+fn work_repository(repository: crate::live_work::Repository) -> wire::WorkRepository {
+    let crate::live_work::Repository { repository, git } = repository;
+    match git {
+        crate::live_work::Git::Read {
+            branch,
+            changed,
+            staged,
+            committed,
+            pushed,
+            untracked,
+            stashed,
+        } => wire::WorkRepository::WorkRepositoryRead(wire::WorkRepositoryRead {
+            repository,
+            git: serde_json::json!("read"),
+            branch,
+            changed: work_changes(changed),
+            staged: work_changes(staged),
+            committed: work_commits(committed),
+            pushed,
+            untracked: wire_count(untracked),
+            stashed: wire_count(stashed),
+        }),
+        crate::live_work::Git::Unreadable { because } => {
+            wire::WorkRepository::WorkRepositoryUnreadable(wire::WorkRepositoryUnreadable {
+                repository,
+                git: serde_json::json!("unreadable"),
+                because,
+            })
+        }
+    }
+}
+
+fn work_changes(changes: crate::live_work::Changes) -> wire::WorkChanges {
+    wire::WorkChanges {
+        files: wire_count(changes.files),
+        added: wire_count(changes.added),
+        removed: wire_count(changes.removed),
+    }
+}
+
+fn work_commits(commits: crate::live_work::Commits) -> wire::WorkCommits {
+    wire::WorkCommits {
+        commits: wire_count(commits.commits),
+        added: wire_count(commits.added),
+        removed: wire_count(commits.removed),
+    }
+}
+
+fn wire_count(counted: u64) -> i64 {
+    counted.try_into().expect("a count fits a wire integer")
+}
+
 pub(crate) async fn workspace_record(
     store: &Store,
     workspace: Workspace,
@@ -3476,16 +3626,16 @@ async fn open_workspace(
 async fn work_summary(
     State(control_plane): State<ControlPlane>,
     Path((organization, reference)): Path<(String, String)>,
-) -> Result<Json<crate::live_work::Work>, Refused> {
-    Ok(Json(
-        crate::live_work::read(
-            &control_plane.store,
-            &control_plane.live.summaries,
-            &organization,
-            &reference,
-        )
-        .await?,
-    ))
+) -> Result<Json<wire::WorkspaceWork>, Refused> {
+    let work = crate::live_work::read(
+        &control_plane.store,
+        &control_plane.live.summaries,
+        &organization,
+        &reference,
+    )
+    .await?;
+
+    Ok(Json(workspace_work(work)))
 }
 
 #[derive(Deserialize)]

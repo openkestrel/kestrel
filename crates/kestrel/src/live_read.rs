@@ -6,6 +6,7 @@ use std::time::Duration;
 use axum::body::{Body, Bytes};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
+use kestrel_operator_types as wire;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OnceCell, mpsc, oneshot};
 use tokio::time::Instant;
@@ -59,45 +60,18 @@ pub struct Request {
     pub read: Read,
 }
 
+/// The supervisor's answer, read into the shapes the operator document publishes: the link's own
+/// vocabulary stays the supervisor's, and only this boundary maps it.
 #[derive(Deserialize)]
 #[serde(tag = "answer", rename_all = "snake_case")]
 enum Answer {
-    Listing(Listing),
-    Text(Text),
-    Changes(Repositories),
-    Commits(Repositories),
-    Stashes(Repositories),
+    Listing(wire::FileListing),
+    Text(wire::FileText),
+    Changes(wire::WorkspaceChanges),
+    Commits(wire::WorkspaceCommits),
+    Stashes(wire::WorkspaceStashes),
     Refused { message: String },
     Missing { message: String },
-}
-
-#[derive(Serialize, Deserialize)]
-struct Repositories {
-    repositories: Vec<serde_json::Value>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Listing {
-    path: String,
-    entries: Vec<Entry>,
-    total: u64,
-    truncated: bool,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Entry {
-    name: String,
-    kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    size: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    git: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Text {
-    path: String,
-    text: String,
 }
 
 pub enum AnswerBody {
@@ -334,11 +308,9 @@ impl Reads {
             Ok(json) => match serde_json::from_slice::<Answer>(&json) {
                 Ok(Answer::Listing(listing)) => serialized(&listing),
                 Ok(Answer::Text(text)) => serialized(&text),
-                Ok(
-                    Answer::Changes(repositories)
-                    | Answer::Commits(repositories)
-                    | Answer::Stashes(repositories),
-                ) => serialized(&repositories),
+                Ok(Answer::Changes(changes)) => serialized(&changes),
+                Ok(Answer::Commits(commits)) => serialized(&commits),
+                Ok(Answer::Stashes(stashes)) => serialized(&stashes),
                 Ok(Answer::Refused { message }) => Outcome::Refused(message),
                 Ok(Answer::Missing { message }) => Outcome::Missing(message),
                 Err(_) => Outcome::NotAnswering,

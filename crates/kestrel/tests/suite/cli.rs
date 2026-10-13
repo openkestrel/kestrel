@@ -2047,7 +2047,7 @@ fn empty_cli_inspection_lists_leave_pipes_empty_and_json_unmodified() {
             } else if request.url().contains("/files") {
                 json!({"path":"repo/empty", "entries":[], "total":0, "truncated":false})
             } else if request.url().contains("/changes") {
-                json!({"repositories":[{"repository":"repo", "diff":"", "stats":[], "truncated":false}]})
+                json!({"repositories":[{"repository":"repo", "diff":"", "files":[], "truncated":false}]})
             } else {
                 json!({"repositories":[{"repository":"repo", "text":""}]})
             };

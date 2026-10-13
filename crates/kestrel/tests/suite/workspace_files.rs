@@ -805,3 +805,46 @@ async fn changes_include_files_in_an_untracked_nested_repository() {
     );
     kestrel.teardown().await;
 }
+
+/// Every live inspection answer is the published type's own shape: it decodes and re-serializes
+/// unchanged, so the boundary and the CLI read the generated leaf.
+#[tokio::test]
+async fn every_live_inspection_answer_round_trips_through_its_generated_type() {
+    let (kestrel, workspace, checkout) = held(Script::Speaks).await;
+    std::fs::write(checkout.join("new.txt"), "untracked\n").unwrap();
+
+    let listing = listed(&kestrel, &workspace, "kestrel").await;
+    let decoded: kestrel_operator_types::FileListing =
+        serde_json::from_value(listing.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), listing);
+
+    let text: Value = get(
+        &kestrel,
+        &workspace,
+        "file",
+        &[("path", "kestrel/README.md")],
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let decoded: kestrel_operator_types::FileText = serde_json::from_value(text.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), text);
+
+    let diff = changes(&kestrel, &workspace, &[]).await;
+    let decoded: kestrel_operator_types::WorkspaceChanges =
+        serde_json::from_value(diff.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), diff);
+
+    for read in ["commits", "stashes"] {
+        let answer: Value = get(&kestrel, &workspace, read, &[])
+            .await
+            .json()
+            .await
+            .unwrap();
+        let decoded: kestrel_operator_types::WorkspaceCommits =
+            serde_json::from_value(answer.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), answer);
+    }
+    kestrel.teardown().await;
+}

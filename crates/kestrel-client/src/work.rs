@@ -2,30 +2,29 @@ use std::io::{IsTerminal as _, Write};
 
 use anyhow::Result;
 use kestrel_operator_types::{WorkInstanceReport, WorkLastReport, WorkRepository, WorkspaceWork};
-use serde_json::Value;
 
 use crate::output::Presentation;
+use crate::typed;
 
-pub fn show(answer: Value, presentation: &Presentation) -> Result<()> {
+pub fn show(presentation: &Presentation, answer: &WorkspaceWork) -> Result<()> {
     let terminal = std::io::stdout().is_terminal();
-    let mut out = std::io::stdout().lock();
     if presentation.json() {
-        crate::output::document(&mut out, presentation, &answer)?;
-        return Ok(out.flush()?);
+        return typed::whole(presentation, answer);
     }
-    match serde_json::from_value::<WorkspaceWork>(answer)? {
+    let mut out = std::io::stdout().lock();
+    match answer {
         WorkspaceWork::WorkNoInstance(work) => {
             writeln!(out, "no Instance; declared branch {}", work.branch)?;
-            if let Some(pull_request) = work.pull_request {
+            if let Some(pull_request) = &work.pull_request {
                 writeln!(out, "{pull_request}")?;
             }
-            last_report(&mut out, work.last_report, terminal)?;
-            earlier_reports(&mut out, work.earlier_reports, terminal)?;
+            last_report(&mut out, &work.last_report, terminal)?;
+            earlier_reports(&mut out, &work.earlier_reports, terminal)?;
         }
         WorkspaceWork::WorkNotAnswering(work) => {
             writeln!(out, "{}", work.message)?;
-            last_report(&mut out, work.last_report, terminal)?;
-            earlier_reports(&mut out, work.earlier_reports, terminal)?;
+            last_report(&mut out, &work.last_report, terminal)?;
+            earlier_reports(&mut out, &work.earlier_reports, terminal)?;
         }
         WorkspaceWork::WorkReported(work) => {
             if terminal {
@@ -36,15 +35,15 @@ pub fn show(answer: Value, presentation: &Presentation) -> Result<()> {
                     work.reported_at
                 )?;
             }
-            repositories(&mut out, work.repositories, terminal)?;
-            earlier_reports(&mut out, work.earlier_reports, terminal)?;
+            repositories(&mut out, &work.repositories, terminal)?;
+            earlier_reports(&mut out, &work.earlier_reports, terminal)?;
         }
     }
     out.flush()?;
     Ok(())
 }
 
-fn last_report(out: &mut impl Write, report: WorkLastReport, terminal: bool) -> Result<()> {
+fn last_report(out: &mut impl Write, report: &WorkLastReport, terminal: bool) -> Result<()> {
     match report {
         WorkLastReport::WorkNoReport(_) => writeln!(out, "No work report received.")?,
         WorkLastReport::WorkInstanceReport(report) => {
@@ -60,7 +59,7 @@ fn last_report(out: &mut impl Write, report: WorkLastReport, terminal: bool) -> 
                 age(&report.reported_at)?,
                 report.reported_at
             )?;
-            repositories(out, report.repositories, terminal)?;
+            repositories(out, &report.repositories, terminal)?;
         }
     }
     Ok(())
@@ -68,7 +67,7 @@ fn last_report(out: &mut impl Write, report: WorkLastReport, terminal: bool) -> 
 
 fn earlier_reports(
     out: &mut impl Write,
-    reports: Vec<WorkInstanceReport>,
+    reports: &[WorkInstanceReport],
     terminal: bool,
 ) -> Result<()> {
     for report in reports {
@@ -79,11 +78,12 @@ fn earlier_reports(
             age(&report.reported_at)?,
             report.reported_at
         )?;
-        repositories(out, report.repositories, terminal)?;
+        repositories(out, &report.repositories, terminal)?;
     }
     Ok(())
 }
 
+/// The wire carries the report's time as text; only this display reads it.
 fn age(reported_at: &str) -> Result<i64> {
     Ok(jiff::Timestamp::now()
         .duration_since(reported_at.parse()?)
@@ -93,7 +93,7 @@ fn age(reported_at: &str) -> Result<i64> {
 
 fn repositories(
     out: &mut impl Write,
-    repositories: Vec<WorkRepository>,
+    repositories: &[WorkRepository],
     terminal: bool,
 ) -> Result<()> {
     for repository in repositories {
@@ -114,8 +114,8 @@ fn repositories(
                     repository.branch.as_deref().unwrap_or("(detached HEAD)")
                 )?;
                 for (label, changes) in [
-                    ("Changed", repository.changed),
-                    ("Staged", repository.staged),
+                    ("Changed", &repository.changed),
+                    ("Staged", &repository.staged),
                 ] {
                     writeln!(
                         out,
@@ -126,7 +126,7 @@ fn repositories(
                         changes.removed
                     )?;
                 }
-                let committed = repository.committed;
+                let committed = &repository.committed;
                 writeln!(
                     out,
                     "  Committed: {} {}, +{} -{} lines",
