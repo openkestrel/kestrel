@@ -45,21 +45,6 @@ impl Presentation {
     }
 }
 
-pub fn collection(
-    presentation: &Presentation,
-    view: &View,
-    answer: &Value,
-    empty: &str,
-) -> Result<()> {
-    if answer.as_array().is_some_and(Vec::is_empty)
-        && matches!(presentation, Presentation::Human(_))
-    {
-        writeln!(std::io::stdout().lock(), "{empty}")?;
-        return Ok(());
-    }
-    show(presentation, view, answer)
-}
-
 pub fn show(presentation: &Presentation, view: &View, answer: &Value) -> Result<()> {
     let mut out = std::io::stdout().lock();
     written(&mut out, presentation, view, answer)?;

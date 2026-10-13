@@ -40,7 +40,7 @@ impl Existing {
         organization_declared: bool,
         projects: wire::ListProjectsResponse,
         agents: wire::ListAgentsResponse,
-        credentials: &[wire::ProviderCredential],
+        credentials: wire::ListProviderCredentialsResponse,
     ) -> Self {
         Self {
             organization_declared,
@@ -69,8 +69,8 @@ impl Existing {
                 })
                 .collect(),
             credentials: credentials
-                .iter()
-                .map(|record| record.variable.clone())
+                .into_iter()
+                .map(|record| record.variable)
                 .collect(),
         }
     }

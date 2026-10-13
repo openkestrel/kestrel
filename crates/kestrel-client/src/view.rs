@@ -2,9 +2,12 @@
 
 use kestrel_operator_types as wire;
 
-use crate::typed::{Column, Columns, compound, joined, or_absent, text};
+use crate::typed::{Column, Columns, compound, joined, object, objects, or_absent, text};
 
 /// What a command produces, as dotted paths into the record the control plane answered.
+///
+/// `Value` and `Rows` have no command left, but the renderer's tests still read them.
+#[allow(dead_code)]
 pub enum View {
     /// The one field a `$(…)` captures.
     Value(&'static str),
@@ -52,38 +55,90 @@ pub const AGENT_DECLARED: Columns<wire::Agent> =
     Columns::Value(Column("id", |agent| text(agent.id)));
 pub const AGENT_MODEL: Columns<wire::Agent> =
     Columns::Value(Column("model", |agent| or_absent(agent.model.as_ref())));
-pub const CREDENTIAL: View = View::Value("variable");
-pub const CREDENTIALS: View = View::Rows(&["variable", "set_at"]);
-pub const PROFILES: View = View::Rows(&["id", "name", "owner", "holds"]);
-pub const LOGIN: View = View::Value("name");
-pub const INTEGRATIONS: View = View::Rows(&[
-    "id",
-    "name",
-    "kind",
-    "repository",
-    "carries",
-    "state",
-    "revision",
-    "polled_every",
-    "webhook_path",
-    "last_event_refusal.reason",
+pub const CREDENTIAL: Columns<wire::ProviderCredential> =
+    Columns::Value(Column("variable", |credential| text(&credential.variable)));
+pub const CREDENTIALS: Columns<wire::ProviderCredential> = Columns::Rows(&[
+    Column("variable", |credential| text(&credential.variable)),
+    Column("set at", |credential| text(&credential.set_at)),
 ]);
-pub const INTEGRATION: View = View::Detail(&[
-    "id",
-    "name",
-    "kind",
-    "repository",
-    "bot_login",
-    "carries",
-    "state",
-    "revision",
-    "disabled_at",
-    "retired_at",
-    "canceled_posts",
-    "diagnostic",
-    "polled_every",
-    "webhook_path",
-    "last_event_refusal",
+pub const PROFILE_DECLARED: Columns<wire::SubscriptionProfile> =
+    Columns::Value(Column("id", |profile| text(profile.id)));
+pub const PROFILES: Columns<wire::SubscriptionProfileListed> = Columns::Rows(&[
+    Column("id", |profile| text(profile.id)),
+    Column("name", |profile| text(&profile.name)),
+    Column("owner", |profile| text(&profile.owner)),
+    Column("holds", |profile| objects(&profile.holds)),
+]);
+pub const LOGIN: Columns<wire::SubscriptionProfileLogin> =
+    Columns::Value(Column("name", |login| text(&login.name)));
+pub const GITHUB_APP_STARTED: Columns<wire::GithubAppStarted> =
+    Columns::Value(Column("url", |started| text(&started.url)));
+pub const INTEGRATIONS: Columns<wire::Integration> = Columns::Rows(&[
+    Column("id", |integration| text(integration.id)),
+    Column("name", |integration| text(&integration.name)),
+    Column("kind", |integration| text(&integration.kind)),
+    Column("repository", |integration| {
+        or_absent(integration.repository.as_ref())
+    }),
+    Column("carries", |integration| joined(&integration.carries)),
+    Column("state", |integration| text(&integration.state)),
+    Column("revision", |integration| text(integration.revision)),
+    Column("polled every", |integration| {
+        or_absent(integration.polled_every.as_ref())
+    }),
+    Column("webhook path", |integration| {
+        or_absent(integration.webhook_path.as_ref())
+    }),
+    Column("reason", |integration| {
+        or_absent(
+            integration
+                .last_event_refusal
+                .as_ref()
+                .map(|refusal| &refusal.reason),
+        )
+    }),
+]);
+pub const INTEGRATION_DECLARED: Columns<wire::Integration> =
+    Columns::Value(Column("id", |integration| text(integration.id)));
+
+/// An Integration as a person reads it: the record the boundary answered, with the two cells a
+/// decoded record answers only with the invocation at hand.
+pub struct IntegrationShown {
+    pub integration: wire::Integration,
+    pub canceled_posts: String,
+    pub diagnostic: String,
+}
+
+pub const INTEGRATION: Columns<IntegrationShown> = Columns::Detail(&[
+    Column("id", |shown| text(shown.integration.id)),
+    Column("name", |shown| text(&shown.integration.name)),
+    Column("kind", |shown| text(&shown.integration.kind)),
+    Column("repository", |shown| {
+        or_absent(shown.integration.repository.as_ref())
+    }),
+    Column("bot login", |shown| {
+        or_absent(shown.integration.bot_login.as_ref())
+    }),
+    Column("carries", |shown| joined(&shown.integration.carries)),
+    Column("state", |shown| text(&shown.integration.state)),
+    Column("revision", |shown| text(shown.integration.revision)),
+    Column("disabled at", |shown| {
+        or_absent(shown.integration.disabled_at.as_ref())
+    }),
+    Column("retired at", |shown| {
+        or_absent(shown.integration.retired_at.as_ref())
+    }),
+    Column("canceled posts", |shown| text(&shown.canceled_posts)),
+    Column("diagnostic", |shown| text(&shown.diagnostic)),
+    Column("polled every", |shown| {
+        or_absent(shown.integration.polled_every.as_ref())
+    }),
+    Column("webhook path", |shown| {
+        or_absent(shown.integration.webhook_path.as_ref())
+    }),
+    Column("last event refusal", |shown| {
+        object(shown.integration.last_event_refusal.as_ref())
+    }),
 ]);
 pub const EVENTS: Columns<wire::EventRecord> = Columns::Rows(&[
     Column("record", |event| text(event.record)),
@@ -416,9 +471,6 @@ pub const OPENED: Columns<wire::Opened> = Columns::Detail(&[
     Column("session", |record| text(&record.session.name)),
     Column("session id", |record| text(record.session.id)),
 ]);
-
-/// What a creation answers back is the identifier the next command is given.
-pub const DECLARED: View = View::Value("id");
 
 fn structured(value: &impl serde::Serialize) -> String {
     crate::output::rendered(Some(

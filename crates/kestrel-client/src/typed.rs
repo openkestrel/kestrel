@@ -88,6 +88,23 @@ pub fn record<T: Serialize>(
     Ok(())
 }
 
+/// A record inside a record, written as the boundary wrote it; nothing reads as absent.
+pub fn object<T: Serialize>(value: Option<&T>) -> String {
+    value.map_or_else(|| output::ABSENT.to_owned(), serialized)
+}
+
+/// Records inside a record, each as the boundary wrote it; nothing reads as absent.
+pub fn objects<T: Serialize>(values: &[T]) -> String {
+    if values.is_empty() {
+        return output::ABSENT.to_owned();
+    }
+    values.iter().map(serialized).collect::<Vec<_>>().join(",")
+}
+
+fn serialized<T: Serialize>(value: &T) -> String {
+    serde_json::to_string(value).expect("a nested record serializes")
+}
+
 pub fn collection<T: Serialize>(
     presentation: &Presentation,
     columns: &Columns<T>,
@@ -114,6 +131,25 @@ pub fn show<T: Serialize>(
         presentation,
         columns,
         record,
+        std::slice::from_ref(record),
+    )?;
+    out.flush().context("writing to standard output")
+}
+
+/// Shows one record through columns that read it, while JSON answers what the boundary sent: a
+/// record whose columns resolve something the record itself does not hold is shown through those.
+pub fn show_as<T>(
+    presentation: &Presentation,
+    columns: &Columns<T>,
+    whole: &impl Serialize,
+    record: &T,
+) -> Result<()> {
+    let mut out = std::io::stdout().lock();
+    written(
+        &mut out,
+        presentation,
+        columns,
+        whole,
         std::slice::from_ref(record),
     )?;
     out.flush().context("writing to standard output")

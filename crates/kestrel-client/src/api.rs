@@ -66,11 +66,6 @@ impl ControlPlane {
             .await
     }
 
-    pub async fn put(&self, path: &[&str], body: &impl Serialize) -> Result<Value> {
-        self.answered(self.client.put(self.url(path)?).json(body), true)
-            .await
-    }
-
     pub async fn post_as<T: DeserializeOwned>(
         &self,
         path: &[&str],
@@ -89,7 +84,11 @@ impl ControlPlane {
             .await
     }
 
-    pub async fn patch(&self, path: &[&str], body: &impl Serialize) -> Result<Value> {
+    pub async fn patch_as<T: DeserializeOwned>(
+        &self,
+        path: &[&str],
+        body: &impl Serialize,
+    ) -> Result<T> {
         self.answered(self.client.patch(self.url(path)?).json(body), true)
             .await
     }

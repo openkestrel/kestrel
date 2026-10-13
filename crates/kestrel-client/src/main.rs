@@ -33,7 +33,7 @@ use serde_json::{Value, json};
 use crate::api::ControlPlane;
 use crate::diagnostic::Invocation;
 use crate::exit::{Exit, Failed};
-use crate::output::{Presentation, collection, show};
+use crate::output::{Presentation, show};
 use crate::scope::{Derived, Scope, Scoping, Source};
 
 const BINARY: &str = "kestrel";
@@ -399,9 +399,10 @@ enum GithubCommand {
         #[arg(
             long = "carries",
             value_name = "DIRECTION",
+            value_parser = direction,
             default_values = ["inbound", "outbound"]
         )]
-        carries: Vec<String>,
+        carries: Vec<wire::Direction>,
         /// How often the poll reads the App's Delivery log
         #[arg(long, value_name = "DURATION", default_value = "1m")]
         interval: String,
@@ -1232,24 +1233,25 @@ async fn run(
         }
         Command::Credential(CredentialCommand::Set { variable }) => {
             let organization = scoping.resolve().await?.organization;
-            let secret = json!({ "secret": read_the_secret()? });
-            show(
-                &presentation,
-                &view::CREDENTIAL,
-                &api.put(
+            let held: wire::ProviderCredential = api
+                .put_as(
                     &["organizations", &organization, "credentials", &variable],
-                    &secret,
+                    &wire::ProviderCredentialSecret {
+                        secret: read_the_secret()?,
+                    },
                 )
-                .await?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::CREDENTIAL, &held)?;
         }
         Command::Credential(CredentialCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            let credentials: wire::ListProviderCredentialsResponse = api
+                .get_as(&["organizations", &organization, "credentials"])
+                .await?;
+            typed::collection(
                 &presentation,
                 &view::CREDENTIALS,
-                &api.get(&["organizations", &organization, "credentials"])
-                    .await?,
+                &credentials,
                 &empty_list(
                     &client.control_plane,
                     "Provider Credentials",
@@ -1268,41 +1270,38 @@ async fn run(
         }
         Command::Profile(ProfileCommand::Declare { name, owner }) => {
             let organization = scoping.resolve().await?.organization;
-            let profile: wire::SubscriptionProfile = serde_json::from_value(
-                api.post(
+            let profile: wire::SubscriptionProfile = api
+                .post_as(
                     &["organizations", &organization, "profiles"],
                     &wire::SubscriptionProfileDeclaration {
                         name,
                         owner: Some(owner),
                     },
                 )
-                .await?,
-            )?;
-            show(
-                &presentation,
-                &view::DECLARED,
-                &serde_json::to_value(profile)?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::PROFILE_DECLARED, &profile)?;
         }
         Command::Profile(ProfileCommand::Set { name, entry }) => {
             let organization = scoping.resolve().await?.organization;
-            let login = json!({ "secret": read_the_login(entry.file.is_some())? });
-            show(
-                &presentation,
-                &view::LOGIN,
-                &api.put(&entry.path(&organization, &name), &login).await?,
-            )?;
+            let login: wire::SubscriptionProfileLogin = api
+                .put_as(
+                    &entry.path(&organization, &name),
+                    &wire::ProviderCredentialSecret {
+                        secret: read_the_login(entry.file.is_some())?,
+                    },
+                )
+                .await?;
+            typed::show(&presentation, &view::LOGIN, &login)?;
         }
         Command::Profile(ProfileCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            let profiles: wire::ListSubscriptionProfilesResponse = serde_json::from_value(
-                api.get(&["organizations", &organization, "profiles"])
-                    .await?,
-            )?;
-            collection(
+            let profiles: wire::ListSubscriptionProfilesResponse = api
+                .get_as(&["organizations", &organization, "profiles"])
+                .await?;
+            typed::collection(
                 &presentation,
                 &view::PROFILES,
-                &serde_json::to_value(profiles)?,
+                &profiles,
                 &empty_list(
                     &client.control_plane,
                     "Subscription Profiles",
@@ -1324,8 +1323,8 @@ async fn run(
             api: github_api,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            let result = api
-                .post(
+            let started: wire::GithubAppStarted = api
+                .post_as(
                     &["organizations", &organization, "github-app"],
                     &wire::GithubAppStart {
                         name,
@@ -1338,12 +1337,7 @@ async fn run(
                     },
                 )
                 .await?;
-            let started: wire::GithubAppStarted = serde_json::from_value(result)?;
-            show(
-                &presentation,
-                &view::View::Value("url"),
-                &serde_json::to_value(started)?,
-            )?;
+            typed::show(&presentation, &view::GITHUB_APP_STARTED, &started)?;
         }
         Command::Integration(IntegrationCommand::Github(GithubCommand::Register {
             name,
@@ -1357,27 +1351,26 @@ async fn run(
             api: github_api,
         })) => {
             let organization = scoping.resolve().await?.organization;
-            let registration = json!({
-                "kind": "github",
-                "name": name,
-                "repository": repository,
-                "app_id": app_id,
-                "installation": installation,
-                "private_key": given(&private_key)?,
-                "carries": carries,
-                "interval": interval,
-                "webhook_secret": webhook_secret,
-                "api": github_api,
-            });
-            show(
-                &presentation,
-                &view::DECLARED,
-                &api.post(
+            let registration =
+                wire::IntegrationRegistration::GithubRegistration(wire::GithubRegistration {
+                    kind: json!("github"),
+                    name,
+                    repository,
+                    app_id,
+                    installation,
+                    private_key: given(&private_key)?,
+                    carries: Some(carries),
+                    interval: Some(Some(interval)),
+                    webhook_secret: webhook_secret.map(Some),
+                    api: github_api.map(Some),
+                });
+            let registered: wire::Integration = api
+                .post_as(
                     &["organizations", &organization, "integrations"],
                     &registration,
                 )
-                .await?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::INTEGRATION_DECLARED, &registered)?;
         }
         Command::Integration(IntegrationCommand::Github(GithubCommand::ReplaceKey {
             name,
@@ -1391,10 +1384,8 @@ async fn run(
                 })?,
                 None => read_standard_input("the App's private key")?,
             };
-            shown_integration(
-                &presentation,
-                invocation,
-                api.put(
+            let replaced: wire::Integration = api
+                .put_as(
                     &[
                         "organizations",
                         &organization,
@@ -1407,32 +1398,35 @@ async fn run(
                         revision,
                     },
                 )
-                .await?,
-            )?;
+                .await?;
+            shown_integration(&presentation, invocation, replaced)?;
         }
         Command::Integration(IntegrationCommand::Register(RegisterCommand::Webhook {
             name,
             secret,
         })) => {
             let organization = scoping.resolve().await?.organization;
-            show(
-                &presentation,
-                &view::DECLARED,
-                &api.post(
+            let registration =
+                wire::IntegrationRegistration::WebhookRegistration(wire::WebhookRegistration {
+                    kind: json!("webhook"),
+                    name,
+                    secret,
+                    carries: None,
+                });
+            let registered: wire::Integration = api
+                .post_as(
                     &["organizations", &organization, "integrations"],
-                    &json!({ "kind": "webhook", "name": name, "secret": secret }),
+                    &registration,
                 )
-                .await?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::INTEGRATION_DECLARED, &registered)?;
         }
         Command::Integration(IntegrationCommand::Show { name }) => {
             let organization = scoping.resolve().await?.organization;
-            shown_integration(
-                &presentation,
-                invocation,
-                api.get(&["organizations", &organization, "integrations", &name])
-                    .await?,
-            )?;
+            let integration: wire::Integration = api
+                .get_as(&["organizations", &organization, "integrations", &name])
+                .await?;
+            shown_integration(&presentation, invocation, integration)?;
         }
         Command::Integration(IntegrationCommand::Repositories {
             name,
@@ -1442,8 +1436,8 @@ async fn run(
             let organization = scoping.resolve().await?.organization;
             let page = page.to_string();
             let per_page = per_page.to_string();
-            let repositories: wire::IntegrationRepositories = serde_json::from_value(
-                api.get_where(
+            let repositories: wire::IntegrationRepositories = api
+                .get_where_as(
                     &[
                         "organizations",
                         &organization,
@@ -1453,8 +1447,7 @@ async fn run(
                     ],
                     &[("page", &page), ("per_page", &per_page)],
                 )
-                .await?,
-            )?;
+                .await?;
             let mut out = std::io::stdout().lock();
             if presentation.json() {
                 crate::output::document(
@@ -1501,22 +1494,18 @@ async fn run(
                 interval,
                 revision,
             };
-            shown_integration(
-                &presentation,
-                invocation,
-                api.patch(
+            let changed: wire::Integration = api
+                .patch_as(
                     &["organizations", &organization, "integrations", &name],
                     &change,
                 )
-                .await?,
-            )?;
+                .await?;
+            shown_integration(&presentation, invocation, changed)?;
         }
         Command::Integration(IntegrationCommand::Disable { name }) => {
             let organization = scoping.resolve().await?.organization;
-            shown_integration(
-                &presentation,
-                invocation,
-                api.post(
+            let disabled: wire::Integration = api
+                .post_as(
                     &[
                         "organizations",
                         &organization,
@@ -1526,15 +1515,13 @@ async fn run(
                     ],
                     &json!({}),
                 )
-                .await?,
-            )?;
+                .await?;
+            shown_integration(&presentation, invocation, disabled)?;
         }
         Command::Integration(IntegrationCommand::Enable { name }) => {
             let organization = scoping.resolve().await?.organization;
-            shown_integration(
-                &presentation,
-                invocation,
-                api.post(
+            let enabled: wire::Integration = api
+                .post_as(
                     &[
                         "organizations",
                         &organization,
@@ -1544,13 +1531,13 @@ async fn run(
                     ],
                     &json!({}),
                 )
-                .await?,
-            )?;
+                .await?;
+            shown_integration(&presentation, invocation, enabled)?;
         }
         Command::Integration(IntegrationCommand::Retire { name, yes }) => {
             let organization = scoping.resolve().await?.organization;
             let path = ["organizations", &organization, "integrations", &name];
-            let reviewed: wire::Integration = serde_json::from_value(api.get(&path).await?)?;
+            let reviewed: wire::Integration = api.get_as(&path).await?;
             if !yes && !matches!(reviewed.state, wire::IntegrationState::Retired) {
                 if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
                     bail!(
@@ -1569,8 +1556,8 @@ async fn run(
                     return Ok(());
                 }
             }
-            let retired = api
-                .post(
+            let retired: wire::Integration = api
+                .post_as(
                     &[path.as_slice(), &["retire"]].concat(),
                     &wire::IntegrationRetirement {
                         revision: Some(reviewed.revision),
@@ -1584,11 +1571,13 @@ async fn run(
         }
         Command::Integration(IntegrationCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            let integrations: wire::ListIntegrationsResponse = api
+                .get_as(&["organizations", &organization, "integrations"])
+                .await?;
+            typed::collection(
                 &presentation,
                 &view::INTEGRATIONS,
-                &api.get(&["organizations", &organization, "integrations"])
-                    .await?,
+                &integrations,
                 &empty_list(
                     &client.control_plane,
                     "Integrations",
@@ -2364,7 +2353,7 @@ async fn started(
     } else {
         (Vec::new(), Vec::new(), Vec::new())
     };
-    let existing = start::Existing::read(declared, projects, agents, &credentials);
+    let existing = start::Existing::read(declared, projects, agents, credentials);
     let names_a_project = start.project.as_ref().is_some_and(|name| {
         existing
             .projects
@@ -2541,15 +2530,10 @@ fn github_cleanup(integration: &wire::Integration) -> String {
     )
 }
 
-fn shown_integration(
-    presentation: &Presentation,
-    invocation: &Invocation,
-    answered: Value,
-) -> Result<()> {
-    let integration: wire::Integration = serde_json::from_value(answered)?;
-    let mut record = serde_json::to_value(&integration)?;
-    if !presentation.json() {
-        record["canceled_posts"] = integration
+/// What retiring an Integration with unsent posts left unsaid, each as one line.
+fn canceled_posts(integration: &wire::Integration) -> String {
+    typed::joined(
+        &integration
             .canceled_posts
             .iter()
             .map(|post| {
@@ -2561,16 +2545,27 @@ fn shown_integration(
                 });
                 format!("{} {said}: {}{attempted}", post.session, post.reason)
             })
-            .collect();
-        record["diagnostic"] = integration
-            .diagnostic
-            .as_ref()
-            .map_or(Value::Null, |diagnostic| {
-                Value::from(diagnostic::inline(diagnostic, invocation))
-            });
-    }
+            .collect::<Vec<_>>(),
+    )
+}
 
-    show(presentation, &view::INTEGRATION, &record)
+fn shown_integration(
+    presentation: &Presentation,
+    invocation: &Invocation,
+    integration: wire::Integration,
+) -> Result<()> {
+    let canceled_posts = canceled_posts(&integration);
+    let diagnostic = integration.diagnostic.as_ref().map_or_else(
+        || crate::output::ABSENT.to_owned(),
+        |diagnostic| diagnostic::inline(diagnostic, invocation),
+    );
+    let shown = view::IntegrationShown {
+        integration,
+        canceled_posts,
+        diagnostic,
+    };
+
+    typed::show_as(presentation, &view::INTEGRATION, &shown.integration, &shown)
 }
 
 fn direction(given: &str) -> Result<wire::Direction, String> {
@@ -2946,7 +2941,6 @@ async fn status(
     };
 
     let organization = scope.organization.as_str();
-    let within = async |records| api.get(&["organizations", organization, records]).await;
     let (projects, agents, triggers, workspaces, integrations, credentials, profiles) = tokio::try_join!(
         async {
             api.get_as::<wire::ListProjectsResponse>(&["organizations", organization, "projects"])
@@ -2968,9 +2962,30 @@ async fn status(
             ])
             .await
         },
-        within("integrations"),
-        within("credentials"),
-        within("profiles"),
+        async {
+            api.get_as::<wire::ListIntegrationsResponse>(&[
+                "organizations",
+                organization,
+                "integrations",
+            ])
+            .await
+        },
+        async {
+            api.get_as::<wire::ListProviderCredentialsResponse>(&[
+                "organizations",
+                organization,
+                "credentials",
+            ])
+            .await
+        },
+        async {
+            api.get_as::<wire::ListSubscriptionProfilesResponse>(&[
+                "organizations",
+                organization,
+                "profiles",
+            ])
+            .await
+        },
     )?;
     typed::show(
         presentation,
@@ -2983,18 +2998,14 @@ async fn status(
             agents: agents.len(),
             triggers: triggers.len(),
             workspaces: workspaces.len(),
-            integrations: count(&integrations),
-            credentials: count(&credentials),
-            profiles: count(&profiles),
+            integrations: integrations.len(),
+            credentials: credentials.len(),
+            profiles: profiles.len(),
             next: next_command(projects.first(), agents.first()),
         },
     )?;
 
     Ok(())
-}
-
-fn count(records: &Value) -> usize {
-    records.as_array().map_or(0, Vec::len)
 }
 
 fn next_command(project: Option<&wire::Project>, agent: Option<&wire::Agent>) -> String {
