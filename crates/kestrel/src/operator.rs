@@ -532,76 +532,6 @@ fn agent_defaults(declaration: &wire::AgentDeclaration) -> Declared {
 }
 
 #[derive(Deserialize)]
-struct WorkspaceDeclaration {
-    project: String,
-    agent: String,
-    profile: Option<String>,
-    sign_in_method: Option<String>,
-    branch: Option<String>,
-    continues: Option<String>,
-    model: Option<String>,
-    mode: Option<String>,
-    thought_level: Option<String>,
-    brief: Option<String>,
-    participant: Option<String>,
-    depends_on: Option<Vec<String>>,
-}
-
-impl WorkspaceDeclaration {
-    fn declared(&self) -> Declared {
-        Declared {
-            model: self.model.clone(),
-            mode: self.mode.clone(),
-            thought_level: self.thought_level.clone(),
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct WorkspaceMessage {
-    participant: Option<String>,
-    message: String,
-}
-
-#[derive(Deserialize)]
-struct WorkspaceMessageWithdrawal {
-    participant: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct SessionDeclaration {
-    agent: Option<String>,
-    sign_in_method: Option<String>,
-    model: Option<String>,
-    mode: Option<String>,
-    thought_level: Option<String>,
-    depends_on: Option<Vec<String>>,
-}
-
-#[derive(Deserialize)]
-struct SessionInterrupt {
-    participant: Option<String>,
-}
-
-impl SessionDeclaration {
-    fn declared(&self) -> Declared {
-        Declared {
-            model: self.model.clone(),
-            mode: self.mode.clone(),
-            thought_level: self.thought_level.clone(),
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct OptionChange {
-    participant: Option<String>,
-    option: Option<String>,
-    category: Option<String>,
-    value: String,
-}
-
-#[derive(Deserialize)]
 struct TriggerDeclaration {
     name: String,
     filter: Option<serde_json::Value>,
@@ -668,35 +598,10 @@ fn selected(integrations: Vec<domain::SelectedIntegration>) -> Vec<wire::Selecte
 }
 
 #[derive(Serialize)]
-struct WorkspaceRecord {
-    id: String,
-    name: String,
-    organization: String,
-    project: String,
-    opened_with: String,
-    profile: Option<String>,
-    checkout: domain::Checkout,
-    integrations: Vec<wire::SelectedIntegration>,
-    instance: Option<String>,
-    held: Option<String>,
-    correlation: Option<String>,
-    state: String,
-    opened_at: Timestamp,
-    last_active_at: Timestamp,
-    sealed_at: Option<Timestamp>,
-    continues: Option<String>,
-    started_by: Option<String>,
-    continued_by: Vec<String>,
-    held_messages: Vec<HeldMessage>,
-    pull_requests: Vec<PullRequestAvailabilityRecord>,
-    unfinished_session: Option<UnfinishedSessionRecord>,
-}
-
-#[derive(Serialize)]
 struct WorkspaceListedRecord {
     #[serde(flatten)]
-    workspace: WorkspaceRecord,
-    session: Option<SessionRecord>,
+    workspace: wire::Workspace,
+    session: Option<wire::Session>,
     queue: Option<QueueStandingRecord>,
 }
 
@@ -741,109 +646,6 @@ impl QueueStandingRecord {
                 pending_since: unbriefed.brief_since.or(unbriefed.pending_since),
             })
     }
-}
-
-#[derive(Serialize)]
-struct UnfinishedSessionRecord {
-    id: String,
-    name: String,
-    state: String,
-    preparing: Option<String>,
-}
-
-#[derive(Serialize)]
-struct PostedRecord {
-    session: Option<SessionRecord>,
-    held_message: Option<HeldMessage>,
-}
-
-#[derive(Serialize)]
-struct PullRequestAvailabilityRecord {
-    repository: String,
-    availability: &'static str,
-    known: Option<Vec<PullRequestRecord>>,
-}
-
-#[derive(Serialize)]
-struct PullRequestRecord {
-    repository: String,
-    number: i64,
-    url: String,
-    title: String,
-    state: domain::PullRequestState,
-    head_branch: String,
-    head_revision: String,
-    updated_at: Timestamp,
-    event: String,
-}
-
-impl From<pull_request::Availability> for PullRequestAvailabilityRecord {
-    fn from(availability: pull_request::Availability) -> Self {
-        Self {
-            repository: availability.repository,
-            availability: match availability.known {
-                Some(_) => "available",
-                None => "unavailable",
-            },
-            known: availability.known.map(|known| {
-                known
-                    .into_iter()
-                    .map(|pull_request| PullRequestRecord {
-                        repository: pull_request.repository,
-                        number: pull_request.number,
-                        url: pull_request.url,
-                        title: pull_request.title,
-                        state: pull_request.state,
-                        head_branch: pull_request.head_branch,
-                        head_revision: pull_request.head_revision,
-                        updated_at: pull_request.updated_at,
-                        event: pull_request.event.to_string(),
-                    })
-                    .collect()
-            }),
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct SessionRecord {
-    id: String,
-    name: String,
-    workspace: String,
-    state: String,
-    preparing: Option<String>,
-    exit: Option<domain::Exit>,
-    outcome_message: Option<String>,
-    diagnostic: Option<wire::Diagnostic>,
-    instance: Option<String>,
-    supervisor: Option<String>,
-    agent: String,
-    harness: String,
-    model: Option<String>,
-    mode: Option<String>,
-    thought_level: Option<String>,
-    worked_model: Option<String>,
-    sign_in_method: Option<String>,
-    supplied: Vec<wire::SuppliedMaterial>,
-    title: Option<String>,
-    options: Vec<wire::SessionOption>,
-    changing_options: Vec<domain::ChangingOption>,
-    commands: Vec<domain::SessionCommand>,
-    interrupting: Option<domain::Interrupting>,
-    enqueued_at: Timestamp,
-    started_at: Option<Timestamp>,
-    ended_at: Option<Timestamp>,
-    lease_expires_at: Option<Timestamp>,
-    connected_at: Option<Timestamp>,
-    supervisor_version: Option<String>,
-    usage: Option<domain::Usage>,
-    depends_on: Vec<SessionReferenceRecord>,
-    tools: Vec<crate::live_work::RunningTool>,
-    units: Vec<crate::live_work::RunningUnit>,
-    message_buffering: bool,
-    thought_buffering: bool,
-    last_activity_at: Option<Timestamp>,
-    observation: crate::live_work::Observation,
 }
 
 fn supplied_material(harness: &str, supplied: &domain::Supplied) -> wire::SuppliedMaterial {
@@ -1069,14 +871,8 @@ fn diagnosed_failure(
     }
 }
 
-#[derive(Serialize)]
-struct SessionReferenceRecord {
-    id: String,
-    name: String,
-}
-
 // The contract carries both lists on every option, which the domain's boolean has none of.
-fn shown_option(option: domain::SessionOption, harness: &str) -> wire::SessionOption {
+pub(crate) fn shown_option(option: domain::SessionOption, harness: &str) -> wire::SessionOption {
     let offered = |value: domain::SessionOptionValue| wire::SessionOptionValue {
         value: value.value,
         name: value.name,
@@ -1228,131 +1024,339 @@ impl From<Agent> for wire::Agent {
     }
 }
 
-impl WorkspaceRecord {
-    async fn read(store: &Store, workspace: Workspace) -> Result<Self, Refused> {
-        let continued_by = workspace::continuations(store, workspace.id)
-            .await?
-            .into_iter()
-            .map(|workspace| workspace.to_string())
-            .collect();
-        let instance = work::instance(store, workspace.id).await?;
-        let held = instance::held_by(store, workspace.id)
-            .await?
-            .map(|held| held.because);
-        let pull_requests = pull_request::availability(store, &workspace)
-            .await?
-            .into_iter()
-            .map(PullRequestAvailabilityRecord::from)
-            .collect();
-        let unfinished_session = workspace::unfinished(store, workspace.id)
-            .await?
-            .map(|session| UnfinishedSessionRecord {
-                id: session.id.to_string(),
-                name: session.name,
-                state: session.state.as_str().to_owned(),
-                preparing: session
-                    .preparing
-                    .map(|preparing| preparing.as_str().to_owned()),
-            });
-        let held_messages = workspace::held_messages(store, workspace.id).await?;
-
-        Ok(Self {
-            id: workspace.id.to_string(),
-            name: workspace.name,
-            organization: workspace.organization.name,
-            project: workspace.project.name,
-            opened_with: workspace.opened_with.name,
-            profile: workspace.profile.map(|profile| profile.name),
-            checkout: workspace.checkout,
-            integrations: selected(workspace.integrations),
-            instance,
-            held,
-            correlation: workspace.correlation,
-            state: workspace.state.as_str().to_owned(),
-            opened_at: workspace.opened_at,
-            last_active_at: workspace.last_active_at,
-            sealed_at: workspace.sealed_at,
-            continues: workspace.continues.map(|workspace| workspace.to_string()),
-            started_by: workspace.started_by.map(|started| match started {
-                StartedBy::Event(event) => event.to_string(),
-                StartedBy::Participant(participant) => participant,
-            }),
-            continued_by,
-            held_messages,
-            pull_requests,
-            unfinished_session,
-        })
+fn session_state(value: domain::SessionState) -> wire::SessionState {
+    match value {
+        domain::SessionState::Queued => wire::SessionState::Queued,
+        domain::SessionState::Working => wire::SessionState::Working,
+        domain::SessionState::Trailing => wire::SessionState::Trailing,
+        domain::SessionState::Waiting => wire::SessionState::Waiting,
+        domain::SessionState::Unbriefed => wire::SessionState::Unbriefed,
+        domain::SessionState::Ended => wire::SessionState::Ended,
+        domain::SessionState::Unreachable => wire::SessionState::Unreachable,
     }
 }
 
-impl SessionRecord {
-    fn read(session: Session, organization: &str, summaries: &crate::live_work::Summaries) -> Self {
-        let (observation, state) = summaries.observed(Some(&session));
-        let trailing = session.state == domain::SessionState::Trailing;
-        let harness = session.agent.harness.clone();
-        let diagnostic = session
-            .evidence
-            .clone()
-            .map(|evidence| diagnosed_failure(&session, organization, evidence));
-        let supplied = session
-            .supplied
-            .iter()
-            .map(|supplied| supplied_material(&harness, supplied))
-            .collect();
-        let options = session
-            .options
-            .into_iter()
-            .map(|option| shown_option(option, &harness))
-            .collect();
-        Self {
-            id: session.id.to_string(),
-            name: session.name,
-            workspace: session.workspace.to_string(),
-            state: session.state.as_str().to_owned(),
-            preparing: session
-                .preparing
-                .map(|preparing| preparing.as_str().to_owned()),
-            exit: session.exit,
-            outcome_message: session.outcome_message,
-            diagnostic,
-            instance: session.instance,
-            supervisor: session.supervisor,
-            agent: session.agent.name,
-            harness,
-            model: session.agent.declared.model,
-            mode: session.agent.declared.mode,
-            thought_level: session.agent.declared.thought_level,
-            worked_model: session.worked_model,
-            sign_in_method: session.sign_in_method,
-            supplied,
-            title: session.title,
-            options,
-            changing_options: session.changing_options,
-            commands: session.commands,
-            interrupting: session.interrupting,
-            enqueued_at: session.enqueued_at,
-            started_at: session.started_at,
-            ended_at: session.ended_at,
-            lease_expires_at: session.lease_expires_at,
-            connected_at: session.connected.as_ref().map(|connected| connected.at),
-            supervisor_version: session.connected.map(|connected| connected.version),
-            // The live figure is the Turn in flight; the recorded one is the last Turn answered.
-            usage: state.usage.or(session.usage),
-            depends_on: session
-                .depends_on
+fn unfinished_state(value: domain::SessionState) -> wire::UnfinishedSessionState {
+    match value {
+        domain::SessionState::Queued => wire::UnfinishedSessionState::Queued,
+        domain::SessionState::Working => wire::UnfinishedSessionState::Working,
+        domain::SessionState::Trailing => wire::UnfinishedSessionState::Trailing,
+        domain::SessionState::Waiting => wire::UnfinishedSessionState::Waiting,
+        domain::SessionState::Unbriefed => wire::UnfinishedSessionState::Unbriefed,
+        domain::SessionState::Ended => wire::UnfinishedSessionState::Ended,
+        domain::SessionState::Unreachable => wire::UnfinishedSessionState::Unreachable,
+    }
+}
+
+fn session_preparing(value: domain::Preparing) -> wire::SessionPreparing {
+    match value {
+        domain::Preparing::Provisioning => wire::SessionPreparing::Provisioning,
+        domain::Preparing::Cloning => wire::SessionPreparing::Cloning,
+        domain::Preparing::StartingHarness => wire::SessionPreparing::StartingHarness,
+        domain::Preparing::HarnessReady => wire::SessionPreparing::HarnessReady,
+    }
+}
+
+fn unfinished_preparing(value: domain::Preparing) -> wire::UnfinishedSessionPreparing {
+    match value {
+        domain::Preparing::Provisioning => wire::UnfinishedSessionPreparing::Provisioning,
+        domain::Preparing::Cloning => wire::UnfinishedSessionPreparing::Cloning,
+        domain::Preparing::StartingHarness => wire::UnfinishedSessionPreparing::StartingHarness,
+        domain::Preparing::HarnessReady => wire::UnfinishedSessionPreparing::HarnessReady,
+    }
+}
+
+pub(crate) fn held_message(message: HeldMessage) -> wire::HeldMessage {
+    wire::HeldMessage {
+        id: message.id,
+        participant: message.participant,
+        message: message.message,
+        posted_at: message.posted_at.to_string(),
+        edited_at: message.edited_at.map(|at| at.to_string()),
+    }
+}
+
+fn pull_request_availability(value: pull_request::Availability) -> wire::PullRequestAvailability {
+    wire::PullRequestAvailability {
+        repository: value.repository,
+        availability: if value.known.is_some() {
+            wire::PullRequestAvailabilityAvailability::Available
+        } else {
+            wire::PullRequestAvailabilityAvailability::Unavailable
+        },
+        known: value.known.map(|known| {
+            known
                 .into_iter()
-                .map(|blocker| SessionReferenceRecord {
-                    id: blocker.id.to_string(),
-                    name: blocker.name,
+                .map(|pr| wire::PullRequest {
+                    repository: pr.repository,
+                    number: pr.number,
+                    url: pr.url,
+                    title: pr.title,
+                    state: match pr.state {
+                        domain::PullRequestState::Open => wire::PullRequestState::Open,
+                        domain::PullRequestState::Closed => wire::PullRequestState::Closed,
+                        domain::PullRequestState::Merged => wire::PullRequestState::Merged,
+                    },
+                    head_branch: pr.head_branch,
+                    head_revision: pr.head_revision,
+                    updated_at: pr.updated_at.to_string(),
+                    event: pr.event.to_string().parse().expect("an Event UUID"),
                 })
-                .collect(),
-            tools: state.tools,
-            units: state.units,
-            message_buffering: state.message_buffering,
-            thought_buffering: state.thought_buffering,
-            last_activity_at: state.last_activity_at.filter(|_| trailing),
-            observation,
+                .collect()
+        }),
+    }
+}
+
+pub(crate) fn session_exit(exit: domain::Exit) -> wire::Exit {
+    match exit {
+        domain::Exit::Succeeded => wire::Exit {
+            status: wire::ExitStatus::Succeeded,
+            because: None,
+        },
+        domain::Exit::Failed { because } => wire::Exit {
+            status: wire::ExitStatus::Failed,
+            because: Some(because),
+        },
+    }
+}
+
+pub(crate) fn session_usage(usage: domain::Usage) -> wire::Usage {
+    wire::Usage {
+        context_used: usage
+            .context_used
+            .try_into()
+            .expect("context usage fits a wire integer"),
+        context_size: usage
+            .context_size
+            .try_into()
+            .expect("context size fits a wire integer"),
+        cost: usage.cost.map(|cost| wire::Cost {
+            amount: cost.amount,
+            currency: cost.currency,
+        }),
+    }
+}
+
+pub(crate) fn running_tool(tool: crate::live_work::RunningTool) -> wire::RunningTool {
+    wire::RunningTool {
+        call_id: tool.call_id,
+        title: tool.title,
+        tool_kind: tool.tool_kind,
+        status: match tool.status {
+            crate::log::ToolStatus::Pending => "pending",
+            crate::log::ToolStatus::InProgress => "in_progress",
+            crate::log::ToolStatus::Completed => "completed",
+            crate::log::ToolStatus::Failed => "failed",
         }
+        .to_owned(),
+        started_at: tool.started_at.to_string(),
+    }
+}
+
+pub(crate) fn running_unit(unit: crate::live_work::RunningUnit) -> wire::RunningUnit {
+    wire::RunningUnit {
+        id: unit.id,
+        title: unit.title,
+        started_at: unit.started_at.to_string(),
+        kind: match unit.kind {
+            crate::live_work::UnitKind::BackgroundTask => wire::RunningUnitKind::BackgroundTask,
+            crate::live_work::UnitKind::Subagent => wire::RunningUnitKind::Subagent,
+        },
+    }
+}
+
+pub(crate) fn session_observation(
+    observation: crate::live_work::Observation,
+) -> wire::SessionObservation {
+    match observation {
+        crate::live_work::Observation::Current { observed_at } => {
+            wire::SessionObservation::SessionObservationCurrent(wire::SessionObservationCurrent {
+                availability: "current".into(),
+                observed_at: observed_at.to_string(),
+            })
+        }
+        crate::live_work::Observation::Unavailable { last } => {
+            wire::SessionObservation::SessionObservationUnavailable(
+                wire::SessionObservationUnavailable {
+                    availability: "unavailable".into(),
+                    last: last.map(|last| wire::LastObservation {
+                        observed_at: last.observed_at.to_string(),
+                        tools: last.tools.into_iter().map(running_tool).collect(),
+                        units: last.units.into_iter().map(running_unit).collect(),
+                    }),
+                },
+            )
+        }
+    }
+}
+
+pub(crate) async fn workspace_record(
+    store: &Store,
+    workspace: Workspace,
+) -> anyhow::Result<wire::Workspace> {
+    let continued_by = workspace::continuations(store, workspace.id)
+        .await?
+        .into_iter()
+        .map(|workspace| workspace.to_string())
+        .collect();
+    let instance = work::instance(store, workspace.id).await?;
+    let held = instance::held_by(store, workspace.id)
+        .await?
+        .map(|held| held.because);
+    let pull_requests = pull_request::availability(store, &workspace)
+        .await?
+        .into_iter()
+        .map(pull_request_availability)
+        .collect();
+    let unfinished_session = workspace::unfinished(store, workspace.id)
+        .await?
+        .map(|session| wire::UnfinishedSession {
+            id: session.id.to_string().parse().expect("a Session UUID"),
+            name: session.name,
+            state: unfinished_state(session.state),
+            preparing: session.preparing.map(unfinished_preparing),
+        });
+    let held_messages = workspace::held_messages(store, workspace.id)
+        .await?
+        .into_iter()
+        .map(held_message)
+        .collect();
+
+    Ok(wire::Workspace {
+        id: workspace.id.to_string().parse().expect("a Workspace UUID"),
+        name: workspace.name,
+        organization: workspace.organization.name,
+        project: workspace.project.name,
+        opened_with: workspace.opened_with.name,
+        profile: workspace.profile.map(|profile| profile.name),
+        checkout: wire::Checkout {
+            base: workspace.checkout.base,
+            branch: workspace.checkout.branch,
+            repositories: workspace.checkout.repositories,
+        },
+        integrations: Some(selected(workspace.integrations)),
+        instance,
+        held,
+        correlation: workspace.correlation,
+        state: match workspace.state {
+            domain::WorkspaceState::Open => wire::WorkspaceState::Open,
+            domain::WorkspaceState::Sealed => wire::WorkspaceState::Sealed,
+        },
+        opened_at: workspace.opened_at.to_string(),
+        last_active_at: workspace.last_active_at.to_string(),
+        sealed_at: workspace.sealed_at.map(|at| at.to_string()),
+        continues: workspace
+            .continues
+            .map(|workspace| workspace.to_string().parse().expect("a Workspace UUID")),
+        started_by: workspace.started_by.map(|started| match started {
+            StartedBy::Event(event) => event.to_string(),
+            StartedBy::Participant(participant) => participant,
+        }),
+        continued_by,
+        held_messages,
+        pull_requests,
+        unfinished_session,
+    })
+}
+
+pub(crate) fn session_record(
+    session: Session,
+    organization: &str,
+    summaries: &crate::live_work::Summaries,
+) -> wire::Session {
+    let (observation, state) = summaries.observed(Some(&session));
+    let trailing = session.state == domain::SessionState::Trailing;
+    let harness = session.agent.harness.clone();
+    let diagnostic = session
+        .evidence
+        .clone()
+        .map(|evidence| diagnosed_failure(&session, organization, evidence));
+    let supplied = session
+        .supplied
+        .iter()
+        .map(|supplied| supplied_material(&harness, supplied))
+        .collect();
+    let options = session
+        .options
+        .into_iter()
+        .map(|option| shown_option(option, &harness))
+        .collect();
+    wire::Session {
+        id: session.id.to_string().parse().expect("a Session UUID"),
+        name: session.name,
+        workspace: session
+            .workspace
+            .to_string()
+            .parse()
+            .expect("a Workspace UUID"),
+        state: session_state(session.state),
+        preparing: session.preparing.map(session_preparing),
+        exit: session.exit.map(session_exit),
+        outcome_message: session.outcome_message,
+        diagnostic,
+        instance: session.instance,
+        supervisor: session.supervisor,
+        agent: session.agent.name,
+        harness,
+        model: session.agent.declared.model,
+        mode: session.agent.declared.mode,
+        thought_level: session.agent.declared.thought_level,
+        worked_model: session.worked_model,
+        sign_in_method: session.sign_in_method,
+        supplied,
+        title: session.title,
+        options,
+        changing_options: session
+            .changing_options
+            .into_iter()
+            .map(|change| wire::ChangingOption {
+                category: change.category,
+                option: change.option,
+                participant: change.participant,
+                value: change.value,
+            })
+            .collect(),
+        commands: session
+            .commands
+            .into_iter()
+            .map(|command| wire::SessionCommand {
+                name: command.name,
+                description: command.description,
+                input_hint: command.input_hint,
+            })
+            .collect(),
+        interrupting: session.interrupting.map(|interrupt| wire::Interrupting {
+            participant: interrupt.participant,
+            requested_at: interrupt.requested_at.to_string(),
+        }),
+        enqueued_at: session.enqueued_at.to_string(),
+        started_at: session.started_at.map(|at| at.to_string()),
+        ended_at: session.ended_at.map(|at| at.to_string()),
+        lease_expires_at: session.lease_expires_at.map(|at| at.to_string()),
+        connected_at: session
+            .connected
+            .as_ref()
+            .map(|connected| connected.at.to_string()),
+        supervisor_version: session.connected.map(|connected| connected.version),
+        // The live figure is the Turn in flight; the recorded one is the last Turn answered.
+        usage: state.usage.or(session.usage).map(session_usage),
+        depends_on: session
+            .depends_on
+            .into_iter()
+            .map(|blocker| wire::SessionReference {
+                id: blocker.id.to_string().parse().expect("a Session UUID"),
+                name: blocker.name,
+            })
+            .collect(),
+        tools: state.tools.into_iter().map(running_tool).collect(),
+        units: state.units.into_iter().map(running_unit).collect(),
+        message_buffering: state.message_buffering,
+        thought_buffering: state.thought_buffering,
+        last_activity_at: state
+            .last_activity_at
+            .filter(|_| trailing)
+            .map(|at| at.to_string()),
+        observation: session_observation(observation),
     }
 }
 
@@ -1421,26 +1425,46 @@ impl From<Trigger> for TriggerRecord {
     }
 }
 
-#[derive(Serialize)]
-struct StartedRecord {
-    organization: start::Settled,
-    project: start::Settled,
-    agent: start::Settled,
-    workspace: WorkspaceRecord,
-    session: SessionRecord,
-}
-
-#[derive(Serialize)]
-struct OpenedRecord {
-    workspace: WorkspaceRecord,
-    session: SessionRecord,
-}
-
 async fn start(
     State(control_plane): State<ControlPlane>,
-    plan: Result<Json<start::Plan>, JsonRejection>,
-) -> Result<(StatusCode, Json<StartedRecord>), Refused> {
+    plan: Result<Json<wire::StartPlan>, JsonRejection>,
+) -> Result<(StatusCode, Json<wire::Started>), Refused> {
     let Json(plan) = plan?;
+    let plan = start::Plan {
+        organization: plan.organization,
+        brief: plan.brief,
+        project: declaration::Project {
+            name: plan.project.name,
+            repositories: plan.project.repositories,
+            branch: plan.project.branch,
+            integrations: plan
+                .project
+                .integrations
+                .unwrap_or_default()
+                .into_iter()
+                .map(|selection| crate::repository::Selection {
+                    repository: selection.repository,
+                    integration: selection.integration,
+                })
+                .collect(),
+        },
+        agent: declaration::Agent {
+            name: plan.agent.name,
+            harness: plan.agent.harness,
+            model: plan.agent.model.flatten(),
+            mode: plan.agent.mode.flatten(),
+            thought_level: plan.agent.thought_level.flatten(),
+        },
+        credentials: plan
+            .credentials
+            .unwrap_or_default()
+            .into_iter()
+            .map(|credential| start::Credential {
+                variable: credential.variable,
+                secret: credential.secret,
+            })
+            .collect(),
+    };
     let started = start::start(
         &control_plane.store,
         &control_plane.images,
@@ -1451,12 +1475,21 @@ async fn start(
 
     Ok((
         StatusCode::CREATED,
-        Json(StartedRecord {
-            organization: started.organization,
-            project: started.project,
-            agent: started.agent,
-            workspace: WorkspaceRecord::read(&control_plane.store, started.workspace).await?,
-            session: SessionRecord::read(
+        Json(wire::Started {
+            organization: wire::Settled {
+                name: started.organization.name,
+                created: started.organization.created,
+            },
+            project: wire::Settled {
+                name: started.project.name,
+                created: started.project.created,
+            },
+            agent: wire::Settled {
+                name: started.agent.name,
+                created: started.agent.created,
+            },
+            workspace: workspace_record(&control_plane.store, started.workspace).await?,
+            session: session_record(
                 started.session,
                 &plan.organization,
                 &control_plane.live.summaries,
@@ -3352,11 +3385,9 @@ async fn workspaces(
         let session = work::sessions(&control_plane.store, id)
             .await?
             .pop()
-            .map(|session| {
-                SessionRecord::read(session, &organization, &control_plane.live.summaries)
-            });
+            .map(|session| session_record(session, &organization, &control_plane.live.summaries));
         records.push(WorkspaceListedRecord {
-            workspace: WorkspaceRecord::read(&control_plane.store, workspace).await?,
+            workspace: workspace_record(&control_plane.store, workspace).await?,
             session,
             queue: QueueStandingRecord::of(&snapshot, id),
         });
@@ -3368,8 +3399,8 @@ async fn workspaces(
 async fn open_workspace(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    declaration: Result<Json<WorkspaceDeclaration>, JsonRejection>,
-) -> Result<(StatusCode, Json<OpenedRecord>), Refused> {
+    declaration: Result<Json<wire::WorkspaceDeclaration>, JsonRejection>,
+) -> Result<(StatusCode, Json<wire::Opened>), Refused> {
     let Json(declaration) = declaration?;
     let (workspace, session) = workspace::open(
         &control_plane.store,
@@ -3377,23 +3408,49 @@ async fn open_workspace(
         workspace::Open {
             project: &declaration.project,
             agent: &declaration.agent,
-            profile: declaration.profile.as_deref(),
-            sign_in_method: declaration.sign_in_method.as_deref(),
-            branch: declaration.branch.as_deref(),
-            continues: declaration.continues.as_deref(),
-            declared: declaration.declared(),
-            brief: declaration.brief.as_deref(),
-            participant: declaration.participant.as_deref(),
-            depends_on: declaration.depends_on.as_deref().unwrap_or_default(),
+            profile: declaration
+                .profile
+                .as_ref()
+                .and_then(|value| value.as_deref()),
+            sign_in_method: declaration
+                .sign_in_method
+                .as_ref()
+                .and_then(|value| value.as_deref()),
+            branch: declaration
+                .branch
+                .as_ref()
+                .and_then(|value| value.as_deref()),
+            continues: declaration
+                .continues
+                .as_ref()
+                .and_then(|value| value.as_deref()),
+            declared: Declared {
+                model: declaration.model.clone().flatten(),
+                mode: declaration.mode.clone().flatten(),
+                thought_level: declaration.thought_level.clone().flatten(),
+            },
+            brief: declaration
+                .brief
+                .as_ref()
+                .and_then(|value| value.as_deref()),
+            participant: declaration
+                .participant
+                .as_ref()
+                .and_then(|value| value.as_deref()),
+            depends_on: declaration
+                .depends_on
+                .as_ref()
+                .and_then(|value| value.as_deref())
+                .unwrap_or_default(),
         },
     )
     .await?;
 
     Ok((
         StatusCode::CREATED,
-        Json(OpenedRecord {
-            workspace: WorkspaceRecord::read(&control_plane.store, workspace).await?,
-            session: SessionRecord::read(session, &organization, &control_plane.live.summaries),
+        Json(wire::Opened {
+            workspace: workspace_record(&control_plane.store, workspace).await?,
+            session: session_record(session, &organization, &control_plane.live.summaries),
         }),
     ))
 }
@@ -3518,19 +3575,19 @@ async fn workspace_file(
 async fn show_workspace(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
-) -> Result<Json<WorkspaceRecord>, Refused> {
+) -> Result<Json<wire::Workspace>, Refused> {
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
 
     Ok(Json(
-        WorkspaceRecord::read(&control_plane.store, workspace).await?,
+        workspace_record(&control_plane.store, workspace).await?,
     ))
 }
 
 async fn post_to_workspace(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
-    message: Result<Json<WorkspaceMessage>, JsonRejection>,
-) -> Result<Json<PostedRecord>, Refused> {
+    message: Result<Json<wire::WorkspaceMessage>, JsonRejection>,
+) -> Result<Json<wire::Posted>, Refused> {
     let Json(message) = message?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     let posted = workspace::post(
@@ -3541,19 +3598,19 @@ async fn post_to_workspace(
     )
     .await?;
 
-    Ok(Json(PostedRecord {
-        session: posted.session.map(|session| {
-            SessionRecord::read(session, &organization, &control_plane.live.summaries)
-        }),
-        held_message: posted.held_message,
+    Ok(Json(wire::Posted {
+        session: posted
+            .session
+            .map(|session| session_record(session, &organization, &control_plane.live.summaries)),
+        held_message: posted.held_message.map(held_message),
     }))
 }
 
 async fn edit_workspace_message(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace, id)): Path<(String, String, String)>,
-    edit: Result<Json<WorkspaceMessage>, JsonRejection>,
-) -> Result<Json<HeldMessage>, Refused> {
+    edit: Result<Json<wire::WorkspaceMessage>, JsonRejection>,
+) -> Result<Json<wire::HeldMessage>, Refused> {
     let Json(edit) = edit?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     let id = held_id(&organization, &workspace, &id)?;
@@ -3575,13 +3632,13 @@ async fn edit_workspace_message(
         )
     })?;
 
-    Ok(Json(edited))
+    Ok(Json(held_message(edited)))
 }
 
 async fn withdraw_workspace_message(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace, id)): Path<(String, String, String)>,
-    withdrawal: Result<Json<WorkspaceMessageWithdrawal>, JsonRejection>,
+    withdrawal: Result<Json<wire::WorkspaceMessageWithdrawal>, JsonRejection>,
 ) -> Result<StatusCode, Refused> {
     let Json(withdrawal) = withdrawal?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
@@ -3691,28 +3748,26 @@ fn no_event(record: &str, organization: Option<&str>) -> Refused {
 async fn seal_workspace(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
-) -> Result<Json<WorkspaceRecord>, Refused> {
+) -> Result<Json<wire::Workspace>, Refused> {
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     let workspace = workspace::seal(&control_plane.store, workspace.id).await?;
 
     Ok(Json(
-        WorkspaceRecord::read(&control_plane.store, workspace).await?,
+        workspace_record(&control_plane.store, workspace).await?,
     ))
 }
 
 async fn sessions(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
-) -> Result<Json<Vec<SessionRecord>>, Refused> {
+) -> Result<Json<Vec<wire::Session>>, Refused> {
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     let sessions = work::sessions(&control_plane.store, workspace.id).await?;
 
     Ok(Json(
         sessions
             .into_iter()
-            .map(|session| {
-                SessionRecord::read(session, &organization, &control_plane.live.summaries)
-            })
+            .map(|session| session_record(session, &organization, &control_plane.live.summaries))
             .collect(),
     ))
 }
@@ -3720,8 +3775,8 @@ async fn sessions(
 async fn enqueue_session(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
-    declaration: Result<Json<SessionDeclaration>, JsonRejection>,
-) -> Result<(StatusCode, Json<SessionRecord>), Refused> {
+    declaration: Result<Json<wire::SessionDeclaration>, JsonRejection>,
+) -> Result<(StatusCode, Json<wire::Session>), Refused> {
     let Json(declaration) = declaration?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     if !work::has_had_session(&control_plane.store, workspace.id).await? {
@@ -3747,16 +3802,30 @@ async fn enqueue_session(
     let session = work::enqueue_selecting(
         &control_plane.store,
         workspace.id,
-        declaration.agent.as_deref(),
-        declaration.declared(),
-        declaration.sign_in_method.as_deref(),
-        declaration.depends_on.as_deref().unwrap_or_default(),
+        declaration
+            .agent
+            .as_ref()
+            .and_then(|value| value.as_deref()),
+        Declared {
+            model: declaration.model.clone().flatten(),
+            mode: declaration.mode.clone().flatten(),
+            thought_level: declaration.thought_level.clone().flatten(),
+        },
+        declaration
+            .sign_in_method
+            .as_ref()
+            .and_then(|value| value.as_deref()),
+        declaration
+            .depends_on
+            .as_ref()
+            .and_then(|value| value.as_deref())
+            .unwrap_or_default(),
     )
     .await?;
 
     Ok((
         StatusCode::CREATED,
-        Json(SessionRecord::read(
+        Json(session_record(
             session,
             &organization,
             &control_plane.live.summaries,
@@ -3770,7 +3839,7 @@ async fn show_session(
     headers: HeaderMap,
 ) -> Result<Response, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
-    let record = SessionRecord::read(session, &organization, &control_plane.live.summaries);
+    let record = session_record(session, &organization, &control_plane.live.summaries);
     let body = serde_json::to_string(&record).map_err(anyhow::Error::from)?;
     let tag = strong_etag(&body);
 
@@ -3807,8 +3876,8 @@ fn matches_etag(asked: &str, tag: &str) -> bool {
 async fn interrupt_session(
     State(control_plane): State<ControlPlane>,
     Path((organization, session)): Path<(String, String)>,
-    interrupt: Result<Json<SessionInterrupt>, JsonRejection>,
-) -> Result<(StatusCode, Json<SessionRecord>), Refused> {
+    interrupt: Result<Json<wire::SessionInterrupt>, JsonRejection>,
+) -> Result<(StatusCode, Json<wire::Session>), Refused> {
     let Json(interrupt) = interrupt?;
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
     let interrupting = work::interrupt(
@@ -3820,7 +3889,7 @@ async fn interrupt_session(
 
     Ok((
         StatusCode::ACCEPTED,
-        Json(SessionRecord::read(
+        Json(session_record(
             interrupting,
             &organization,
             &control_plane.live.summaries,
@@ -3831,14 +3900,14 @@ async fn interrupt_session(
 async fn stop_session(
     State(control_plane): State<ControlPlane>,
     Path((organization, session)): Path<(String, String)>,
-) -> Result<Json<SessionRecord>, Refused> {
+) -> Result<Json<wire::Session>, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
     let running = control_plane.live.summaries.last_held(&session).tools;
     work::stop(&control_plane.store, session.id, &running).await?;
     control_plane.live.summaries.clear_session(&session);
     let session = work::session(&control_plane.store, session.id).await?;
 
-    Ok(Json(SessionRecord::read(
+    Ok(Json(session_record(
         session,
         &organization,
         &control_plane.live.summaries,
@@ -3848,10 +3917,13 @@ async fn stop_session(
 async fn set_session_option(
     State(control_plane): State<ControlPlane>,
     Path((organization, session)): Path<(String, String)>,
-    change: Result<Json<OptionChange>, JsonRejection>,
-) -> Result<(StatusCode, Json<SessionRecord>), Refused> {
+    change: Result<Json<wire::OptionChange>, JsonRejection>,
+) -> Result<(StatusCode, Json<wire::Session>), Refused> {
     let Json(change) = change?;
-    let named = match (change.option.as_deref(), change.category.as_deref()) {
+    let named = match (
+        change.option.as_ref().and_then(|value| value.as_deref()),
+        change.category.as_ref().and_then(|value| value.as_deref()),
+    ) {
         (Some(option), None) => work::Named::Option(option),
         (None, Some(category)) => work::Named::Category(category),
         (Some(_), Some(_)) => {
@@ -3871,7 +3943,10 @@ async fn set_session_option(
         &control_plane.store,
         &organization,
         &session,
-        change.participant.as_deref(),
+        change
+            .participant
+            .as_ref()
+            .and_then(|value| value.as_deref()),
         named,
         &change.value,
     )
@@ -3883,7 +3958,7 @@ async fn set_session_option(
         } else {
             StatusCode::OK
         },
-        Json(SessionRecord::read(
+        Json(session_record(
             written.session,
             &organization,
             &control_plane.live.summaries,

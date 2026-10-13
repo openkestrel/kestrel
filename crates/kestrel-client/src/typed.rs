@@ -120,6 +120,36 @@ fn written<T>(
     Ok(())
 }
 
+pub fn show_with<T: Serialize>(
+    presentation: &Presentation,
+    columns: &Columns<T>,
+    record: &T,
+    cell: impl Fn(&str, String) -> String,
+) -> Result<()> {
+    if presentation.json() {
+        return show(presentation, columns, record);
+    }
+    let labels: Vec<String> = columns
+        .all()
+        .iter()
+        .map(|column| column.0.to_owned())
+        .collect();
+    let cells: Vec<String> = columns
+        .all()
+        .iter()
+        .map(|column| cell(column.0, (column.1)(record)))
+        .collect();
+    let mut out = std::io::stdout().lock();
+    match presentation {
+        Presentation::Human(width) => {
+            output::table(&mut out, &columns.shape(), &labels, &[cells], *width)?
+        }
+        Presentation::Delimited => writeln!(out, "{}", output::delimited(&cells))?,
+        Presentation::Json(_) => unreachable!(),
+    }
+    out.flush().context("writing to standard output")
+}
+
 #[cfg(test)]
 mod tests {
     use serde::Serialize;
@@ -172,6 +202,66 @@ mod tests {
         let mut out = Vec::new();
         written(&mut out, presentation, columns, whole, records).expect("written");
         String::from_utf8(out).expect("utf-8")
+    }
+
+    fn session(patch: serde_json::Value) -> kestrel_operator_types::Session {
+        let mut record = serde_json::json!({
+            "id": "00000000-0000-0000-0000-000000000001", "workspace": "00000000-0000-0000-0000-000000000002",
+            "name": "red-blue-abcdefgh", "agent": "builder", "harness": "scripted", "state": "working", "enqueued_at": "2026-10-02T12:00:00Z",
+            "changing_options": [], "commands": [], "depends_on": [], "options": [], "supplied": [], "tools": [], "units": [],
+            "message_buffering": false, "thought_buffering": false, "observation": { "availability": "unavailable", "last": null }
+        });
+        record
+            .as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        serde_json::from_value(record).unwrap()
+    }
+
+    fn session_output(
+        presentation: &Presentation,
+        columns: &Columns<kestrel_operator_types::Session>,
+        record: &kestrel_operator_types::Session,
+    ) -> String {
+        said(presentation, columns, record, std::slice::from_ref(record))
+    }
+
+    #[test]
+    fn session_show_lists_running_tools_with_status_and_start_time() {
+        let record = session(
+            serde_json::json!({"tools":[{"call_id":"one","title":"read README.md","status":"in_progress","tool_kind":"read","started_at":"2026-09-30T12:00:00Z"}]}),
+        );
+        let shown = session_output(&Presentation::Delimited, &crate::view::SESSION, &record);
+        assert!(shown.contains("read README.md"));
+        assert!(shown.contains("in_progress"));
+        assert!(shown.contains("2026-09-30T12:00:00Z"));
+        let shown = session_output(&Presentation::Human(240), &crate::view::SESSION, &record);
+        assert!(shown.contains("read README.md"));
+        assert!(shown.contains("in_progress"));
+        assert!(shown.contains("2026-09-30T12:00:00Z"));
+    }
+
+    #[test]
+    fn session_show_lists_running_units_with_kind_and_start_time() {
+        let record = session(
+            serde_json::json!({"units":[{"id":"task","kind":"background_task","title":"cargo test","started_at":"2026-10-02T12:00:00Z"}]}),
+        );
+        let shown = session_output(&Presentation::Human(240), &crate::view::SESSION, &record);
+        assert!(shown.contains("cargo test"), "{shown}");
+        assert!(shown.contains("background_task"), "{shown}");
+        assert!(shown.contains("2026-10-02T12:00:00Z"), "{shown}");
+    }
+
+    #[test]
+    fn session_show_and_list_say_a_session_trails_and_when_its_agent_was_last_active() {
+        let record = session(
+            serde_json::json!({"state":"trailing","last_activity_at":"2026-10-02T12:00:00Z"}),
+        );
+        let shown = session_output(&Presentation::Human(240), &crate::view::SESSION, &record);
+        assert!(shown.contains("trailing"), "{shown}");
+        assert!(shown.contains("2026-10-02T12:00:00Z"), "{shown}");
+        let listed = session_output(&Presentation::Delimited, &crate::view::SESSIONS, &record);
+        assert!(listed.contains("trailing"), "{listed}");
     }
 
     #[test]

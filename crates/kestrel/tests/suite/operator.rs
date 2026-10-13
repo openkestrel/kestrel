@@ -2703,6 +2703,8 @@ async fn held_messages_are_listed_edited_and_withdrawn_over_the_boundary() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    let typed: kestrel_operator_types::Posted = serde_json::from_value(posted.clone()).unwrap();
+    assert_eq!(serde_json::to_value(typed).unwrap(), posted);
     assert!(posted["session"].is_null(), "{posted}");
     let id = posted["held_message"]["id"]
         .as_i64()
@@ -2729,6 +2731,9 @@ async fn held_messages_are_listed_edited_and_withdrawn_over_the_boundary() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{edited}");
+    let typed: kestrel_operator_types::HeldMessage =
+        serde_json::from_value(edited.clone()).unwrap();
+    assert_eq!(serde_json::to_value(typed).unwrap(), edited);
     assert_eq!(edited["id"], id);
     assert_eq!(edited["message"], "the edited change");
     assert!(!edited["edited_at"].is_null(), "an edit is stamped");
