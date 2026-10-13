@@ -5743,7 +5743,14 @@ impl IntoResponse for Refused {
             Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why),
         };
 
-        (status, Json(Refusal { message })).into_response()
+        (
+            status,
+            Json(wire::Refusal {
+                field: None,
+                message,
+            }),
+        )
+            .into_response()
     }
 }
 
@@ -5922,11 +5929,6 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("DELETE", STREAM_SUBSCRIPTION) => "unsubscribe_stream",
         _ => return None,
     })
-}
-
-#[derive(Serialize)]
-struct Refusal {
-    message: String,
 }
 
 #[cfg(test)]

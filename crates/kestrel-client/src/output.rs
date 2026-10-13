@@ -1,13 +1,11 @@
 use std::io::{IsTerminal as _, Write};
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use jaq_json::Val;
 use serde_json::Value;
 
 use crate::filter::Filter;
-use crate::view::View;
 
-static NULL: Value = Value::Null;
 pub const ABSENT: &str = "-";
 pub const GAP: &str = "  ";
 
@@ -45,41 +43,10 @@ impl Presentation {
     }
 }
 
-pub fn show(presentation: &Presentation, view: &View, answer: &Value) -> Result<()> {
-    let mut out = std::io::stdout().lock();
-    written(&mut out, presentation, view, answer)?;
-    out.flush().context("writing to standard output")
-}
-
 /// The complete answer as JSON, filtered when the invocation asked for it, and the one place a
 /// success answer reaches standard output.
 pub fn document(out: &mut impl Write, presentation: &Presentation, answer: &Value) -> Result<()> {
     json(out, presentation.filter(), answer)
-}
-
-fn written(
-    out: &mut impl Write,
-    presentation: &Presentation,
-    view: &View,
-    answer: &Value,
-) -> Result<()> {
-    if let Presentation::Json(filter) = presentation {
-        return json(out, filter.as_ref(), answer);
-    }
-    let records: Vec<&Value> = match answer {
-        Value::Null => Vec::new(),
-        Value::Array(records) => records.iter().collect(),
-        record => vec![record],
-    };
-    match presentation {
-        Presentation::Human(width) => human(out, view, &records, *width),
-        presentation => {
-            for record in records {
-                writeln!(out, "{}", line(presentation, view, record))?;
-            }
-            Ok(())
-        }
-    }
 }
 
 fn json(out: &mut impl Write, filter: Option<&Filter>, answer: &Value) -> Result<()> {
@@ -109,30 +76,6 @@ fn result(out: &mut impl Write, value: &Val) -> Result<()> {
     Ok(())
 }
 
-/// One record as it arrives, unclipped and unfolded because a streamed entry is prose; a filtered
-/// presentation runs the filter first, in [`written`].
-pub fn line(presentation: &Presentation, view: &View, record: &Value) -> String {
-    match presentation {
-        Presentation::Json(_) => record.to_string(),
-        Presentation::Delimited => delimited_record(record, view),
-        Presentation::Human(_) => view
-            .fields()
-            .iter()
-            .map(|field| rendered(at(record, field)))
-            .collect::<Vec<_>>()
-            .join(GAP),
-    }
-}
-
-fn delimited_record(record: &Value, view: &View) -> String {
-    let cells: Vec<String> = view
-        .fields()
-        .iter()
-        .map(|field| rendered(at(record, field)))
-        .collect();
-    delimited(&cells)
-}
-
 pub fn delimited(cells: &[String]) -> String {
     cells
         .iter()
@@ -145,30 +88,6 @@ pub enum Shape {
     Value,
     Rows,
     Detail,
-}
-
-fn human(out: &mut impl Write, view: &View, records: &[&Value], width: usize) -> Result<()> {
-    let shape = match view {
-        View::Value(_) => Shape::Value,
-        View::Rows(_) => Shape::Rows,
-        View::Detail(_) => Shape::Detail,
-    };
-    let labels: Vec<String> = view.fields().iter().map(|field| label(field)).collect();
-    let rows: Vec<Vec<String>> = records
-        .iter()
-        .map(|record| {
-            view.fields()
-                .iter()
-                .map(|field| match (&shape, *field) {
-                    (Shape::Detail, "tools") => running(record, field, "status"),
-                    (Shape::Detail, "units") => running(record, field, "kind"),
-                    (Shape::Detail, "depends_on") => names(record, field),
-                    _ => rendered(at(record, field)),
-                })
-                .collect()
-        })
-        .collect();
-    table(out, &shape, &labels, &rows, width)
 }
 
 /// A cell arrives as it reads, before it is fitted to a line or a width.
@@ -232,52 +151,8 @@ pub fn table(
     Ok(())
 }
 
-/// A path that reaches through a null holds no value, which is not the same as naming a field
-/// the answer does not have.
-fn at<'a>(record: &'a Value, path: &str) -> Option<&'a Value> {
-    let mut value = record;
-    for key in path.split('.') {
-        if value.is_null() {
-            return Some(&NULL);
-        }
-        value = value.get(key)?;
-    }
-
-    Some(value)
-}
-
-fn running(record: &Value, field: &str, beside: &str) -> String {
-    at(record, field)
-        .and_then(Value::as_array)
-        .map(|running| {
-            running
-                .iter()
-                .map(|one| {
-                    format!(
-                        "{}\n{}  {}",
-                        rendered(one.get("title")),
-                        rendered(one.get(beside)),
-                        rendered(one.get("started_at"))
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_default()
-}
-
-fn names(record: &Value, field: &str) -> String {
-    let names: Vec<Value> = at(record, field)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|named| named.get("name").cloned())
-        .collect();
-    rendered(Some(&Value::Array(names)))
-}
-
 pub(crate) fn rendered(value: Option<&Value>) -> String {
-    match value.unwrap_or(&NULL) {
+    match value.unwrap_or(&Value::Null) {
         Value::Null => ABSENT.to_owned(),
         Value::Bool(yes) => yes.to_string(),
         Value::Number(number) => number.to_string(),
@@ -299,10 +174,6 @@ fn one_line(value: &str) -> String {
         .replace('\n', "\\n")
         .replace('\r', "\\r")
         .replace('\t', "\\t")
-}
-
-fn label(path: &str) -> String {
-    path.rsplit('.').next().unwrap_or(path).replace('_', " ")
 }
 
 fn widest(table: &[Vec<String>]) -> Vec<usize> {
@@ -355,51 +226,30 @@ mod tests {
 
     use super::*;
 
-    const AGENTS: View = View::Rows(&["name", "harness", "model"]);
-
-    fn shown(presentation: &Presentation, view: &View, answer: &Value) -> Vec<String> {
-        answer
-            .as_array()
-            .expect("an array of records")
-            .iter()
-            .map(|record| line(presentation, view, record))
-            .collect()
-    }
-
-    #[test]
-    fn a_pipe_gets_every_field_of_every_record_joined_by_tabs() {
-        let agents = json!([{ "name": "builder", "harness": "opencode", "model": null }]);
-
-        assert_eq!(
-            shown(&Presentation::Delimited, &AGENTS, &agents),
-            ["builder\topencode\t-"]
-        );
-    }
-
-    #[test]
-    fn a_record_spanning_lines_is_still_one_line_of_a_pipe() {
-        let triggers = json!([{ "name": "nightly", "harness": "a\nb", "model": null }]);
-
-        assert_eq!(
-            shown(&Presentation::Delimited, &AGENTS, &triggers),
-            ["nightly\ta\\nb\t-"]
-        );
-    }
-
-    fn written_as_json(answer: &Value) -> String {
+    fn document_as(presentation: &Presentation, answer: &Value) -> String {
         let mut out = Vec::new();
-        written(&mut out, &Presentation::Json(None), &AGENTS, answer).expect("written");
+        document(&mut out, presentation, answer).expect("written");
+        String::from_utf8(out).expect("utf-8")
+    }
+
+    fn rows(shape: &Shape, labels: &[&str], rows: &[&[&str]], width: usize) -> String {
+        let labels: Vec<String> = labels.iter().map(|label| (*label).to_owned()).collect();
+        let rows: Vec<Vec<String>> = rows
+            .iter()
+            .map(|row| row.iter().map(|cell| (*cell).to_owned()).collect())
+            .collect();
+        let mut out = Vec::new();
+        table(&mut out, shape, &labels, &rows, width).expect("a table");
         String::from_utf8(out).expect("utf-8")
     }
 
     #[test]
-    fn json_emits_the_whole_record_and_not_the_commands_fields() {
+    fn json_emits_the_whole_record_and_not_the_columns() {
         let record = json!({ "id": "01", "name": "builder", "harness": "opencode", "extra": { "deep": [1, 2] } });
 
-        let written = written_as_json(&record);
-
         assert_eq!(
-            serde_json::from_str::<Value>(&written).expect("json"),
+            serde_json::from_str::<Value>(&document_as(&Presentation::Json(None), &record))
+                .expect("json"),
             record
         );
     }
@@ -409,60 +259,69 @@ mod tests {
     fn json_emits_a_collection_as_one_array_and_nothing_as_an_empty_one() {
         let agents = json!([{ "name": "builder" }, { "name": "reviewer" }]);
 
-        assert_eq!(written_as_json(&agents).lines().count(), 1);
         assert_eq!(
-            serde_json::from_str::<Value>(&written_as_json(&agents)).expect("json"),
+            document_as(&Presentation::Json(None), &agents)
+                .lines()
+                .count(),
+            1
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&document_as(&Presentation::Json(None), &agents))
+                .expect("json"),
             agents
         );
-        assert_eq!(written_as_json(&json!([])), "[]\n");
-    }
-
-    #[test]
-    fn a_streamed_record_is_one_whole_json_line_however_much_it_spans() {
-        let entry = json!({ "seq": 3, "entry": { "text": "one\ntwo\tthree" } });
-
-        let shown = line(
-            &Presentation::Json(None),
-            &View::Rows(&["seq", "entry"]),
-            &entry,
-        );
-
-        assert!(!shown.contains('\n'), "{shown}");
-        assert_eq!(serde_json::from_str::<Value>(&shown).expect("json"), entry);
+        assert_eq!(document_as(&Presentation::Json(None), &json!([])), "[]\n");
     }
 
     #[test]
     fn json_is_never_clipped_to_a_terminal() {
         let long = "x".repeat(500);
 
-        let written = written_as_json(&json!([{ "name": long }]));
+        let written = document_as(&Presentation::Json(None), &json!([{ "name": long }]));
 
         assert!(written.contains(&long));
         assert!(!written.contains('…'));
     }
 
     #[test]
-    fn a_terminal_gets_columns_that_line_up_under_their_labels() {
-        let agents = json!([
-            { "name": "builder", "harness": "opencode", "model": "claude-opus-5" },
-            { "name": "reviewer", "harness": "acp", "model": null },
-        ]);
-        let mut written = Vec::new();
+    fn a_filtered_answer_prints_a_string_raw_and_anything_else_as_json() {
+        let agents = json!([{ "name": "builder" }, { "name": "reviewer" }]);
+        let filtered = |expression: &str| {
+            let filter = Filter::compile(expression).expect("the filter should compile");
+            document_as(&Presentation::Json(Some(filter)), &agents)
+        };
 
-        human(
-            &mut written,
-            &AGENTS,
-            &agents
-                .as_array()
-                .expect("records")
-                .iter()
-                .collect::<Vec<_>>(),
+        assert_eq!(filtered(".[] | .name"), "builder\nreviewer\n");
+        assert_eq!(filtered("map(.name)"), "[\"builder\",\"reviewer\"]\n");
+        assert_eq!(filtered(r#".[] | select(.name == "nobody")"#), "");
+    }
+
+    #[test]
+    fn a_record_spanning_lines_is_still_one_line_of_a_pipe() {
+        assert_eq!(
+            delimited(&[
+                "nightly".to_owned(),
+                "a\nb".to_owned(),
+                "c\td\re\\f".to_owned()
+            ]),
+            "nightly\ta\\nb\tc\\td\\re\\\\f"
+        );
+    }
+
+    #[test]
+    fn a_terminal_gets_columns_that_line_up_under_their_labels() {
+        let written = rows(
+            &Shape::Rows,
+            &["name", "harness", "model"],
+            &[
+                &["builder", "opencode", "claude-opus-5"],
+                &["reviewer", "acp", "-"],
+            ],
             usize::MAX,
-        )
-        .expect("a table");
+        );
 
         assert_eq!(
-            String::from_utf8(written).expect("utf-8"),
+            written,
             "name      harness   model\n\
              builder   opencode  claude-opus-5\n\
              reviewer  acp       -\n"
@@ -471,24 +330,46 @@ mod tests {
 
     #[test]
     fn a_terminal_gets_a_line_no_wider_than_it_is() {
-        let agents =
-            json!([{ "name": "builder", "harness": "opencode", "model": "claude-opus-5" }]);
-        let mut written = Vec::new();
-
-        human(
-            &mut written,
-            &AGENTS,
-            &agents
-                .as_array()
-                .expect("records")
-                .iter()
-                .collect::<Vec<_>>(),
+        let written = rows(
+            &Shape::Rows,
+            &["name", "harness", "model"],
+            &[&["builder", "opencode", "claude-opus-5"]],
             12,
-        )
-        .expect("a table");
+        );
 
-        for line in String::from_utf8(written).expect("utf-8").lines() {
+        for line in written.lines() {
             assert!(line.chars().count() <= 12, "{line:?} is wider than 12");
         }
+    }
+
+    #[test]
+    fn a_lone_value_is_written_alone_and_a_detail_pairs_labels_with_values() {
+        assert_eq!(
+            rows(&Shape::Value, &["status"], &[&["stopped"]], usize::MAX),
+            "stopped\n"
+        );
+        assert_eq!(
+            rows(
+                &Shape::Detail,
+                &["id", "name"],
+                &[&["01", "builder"], &["02", "reviewer"]],
+                usize::MAX
+            ),
+            "id    01\nname  builder\n\nid    02\nname  reviewer\n"
+        );
+    }
+
+    #[test]
+    fn nothing_is_written_for_no_records() {
+        assert_eq!(rows(&Shape::Rows, &["name"], &[], usize::MAX), "");
+    }
+
+    #[test]
+    fn a_missing_field_reads_as_absent_and_an_empty_list_the_same() {
+        assert_eq!(rendered(None), ABSENT);
+        assert_eq!(rendered(Some(&Value::Null)), ABSENT);
+        assert_eq!(rendered(Some(&json!([]))), ABSENT);
+        assert_eq!(rendered(Some(&json!([1, 2]))), "1,2");
+        assert_eq!(rendered(Some(&json!("x"))), "x");
     }
 }
