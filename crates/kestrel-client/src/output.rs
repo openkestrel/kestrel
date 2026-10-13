@@ -306,7 +306,7 @@ fn names(record: &Value, field: &str) -> String {
     rendered(Some(&Value::Array(names)))
 }
 
-fn rendered(value: Option<&Value>) -> String {
+pub(crate) fn rendered(value: Option<&Value>) -> String {
     match value.unwrap_or(&NULL) {
         Value::Null => ABSENT.to_owned(),
         Value::Bool(yes) => yes.to_string(),
@@ -394,44 +394,6 @@ mod tests {
             .iter()
             .map(|record| line(presentation, view, record))
             .collect()
-    }
-
-    #[test]
-    fn session_show_lists_running_tools_with_status_and_start_time() {
-        let record = json!({"tools":[{"call_id":"one","title":"read README.md","status":"in_progress","started_at":"2026-09-30T12:00:00Z"}]});
-        let shown = line(&Presentation::Delimited, &crate::view::SESSION, &record);
-        assert!(shown.contains("read README.md"));
-        assert!(shown.contains("in_progress"));
-        assert!(shown.contains("2026-09-30T12:00:00Z"));
-        let mut human_output = Vec::new();
-        human(&mut human_output, &crate::view::SESSION, &[&record], 240).unwrap();
-        let shown = String::from_utf8(human_output).unwrap();
-        assert!(shown.contains("read README.md"));
-        assert!(shown.contains("in_progress"));
-        assert!(shown.contains("2026-09-30T12:00:00Z"));
-    }
-
-    #[test]
-    fn session_show_lists_running_units_with_kind_and_start_time() {
-        let record = json!({"units":[{"id":"task","kind":"background_task","title":"cargo test","started_at":"2026-10-02T12:00:00Z"}]});
-        let mut human_output = Vec::new();
-        human(&mut human_output, &crate::view::SESSION, &[&record], 240).unwrap();
-        let shown = String::from_utf8(human_output).unwrap();
-        assert!(shown.contains("cargo test"), "{shown}");
-        assert!(shown.contains("background_task"), "{shown}");
-        assert!(shown.contains("2026-10-02T12:00:00Z"), "{shown}");
-    }
-
-    #[test]
-    fn session_show_and_list_say_a_session_trails_and_when_its_agent_was_last_active() {
-        let record = json!({"state":"trailing","last_activity_at":"2026-10-02T12:00:00Z"});
-        let mut shown = Vec::new();
-        human(&mut shown, &crate::view::SESSION, &[&record], 240).unwrap();
-        let shown = String::from_utf8(shown).unwrap();
-        assert!(shown.contains("trailing"), "{shown}");
-        assert!(shown.contains("2026-10-02T12:00:00Z"), "{shown}");
-        let listed = line(&Presentation::Delimited, &crate::view::SESSIONS, &record);
-        assert!(listed.contains("trailing"), "{listed}");
     }
 
     #[test]

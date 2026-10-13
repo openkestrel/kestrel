@@ -278,6 +278,23 @@ async fn link_loss_leaves_the_last_observation_historical_and_a_fresh_snapshot_r
         json!({ "tools": [], "units": [] }),
         "a historical observation is never listed as current work"
     );
+    let shown = support::client::ran_by(
+        &kestrel,
+        &[
+            "session",
+            "show",
+            &session.id.to_string(),
+            "--organization",
+            "acme",
+            "--json",
+        ],
+        support::client::Invocation::default(),
+    )
+    .await
+    .json();
+    assert_eq!(shown, lost);
+    let typed: kestrel_operator_types::Session = serde_json::from_value(shown).unwrap();
+    assert_eq!(serde_json::to_value(typed).unwrap(), lost);
     assert_eq!(lost["state"], current["state"]);
     assert_eq!(lost["lease_expires_at"], current["lease_expires_at"]);
     let state = next_state(&mut transcript, |state| {

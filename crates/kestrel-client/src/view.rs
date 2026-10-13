@@ -142,91 +142,164 @@ pub const TRIGGER_TEST: View = View::Detail(&[
 ]);
 pub const TRIGGER_STATE: View = View::Value("state");
 pub const FIRED: View = View::Detail(&["outcome", "workspace", "session", "event", "correlation"]);
-pub const WORKSPACES: View = View::Rows(&[
-    "id",
-    "name",
-    "state",
-    "project",
-    "opened_with",
-    "started_by",
+pub const WORKSPACES: Columns<wire::WorkspaceListed> = Columns::Rows(&[
+    Column("id", |record| text(record.id)),
+    Column("name", |record| text(&record.name)),
+    Column("state", |record| text(&record.state)),
+    Column("project", |record| text(&record.project)),
+    Column("opened with", |record| text(&record.opened_with)),
+    Column("started by", |record| or_absent(record.started_by.as_ref())),
 ]);
 pub const ENTRIES: View = View::Rows(&["seq", "appended_at", "entry"]);
-pub const WORKSPACE: View = View::Detail(&[
-    "id",
-    "name",
-    "organization",
-    "project",
-    "opened_with",
-    "profile",
-    "checkout.base",
-    "checkout.branch",
-    "instance",
-    "held",
-    "correlation",
-    "state",
-    "opened_at",
-    "last_active_at",
-    "sealed_at",
-    "started_by",
-    "continues",
-    "continued_by",
-    "held_messages",
-    "pull_requests",
-    "unfinished_session.state",
-    "unfinished_session.preparing",
+pub const WORKSPACE: Columns<wire::Workspace> = Columns::Detail(&[
+    Column("id", |record| text(record.id)),
+    Column("name", |record| text(&record.name)),
+    Column("organization", |record| text(&record.organization)),
+    Column("project", |record| text(&record.project)),
+    Column("opened with", |record| text(&record.opened_with)),
+    Column("profile", |record| or_absent(record.profile.as_ref())),
+    Column("base", |record| text(&record.checkout.base)),
+    Column("branch", |record| text(&record.checkout.branch)),
+    Column("instance", |record| or_absent(record.instance.as_ref())),
+    Column("held", |record| or_absent(record.held.as_ref())),
+    Column("correlation", |record| {
+        or_absent(record.correlation.as_ref())
+    }),
+    Column("state", |record| text(&record.state)),
+    Column("opened at", |record| text(&record.opened_at)),
+    Column("last active at", |record| text(&record.last_active_at)),
+    Column("sealed at", |record| or_absent(record.sealed_at.as_ref())),
+    Column("started by", |record| or_absent(record.started_by.as_ref())),
+    Column("continues", |record| or_absent(record.continues.as_ref())),
+    Column("continued by", |record| joined(&record.continued_by)),
+    Column("held messages", |record| structured(&record.held_messages)),
+    Column("pull requests", |record| structured(&record.pull_requests)),
+    Column("state", |record| {
+        or_absent(
+            record
+                .unfinished_session
+                .as_ref()
+                .map(|session| &session.state),
+        )
+    }),
+    Column("preparing", |record| {
+        or_absent(
+            record
+                .unfinished_session
+                .as_ref()
+                .and_then(|session| session.preparing.as_ref()),
+        )
+    }),
 ]);
-pub const HELD_MESSAGE: View =
-    View::Detail(&["id", "participant", "message", "posted_at", "edited_at"]);
-pub const SESSIONS: View = View::Rows(&[
-    "id",
-    "name",
-    "state",
-    "preparing",
-    "agent",
-    "exit.status",
-    "exit.because",
-    "instance",
-    "worked_model",
+pub const HELD_MESSAGE: Columns<wire::HeldMessage> = Columns::Detail(&[
+    Column("id", |record| text(record.id)),
+    Column("participant", |record| text(&record.participant)),
+    Column("message", |record| text(&record.message)),
+    Column("posted at", |record| text(&record.posted_at)),
+    Column("edited at", |record| or_absent(record.edited_at.as_ref())),
 ]);
-pub const SESSION: View = View::Detail(&[
-    "id",
-    "name",
-    "workspace",
-    "state",
-    "preparing",
-    "exit.status",
-    "exit.because",
-    "diagnostic",
-    "outcome_message",
-    "instance",
-    "supervisor",
-    "agent",
-    "harness",
-    "model",
-    "worked_model",
-    "title",
-    "options",
-    "changing_options",
-    "commands",
-    "enqueued_at",
-    "started_at",
-    "ended_at",
-    "lease_expires_at",
-    "connected_at",
-    "supervisor_version",
-    "usage",
-    "depends_on",
-    "tools",
-    "units",
-    "last_activity_at",
+pub const SESSIONS: Columns<wire::Session> = Columns::Rows(&[
+    Column("id", |record| text(record.id)),
+    Column("name", |record| text(&record.name)),
+    Column("state", |record| text(&record.state)),
+    Column("preparing", |record| or_absent(record.preparing.as_ref())),
+    Column("agent", |record| text(&record.agent)),
+    Column("status", |record| {
+        or_absent(record.exit.as_ref().map(|exit| &exit.status))
+    }),
+    Column("because", |record| {
+        or_absent(record.exit.as_ref().and_then(|exit| exit.because.as_ref()))
+    }),
+    Column("instance", |record| or_absent(record.instance.as_ref())),
+    Column("worked model", |record| {
+        or_absent(record.worked_model.as_ref())
+    }),
 ]);
-pub const INTERRUPTED: View = View::Detail(&[
-    "id",
-    "state",
-    "interrupting.participant",
-    "interrupting.requested_at",
+pub const SESSION: Columns<wire::Session> = Columns::Detail(&[
+    Column("id", |record| text(record.id)),
+    Column("name", |record| text(&record.name)),
+    Column("workspace", |record| text(record.workspace)),
+    Column("state", |record| text(&record.state)),
+    Column("preparing", |record| or_absent(record.preparing.as_ref())),
+    Column("status", |record| {
+        or_absent(record.exit.as_ref().map(|exit| &exit.status))
+    }),
+    Column("because", |record| {
+        or_absent(record.exit.as_ref().and_then(|exit| exit.because.as_ref()))
+    }),
+    Column("diagnostic", |record| structured(&record.diagnostic)),
+    Column("outcome message", |record| {
+        or_absent(record.outcome_message.as_ref())
+    }),
+    Column("instance", |record| or_absent(record.instance.as_ref())),
+    Column("supervisor", |record| or_absent(record.supervisor.as_ref())),
+    Column("agent", |record| text(&record.agent)),
+    Column("harness", |record| text(&record.harness)),
+    Column("model", |record| or_absent(record.model.as_ref())),
+    Column("worked model", |record| {
+        or_absent(record.worked_model.as_ref())
+    }),
+    Column("title", |record| or_absent(record.title.as_ref())),
+    Column("options", |record| option_summary(&record.options)),
+    Column("changing options", |record| {
+        record
+            .changing_options
+            .iter()
+            .map(|change| {
+                format!(
+                    "{}: {} ({})",
+                    change.option, change.value, change.participant
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }),
+    Column("commands", |record| {
+        record
+            .commands
+            .iter()
+            .map(|command| command.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }),
+    Column("enqueued at", |record| text(&record.enqueued_at)),
+    Column("started at", |record| or_absent(record.started_at.as_ref())),
+    Column("ended at", |record| or_absent(record.ended_at.as_ref())),
+    Column("lease expires at", |record| {
+        or_absent(record.lease_expires_at.as_ref())
+    }),
+    Column("connected at", |record| {
+        or_absent(record.connected_at.as_ref())
+    }),
+    Column("supervisor version", |record| {
+        or_absent(record.supervisor_version.as_ref())
+    }),
+    Column("usage", |record| structured(&record.usage)),
+    Column("depends on", |record| structured(&record.depends_on)),
+    Column("tools", |record| structured(&record.tools)),
+    Column("units", |record| structured(&record.units)),
+    Column("last activity at", |record| {
+        or_absent(record.last_activity_at.as_ref())
+    }),
 ]);
-pub const STOPPED: View = View::Value("exit.status");
+pub const INTERRUPTED: Columns<wire::Session> = Columns::Detail(&[
+    Column("id", |record| text(record.id)),
+    Column("state", |record| text(&record.state)),
+    Column("participant", |record| {
+        or_absent(record.interrupting.as_ref().map(|value| &value.participant))
+    }),
+    Column("requested at", |record| {
+        or_absent(
+            record
+                .interrupting
+                .as_ref()
+                .map(|value| &value.requested_at),
+        )
+    }),
+]);
+pub const STOPPED: Columns<wire::Session> = Columns::Value(Column("status", |record| {
+    or_absent(record.exit.as_ref().map(|exit| &exit.status))
+}));
 pub const INSTANCES: View = View::Rows(&["workspace", "instance", "because"]);
 pub const QUEUE: View = View::Rows(&[
     "position",
@@ -262,10 +335,58 @@ pub const UNRESOLVED: View = View::Detail(&[
 ]);
 pub const EXIT_CODES: View = View::Detail(&["code", "name", "meaning", "branch"]);
 
-pub const STARTED: View =
-    View::Detail(&["organization", "project", "agent", "workspace", "session"]);
+pub const STARTED: Columns<wire::Started> = Columns::Detail(&[
+    Column("organization", |record| text(&record.organization.name)),
+    Column("project", |record| text(&record.project.name)),
+    Column("agent", |record| text(&record.agent.name)),
+    Column("workspace", |record| text(&record.workspace.name)),
+    Column("session", |record| text(&record.session.name)),
+]);
 
-pub const OPENED: View = View::Detail(&["workspace", "workspace_id", "session", "session_id"]);
+pub const OPENED: Columns<wire::Opened> = Columns::Detail(&[
+    Column("workspace", |record| text(&record.workspace.name)),
+    Column("workspace id", |record| text(record.workspace.id)),
+    Column("session", |record| text(&record.session.name)),
+    Column("session id", |record| text(record.session.id)),
+]);
 
 /// What a creation answers back is the identifier the next command is given.
 pub const DECLARED: View = View::Value("id");
+
+fn structured(value: &impl serde::Serialize) -> String {
+    crate::output::rendered(Some(
+        &serde_json::to_value(value).expect("a wire field serializes"),
+    ))
+}
+
+pub const WORKSPACE_DECLARED: Columns<wire::Workspace> =
+    Columns::Value(Column("id", |record| text(record.id)));
+pub const SESSION_DECLARED: Columns<wire::Session> =
+    Columns::Value(Column("id", |record| text(record.id)));
+pub const HELD_DECLARED: Columns<wire::HeldMessage> =
+    Columns::Value(Column("id", |record| text(record.id)));
+pub const POSTED: Columns<wire::Posted> = Columns::Value(Column("id", |record| {
+    record
+        .session
+        .as_ref()
+        .map(|session| text(session.id))
+        .or_else(|| record.held_message.as_ref().map(|held| text(held.id)))
+        .unwrap_or_else(|| "-".to_owned())
+}));
+
+fn option_summary(options: &[wire::SessionOption]) -> String {
+    options
+        .iter()
+        .map(|option| {
+            let current = match &option.current {
+                wire::SessionOptionCurrent::SelectedOptionValue(value) => value.clone(),
+                wire::SessionOptionCurrent::ToggleOptionValue(value) => value.to_string(),
+            };
+            format!(
+                "{}: {current}",
+                option.category.as_deref().unwrap_or(&option.id)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}

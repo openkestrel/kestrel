@@ -391,6 +391,9 @@ async fn json_answers_a_compound_write_whole() {
         r#"[true,"open"]"#
     );
     let opened = opened.json();
+    let typed: kestrel_operator_types::Opened = serde_json::from_value(opened.clone()).unwrap();
+    assert_eq!(typed.workspace.id, typed.session.workspace);
+    assert_eq!(serde_json::to_value(&typed).unwrap(), opened);
     let workspace = opened["workspace"]["id"].as_str().expect("the Workspace");
     assert_eq!(opened["session"]["workspace"], workspace, "{opened}");
     assert_eq!(opened["workspace"]["state"], "open", "{opened}");
@@ -417,6 +420,28 @@ async fn json_answers_a_compound_write_whole() {
             .is_some_and(|posted| posted.contains_key("held_message")),
         "{posted}"
     );
+    let typed: kestrel_operator_types::Posted = serde_json::from_value(posted.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&typed).unwrap(), posted);
+    let listed = piped(&kestrel, &["workspace", "list", "--json"])
+        .await
+        .json();
+    let typed: kestrel_operator_types::ListWorkspacesResponse =
+        serde_json::from_value(listed.clone()).unwrap();
+    assert_eq!(typed[0].id.to_string(), workspace);
+    assert_eq!(serde_json::to_value(&typed).unwrap(), listed);
+    let sessions = piped(
+        &kestrel,
+        &["session", "list", "--workspace", workspace, "--json"],
+    )
+    .await
+    .json();
+    let typed: kestrel_operator_types::ListSessionsResponse =
+        serde_json::from_value(sessions.clone()).unwrap();
+    assert_eq!(
+        typed[0].id.to_string(),
+        opened["session"]["id"].as_str().unwrap()
+    );
+    assert_eq!(serde_json::to_value(&typed).unwrap(), sessions);
     kestrel.teardown().await;
 }
 

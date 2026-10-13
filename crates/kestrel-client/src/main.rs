@@ -1843,44 +1843,38 @@ async fn run(
         }) => {
             let organization = scoping.resolve().await?.organization;
             let brief = brief.as_deref().map(given).transpose()?;
-            let opened = api
-                .post(
+            let opened: wire::Opened = api
+                .post_as(
                     &["organizations", &organization, "workspaces"],
-                    &json!({
-                        "project": project,
-                        "agent": agent,
-                        "profile": profile,
-                        "sign_in_method": sign_in,
-                        "branch": branch,
-                        "continues": continues,
-                        "model": model,
-                        "mode": mode,
-                        "thought_level": thought_level,
-                        "brief": brief,
-                        "participant": as_participant,
-                        "depends_on": depends_on,
-                    }),
+                    &wire::WorkspaceDeclaration {
+                        project,
+                        agent,
+                        profile: Some(profile),
+                        sign_in_method: Some(sign_in),
+                        branch: Some(branch),
+                        continues: Some(continues),
+                        model: Some(model),
+                        mode: Some(mode),
+                        thought_level: Some(thought_level),
+                        brief: Some(brief),
+                        participant: Some(as_participant),
+                        depends_on: Some(Some(depends_on)),
+                    },
                 )
                 .await?;
-            let shown = if json {
-                opened
-            } else {
-                json!({
-                    "workspace": opened["workspace"]["name"],
-                    "workspace_id": opened["workspace"]["id"],
-                    "session": opened["session"]["name"],
-                    "session_id": opened["session"]["id"],
-                })
-            };
-            show(&presentation, &view::OPENED, &shown)?;
+            typed::show(&presentation, &view::OPENED, &opened)?;
         }
         Command::Workspace(WorkspaceCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            typed::collection(
                 &presentation,
                 &view::WORKSPACES,
-                &api.get(&["organizations", &organization, "workspaces"])
-                    .await?,
+                &api.get_as::<wire::ListWorkspacesResponse>(&[
+                    "organizations",
+                    &organization,
+                    "workspaces",
+                ])
+                .await?,
                 &empty_list(
                     &client.control_plane,
                     "Workspaces",
@@ -2017,11 +2011,16 @@ async fn run(
         }
         Command::Workspace(WorkspaceCommand::Show { workspace }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            typed::show(
                 &presentation,
                 &view::WORKSPACE,
-                &api.get(&["organizations", &organization, "workspaces", &workspace])
-                    .await?,
+                &api.get_as::<wire::Workspace>(&[
+                    "organizations",
+                    &organization,
+                    "workspaces",
+                    &workspace,
+                ])
+                .await?,
             )?;
         }
         Command::Workspace(WorkspaceCommand::Post {
@@ -2030,8 +2029,8 @@ async fn run(
             message,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            let answer = api
-                .post(
+            let answer: wire::Posted = api
+                .post_as(
                     &[
                         "organizations",
                         &organization,
@@ -2039,17 +2038,18 @@ async fn run(
                         &workspace,
                         "messages",
                     ],
-                    &json!({ "participant": as_participant, "message": message }),
+                    &wire::WorkspaceMessage {
+                        participant: as_participant,
+                        message,
+                    },
                 )
                 .await?;
-            let session = &answer["session"];
-            let held = &answer["held_message"];
             if json {
-                show(&presentation, &view::DECLARED, &answer)?;
-            } else if !session.is_null() {
-                show(&presentation, &view::DECLARED, session)?;
-            } else if !held.is_null() {
-                show(&presentation, &view::DECLARED, held)?;
+                typed::show(&presentation, &view::POSTED, &answer)?;
+            } else if let Some(session) = &answer.session {
+                typed::show(&presentation, &view::SESSION_DECLARED, session)?;
+            } else if let Some(held) = &answer.held_message {
+                typed::show(&presentation, &view::HELD_DECLARED, held)?;
             } else {
                 eprintln!("queued as the next turn of the session already in flight");
             }
@@ -2061,8 +2061,8 @@ async fn run(
             message,
         })) => {
             let organization = scoping.resolve().await?.organization;
-            let answer = api
-                .put(
+            let answer: wire::HeldMessage = api
+                .put_as(
                     &[
                         "organizations",
                         &organization,
@@ -2071,10 +2071,13 @@ async fn run(
                         "messages",
                         &id.to_string(),
                     ],
-                    &json!({ "participant": as_participant, "message": message }),
+                    &wire::WorkspaceMessage {
+                        participant: as_participant,
+                        message,
+                    },
                 )
                 .await?;
-            show(&presentation, &view::HELD_MESSAGE, &answer)?;
+            typed::show(&presentation, &view::HELD_MESSAGE, &answer)?;
         }
         Command::Workspace(WorkspaceCommand::Message(MessageCommand::Withdraw {
             workspace,
@@ -2091,16 +2094,18 @@ async fn run(
                     "messages",
                     &id.to_string(),
                 ],
-                &json!({ "participant": as_participant }),
+                &wire::WorkspaceMessageWithdrawal {
+                    participant: as_participant,
+                },
             )
             .await?;
         }
         Command::Workspace(WorkspaceCommand::Seal { workspace }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            typed::show(
                 &presentation,
-                &view::DECLARED,
-                &api.post(
+                &view::WORKSPACE_DECLARED,
+                &api.post_as::<wire::Workspace>(
                     &[
                         "organizations",
                         &organization,
@@ -2151,10 +2156,10 @@ async fn run(
             depends_on,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            typed::show(
                 &presentation,
-                &view::DECLARED,
-                &api.post(
+                &view::SESSION_DECLARED,
+                &api.post_as::<wire::Session>(
                     &[
                         "organizations",
                         &organization,
@@ -2162,24 +2167,24 @@ async fn run(
                         &workspace,
                         "sessions",
                     ],
-                    &json!({
-                        "agent": agent,
-                        "sign_in_method": sign_in,
-                        "model": model,
-                        "mode": mode,
-                        "thought_level": thought_level,
-                        "depends_on": depends_on,
-                    }),
+                    &wire::SessionDeclaration {
+                        agent: Some(agent),
+                        sign_in_method: Some(sign_in),
+                        model: Some(model),
+                        mode: Some(mode),
+                        thought_level: Some(thought_level),
+                        depends_on: Some(Some(depends_on)),
+                    },
                 )
                 .await?,
             )?;
         }
         Command::Session(SessionCommand::List { workspace }) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            typed::collection(
                 &presentation,
                 &view::SESSIONS,
-                &api.get(&[
+                &api.get_as::<wire::ListSessionsResponse>(&[
                     "organizations",
                     &organization,
                     "workspaces",
@@ -2200,8 +2205,13 @@ async fn run(
             shown_session(
                 &presentation,
                 invocation,
-                &api.get(&["organizations", &organization, "sessions", &session])
-                    .await?,
+                &api.get_as::<wire::Session>(&[
+                    "organizations",
+                    &organization,
+                    "sessions",
+                    &session,
+                ])
+                .await?,
             )?;
         }
         Command::Session(SessionCommand::Interrupt {
@@ -2209,10 +2219,10 @@ async fn run(
             as_participant,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            typed::show(
                 &presentation,
                 &view::INTERRUPTED,
-                &api.post(
+                &api.post_as::<wire::Session>(
                     &[
                         "organizations",
                         &organization,
@@ -2220,17 +2230,19 @@ async fn run(
                         &session,
                         "interrupt",
                     ],
-                    &json!({ "participant": as_participant }),
+                    &wire::SessionInterrupt {
+                        participant: as_participant,
+                    },
                 )
                 .await?,
             )?;
         }
         Command::Session(SessionCommand::Stop { session }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            typed::show(
                 &presentation,
                 &view::STOPPED,
-                &api.post(
+                &api.post_as::<wire::Session>(
                     &["organizations", &organization, "sessions", &session, "stop"],
                     &json!({}),
                 )
@@ -2245,13 +2257,14 @@ async fn run(
                 as_participant,
             } = command;
             let organization = scoping.resolve().await?.organization;
-            let body = if declares(&option) {
-                json!({ "participant": as_participant, "category": option, "value": value })
-            } else {
-                json!({ "participant": as_participant, "option": option, "value": value })
+            let body = wire::OptionChange {
+                participant: Some(as_participant),
+                category: declares(&option).then(|| Some(option.clone())),
+                option: (!declares(&option)).then(|| Some(option.clone())),
+                value,
             };
-            let changed = api
-                .post(
+            let changed: wire::Session = api
+                .post_as(
                     &[
                         "organizations",
                         &organization,
@@ -2349,10 +2362,10 @@ async fn started(
         tokio::try_join!(
             async { api.get_as(&within("projects")).await },
             async { api.get_as(&within("agents")).await },
-            async { api.get(&within("credentials")).await },
+            async { api.get_as(&within("credentials")).await },
         )?
     } else {
-        (Vec::new(), Vec::new(), json!([]))
+        (Vec::new(), Vec::new(), Vec::new())
     };
     let existing = start::Existing::read(declared, projects, agents, &credentials);
     let names_a_project = start.project.as_ref().is_some_and(|name| {
@@ -2419,32 +2432,19 @@ async fn started(
         }
     }
 
-    let started = api.post(&["starts"], &plan.body(&brief, &secrets)).await?;
+    let started: wire::Started = api
+        .post_as(&["starts"], &plan.body(&brief, &secrets))
+        .await?;
     for (kind, settled) in [
-        ("organization", &started["organization"]),
-        ("project", &started["project"]),
-        ("agent", &started["agent"]),
+        ("organization", &started.organization),
+        ("project", &started.project),
+        ("agent", &started.agent),
     ] {
-        if settled["created"] == true {
-            eprintln!("declared the {kind} {}", rendered(&settled["name"]));
+        if settled.created {
+            eprintln!("declared the {kind} {}", settled.name);
         }
     }
-    if presentation.json() {
-        return show(presentation, &view::STARTED, &started);
-    }
-    show(
-        presentation,
-        &view::STARTED,
-        &json!({
-            "organization": started["organization"]["name"],
-            "project": started["project"]["name"],
-            "agent": started["agent"]["name"],
-            "workspace": started["workspace"]["name"],
-            "workspace_id": started["workspace"]["id"],
-            "session": started["session"]["name"],
-            "session_id": started["session"]["id"],
-        }),
-    )
+    typed::show(presentation, &view::STARTED, &started)
 }
 
 fn selections(
@@ -2585,59 +2585,59 @@ fn direction(given: &str) -> Result<wire::Direction, String> {
 fn shown_session(
     presentation: &Presentation,
     invocation: &Invocation,
-    session: &Value,
+    session: &wire::Session,
 ) -> Result<()> {
-    let mut record = session.clone();
-    if !presentation.json() {
-        record["diagnostic"] =
-            serde_json::from_value::<wire::Diagnostic>(record["diagnostic"].clone())
-                .map_or(Value::Null, |diagnostic| {
-                    Value::from(diagnostic::inline(&diagnostic, invocation))
-                });
-        record["options"] = Value::from(session_options(&record["options"]));
-        record["changing_options"] = Value::from(changing_options(&record["changing_options"]));
-        record["commands"] = Value::from(session_commands(&record["commands"]));
-    }
-
-    show(presentation, &view::SESSION, &record)
-}
-
-fn changing_options(changing: &Value) -> String {
-    changing
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|change| {
-            format!(
-                "{}: {} ({})",
-                change["option"].as_str().unwrap_or("option"),
-                change["value"].as_str().unwrap_or(""),
-                change["participant"].as_str().unwrap_or("")
+    typed::show_with(presentation, &view::SESSION, session, |label, cell| {
+        if matches!(presentation, Presentation::Human(_)) {
+            match label {
+                "tools" => {
+                    return session
+                        .tools
+                        .iter()
+                        .map(|tool| format!("{}\n{}  {}", tool.title, tool.status, tool.started_at))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                }
+                "units" => {
+                    return session
+                        .units
+                        .iter()
+                        .map(|unit| format!("{}\n{}  {}", unit.title, unit.kind, unit.started_at))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                }
+                "depends on" => {
+                    return typed::joined(
+                        &session
+                            .depends_on
+                            .iter()
+                            .map(|dependency| &dependency.name)
+                            .collect::<Vec<_>>(),
+                    );
+                }
+                _ => {}
+            }
+        }
+        if label == "diagnostic" {
+            session.diagnostic.as_ref().map_or_else(
+                || "-".to_owned(),
+                |diagnostic| diagnostic::inline(diagnostic, invocation),
             )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+        } else {
+            cell
+        }
+    })
 }
 
-/// ADR-0041: a change that makes the next Turn re-read the context without the prompt cache says
-/// so, with the size of the context it last reported.
-fn warn_about_cache(changed: &Value, named: &str) {
-    let warns = changed["options"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|option| {
-            option["id"].as_str() == Some(named) || option["category"].as_str() == Some(named)
-        })
-        .is_some_and(|option| option["warns_cache"] == true);
-    if !warns {
+fn warn_about_cache(changed: &wire::Session, named: &str) {
+    if !changed.options.iter().any(|option| {
+        (option.id == named || option.category.as_deref() == Some(named)) && option.warns_cache
+    }) {
         return;
     }
-
-    match changed["usage"]["context_used"].as_u64() {
+    match changed.usage.as_ref().map(|usage| usage.context_used) {
         Some(tokens) => eprintln!(
-            "changing this makes the next turn re-read the context without the prompt cache: \
-             {tokens} tokens"
+            "changing this makes the next turn re-read the context without the prompt cache: {tokens} tokens"
         ),
         None => eprintln!(
             "changing this makes the next turn re-read the context without the prompt cache"
@@ -2647,37 +2647,6 @@ fn warn_about_cache(changed: &Value, named: &str) {
 
 fn declares(category: &str) -> bool {
     matches!(category, "model" | "mode" | "thought_level")
-}
-
-fn session_options(options: &Value) -> String {
-    options
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|option| {
-            let category = option["category"]
-                .as_str()
-                .or_else(|| option["id"].as_str())
-                .unwrap_or("option");
-            let current = match &option["current"] {
-                Value::String(value) => value.clone(),
-                other => other.to_string(),
-            };
-
-            format!("{category}: {current}")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn session_commands(commands: &Value) -> String {
-    commands
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|command| command["name"].as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 fn shown_queue(
@@ -2945,13 +2914,6 @@ fn confirmed() -> Result<bool> {
     }
 }
 
-fn rendered(value: &Value) -> String {
-    value
-        .as_str()
-        .map_or_else(|| value.to_string(), str::to_owned)
-}
-
-/// Nothing is asked for: whatever drives the Client may have no terminal to answer on.
 fn incomplete(missing: &[start::Missing]) -> anyhow::Error {
     let flags: Vec<&str> = missing.iter().map(|missing| missing.flag).collect();
     let reasons: Vec<String> = missing
