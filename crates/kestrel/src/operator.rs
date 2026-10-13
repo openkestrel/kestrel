@@ -1705,22 +1705,11 @@ async fn declared_declaration(
     Ok(Json(applied))
 }
 
-#[derive(Deserialize)]
-struct Secret {
-    secret: String,
-}
-
-#[derive(Serialize)]
-struct CredentialRecord {
-    variable: String,
-    set_at: Timestamp,
-}
-
-impl From<Held> for CredentialRecord {
+impl From<Held> for wire::ProviderCredential {
     fn from(held: Held) -> Self {
         Self {
             variable: held.variable,
-            set_at: held.set_at,
+            set_at: held.set_at.to_string(),
         }
     }
 }
@@ -1728,7 +1717,7 @@ impl From<Held> for CredentialRecord {
 async fn credentials(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<CredentialRecord>>, Refused> {
+) -> Result<Json<Vec<wire::ProviderCredential>>, Refused> {
     let held = provider::held(&control_plane.store, &organization).await?;
 
     Ok(Json(held.into_iter().map(Into::into).collect()))
@@ -1737,10 +1726,16 @@ async fn credentials(
 async fn hold_credential(
     State(control_plane): State<ControlPlane>,
     Path((organization, variable)): Path<(String, String)>,
-    secret: Result<Json<Secret>, JsonRejection>,
-) -> Result<Json<CredentialRecord>, Refused> {
-    let Json(Secret { secret }) = secret?;
-    let held = provider::hold(&control_plane.store, &organization, &variable, &secret).await?;
+    secret: Result<Json<wire::ProviderCredentialSecret>, JsonRejection>,
+) -> Result<Json<wire::ProviderCredential>, Refused> {
+    let Json(secret) = secret?;
+    let held = provider::hold(
+        &control_plane.store,
+        &organization,
+        &variable,
+        &secret.secret,
+    )
+    .await?;
 
     Ok(Json(held.into()))
 }
@@ -1825,7 +1820,7 @@ async fn declare_profile(
 async fn hold_profile_variable(
     State(control_plane): State<ControlPlane>,
     Path((organization, profile, variable)): Path<(String, String, String)>,
-    secret: Result<Json<Secret>, JsonRejection>,
+    secret: Result<Json<wire::ProviderCredentialSecret>, JsonRejection>,
 ) -> Result<Json<wire::SubscriptionProfileLogin>, Refused> {
     let entry = Entry::variable(&variable)?;
     held_in_profile(&control_plane, &organization, &profile, &entry, secret).await
@@ -1834,7 +1829,7 @@ async fn hold_profile_variable(
 async fn hold_profile_file(
     State(control_plane): State<ControlPlane>,
     Path((organization, profile, path)): Path<(String, String, String)>,
-    secret: Result<Json<Secret>, JsonRejection>,
+    secret: Result<Json<wire::ProviderCredentialSecret>, JsonRejection>,
 ) -> Result<Json<wire::SubscriptionProfileLogin>, Refused> {
     let entry = Entry::file(&path)?;
     held_in_profile(&control_plane, &organization, &profile, &entry, secret).await
@@ -1845,10 +1840,17 @@ async fn held_in_profile(
     organization: &str,
     profile: &str,
     entry: &Entry,
-    secret: Result<Json<Secret>, JsonRejection>,
+    secret: Result<Json<wire::ProviderCredentialSecret>, JsonRejection>,
 ) -> Result<Json<wire::SubscriptionProfileLogin>, Refused> {
-    let Json(Secret { secret }) = secret?;
-    let held = profile::hold(&control_plane.store, organization, profile, entry, &secret).await?;
+    let Json(secret) = secret?;
+    let held = profile::hold(
+        &control_plane.store,
+        organization,
+        profile,
+        entry,
+        &secret.secret,
+    )
+    .await?;
 
     Ok(Json(held.into()))
 }
@@ -2310,31 +2312,6 @@ async fn github_app_setup_finish(
     ))
 }
 
-#[derive(Deserialize)]
-struct IntegrationRegistration {
-    name: String,
-    carries: Option<Vec<Direction>>,
-    #[serde(flatten)]
-    connection: ConnectionRegistration,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum ConnectionRegistration {
-    Github {
-        repository: String,
-        app_id: i64,
-        installation: i64,
-        private_key: String,
-        interval: Option<String>,
-        webhook_secret: Option<String>,
-        api: Option<String>,
-    },
-    Webhook {
-        secret: String,
-    },
-}
-
 /// Never the private key or a webhook secret: what an Integration presents stays behind the
 /// boundary. The bot login is not a secret — it is the name GitHub already shows in public.
 fn integration_record(integration: Integration, organization: &str) -> wire::Integration {
@@ -2615,52 +2592,78 @@ async fn replace_integration_private_key(
     Ok(Json(integration_record(replaced, &organization)))
 }
 
+fn registration_name(registration: &wire::IntegrationRegistration) -> &str {
+    match registration {
+        wire::IntegrationRegistration::GithubRegistration(github) => &github.name,
+        wire::IntegrationRegistration::WebhookRegistration(webhook) => &webhook.name,
+    }
+}
+
+fn registration_connecting(
+    registration: &wire::IntegrationRegistration,
+) -> Result<(&[wire::Direction], Connecting<'_>), Refused> {
+    match registration {
+        wire::IntegrationRegistration::GithubRegistration(github) => {
+            let interval = github
+                .interval
+                .as_ref()
+                .and_then(|interval| interval.as_deref());
+            Ok((
+                github
+                    .carries
+                    .as_deref()
+                    .unwrap_or(&[wire::Direction::Inbound, wire::Direction::Outbound]),
+                Connecting::Github {
+                    repository: &github.repository,
+                    api: github
+                        .api
+                        .as_ref()
+                        .and_then(|api| api.as_deref())
+                        .unwrap_or(github::API),
+                    app_id: github.app_id,
+                    installation: github.installation,
+                    private_key: &github.private_key,
+                    interval: interval
+                        .map_or(Ok(SignedDuration::from_mins(1)), str::parse)
+                        .map_err(|error| {
+                            Refused::Unprocessable(format!("an interval is a duration: {error}"))
+                        })?,
+                    signing_secret: github
+                        .webhook_secret
+                        .as_ref()
+                        .and_then(|secret| secret.as_deref()),
+                },
+            ))
+        }
+        wire::IntegrationRegistration::WebhookRegistration(webhook) => Ok((
+            webhook
+                .carries
+                .as_deref()
+                .unwrap_or(&[wire::Direction::Inbound]),
+            Connecting::Webhook {
+                secret: &webhook.secret,
+            },
+        )),
+    }
+}
+
 async fn register_integration(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    registration: Result<Json<IntegrationRegistration>, JsonRejection>,
+    registration: Result<Json<wire::IntegrationRegistration>, JsonRejection>,
 ) -> Result<(StatusCode, Json<wire::Integration>), Refused> {
     let Json(registration) = registration?;
-    named("register_integration", &registration.name)?;
-
-    let (connecting, carries) = match &registration.connection {
-        ConnectionRegistration::Github {
-            repository,
-            app_id,
-            installation,
-            private_key,
-            interval,
-            webhook_secret,
-            api,
-        } => (
-            Connecting::Github {
-                repository,
-                api: api.as_deref().unwrap_or(github::API),
-                app_id: *app_id,
-                installation: *installation,
-                private_key,
-                interval: interval
-                    .as_deref()
-                    .map_or(Ok(SignedDuration::from_mins(1)), str::parse)
-                    .map_err(|error| {
-                        Refused::Unprocessable(format!("an interval is a duration: {error}"))
-                    })?,
-                signing_secret: webhook_secret.as_deref(),
-            },
-            &[Direction::Inbound, Direction::Outbound][..],
-        ),
-        ConnectionRegistration::Webhook { secret } => {
-            (Connecting::Webhook { secret }, &[Direction::Inbound][..])
-        }
-    };
+    named("register_integration", registration_name(&registration))?;
+    let (carries, connecting) = registration_connecting(&registration)?;
+    let carries: Vec<Direction> = carries.iter().map(domain_direction).collect();
     let github = Github::unfenced()?;
     let registered = integration::register(
         &control_plane.store,
         &github,
         Registration {
             organization: &organization,
-            name: &registration.name,
-            carries: registration.carries.as_deref().unwrap_or(carries),
+            name: registration_name(&registration),
+            carries: &carries,
             connecting,
         },
     )

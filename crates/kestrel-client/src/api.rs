@@ -39,6 +39,19 @@ impl ControlPlane {
         self.answered(self.client.get(self.url(path)?), false).await
     }
 
+    pub async fn get_where_as<T: DeserializeOwned>(
+        &self,
+        path: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<T> {
+        let mut url = self.url(path)?;
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query);
+        }
+
+        self.answered(self.client.get(url), false).await
+    }
+
     pub async fn get_response(&self, path: &[&str], query: &[(&str, &str)]) -> Result<Response> {
         let mut url = self.url(path)?;
         if !query.is_empty() {
@@ -76,7 +89,11 @@ impl ControlPlane {
             .await
     }
 
-    pub async fn patch(&self, path: &[&str], body: &impl Serialize) -> Result<Value> {
+    pub async fn patch_as<T: DeserializeOwned>(
+        &self,
+        path: &[&str],
+        body: &impl Serialize,
+    ) -> Result<T> {
         self.answered(self.client.patch(self.url(path)?).json(body), true)
             .await
     }

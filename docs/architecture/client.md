@@ -22,9 +22,14 @@ in `crates/kestrel-client/`, and the browser Client in `packages/client`. Both d
   them. Every `--as-participant` is optional and sent only when given; the Client supplies no
   name of its own.
 - **Output** (`output.rs`, `typed.rs`, `view.rs`): a migrated command decodes the answer into its
-  `kestrel-operator-types` value with `ControlPlane::get_as`, `post_as` or `put_as` and declares
-  `Columns` that read its fields; the Operator, Organization, Project and Agent commands, scope
-  resolution and `status`'s Project and Agent reads do. Every other command still declares a `View`
+  `kestrel-operator-types` value with `ControlPlane::get_as`, `get_where_as`, `post_as`, `put_as` or
+  `patch_as` and declares `Columns` that read its fields; the Operator, Organization, Project,
+  Agent, Credential, Profile and Integration commands, scope resolution and `status`'s Project,
+  Agent, Integration, Credential and Profile reads do, and the start plan reads what an
+  Organization already holds. A record whose columns resolve something the decoded record does not
+  hold — an Integration's diagnostic text, which reads the invocation — is shown with
+  `typed::show_as`, which prints the columns a terminal or a pipe reads and the answer the boundary
+  sent to `--json`. Every other command still declares a `View`
   of dotted paths into an untyped answer, and both draw through one table. Live work inspection
   follows git-style prose even when piped. For commands with a
   `View`, a terminal gets aligned columns and a pipe gets delimited rows. `--json` is a flag on

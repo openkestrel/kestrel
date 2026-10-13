@@ -4236,6 +4236,75 @@ async fn an_integration_is_registered_with_what_it_is_declared_to_carry() {
     kestrel.teardown().await;
 }
 
+/// What a registration leaves out and what it nulls read alike, and a named value still stands:
+/// the union's optional connection fields carry absent and null the same way.
+#[tokio::test]
+async fn a_registration_reads_an_omitted_connection_field_as_one_it_nulls() {
+    let kestrel = Kestrel::boot().await;
+    let stub = GithubStub::start();
+    kestrel.declare_organization("acme").await;
+
+    let github = async |name: &str, fields: Value| {
+        let mut registration = json!({
+            "kind": "github",
+            "name": name,
+            "repository": "jtmthf/kestrel",
+            "app_id": 1,
+            "installation": 2,
+            "private_key": PRIVATE_KEY,
+            "api": stub.base_url(),
+        });
+        registration
+            .as_object_mut()
+            .expect("an object")
+            .extend(fields.as_object().expect("an object").clone());
+        declared(&kestrel, &integrations_of("acme"), &registration).await
+    };
+    let webhook = async |name: &str, fields: Value| {
+        let mut registration = json!({
+            "kind": "webhook",
+            "name": name,
+            "secret": "a-shared-secret",
+        });
+        registration
+            .as_object_mut()
+            .expect("an object")
+            .extend(fields.as_object().expect("an object").clone());
+        declared(&kestrel, &integrations_of("acme"), &registration).await
+    };
+
+    let (omitted, absent) = github("hub", json!({})).await;
+    let (nulled, null) = github(
+        "hub-null",
+        json!({ "carries": null, "interval": null, "webhook_secret": null }),
+    )
+    .await;
+    let (named, given) = github("hub-polled", json!({ "interval": "5m" })).await;
+
+    assert_eq!(omitted, StatusCode::CREATED, "{absent}");
+    assert_eq!(nulled, StatusCode::CREATED, "{null}");
+    assert_eq!(named, StatusCode::CREATED, "{given}");
+    for answered in [&absent, &null] {
+        assert_eq!(
+            answered["carries"],
+            json!(["inbound", "outbound"]),
+            "{answered}"
+        );
+        assert_eq!(answered["polled_every"], "1m", "{answered}");
+    }
+    assert_eq!(given["carries"], json!(["inbound", "outbound"]), "{given}");
+    assert_eq!(given["polled_every"], "5m", "{given}");
+
+    let (omitted, absent) = webhook("ci", json!({})).await;
+    let (nulled, null) = webhook("cd", json!({ "carries": null })).await;
+    assert_eq!(omitted, StatusCode::CREATED, "{absent}");
+    assert_eq!(nulled, StatusCode::CREATED, "{null}");
+    assert_eq!(absent["carries"], json!(["inbound"]), "{absent}");
+    assert_eq!(null["carries"], json!(["inbound"]), "{null}");
+
+    kestrel.teardown().await;
+}
+
 #[tokio::test]
 async fn a_client_maintains_an_integration_without_changing_what_it_is() {
     let kestrel = Kestrel::boot().await;

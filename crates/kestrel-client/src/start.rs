@@ -3,7 +3,6 @@ use std::process::Command;
 
 use anyhow::Result;
 use kestrel_operator_types as wire;
-use serde_json::Value;
 
 use crate::scope::{Scope, Source};
 
@@ -41,7 +40,7 @@ impl Existing {
         organization_declared: bool,
         projects: wire::ListProjectsResponse,
         agents: wire::ListAgentsResponse,
-        credentials: &Value,
+        credentials: wire::ListProviderCredentialsResponse,
     ) -> Self {
         Self {
             organization_declared,
@@ -70,10 +69,8 @@ impl Existing {
                 })
                 .collect(),
             credentials: credentials
-                .as_array()
                 .into_iter()
-                .flatten()
-                .filter_map(|record| record["variable"].as_str().map(str::to_owned))
+                .map(|record| record.variable)
                 .collect(),
         }
     }
