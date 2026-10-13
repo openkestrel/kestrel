@@ -384,6 +384,86 @@ async fn a_client_declares_and_lists_organizations_without_opening_a_database() 
 }
 
 #[tokio::test]
+async fn an_organizations_cap_is_a_positive_count_and_null_or_absent_is_unbounded() {
+    let kestrel = Kestrel::boot().await;
+
+    for cap in [json!(0), json!(-1)] {
+        let (status, refusal) = declared(
+            &kestrel,
+            operator::ORGANIZATIONS,
+            &json!({"name": "acme", "max_live_instances": cap}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refusal}");
+        assert_eq!(refusal["kind"], "malformed_request", "{refusal}");
+    }
+    assert!(listed_nothing(&kestrel, operator::ORGANIZATIONS).await);
+
+    let (created, capped) = declared(
+        &kestrel,
+        operator::ORGANIZATIONS,
+        &json!({"name": "acme", "max_live_instances": 2}),
+    )
+    .await;
+    assert_eq!(created, StatusCode::CREATED, "{capped}");
+    assert_eq!(capped["max_live_instances"], 2);
+    let (changed, absent) =
+        declared(&kestrel, operator::ORGANIZATIONS, &json!({"name": "acme"})).await;
+    assert_eq!(changed, StatusCode::OK, "{absent}");
+    assert_eq!(absent["id"], capped["id"]);
+    assert_eq!(absent["max_live_instances"], Value::Null);
+    let (_, null) = declared(
+        &kestrel,
+        operator::ORGANIZATIONS,
+        &json!({"name": "globex", "max_live_instances": null}),
+    )
+    .await;
+    assert_eq!(null["max_live_instances"], Value::Null);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_agents_defaults_are_null_whether_a_declaration_omits_them_or_names_none() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, operator::ORGANIZATIONS, &json!({"name": "acme"})).await;
+
+    let (_, omitted) = declared(
+        &kestrel,
+        &agents_of("acme"),
+        &json!({"name": "builder", "harness": "opencode"}),
+    )
+    .await;
+    let (_, null) = declared(
+        &kestrel,
+        &agents_of("acme"),
+        &json!({
+            "name": "reviewer", "harness": "opencode",
+            "model": null, "mode": null, "thought_level": null,
+        }),
+    )
+    .await;
+    for agent in [&omitted, &null] {
+        for default in ["model", "mode", "thought_level"] {
+            assert_eq!(agent[default], Value::Null, "{agent}");
+        }
+    }
+
+    let model = agent_model_of("acme", "builder");
+    let put =
+        async |body: Value| requested(&kestrel, reqwest::Method::PUT, &model, Some(&body)).await;
+    let (status, set) = put(json!({"model": "claude-opus-5"})).await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    assert_eq!(set["model"], "claude-opus-5");
+    assert_eq!(set["id"], omitted["id"]);
+    assert_eq!(put(json!({"model": null})).await.1["model"], Value::Null);
+    put(json!({"model": "claude-opus-5"})).await;
+    assert_eq!(put(json!({})).await.1["model"], Value::Null);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_client_declares_and_lists_projects_and_agents() {
     let kestrel = Kestrel::boot().await;
     succeeded(&client(&kestrel, &["organization", "declare", "acme"]).await);

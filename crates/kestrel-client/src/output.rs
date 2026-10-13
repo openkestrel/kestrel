@@ -7,7 +7,8 @@ use serde_json::Value;
 use crate::filter::Filter;
 use crate::view::View;
 
-static ABSENT: Value = Value::Null;
+static NULL: Value = Value::Null;
+pub const ABSENT: &str = "-";
 const GAP: &str = "  ";
 
 pub enum Presentation {
@@ -143,7 +144,7 @@ fn result(out: &mut impl Write, value: &Val) -> Result<()> {
 pub fn line(presentation: &Presentation, view: &View, record: &Value) -> String {
     match presentation {
         Presentation::Json(_) => record.to_string(),
-        Presentation::Delimited => delimited(record, view),
+        Presentation::Delimited => delimited_record(record, view),
         Presentation::Human(_) => view
             .fields()
             .iter()
@@ -153,46 +154,92 @@ pub fn line(presentation: &Presentation, view: &View, record: &Value) -> String 
     }
 }
 
-fn delimited(record: &Value, view: &View) -> String {
-    cells(record, view.fields()).join("\t")
+fn delimited_record(record: &Value, view: &View) -> String {
+    let cells: Vec<String> = view
+        .fields()
+        .iter()
+        .map(|field| rendered(at(record, field)))
+        .collect();
+    delimited(&cells)
+}
+
+pub fn delimited(cells: &[String]) -> String {
+    cells
+        .iter()
+        .map(|cell| one_line(cell))
+        .collect::<Vec<_>>()
+        .join("\t")
+}
+
+pub enum Shape {
+    Value,
+    Rows,
+    Detail,
 }
 
 fn human(out: &mut impl Write, view: &View, records: &[&Value], width: usize) -> Result<()> {
-    if records.is_empty() {
+    let shape = match view {
+        View::Value(_) => Shape::Value,
+        View::Rows(_) => Shape::Rows,
+        View::Detail(_) => Shape::Detail,
+    };
+    let labels: Vec<String> = view.fields().iter().map(|field| label(field)).collect();
+    let rows: Vec<Vec<String>> = records
+        .iter()
+        .map(|record| {
+            view.fields()
+                .iter()
+                .map(|field| match (&shape, *field) {
+                    (Shape::Detail, "tools") => running(record, field, "status"),
+                    (Shape::Detail, "units") => running(record, field, "kind"),
+                    (Shape::Detail, "depends_on") => names(record, field),
+                    _ => rendered(at(record, field)),
+                })
+                .collect()
+        })
+        .collect();
+    table(out, &shape, &labels, &rows, width)
+}
+
+/// A cell arrives as it reads, before it is fitted to a line or a width.
+pub fn table(
+    out: &mut impl Write,
+    shape: &Shape,
+    labels: &[String],
+    rows: &[Vec<String>],
+    width: usize,
+) -> Result<()> {
+    if rows.is_empty() {
         return Ok(());
     }
-    match view {
-        View::Value(field) => {
-            for record in records {
-                writeln!(out, "{}", truncated(&rendered(at(record, field)), width))?;
+    match shape {
+        Shape::Value => {
+            for cell in rows.iter().flatten() {
+                writeln!(out, "{}", truncated(cell, width))?;
             }
         }
-        View::Rows(fields) => {
-            let mut table = vec![fields.iter().map(|field| label(field)).collect()];
-            table.extend(records.iter().map(|record| cells(record, fields)));
+        Shape::Rows => {
+            let mut table = vec![labels.to_vec()];
+            table.extend(
+                rows.iter()
+                    .map(|row| row.iter().map(|cell| one_line(cell)).collect()),
+            );
             let widths = widest(&table);
             for row in &table {
                 writeln!(out, "{}", truncated(&padded(row, &widths), width))?;
             }
         }
-        View::Detail(fields) => {
-            let labels: Vec<String> = fields.iter().map(|field| label(field)).collect();
+        Shape::Detail => {
             let column = labels
                 .iter()
                 .map(|label| label.chars().count())
                 .max()
                 .unwrap_or_default();
-            for (place, record) in records.iter().enumerate() {
+            for (place, row) in rows.iter().enumerate() {
                 if place > 0 {
                     writeln!(out)?;
                 }
-                for (label, field) in labels.iter().zip(*fields) {
-                    let value = match *field {
-                        "tools" => running(record, field, "status"),
-                        "units" => running(record, field, "kind"),
-                        "depends_on" => names(record, field),
-                        _ => rendered(at(record, field)),
-                    };
+                for (label, value) in labels.iter().zip(row) {
                     let mut lines = value.lines();
                     let first = lines.next().unwrap_or_default();
                     writeln!(
@@ -221,7 +268,7 @@ fn at<'a>(record: &'a Value, path: &str) -> Option<&'a Value> {
     let mut value = record;
     for key in path.split('.') {
         if value.is_null() {
-            return Some(&ABSENT);
+            return Some(&NULL);
         }
         value = value.get(key)?;
     }
@@ -259,20 +306,13 @@ fn names(record: &Value, field: &str) -> String {
     rendered(Some(&Value::Array(names)))
 }
 
-fn cells(record: &Value, fields: &[&str]) -> Vec<String> {
-    fields
-        .iter()
-        .map(|field| one_line(&rendered(at(record, field))))
-        .collect()
-}
-
 fn rendered(value: Option<&Value>) -> String {
-    match value.unwrap_or(&ABSENT) {
-        Value::Null => "-".to_owned(),
+    match value.unwrap_or(&NULL) {
+        Value::Null => ABSENT.to_owned(),
         Value::Bool(yes) => yes.to_string(),
         Value::Number(number) => number.to_string(),
         Value::String(text) => text.clone(),
-        Value::Array(items) if items.is_empty() => "-".to_owned(),
+        Value::Array(items) if items.is_empty() => ABSENT.to_owned(),
         Value::Array(items) => items
             .iter()
             .map(|item| rendered(Some(item)))

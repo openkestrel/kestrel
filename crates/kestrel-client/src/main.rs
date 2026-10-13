@@ -12,6 +12,7 @@ mod sse;
 mod start;
 mod terminal;
 mod transcript;
+mod typed;
 mod view;
 mod work;
 
@@ -1117,38 +1118,36 @@ async fn run(
             }
         }
         Command::Operator(OperatorCommand::Name { name }) => {
-            show(
-                &presentation,
-                &view::OPERATOR,
-                &api.put(&["operator"], &json!({ "name": name })).await?,
-            )?;
+            let operator: wire::Operator = api
+                .put_as(&["operator"], &wire::OperatorDeclaration { name })
+                .await?;
+            typed::show(&presentation, &view::OPERATOR, &operator)?;
         }
         Command::Operator(OperatorCommand::Show) => {
-            show(
-                &presentation,
-                &view::OPERATOR,
-                &api.get(&["operator"]).await?,
-            )?;
+            let operator: wire::Operator = api.get_as(&["operator"]).await?;
+            typed::show(&presentation, &view::OPERATOR, &operator)?;
         }
         Command::Organization(OrganizationCommand::Declare {
             name,
             max_live_instances,
         }) => {
-            show(
-                &presentation,
-                &view::DECLARED,
-                &api.post(
-                    &["organizations"],
-                    &json!({ "name": name, "max_live_instances": max_live_instances }),
-                )
-                .await?,
-            )?;
+            let declaration = wire::OrganizationDeclaration {
+                name,
+                max_live_instances: Some(
+                    max_live_instances.map(|most| i64::try_from(most.get()).unwrap_or(i64::MAX)),
+                ),
+            };
+            let organization: wire::Organization =
+                api.post_as(&["organizations"], &declaration).await?;
+            typed::show(&presentation, &view::ORGANIZATION_DECLARED, &organization)?;
         }
         Command::Organization(OrganizationCommand::List) => {
-            collection(
+            let organizations: wire::ListOrganizationsResponse =
+                api.get_as(&["organizations"]).await?;
+            typed::collection(
                 &presentation,
                 &view::ORGANIZATIONS,
-                &api.get(&["organizations"]).await?,
+                &organizations,
                 &empty_list(
                     &client.control_plane,
                     "Organizations",
@@ -1168,20 +1167,20 @@ async fn run(
             let declaration = wire::ProjectDeclaration::builder(branch, name, repositories)
                 .integrations(integrations)
                 .build();
-            show(
-                &presentation,
-                &view::DECLARED,
-                &api.post(&["organizations", &organization, "projects"], &declaration)
-                    .await?,
-            )?;
+            let project: wire::Project = api
+                .post_as(&["organizations", &organization, "projects"], &declaration)
+                .await?;
+            typed::show(&presentation, &view::PROJECT_DECLARED, &project)?;
         }
         Command::Project(ProjectCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            let projects: wire::ListProjectsResponse = api
+                .get_as(&["organizations", &organization, "projects"])
+                .await?;
+            typed::collection(
                 &presentation,
                 &view::PROJECTS,
-                &api.get(&["organizations", &organization, "projects"])
-                    .await?,
+                &projects,
                 &empty_list(
                     &client.control_plane,
                     "Projects",
@@ -1196,36 +1195,32 @@ async fn run(
             model,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            let declaration = json!({
-                "name": name,
-                "harness": harness,
-                "model": model,
-            });
-            show(
-                &presentation,
-                &view::DECLARED,
-                &api.post(&["organizations", &organization, "agents"], &declaration)
-                    .await?,
-            )?;
+            let mut declaration = wire::AgentDeclaration::new(harness, name);
+            declaration.model = Some(model);
+            let agent: wire::Agent = api
+                .post_as(&["organizations", &organization, "agents"], &declaration)
+                .await?;
+            typed::show(&presentation, &view::AGENT_DECLARED, &agent)?;
         }
         Command::Agent(AgentCommand::Model { name, model }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
-                &presentation,
-                &view::AGENT_MODEL,
-                &api.put(
+            let agent: wire::Agent = api
+                .put_as(
                     &["organizations", &organization, "agents", &name, "model"],
-                    &json!({ "model": model }),
+                    &wire::AgentModel { model: Some(model) },
                 )
-                .await?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::AGENT_MODEL, &agent)?;
         }
         Command::Agent(AgentCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            let agents: wire::ListAgentsResponse = api
+                .get_as(&["organizations", &organization, "agents"])
+                .await?;
+            typed::collection(
                 &presentation,
                 &view::AGENTS,
-                &api.get(&["organizations", &organization, "agents"]).await?,
+                &agents,
                 &empty_list(
                     &client.control_plane,
                     "Agents",
@@ -2346,17 +2341,20 @@ async fn started(
     let organization =
         start::organization(named, &existing).map_err(|missing| incomplete(&[missing]))?;
 
-    let declared = names(&api.get(&["organizations"]).await?).contains(&organization.value);
+    let declared = scope::organizations(api)
+        .await?
+        .contains(&organization.value);
     let (projects, agents, credentials) = if declared {
-        let within = async |records| {
-            api.get(&["organizations", &organization.value, records])
-                .await
-        };
-        tokio::try_join!(within("projects"), within("agents"), within("credentials"))?
+        let within = |records| ["organizations", &organization.value, records];
+        tokio::try_join!(
+            async { api.get_as(&within("projects")).await },
+            async { api.get_as(&within("agents")).await },
+            async { api.get(&within("credentials")).await },
+        )?
     } else {
-        (json!([]), json!([]), json!([]))
+        (Vec::new(), Vec::new(), json!([]))
     };
-    let existing = start::Existing::read(declared, &projects, &agents, &credentials)?;
+    let existing = start::Existing::read(declared, projects, agents, &credentials);
     let names_a_project = start.project.as_ref().is_some_and(|name| {
         existing
             .projects
@@ -3362,17 +3360,20 @@ async fn status(
     let organization = scope.organization.as_str();
     let within = async |records| api.get(&["organizations", organization, records]).await;
     let (projects, agents, triggers, workspaces, integrations, credentials, profiles) = tokio::try_join!(
-        within("projects"),
-        within("agents"),
+        async {
+            api.get_as::<wire::ListProjectsResponse>(&["organizations", organization, "projects"])
+                .await
+        },
+        async {
+            api.get_as::<wire::ListAgentsResponse>(&["organizations", organization, "agents"])
+                .await
+        },
         within("triggers"),
         within("workspaces"),
         within("integrations"),
         within("credentials"),
         within("profiles"),
     )?;
-    let project_names = names(&projects);
-    let agent_names = names(&agents);
-
     show(
         presentation,
         &view::STATUS,
@@ -3381,14 +3382,14 @@ async fn status(
             json!({
                 "organization": organization,
                 "organization_source": scope.source.to_string(),
-                "projects": count(&projects),
-                "agents": count(&agents),
+                "projects": projects.len(),
+                "agents": agents.len(),
                 "triggers": count(&triggers),
                 "workspaces": count(&workspaces),
                 "integrations": count(&integrations),
                 "credentials": count(&credentials),
                 "profiles": count(&profiles),
-                "next": next_command(&project_names, &agent_names),
+                "next": next_command(projects.first(), agents.first()),
             }),
         ),
     )?;
@@ -3407,19 +3408,13 @@ fn count(records: &Value) -> usize {
     records.as_array().map_or(0, Vec::len)
 }
 
-fn names(records: &Value) -> Vec<String> {
-    records
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|record| record["name"].as_str().map(str::to_owned))
-        .collect()
-}
-
-fn next_command(projects: &[String], agents: &[String]) -> String {
-    match (projects.first(), agents.first()) {
+fn next_command(project: Option<&wire::Project>, agent: Option<&wire::Agent>) -> String {
+    match (project, agent) {
         (Some(project), Some(agent)) => {
-            format!("{BINARY} workspace open --project {project} --agent {agent}")
+            format!(
+                "{BINARY} workspace open --project {} --agent {}",
+                project.name, agent.name
+            )
         }
         (Some(_), None) => format!("{BINARY} agent declare <name>"),
         (None, _) => {

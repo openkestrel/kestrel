@@ -523,29 +523,12 @@ fn is_loopback_host(host: &str) -> bool {
             .is_ok_and(|address| address.is_loopback())
 }
 
-#[derive(Deserialize)]
-struct OrganizationDeclaration {
-    name: String,
-    max_live_instances: Option<std::num::NonZeroUsize>,
-}
-
-#[derive(Deserialize)]
-struct AgentDeclaration {
-    name: String,
-    harness: String,
-    model: Option<String>,
-    mode: Option<String>,
-    thought_level: Option<String>,
-}
-
-impl AgentDeclaration {
-    fn declared(&self) -> Declared {
-        Declared::named(Declared {
-            model: self.model.clone(),
-            mode: self.mode.clone(),
-            thought_level: self.thought_level.clone(),
-        })
-    }
+fn agent_defaults(declaration: &wire::AgentDeclaration) -> Declared {
+    Declared::named(Declared {
+        model: declaration.model.clone().flatten(),
+        mode: declaration.mode.clone().flatten(),
+        thought_level: declaration.thought_level.clone().flatten(),
+    })
 }
 
 #[derive(Deserialize)]
@@ -669,29 +652,8 @@ struct TriggerDispatch {
 }
 
 #[derive(Deserialize)]
-struct AgentModel {
-    model: Option<String>,
-}
-
-#[derive(Deserialize)]
 struct Release {
     participant: Option<String>,
-}
-
-#[derive(Serialize)]
-struct OrganizationRecord {
-    id: String,
-    name: String,
-    max_live_instances: Option<std::num::NonZeroUsize>,
-}
-
-#[derive(Serialize)]
-struct ProjectRecord {
-    id: String,
-    name: String,
-    repositories: Vec<String>,
-    integrations: Vec<wire::SelectedIntegration>,
-    branch: String,
 }
 
 fn selected(integrations: Vec<domain::SelectedIntegration>) -> Vec<wire::SelectedIntegration> {
@@ -703,16 +665,6 @@ fn selected(integrations: Vec<domain::SelectedIntegration>) -> Vec<wire::Selecte
             integration_id: selected.integration.to_string().parse().expect("a uuid"),
         })
         .collect()
-}
-
-#[derive(Serialize)]
-struct AgentRecord {
-    id: String,
-    name: String,
-    harness: String,
-    model: Option<String>,
-    mode: Option<String>,
-    thought_level: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1235,20 +1187,26 @@ struct TriggerTestRecord {
     elapsing: Option<Timestamp>,
 }
 
-impl From<Organization> for OrganizationRecord {
+impl From<Organization> for wire::Organization {
     fn from(organization: Organization) -> Self {
         Self {
-            id: organization.id.to_string(),
+            id: organization
+                .id
+                .to_string()
+                .parse()
+                .expect("an Organization UUID"),
             name: organization.name,
-            max_live_instances: organization.max_live_instances,
+            max_live_instances: organization
+                .max_live_instances
+                .map(|most| i64::try_from(most.get()).unwrap_or(i64::MAX)),
         }
     }
 }
 
-impl From<Project> for ProjectRecord {
+impl From<Project> for wire::Project {
     fn from(project: Project) -> Self {
         Self {
-            id: project.id.to_string(),
+            id: project.id.to_string().parse().expect("a Project UUID"),
             name: project.name,
             repositories: project.repositories,
             integrations: selected(project.integrations),
@@ -1257,10 +1215,10 @@ impl From<Project> for ProjectRecord {
     }
 }
 
-impl From<Agent> for AgentRecord {
+impl From<Agent> for wire::Agent {
     fn from(agent: Agent) -> Self {
         Self {
-            id: agent.id.to_string(),
+            id: agent.id.to_string().parse().expect("an Agent UUID"),
             name: agent.name,
             harness: agent.harness,
             model: agent.declared.model,
@@ -1558,7 +1516,7 @@ async fn resolve_repositories(
 
 async fn organizations(
     State(control_plane): State<ControlPlane>,
-) -> Result<Json<Vec<OrganizationRecord>>, Refused> {
+) -> Result<Json<wire::ListOrganizationsResponse>, Refused> {
     let mut tx = control_plane.store.begin().await?;
     let organizations = tx.organizations().all().await?;
 
@@ -1567,25 +1525,38 @@ async fn organizations(
 
 async fn declare_organization(
     State(control_plane): State<ControlPlane>,
-    declaration: Result<Json<OrganizationDeclaration>, JsonRejection>,
+    declaration: Result<Json<wire::OrganizationDeclaration>, JsonRejection>,
 ) -> Result<Response, Refused> {
     let Json(declaration) = declaration?;
+    let max_live_instances = declaration
+        .max_live_instances
+        .flatten()
+        .map(|most| {
+            usize::try_from(most)
+                .ok()
+                .and_then(std::num::NonZeroUsize::new)
+                .ok_or_else(|| Refused::Malformed {
+                    field: Some("max_live_instances"),
+                    why: format!("max_live_instances is a count of at least 1, not {most}"),
+                })
+        })
+        .transpose()?;
     named("declare_organization", &declaration.name)?;
 
     let mut tx = control_plane.store.begin().await?;
     let declared = tx
         .organizations()
-        .declare(&declaration.name, declaration.max_live_instances)
+        .declare(&declaration.name, max_live_instances)
         .await?;
     tx.commit().await?;
 
-    Ok(answered::<_, OrganizationRecord>(declared))
+    Ok(answered::<_, wire::Organization>(declared))
 }
 
 async fn projects(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<ProjectRecord>>, Refused> {
+) -> Result<Json<wire::ListProjectsResponse>, Refused> {
     let mut tx = control_plane.store.begin().await?;
     let organization = tx.organizations().named(&organization).await?;
     let projects = tx.projects().all(&organization).await?;
@@ -1625,13 +1596,13 @@ async fn declare_project(
     .await?;
     tx.commit().await?;
 
-    Ok(answered::<_, ProjectRecord>(declared))
+    Ok(answered::<_, wire::Project>(declared))
 }
 
 async fn agents(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<AgentRecord>>, Refused> {
+) -> Result<Json<wire::ListAgentsResponse>, Refused> {
     let agents = agent::agents(&control_plane.store, &organization).await?;
 
     Ok(Json(agents.into_iter().map(Into::into).collect()))
@@ -1640,14 +1611,14 @@ async fn agents(
 async fn set_agent_model(
     State(control_plane): State<ControlPlane>,
     Path((organization, name)): Path<(String, String)>,
-    model: Result<Json<AgentModel>, JsonRejection>,
-) -> Result<Json<AgentRecord>, Refused> {
+    model: Result<Json<wire::AgentModel>, JsonRejection>,
+) -> Result<Json<wire::Agent>, Refused> {
     let Json(model) = model?;
     let agent = agent::set_model(
         &control_plane.store,
         &organization,
         &name,
-        model.model.as_deref(),
+        model.model.flatten().as_deref(),
     )
     .await
     .map_err(named_refusal)?;
@@ -1658,14 +1629,14 @@ async fn set_agent_model(
 async fn declare_agent(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    declaration: Result<Json<AgentDeclaration>, JsonRejection>,
+    declaration: Result<Json<wire::AgentDeclaration>, JsonRejection>,
 ) -> Result<Response, Refused> {
     let Json(declaration) = declaration?;
     let checked = declaration::check_agent(
         &control_plane.images,
         &declaration.name,
         &declaration.harness,
-        &declaration.declared(),
+        &agent_defaults(&declaration),
         "declare_agent",
     )
     .await
@@ -1682,7 +1653,7 @@ async fn declare_agent(
     .await?;
     tx.commit().await?;
 
-    Ok(answered::<_, AgentRecord>(declared))
+    Ok(answered::<_, wire::Agent>(declared))
 }
 
 async fn apply_declaration(

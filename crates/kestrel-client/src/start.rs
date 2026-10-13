@@ -39,12 +39,11 @@ pub struct LocalClone {
 impl Existing {
     pub fn read(
         organization_declared: bool,
-        projects: &Value,
-        agents: &Value,
+        projects: wire::ListProjectsResponse,
+        agents: wire::ListAgentsResponse,
         credentials: &Value,
-    ) -> Result<Self> {
-        let projects: wire::ListProjectsResponse = serde_json::from_value(projects.clone())?;
-        Ok(Self {
+    ) -> Self {
+        Self {
             organization_declared,
             projects: projects
                 .into_iter()
@@ -62,27 +61,22 @@ impl Existing {
                     branch: record.branch,
                 })
                 .collect(),
-            agents: records(agents, |record| {
-                Some(Agent {
-                    name: record["name"].as_str()?.to_owned(),
-                    harness: record["harness"].as_str()?.to_owned(),
-                    model: record["model"].as_str().map(str::to_owned),
+            agents: agents
+                .into_iter()
+                .map(|record| Agent {
+                    name: record.name,
+                    harness: record.harness,
+                    model: record.model,
                 })
-            }),
-            credentials: records(credentials, |record| {
-                record["variable"].as_str().map(str::to_owned)
-            }),
-        })
+                .collect(),
+            credentials: credentials
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|record| record["variable"].as_str().map(str::to_owned))
+                .collect(),
+        }
     }
-}
-
-fn records<T>(records: &Value, read: impl Fn(&Value) -> Option<T>) -> Vec<T> {
-    records
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(read)
-        .collect()
 }
 
 pub struct Project {
