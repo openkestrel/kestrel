@@ -306,7 +306,7 @@ fn names(record: &Value, field: &str) -> String {
     rendered(Some(&Value::Array(names)))
 }
 
-fn rendered(value: Option<&Value>) -> String {
+pub fn rendered(value: Option<&Value>) -> String {
     match value.unwrap_or(&NULL) {
         Value::Null => ABSENT.to_owned(),
         Value::Bool(yes) => yes.to_string(),

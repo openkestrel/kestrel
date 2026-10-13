@@ -36,7 +36,20 @@ impl ControlPlane {
     }
 
     pub async fn get_as<T: DeserializeOwned>(&self, path: &[&str]) -> Result<T> {
-        self.answered(self.client.get(self.url(path)?), false).await
+        self.get_where_as(path, &[]).await
+    }
+
+    pub async fn get_where_as<T: DeserializeOwned>(
+        &self,
+        path: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<T> {
+        let mut url = self.url(path)?;
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query);
+        }
+
+        self.answered(self.client.get(url), false).await
     }
 
     pub async fn get_response(&self, path: &[&str], query: &[(&str, &str)]) -> Result<Response> {

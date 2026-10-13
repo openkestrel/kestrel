@@ -2,7 +2,7 @@
 
 use kestrel_operator_types as wire;
 
-use crate::typed::{Column, Columns, joined, or_absent, text};
+use crate::typed::{Column, Columns, compound, joined, or_absent, text};
 
 /// What a command produces, as dotted paths into the record the control plane answered.
 pub enum View {
@@ -85,63 +85,106 @@ pub const INTEGRATION: View = View::Detail(&[
     "webhook_path",
     "last_event_refusal",
 ]);
-pub const EVENTS: View = View::Rows(&[
-    "record",
-    "event.time",
-    "event.source",
-    "event.type",
-    "event.subject",
+pub const EVENTS: Columns<wire::EventRecord> = Columns::Rows(&[
+    Column("record", |event| text(event.record)),
+    Column("time", |event| text(&event.event.time)),
+    Column("source", |event| text(&event.event.source)),
+    Column("type", |event| text(&event.event.r#type)),
+    Column("subject", |event| or_absent(event.event.subject.as_ref())),
 ]);
-pub const EVENT: View = View::Detail(&[
-    "record",
-    "organization",
-    "integration",
-    "recorded_at",
-    "event.id",
-    "event.specversion",
-    "event.source",
-    "event.type",
-    "event.subject",
-    "event.time",
-    "event.data",
+pub const EVENT: Columns<wire::EventRecord> = Columns::Detail(&[
+    Column("record", |event| text(event.record)),
+    Column("organization", |event| text(event.organization)),
+    Column("integration", |event| or_absent(event.integration.as_ref())),
+    Column("recorded at", |event| text(&event.recorded_at)),
+    Column("id", |event| text(&event.event.id)),
+    Column("specversion", |event| text(&event.event.specversion)),
+    Column("source", |event| text(&event.event.source)),
+    Column("type", |event| text(&event.event.r#type)),
+    Column("subject", |event| or_absent(event.event.subject.as_ref())),
+    Column("time", |event| text(&event.event.time)),
+    Column("data", |event| compound(&event.event.data)),
 ]);
-pub const TRIGGERS: View = View::Rows(&[
-    "id", "name", "state", "project", "agent", "every", "cron", "filter",
+pub const TRIGGERS: Columns<wire::Trigger> = Columns::Rows(&[
+    Column("id", |trigger| text(trigger.id)),
+    Column("name", |trigger| text(&trigger.name)),
+    Column("state", |trigger| text(&trigger.state)),
+    Column("project", |trigger| text(&trigger.project)),
+    Column("agent", |trigger| text(&trigger.agent)),
+    Column("every", |trigger| or_absent(trigger.every.as_ref())),
+    Column("cron", |trigger| or_absent(trigger.cron.as_ref())),
+    Column("filter", |trigger| compound(&trigger.filter)),
 ]);
-pub const TRIGGER: View = View::Detail(&[
-    "id",
-    "organization",
-    "name",
-    "state",
-    "disabled_because",
-    "firing_budget",
-    "every",
-    "cron",
-    "zone",
-    "filter",
-    "project",
-    "agent",
-    "allows",
-    "profile",
-    "branch",
-    "correlation",
-    "on_miss",
-    "on_open_workspace",
-    "applied",
-    "declared_at",
-    "brief",
+pub const TRIGGER: Columns<wire::Trigger> = Columns::Detail(&[
+    Column("id", |trigger| text(trigger.id)),
+    Column("organization", |trigger| text(&trigger.organization)),
+    Column("name", |trigger| text(&trigger.name)),
+    Column("state", |trigger| text(&trigger.state)),
+    Column("disabled because", |trigger| {
+        or_absent(trigger.disabled_because.as_ref())
+    }),
+    Column("firing budget", |trigger| compound(&trigger.firing_budget)),
+    Column("every", |trigger| or_absent(trigger.every.as_ref())),
+    Column("cron", |trigger| or_absent(trigger.cron.as_ref())),
+    Column("zone", |trigger| or_absent(trigger.zone.as_ref())),
+    Column("filter", |trigger| compound(&trigger.filter)),
+    Column("project", |trigger| text(&trigger.project)),
+    Column("agent", |trigger| text(&trigger.agent)),
+    Column("allows", |trigger| joined(&trigger.allows)),
+    Column("profile", |trigger| or_absent(trigger.profile.as_ref())),
+    Column("branch", |trigger| or_absent(trigger.branch.as_ref())),
+    Column("correlation", |trigger| {
+        or_absent(trigger.correlation.as_ref())
+    }),
+    Column("on miss", |trigger| or_absent(trigger.on_miss.as_ref())),
+    Column("on open workspace", |trigger| {
+        text(&trigger.on_open_workspace)
+    }),
+    Column("applied", |trigger| text(trigger.applied)),
+    Column("declared at", |trigger| text(&trigger.declared_at)),
+    Column("brief", |trigger| text(&trigger.brief)),
 ]);
-pub const TRIGGER_TEST: View = View::Detail(&[
-    "matches",
-    "would",
-    "elapsing",
-    "agent",
-    "branch",
-    "correlation",
-    "brief",
+pub const TRIGGER_DECLARED: Columns<wire::Trigger> =
+    Columns::Value(Column("id", |trigger| text(trigger.id)));
+pub const TRIGGER_STATE: Columns<wire::Trigger> =
+    Columns::Value(Column("state", |trigger| text(&trigger.state)));
+pub const TRIGGER_TEST: Columns<wire::TriggerTestResult> = Columns::Detail(&[
+    Column("matches", |tested| text(tested.matches)),
+    Column("would", |tested| text(&tested.would)),
+    Column("elapsing", |tested| or_absent(tested.elapsing.as_ref())),
+    Column("agent", |tested| text(&tested.agent)),
+    Column("branch", |tested| or_absent(tested.branch.as_ref())),
+    Column("correlation", |tested| {
+        or_absent(tested.correlation.as_ref())
+    }),
+    Column("brief", |tested| text(&tested.brief)),
 ]);
-pub const TRIGGER_STATE: View = View::Value("state");
-pub const FIRED: View = View::Detail(&["outcome", "workspace", "session", "event", "correlation"]);
+pub const FIRED: Columns<wire::Fired> = Columns::Detail(&[
+    Column("outcome", |fired| match fired {
+        wire::Fired::FiredOpened(opened) => compound(&opened.outcome),
+        wire::Fired::FiredFed(fed) => compound(&fed.outcome),
+        wire::Fired::FiredIgnored(ignored) => compound(&ignored.outcome),
+    }),
+    Column("workspace", |fired| match fired {
+        wire::Fired::FiredOpened(opened) => text(opened.workspace),
+        wire::Fired::FiredFed(fed) => text(fed.workspace),
+        wire::Fired::FiredIgnored(_) => or_absent(None::<&String>),
+    }),
+    Column("session", |fired| match fired {
+        wire::Fired::FiredOpened(opened) => text(opened.session),
+        wire::Fired::FiredFed(fed) => or_absent(fed.session.as_ref()),
+        wire::Fired::FiredIgnored(_) => or_absent(None::<&String>),
+    }),
+    Column("event", |fired| match fired {
+        wire::Fired::FiredOpened(opened) => text(opened.event),
+        wire::Fired::FiredFed(fed) => text(fed.event),
+        wire::Fired::FiredIgnored(ignored) => text(ignored.event),
+    }),
+    Column("correlation", |fired| match fired {
+        wire::Fired::FiredIgnored(ignored) => text(&ignored.correlation),
+        wire::Fired::FiredOpened(_) | wire::Fired::FiredFed(_) => or_absent(None::<&String>),
+    }),
+]);
 pub const WORKSPACES: View = View::Rows(&[
     "id",
     "name",

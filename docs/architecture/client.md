@@ -23,8 +23,9 @@ in `crates/kestrel-client/`, and the browser Client in `packages/client`. Both d
   name of its own.
 - **Output** (`output.rs`, `typed.rs`, `view.rs`): a migrated command decodes the answer into its
   `kestrel-operator-types` value with `ControlPlane::get_as`, `post_as` or `put_as` and declares
-  `Columns` that read its fields; the Operator, Organization, Project and Agent commands, scope
-  resolution and `status`'s Project and Agent reads do. Every other command still declares a `View`
+  `Columns` that read its fields; the Operator, Organization, Project, Agent, Event and Trigger
+  commands, both `apply` results, scope resolution and `status`'s Project, Agent and Trigger reads
+  do. Every other command still declares a `View`
   of dotted paths into an untyped answer, and both draw through one table. Live work inspection
   follows git-style prose even when piped. For commands with a
   `View`, a terminal gets aligned columns and a pipe gets delimited rows. `--json` is a flag on

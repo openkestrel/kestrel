@@ -18,6 +18,7 @@ use axum::{BoxError, Form, Json, Router};
 use futures_core::Stream;
 use jiff::{SignedDuration, Timestamp};
 use kestrel_operator_types as wire;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 use tokio_stream::{StreamExt as _, StreamMap};
@@ -32,9 +33,10 @@ use crate::declined::{
     Resource, Step, Within,
 };
 use crate::domain::{
-    self, Agent, Connection, Declared, Direction, EventRecordId, Fires, Firing, HeldMessage,
-    Integration, IntegrationKind, IntegrationState, Occurrence, Organization, Project, Schedule,
-    Session, StartedBy, SubscriptionProfile, Trigger, Workspace, WorkspaceId, WorkspaceState,
+    self, Agent, Connection, CorrelationMiss, Declared, Direction, DisableReason, EventRecordId,
+    Fires, HeldMessage, Integration, IntegrationKind, IntegrationState, OnOpenWorkspace,
+    Organization, Project, Schedule, Session, StartedBy, SubscriptionProfile, Trigger,
+    TriggerState, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::fanout;
 use crate::integration::github::{self, Github};
@@ -602,56 +604,6 @@ struct OptionChange {
 }
 
 #[derive(Deserialize)]
-struct TriggerDeclaration {
-    name: String,
-    filter: Option<serde_json::Value>,
-    every: Option<String>,
-    cron: Option<String>,
-    zone: Option<String>,
-    brief: String,
-    branch: Option<String>,
-    correlation: Option<String>,
-    on_miss: Option<String>,
-    on_open_workspace: Option<String>,
-    project: String,
-    agent: String,
-    #[serde(default)]
-    allows: Vec<String>,
-    profile: Option<String>,
-    model: Option<String>,
-    mode: Option<String>,
-    thought_level: Option<String>,
-}
-
-impl TriggerDeclaration {
-    fn declared(&self) -> Declared {
-        Declared::named(Declared {
-            model: self.model.clone(),
-            mode: self.mode.clone(),
-            thought_level: self.thought_level.clone(),
-        })
-    }
-}
-
-#[derive(Deserialize)]
-struct TriggerTest {
-    event: Option<String>,
-    integration: Option<String>,
-    issue: Option<i64>,
-    instruction: Option<String>,
-    agent: Option<String>,
-    declared: Option<triggers::File>,
-}
-
-#[derive(Deserialize)]
-struct TriggerDispatch {
-    integration: String,
-    issue: i64,
-    instruction: Option<String>,
-    agent: Option<String>,
-}
-
-#[derive(Deserialize)]
 struct Release {
     participant: Option<String>,
 }
@@ -1141,52 +1093,6 @@ fn warns_cache(harness: &str, category: Option<&str>) -> bool {
     !CACHE_KEPT_ACROSS.contains(&(harness, category))
 }
 
-#[derive(Serialize)]
-struct TriggerRecord {
-    id: String,
-    organization: String,
-    name: String,
-    state: String,
-    disabled_because: Option<String>,
-    firing_budget: FiringBudgetRecord,
-    filter: Option<serde_json::Value>,
-    every: Option<String>,
-    cron: Option<String>,
-    zone: Option<String>,
-    admits_outsiders: bool,
-    brief: String,
-    branch: Option<String>,
-    correlation: Option<String>,
-    on_miss: Option<String>,
-    on_open_workspace: String,
-    project: String,
-    agent: String,
-    allows: Vec<String>,
-    profile: Option<String>,
-    model: Option<String>,
-    mode: Option<String>,
-    thought_level: Option<String>,
-    applied: bool,
-    declared_at: Timestamp,
-}
-
-#[derive(Serialize)]
-struct FiringBudgetRecord {
-    limit: usize,
-    window: String,
-}
-
-#[derive(Serialize)]
-struct TriggerTestRecord {
-    matches: bool,
-    brief: String,
-    branch: Option<String>,
-    correlation: Option<String>,
-    agent: String,
-    would: &'static str,
-    elapsing: Option<Timestamp>,
-}
-
 impl From<Organization> for wire::Organization {
     fn from(organization: Organization) -> Self {
         Self {
@@ -1356,7 +1262,7 @@ impl SessionRecord {
     }
 }
 
-impl From<Trigger> for TriggerRecord {
+impl From<Trigger> for wire::Trigger {
     fn from(trigger: Trigger) -> Self {
         let (filter, every, cron, zone, admits_outsiders) = match trigger.fires {
             Fires::On(filter) => {
@@ -1374,15 +1280,25 @@ impl From<Trigger> for TriggerRecord {
                 false,
             ),
         };
+        let correlation = trigger.templates.correlation;
 
         Self {
-            id: trigger.id.to_string(),
+            id: trigger.id.to_string().parse().expect("a Trigger UUID"),
             organization: trigger.organization.name,
             name: trigger.name,
-            state: trigger.state.as_str().to_owned(),
+            state: match trigger.state {
+                TriggerState::Enabled => wire::TriggerState::Enabled,
+                TriggerState::Disabled(DisableReason::Operator) => {
+                    wire::TriggerState::DisabledOperator
+                }
+                TriggerState::Disabled(DisableReason::FiringBudget) => {
+                    wire::TriggerState::DisabledFiringBudget
+                }
+            },
             disabled_because: trigger.disabled_because,
-            firing_budget: FiringBudgetRecord {
-                limit: trigger.firing_budget.limit.get(),
+            firing_budget: wire::TriggerFiringBudget {
+                limit: i64::try_from(trigger.firing_budget.limit.get())
+                    .expect("a firing budget's limit fits the wire"),
                 window: format!("{:#}", trigger.firing_budget.window),
             },
             filter,
@@ -1392,22 +1308,15 @@ impl From<Trigger> for TriggerRecord {
             admits_outsiders,
             brief: trigger.templates.brief.to_string(),
             branch: trigger.templates.branch.map(|branch| branch.to_string()),
-            correlation: trigger
-                .templates
-                .correlation
-                .template()
-                .map(ToString::to_string),
-            on_miss: trigger
-                .templates
-                .correlation
-                .on_miss()
-                .map(|miss| miss.as_str().to_owned()),
-            on_open_workspace: trigger
-                .templates
-                .correlation
-                .on_open_workspace()
-                .as_str()
-                .to_owned(),
+            correlation: correlation.template().map(ToString::to_string),
+            on_miss: correlation.on_miss().map(|miss| match miss {
+                CorrelationMiss::Open => wire::TriggerOnMiss::Open,
+                CorrelationMiss::Ignore => wire::TriggerOnMiss::Ignore,
+            }),
+            on_open_workspace: match correlation.on_open_workspace() {
+                OnOpenWorkspace::Continue => wire::TriggerOnOpenWorkspace::Continue_,
+                OnOpenWorkspace::NewSession => wire::TriggerOnOpenWorkspace::NewSession,
+            },
             project: trigger.project.name,
             agent: trigger.agent.name,
             allows: trigger.allows.into_iter().map(|agent| agent.name).collect(),
@@ -1416,7 +1325,7 @@ impl From<Trigger> for TriggerRecord {
             mode: trigger.declared.mode,
             thought_level: trigger.declared.thought_level,
             applied: trigger.applied,
-            declared_at: trigger.declared_at,
+            declared_at: trigger.declared_at.to_string(),
         }
     }
 }
@@ -1574,12 +1483,7 @@ async fn declare_project(
         &control_plane.store,
         &Github::unfenced()?,
         &organization,
-        &declaration::Project {
-            name: declaration.name.clone(),
-            repositories: declaration.repositories.clone(),
-            integrations: declaration.integrations.clone().unwrap_or_default(),
-            branch: declaration.branch.clone(),
-        },
+        &project_declaration(declaration),
         "declare_project",
     )
     .await
@@ -1659,8 +1563,8 @@ async fn declare_agent(
 async fn apply_declaration(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    declaration: Result<Json<declaration::Document>, JsonRejection>,
-) -> Result<Json<declaration::Applied>, Refused> {
+    declaration: Result<Json<serde_json::Value>, JsonRejection>,
+) -> Result<Json<wire::AppliedDeclaration>, Refused> {
     declared_declaration(
         control_plane,
         organization,
@@ -1673,8 +1577,8 @@ async fn apply_declaration(
 async fn preview_declaration(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    declaration: Result<Json<declaration::Document>, JsonRejection>,
-) -> Result<Json<declaration::Applied>, Refused> {
+    declaration: Result<Json<serde_json::Value>, JsonRejection>,
+) -> Result<Json<wire::AppliedDeclaration>, Refused> {
     declared_declaration(
         control_plane,
         organization,
@@ -1687,10 +1591,11 @@ async fn preview_declaration(
 async fn declared_declaration(
     control_plane: ControlPlane,
     organization: String,
-    declaration: Result<Json<declaration::Document>, JsonRejection>,
+    declaration: Result<Json<serde_json::Value>, JsonRejection>,
     mode: declaration::ApplyMode,
-) -> Result<Json<declaration::Applied>, Refused> {
-    let Json(declaration) = declaration?;
+) -> Result<Json<wire::AppliedDeclaration>, Refused> {
+    let Json(sent) = declaration?;
+    let declaration = document(closed(&sent).map_err(|why| malformed(None, why))?)?;
     let applied = declaration::apply(
         &control_plane.store,
         &control_plane.images,
@@ -1702,7 +1607,151 @@ async fn declared_declaration(
     .await
     .map_err(named_refusal)?;
 
-    Ok(Json(applied))
+    Ok(Json(wire::AppliedDeclaration {
+        declarations: applied.declarations.into_iter().map(change).collect(),
+        admitting_outsiders: applied.admitting_outsiders,
+    }))
+}
+
+/// A generated type reads past a field it has no place for, so a body whose schema the
+/// document closes is read here, where one is refused by its path.
+fn closed<T: DeserializeOwned>(sent: &serde_json::Value) -> Result<T, String> {
+    let mut stray = None;
+    let mut ignored = |path: serde_ignored::Path<'_>| {
+        stray.get_or_insert_with(|| path.to_string());
+    };
+    let read =
+        serde_path_to_error::deserialize(serde_ignored::Deserializer::new(sent, &mut ignored));
+    match stray {
+        Some(field) => Err(format!("unknown field `{field}`")),
+        None => read.map_err(|error| error.to_string()),
+    }
+}
+
+fn project_declaration(declaration: wire::ProjectDeclaration) -> declaration::Project {
+    declaration::Project {
+        name: declaration.name,
+        repositories: declaration.repositories,
+        integrations: declaration.integrations.unwrap_or_default(),
+        branch: declaration.branch,
+    }
+}
+
+/// The document's trigger fires on a filter alone, which the generated type cannot say.
+fn document(document: wire::DeclarationDocument) -> Result<declaration::Document, Refused> {
+    let trigger = document.trigger;
+    for (field, schedule) in [
+        ("trigger.every", &trigger.every),
+        ("trigger.cron", &trigger.cron),
+        ("trigger.zone", &trigger.zone),
+    ] {
+        if schedule.is_some() {
+            return Err(malformed(
+                Some(field),
+                "a declaration document's trigger fires on a filter, not a schedule",
+            ));
+        }
+    }
+
+    Ok(declaration::Document {
+        project: project_declaration(document.project),
+        agent: declaration::Agent {
+            name: document.agent.name,
+            harness: document.agent.harness,
+            model: document.agent.model.flatten(),
+            mode: document.agent.mode.flatten(),
+            thought_level: document.agent.thought_level.flatten(),
+        },
+        trigger: declaration::TriggerDeclaration {
+            name: trigger.name,
+            filter: trigger.filter.ok_or_else(|| {
+                malformed(
+                    Some("trigger.filter"),
+                    "a declaration document's trigger declares its filter",
+                )
+            })?,
+            brief: trigger.brief,
+            branch: trigger.branch.flatten(),
+            correlation: trigger.correlation.flatten(),
+            on_miss: trigger.on_miss.flatten(),
+            on_open_workspace: trigger.on_open_workspace.flatten(),
+            project: trigger.project,
+            agent: trigger.agent,
+            allows: trigger.allows.unwrap_or_default(),
+            profile: trigger.profile.flatten(),
+            model: trigger.model.flatten(),
+            mode: trigger.mode.flatten(),
+            thought_level: trigger.thought_level.flatten(),
+        },
+    })
+}
+
+/// The generated file flattens its entries out of serde's sight, so each is read alone first
+/// for a refusal to name the entry it is in.
+fn trigger_file(sent: &serde_json::Value) -> Result<triggers::File, Refused> {
+    let entries = sent.get("triggers").and_then(serde_json::Value::as_object);
+    for (name, entry) in entries.into_iter().flatten() {
+        closed::<wire::TriggerFileEntry>(entry)
+            .map_err(|why| malformed(None, format!("triggers.{name}: {why}")))?;
+    }
+    let file: wire::TriggerFile = closed(sent).map_err(|why| malformed(None, why))?;
+
+    Ok(triggers::File {
+        triggers: file
+            .triggers
+            .additional_properties
+            .into_iter()
+            .map(|(name, entry)| {
+                (
+                    name,
+                    triggers::Entry {
+                        filter: entry.filter,
+                        brief: entry.brief,
+                        branch: entry.branch.flatten(),
+                        correlation: entry.correlation.flatten(),
+                        on_miss: entry.on_miss.flatten(),
+                        on_open_workspace: entry.on_open_workspace.flatten(),
+                        project: entry.project,
+                        agent: entry.agent,
+                        allows: entry.allows.unwrap_or_default(),
+                        profile: entry.profile.flatten(),
+                        model: entry.model.flatten(),
+                        mode: entry.mode.flatten(),
+                        thought_level: entry.thought_level.flatten(),
+                    },
+                )
+            })
+            .collect(),
+    })
+}
+
+fn change(change: declaration::Declaration) -> wire::DeclarationChange {
+    wire::DeclarationChange {
+        kind: match change.kind {
+            declaration::Kind::Project => wire::DeclarationChangeKind::Project,
+            declaration::Kind::Agent => wire::DeclarationChangeKind::Agent,
+            declaration::Kind::Trigger => wire::DeclarationChangeKind::Trigger,
+        },
+        name: change.name,
+        action: match change.action {
+            declaration::Action::Add => wire::DeclarationChangeAction::Add,
+            declaration::Action::Change => wire::DeclarationChangeAction::Change,
+            declaration::Action::Unchanged => wire::DeclarationChangeAction::Unchanged,
+            declaration::Action::Remove => wire::DeclarationChangeAction::Remove,
+        },
+        differences: differences(change.differences),
+    }
+}
+
+fn differences(differences: Vec<declaration::Difference>) -> Vec<wire::DeclarationDifference> {
+    differences
+        .into_iter()
+        .map(|difference| wire::DeclarationDifference {
+            field: difference.field.to_owned(),
+            was: difference.was,
+            becomes: difference.becomes,
+        })
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -2687,34 +2736,53 @@ struct Limited {
     limit: Option<usize>,
 }
 
-#[derive(Serialize)]
-struct EventRecord {
-    record: String,
-    organization: String,
-    integration: Option<String>,
-    recorded_at: Timestamp,
-    event: Occurrence,
-    firings: Vec<Firing>,
+async fn event_record(store: &Store, event: domain::Event) -> Result<wire::EventRecord, Refused> {
+    let mut firings = Vec::new();
+    for firing in trigger::firings(store, event.record_id).await? {
+        firings.push(wire::Firing {
+            outcome: match firing.outcome.as_str() {
+                "opened" => wire::FiringOutcome::Opened,
+                "fed" => wire::FiringOutcome::Fed,
+                "ignored" => wire::FiringOutcome::Ignored,
+                "failed" => wire::FiringOutcome::Failed,
+                "held" => wire::FiringOutcome::Held,
+                "canceled" => wire::FiringOutcome::Canceled,
+                outcome => return Err(anyhow::anyhow!("a firing ended {outcome}").into()),
+            },
+            trigger: firing.trigger,
+            workspace: firing.workspace.map(|workspace| wire_id(&workspace)),
+            failure: firing.failure,
+            worked_ahead: firing.worked_ahead,
+        });
+    }
+
+    Ok(wire::EventRecord {
+        record: wire_id(&event.record_id),
+        organization: wire_id(&event.organization),
+        integration: event.integration.map(|integration| wire_id(&integration)),
+        recorded_at: event.recorded_at.to_string(),
+        event: wire::CloudEvent {
+            id: event.occurrence.id,
+            source: event.occurrence.source,
+            specversion: event.occurrence.specversion,
+            r#type: event.occurrence.r#type,
+            subject: event.occurrence.subject,
+            time: event.occurrence.time.to_string(),
+            data: event.occurrence.data,
+        },
+        firings,
+    })
 }
 
-impl EventRecord {
-    async fn read(store: &Store, event: domain::Event) -> Result<Self, Refused> {
-        Ok(Self {
-            record: event.record_id.to_string(),
-            organization: event.organization.to_string(),
-            integration: event.integration.map(|integration| integration.to_string()),
-            recorded_at: event.recorded_at,
-            firings: trigger::firings(store, event.record_id).await?,
-            event: event.occurrence,
-        })
-    }
+fn wire_id(id: &impl ToString) -> uuid::Uuid {
+    id.to_string().parse().expect("an identifier is a UUID")
 }
 
 async fn events(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
     Query(limited): Query<Limited>,
-) -> Result<Json<Vec<EventRecord>>, Refused> {
+) -> Result<Json<wire::ListEventsResponse>, Refused> {
     let events = integration::events(
         &control_plane.store,
         &organization,
@@ -2723,7 +2791,7 @@ async fn events(
     .await?;
     let mut records = Vec::new();
     for event in events {
-        records.push(EventRecord::read(&control_plane.store, event).await?);
+        records.push(event_record(&control_plane.store, event).await?);
     }
 
     Ok(Json(records))
@@ -2732,17 +2800,17 @@ async fn events(
 async fn event(
     State(control_plane): State<ControlPlane>,
     Path(record): Path<String>,
-) -> Result<Json<EventRecord>, Refused> {
+) -> Result<Json<wire::EventRecord>, Refused> {
     let record: EventRecordId = record.parse().map_err(|_| no_event(&record, None))?;
     let event = integration::event(&control_plane.store, record).await?;
 
-    Ok(Json(EventRecord::read(&control_plane.store, event).await?))
+    Ok(Json(event_record(&control_plane.store, event).await?))
 }
 
 async fn triggers(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<TriggerRecord>>, Refused> {
+) -> Result<Json<wire::ListTriggersResponse>, Refused> {
     let triggers = trigger::triggers(&control_plane.store, &organization)
         .await
         .map_err(named_refusal)?;
@@ -2753,8 +2821,8 @@ async fn triggers(
 async fn declare_trigger(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    declaration: Result<Json<TriggerDeclaration>, JsonRejection>,
-) -> Result<(StatusCode, Json<TriggerRecord>), Refused> {
+    declaration: Result<Json<wire::TriggerDeclaration>, JsonRejection>,
+) -> Result<(StatusCode, Json<wire::Trigger>), Refused> {
     let Json(declaration) = declaration?;
     let checked = declaration::check_trigger(&declaration::TriggerFields {
         name: &declaration.name,
@@ -2766,16 +2834,23 @@ async fn declare_trigger(
         },
         templates: declaration::TemplateFields {
             brief: &declaration.brief,
-            branch: declaration.branch.as_deref(),
-            correlation: declaration.correlation.as_deref(),
-            on_miss: declaration.on_miss.as_deref(),
-            on_open_workspace: declaration.on_open_workspace.as_deref(),
+            branch: declaration.branch.as_ref().and_then(Option::as_deref),
+            correlation: declaration.correlation.as_ref().and_then(Option::as_deref),
+            on_miss: declaration.on_miss.as_ref().and_then(Option::as_deref),
+            on_open_workspace: declaration
+                .on_open_workspace
+                .as_ref()
+                .and_then(Option::as_deref),
         },
         project: &declaration.project,
         agent: &declaration.agent,
-        declared: declaration.declared(),
-        allows: &declaration.allows,
-        profile: declaration.profile.as_deref(),
+        declared: Declared::named(Declared {
+            model: declaration.model.clone().flatten(),
+            mode: declaration.mode.clone().flatten(),
+            thought_level: declaration.thought_level.clone().flatten(),
+        }),
+        allows: declaration.allows.as_deref().unwrap_or_default(),
+        profile: declaration.profile.as_ref().and_then(Option::as_deref),
     })
     .map_err(|error| declaration::scoped(declaration::Prefix::Root, "declare_trigger", error))?;
     let mut tx = control_plane.store.begin().await?;
@@ -2801,7 +2876,7 @@ async fn declare_trigger(
 async fn show_trigger(
     State(control_plane): State<ControlPlane>,
     Path((organization, name)): Path<(String, String)>,
-) -> Result<Json<TriggerRecord>, Refused> {
+) -> Result<Json<wire::Trigger>, Refused> {
     let trigger = trigger::show(&control_plane.store, &organization, &name)
         .await
         .map_err(named_refusal)?;
@@ -2812,20 +2887,26 @@ async fn show_trigger(
 async fn test_trigger(
     State(control_plane): State<ControlPlane>,
     Path((organization, name)): Path<(String, String)>,
-    tested: Result<Json<TriggerTest>, JsonRejection>,
-) -> Result<Json<TriggerTestRecord>, Refused> {
-    let Json(tested) = tested?;
-    let event = tested
-        .event
-        .as_deref()
-        .map(|event| {
-            event
-                .parse()
-                .map_err(|_| no_event(event, Some(&organization)))
-        })
-        .transpose()?;
+    tested: Result<Json<serde_json::Value>, JsonRejection>,
+) -> Result<Json<wire::TriggerTestResult>, Refused> {
+    let Json(sent) = tested?;
+    let tested: wire::TriggerTest = serde_path_to_error::deserialize(&sent)
+        .map_err(|error| malformed(None, error.to_string()))?;
+    let declared = match tested.declared.flatten() {
+        Some(_) => Some(trigger_file(&sent["declared"])?),
+        None => None,
+    };
+    let event: Option<EventRecordId> = tested.event.flatten().map(|event| {
+        event
+            .to_string()
+            .parse()
+            .expect("an Event's identifier is a UUID")
+    });
+    let integration = tested.integration.flatten();
+    let instruction = tested.instruction.flatten();
+    let agent = tested.agent.flatten();
     let github;
-    let against = match (event, tested.integration.as_deref(), tested.issue) {
+    let against = match (event, integration.as_deref(), tested.issue.flatten()) {
         (Some(_), _, Some(_)) => {
             return Err(malformed(
                 Some("issue"),
@@ -2856,10 +2937,10 @@ async fn test_trigger(
         (None, None, None) => trigger::Against::NextElapsing,
     };
     let asked = trigger::Asked {
-        instruction: tested.instruction.as_deref(),
-        agent: tested.agent.as_deref(),
+        instruction: instruction.as_deref(),
+        agent: agent.as_deref(),
     };
-    let tested = match tested.declared {
+    let tested = match declared {
         Some(file) => {
             let declarations = triggers::declarations(file)
                 .map_err(|error| {
@@ -2903,21 +2984,26 @@ async fn test_trigger(
         .would
         .ok_or_else(|| anyhow::anyhow!("a trigger that rendered says what its firing would do"))?;
 
-    Ok(Json(TriggerTestRecord {
+    Ok(Json(wire::TriggerTestResult {
         matches: tested.matches,
         brief: rendered.brief,
         branch: rendered.branch,
         correlation: rendered.correlation,
         agent,
-        would: would.as_str(),
-        elapsing: tested.elapsing,
+        would: match would {
+            trigger::Would::Open => wire::TriggerTestResultWould::OpenWorkspace,
+            trigger::Would::Continue => wire::TriggerTestResultWould::ContinueSession,
+            trigger::Would::NewSession => wire::TriggerTestResultWould::NewSession,
+            trigger::Would::Ignore => wire::TriggerTestResultWould::Ignore,
+        },
+        elapsing: tested.elapsing.map(|elapsing| elapsing.to_string()),
     }))
 }
 
 async fn disable_trigger(
     State(control_plane): State<ControlPlane>,
     Path((organization, name)): Path<(String, String)>,
-) -> Result<Json<TriggerRecord>, Refused> {
+) -> Result<Json<wire::Trigger>, Refused> {
     let trigger = trigger::disable(&control_plane.store, &organization, &name)
         .await
         .map_err(named_refusal)?;
@@ -2928,7 +3014,7 @@ async fn disable_trigger(
 async fn enable_trigger(
     State(control_plane): State<ControlPlane>,
     Path((organization, name)): Path<(String, String)>,
-) -> Result<Json<TriggerRecord>, Refused> {
+) -> Result<Json<wire::Trigger>, Refused> {
     let trigger = trigger::enable(&control_plane.store, &organization, &name)
         .await
         .map_err(named_refusal)?;
@@ -2936,31 +3022,14 @@ async fn enable_trigger(
     Ok(Json(trigger.into()))
 }
 
-#[derive(Serialize)]
-#[serde(tag = "outcome", rename_all = "snake_case")]
-enum FiredRecord {
-    Opened {
-        event: String,
-        workspace: String,
-        session: String,
-    },
-    Fed {
-        event: String,
-        workspace: String,
-        session: Option<String>,
-    },
-    Ignored {
-        event: String,
-        correlation: String,
-    },
-}
-
 async fn dispatch_trigger(
     State(control_plane): State<ControlPlane>,
     Path((organization, name)): Path<(String, String)>,
-    dispatch: Result<Json<TriggerDispatch>, JsonRejection>,
-) -> Result<Json<FiredRecord>, Refused> {
+    dispatch: Result<Json<wire::TriggerDispatch>, JsonRejection>,
+) -> Result<Json<wire::Fired>, Refused> {
     let Json(dispatch) = dispatch?;
+    let instruction = dispatch.instruction.flatten();
+    let agent = dispatch.agent.flatten();
     let fired = trigger::dispatch(
         &control_plane.store,
         &Github::dialling_out(&control_plane.store)?,
@@ -2970,8 +3039,8 @@ async fn dispatch_trigger(
             integration: &dispatch.integration,
             issue: dispatch.issue,
             asked: trigger::Asked {
-                instruction: dispatch.instruction.as_deref(),
-                agent: dispatch.agent.as_deref(),
+                instruction: instruction.as_deref(),
+                agent: agent.as_deref(),
             },
         },
     )
@@ -2983,26 +3052,29 @@ async fn dispatch_trigger(
             event,
             workspace,
             session,
-        } => FiredRecord::Opened {
-            event: event.to_string(),
-            workspace: workspace.to_string(),
-            session: session.to_string(),
-        },
+        } => wire::Fired::FiredOpened(wire::FiredOpened {
+            outcome: serde_json::json!("opened"),
+            event: wire_id(&event),
+            workspace: wire_id(&workspace),
+            session: wire_id(&session),
+        }),
         trigger::Fired::Fed {
             event,
             workspace,
             session,
-        } => FiredRecord::Fed {
-            event: event.to_string(),
-            workspace: workspace.to_string(),
-            session: session.map(|session| session.to_string()),
-        },
+        } => wire::Fired::FiredFed(wire::FiredFed {
+            outcome: serde_json::json!("fed"),
+            event: wire_id(&event),
+            workspace: wire_id(&workspace),
+            session: session.map(|session| wire_id(&session)),
+        }),
         trigger::Fired::Ignored {
             event, correlation, ..
-        } => FiredRecord::Ignored {
-            event: event.to_string(),
+        } => wire::Fired::FiredIgnored(wire::FiredIgnored {
+            outcome: serde_json::json!("ignored"),
+            event: wire_id(&event),
             correlation,
-        },
+        }),
         trigger::Fired::Failed { because, .. }
         | trigger::Fired::Held { because, .. }
         | trigger::Fired::Canceled { because, .. } => {
@@ -3014,26 +3086,27 @@ async fn dispatch_trigger(
 async fn apply_triggers(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    file: Result<Json<triggers::File>, JsonRejection>,
-) -> Result<Json<triggers::Applied>, Refused> {
+    file: Result<Json<serde_json::Value>, JsonRejection>,
+) -> Result<Json<wire::AppliedTriggers>, Refused> {
     applied_triggers(control_plane, organization, file, false).await
 }
 
 async fn preview_applied_triggers(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    file: Result<Json<triggers::File>, JsonRejection>,
-) -> Result<Json<triggers::Applied>, Refused> {
+    file: Result<Json<serde_json::Value>, JsonRejection>,
+) -> Result<Json<wire::AppliedTriggers>, Refused> {
     applied_triggers(control_plane, organization, file, true).await
 }
 
 async fn applied_triggers(
     control_plane: ControlPlane,
     organization: String,
-    file: Result<Json<triggers::File>, JsonRejection>,
+    file: Result<Json<serde_json::Value>, JsonRejection>,
     dry_run: bool,
-) -> Result<Json<triggers::Applied>, Refused> {
-    let Json(file) = file?;
+) -> Result<Json<wire::AppliedTriggers>, Refused> {
+    let Json(sent) = file?;
+    let file = trigger_file(&sent)?;
     let operation = if dry_run {
         "preview_applied_triggers"
     } else {
@@ -3046,7 +3119,23 @@ async fn applied_triggers(
         .await
         .map_err(named_refusal)?;
 
-    Ok(Json(applied))
+    Ok(Json(wire::AppliedTriggers {
+        changes: applied
+            .changes
+            .into_iter()
+            .map(|change| wire::DeclarationChange {
+                kind: wire::DeclarationChangeKind::Trigger,
+                name: change.name,
+                action: match change.action {
+                    triggers::Action::Add => wire::DeclarationChangeAction::Add,
+                    triggers::Action::Change => wire::DeclarationChangeAction::Change,
+                    triggers::Action::Remove => wire::DeclarationChangeAction::Remove,
+                },
+                differences: differences(change.differences),
+            })
+            .collect(),
+        admitting_outsiders: applied.admitting_outsiders,
+    }))
 }
 
 /// An untyped refusal here is about what the request named, never a control plane that could

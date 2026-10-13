@@ -1,7 +1,7 @@
 use std::fmt;
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::capability::Images;
 use crate::cron::Cron;
@@ -17,8 +17,6 @@ use crate::template::Template;
 
 pub mod triggers;
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Document {
     pub project: Project,
     pub agent: Agent,
@@ -55,8 +53,6 @@ impl Agent {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct TriggerDeclaration {
     pub name: String,
     pub filter: serde_json::Value,
@@ -67,7 +63,6 @@ pub struct TriggerDeclaration {
     pub on_open_workspace: Option<String>,
     pub project: String,
     pub agent: String,
-    #[serde(default)]
     pub allows: Vec<String>,
     pub profile: Option<String>,
     pub model: Option<String>,
@@ -85,7 +80,6 @@ impl TriggerDeclaration {
     }
 }
 
-#[derive(Serialize)]
 pub struct Applied {
     pub declarations: Vec<Declaration>,
     pub admitting_outsiders: Vec<String>,
@@ -93,7 +87,7 @@ pub struct Applied {
 
 /// The one change vocabulary every declaration path answers in: what was declared, and what
 /// writing it did.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Declaration {
     pub kind: Kind,
     pub name: String,
@@ -101,23 +95,21 @@ pub struct Declaration {
     pub differences: Vec<Difference>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Difference {
     pub field: &'static str,
     pub was: Option<String>,
     pub becomes: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy)]
 pub enum Kind {
     Project,
     Agent,
     Trigger,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy)]
 pub enum Action {
     Add,
     Change,
