@@ -105,6 +105,14 @@ candidates as `{id, name}` rather than formatting them into the message.
   by the record it is under: `branch`, `project.branch`, `triggers.<name>.brief`.
   The callers choose two things: whether an existing record that differs is changed or refused
   (`start`), and whether flags or a file declared a Trigger.
+- The boundary reads the document and the applied-Triggers file as their generated types and maps
+  them to the module's own; both apply results answer one `DeclarationChange` (`kind`, `name`,
+  `action` over add / change / unchanged / remove, `differences`), and a route chooses whether it
+  lists what it left unchanged. A generated type reads past a field it has no place for, so
+  `operator::closed` refuses one in a body whose schema the document closes, and the document's
+  trigger is refused a schedule field there: both are a `malformed_request`. A Trigger's `on_miss`
+  and `on_open_workspace` are plain strings in a request, so the module, not the decoder, refuses
+  a spelling it does not know.
 - `POST …/workspaces` is the one open: it opens a Workspace and enqueues its first Session in one
   transaction, with an optional Brief, declared model, mode, thought level and declared name, or
   refuses and leaves nothing behind ([ADR-0038](../adr/0038-a-session-may-start-before-its-brief.md),

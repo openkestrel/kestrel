@@ -824,11 +824,10 @@ pub struct TriggerFileTriggers {
     /// Additional properties matching the spec's
     /// `additionalProperties` value schema.
     #[serde(flatten)]
-    pub additional_properties:
-        std::collections::BTreeMap<String, TriggerFileTriggersAdditionalProperty>,
+    pub additional_properties: std::collections::BTreeMap<String, TriggerFileEntry>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct TriggerFileTriggersAdditionalProperty {
+pub struct TriggerFileEntry {
     pub agent: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allows: Option<Vec<String>>,
@@ -860,18 +859,20 @@ pub struct TriggerFileTriggersAdditionalProperty {
         deserialize_with = "tri_state_serde::deserialize"
     )]
     pub model: Option<Option<String>>,
+    ///What a correlation miss does: `open` or `ignore`.
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
         deserialize_with = "tri_state_serde::deserialize"
     )]
-    pub on_miss: Option<Option<TriggerFileTriggersAdditionalPropertyOnMiss>>,
+    pub on_miss: Option<Option<String>>,
+    ///What a firing that correlates to an open Workspace does: `continue` or `new-session`. Absent continues.
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
         deserialize_with = "tri_state_serde::deserialize"
     )]
-    pub on_open_workspace: Option<Option<TriggerFileTriggersAdditionalPropertyOnOpenWorkspace>>,
+    pub on_open_workspace: Option<Option<String>>,
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
@@ -886,64 +887,6 @@ pub struct TriggerFileTriggersAdditionalProperty {
         deserialize_with = "tri_state_serde::deserialize"
     )]
     pub thought_level: Option<Option<String>>,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
-pub enum TriggerFileTriggersAdditionalPropertyOnOpenWorkspace {
-    #[default]
-    #[serde(rename = "continue")]
-    Continue_,
-    #[serde(rename = "new-session")]
-    NewSession,
-    #[serde(rename = "null")]
-    NullValue,
-}
-impl TriggerFileTriggersAdditionalPropertyOnOpenWorkspace {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Continue_ => "continue",
-            Self::NewSession => "new-session",
-            Self::NullValue => "null",
-        }
-    }
-}
-impl ::std::fmt::Display for TriggerFileTriggersAdditionalPropertyOnOpenWorkspace {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-impl AsRef<str> for TriggerFileTriggersAdditionalPropertyOnOpenWorkspace {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
-pub enum TriggerFileTriggersAdditionalPropertyOnMiss {
-    #[default]
-    #[serde(rename = "open")]
-    Open,
-    #[serde(rename = "ignore")]
-    Ignore,
-    #[serde(rename = "null")]
-    NullValue,
-}
-impl TriggerFileTriggersAdditionalPropertyOnMiss {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Open => "open",
-            Self::Ignore => "ignore",
-            Self::NullValue => "null",
-        }
-    }
-}
-impl ::std::fmt::Display for TriggerFileTriggersAdditionalPropertyOnMiss {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-impl AsRef<str> for TriggerFileTriggersAdditionalPropertyOnMiss {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StreamSubscription {
@@ -3787,13 +3730,17 @@ pub struct EventRecord {
 ///One Trigger matching the Event, and what that match did.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Firing {
-    ///Why a failed firing started nothing, such as labels choosing two Agents.
+    ///Why a failed, held or canceled firing started nothing, such as labels choosing two Agents.
     pub failure: Option<String>,
+    ///A held firing waits on the issue's readiness and is looked at again; a canceled one never started.
     pub outcome: FiringOutcome,
     pub trigger: String,
+    ///Who started it ahead of the issue's blockers, when a command or a dispatch did.
+    pub worked_ahead: Option<String>,
     ///The Workspace it opened or fed.
     pub workspace: Option<uuid::Uuid>,
 }
+///A held firing waits on the issue's readiness and is looked at again; a canceled one never started.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
 pub enum FiringOutcome {
     #[default]
@@ -3805,6 +3752,10 @@ pub enum FiringOutcome {
     Ignored,
     #[serde(rename = "failed")]
     Failed,
+    #[serde(rename = "held")]
+    Held,
+    #[serde(rename = "canceled")]
+    Canceled,
 }
 impl FiringOutcome {
     pub fn as_str(&self) -> &'static str {
@@ -3813,6 +3764,8 @@ impl FiringOutcome {
             Self::Fed => "fed",
             Self::Ignored => "ignored",
             Self::Failed => "failed",
+            Self::Held => "held",
+            Self::Canceled => "canceled",
         }
     }
 }
@@ -8754,9 +8707,10 @@ pub struct TriggerDeclaration {
     pub model: Option<Option<String>>,
     ///Constraint: minLength=1
     pub name: String,
-    pub on_miss: Option<Option<TriggerDeclarationOnMiss>>,
-    ///What a firing that correlates to an open Workspace does: continues its waiting Session, or starts a new Session with this Trigger's Agent. Absent continues.
-    pub on_open_workspace: Option<Option<TriggerDeclarationOnOpenWorkspace>>,
+    ///What a correlation miss does: `open` or `ignore`.
+    pub on_miss: Option<Option<String>>,
+    ///What a firing that correlates to an open Workspace does: `continue` its waiting Session, or `new-session` with this Trigger's Agent. Absent continues.
+    pub on_open_workspace: Option<Option<String>>,
     pub profile: Option<Option<String>>,
     ///Constraint: minLength=1
     pub project: String,
@@ -8809,13 +8763,13 @@ struct __TriggerDeclarationBase {
         default,
         deserialize_with = "tri_state_serde::deserialize"
     )]
-    on_miss: Option<Option<TriggerDeclarationOnMiss>>,
+    on_miss: Option<Option<String>>,
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
         deserialize_with = "tri_state_serde::deserialize"
     )]
-    on_open_workspace: Option<Option<TriggerDeclarationOnOpenWorkspace>>,
+    on_open_workspace: Option<Option<String>>,
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
@@ -9032,9 +8986,10 @@ pub struct DeclarationDocumentTrigger {
     pub model: Option<Option<String>>,
     ///Constraint: minLength=1
     pub name: String,
-    pub on_miss: Option<Option<TriggerDeclarationOnMiss>>,
-    ///What a firing that correlates to an open Workspace does: continues its waiting Session, or starts a new Session with this Trigger's Agent. Absent continues.
-    pub on_open_workspace: Option<Option<TriggerDeclarationOnOpenWorkspace>>,
+    ///What a correlation miss does: `open` or `ignore`.
+    pub on_miss: Option<Option<String>>,
+    ///What a firing that correlates to an open Workspace does: `continue` its waiting Session, or `new-session` with this Trigger's Agent. Absent continues.
+    pub on_open_workspace: Option<Option<String>>,
     pub profile: Option<Option<String>>,
     ///Constraint: minLength=1
     pub project: String,
@@ -9087,13 +9042,13 @@ struct __DeclarationDocumentTriggerBase {
         default,
         deserialize_with = "tri_state_serde::deserialize"
     )]
-    on_miss: Option<Option<TriggerDeclarationOnMiss>>,
+    on_miss: Option<Option<String>>,
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
         deserialize_with = "tri_state_serde::deserialize"
     )]
-    on_open_workspace: Option<Option<TriggerDeclarationOnOpenWorkspace>>,
+    on_open_workspace: Option<Option<String>>,
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
@@ -9214,65 +9169,6 @@ impl<'de> serde::Deserialize<'de> for DeclarationDocumentTrigger {
             zone: base.zone,
             variant: variant,
         })
-    }
-}
-///What a firing that correlates to an open Workspace does: continues its waiting Session, or starts a new Session with this Trigger's Agent. Absent continues.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
-pub enum TriggerDeclarationOnOpenWorkspace {
-    #[default]
-    #[serde(rename = "continue")]
-    Continue_,
-    #[serde(rename = "new-session")]
-    NewSession,
-    #[serde(rename = "null")]
-    NullValue,
-}
-impl TriggerDeclarationOnOpenWorkspace {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Continue_ => "continue",
-            Self::NewSession => "new-session",
-            Self::NullValue => "null",
-        }
-    }
-}
-impl ::std::fmt::Display for TriggerDeclarationOnOpenWorkspace {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-impl AsRef<str> for TriggerDeclarationOnOpenWorkspace {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
-pub enum TriggerDeclarationOnMiss {
-    #[default]
-    #[serde(rename = "open")]
-    Open,
-    #[serde(rename = "ignore")]
-    Ignore,
-    #[serde(rename = "null")]
-    NullValue,
-}
-impl TriggerDeclarationOnMiss {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Open => "open",
-            Self::Ignore => "ignore",
-            Self::NullValue => "null",
-        }
-    }
-}
-impl ::std::fmt::Display for TriggerDeclarationOnMiss {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-impl AsRef<str> for TriggerDeclarationOnMiss {
-    fn as_ref(&self) -> &str {
-        self.as_str()
     }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -10629,63 +10525,29 @@ impl AsRef<str> for AuthenticationEvidenceSource {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppliedTriggers {
     pub admitting_outsiders: Vec<String>,
-    pub changes: Vec<AppliedTriggersChangesItem>,
+    pub changes: Vec<DeclarationChange>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct AppliedTriggersChangesItem {
-    pub action: AppliedTriggersChangesItemAction,
-    pub differences: Vec<AppliedTriggersChangesItemDifferencesItem>,
+pub struct AppliedDeclaration {
+    pub admitting_outsiders: Vec<String>,
+    pub declarations: Vec<DeclarationChange>,
+}
+///What applying a Declaration does to one record. Whether a route lists a record it leaves unchanged is that route's choice.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DeclarationChange {
+    pub action: DeclarationChangeAction,
+    pub differences: Vec<DeclarationDifference>,
+    pub kind: DeclarationChangeKind,
     pub name: String,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct AppliedTriggersChangesItemDifferencesItem {
+pub struct DeclarationDifference {
     pub becomes: Option<String>,
     pub field: String,
     pub was: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
-pub enum AppliedTriggersChangesItemAction {
-    #[default]
-    #[serde(rename = "add")]
-    Add,
-    #[serde(rename = "change")]
-    Change,
-    #[serde(rename = "remove")]
-    Remove,
-}
-impl AppliedTriggersChangesItemAction {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Add => "add",
-            Self::Change => "change",
-            Self::Remove => "remove",
-        }
-    }
-}
-impl ::std::fmt::Display for AppliedTriggersChangesItemAction {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-impl AsRef<str> for AppliedTriggersChangesItemAction {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct AppliedDeclaration {
-    pub admitting_outsiders: Vec<String>,
-    pub declarations: Vec<DeclarationDiff>,
-}
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct DeclarationDiff {
-    pub action: DeclarationDiffAction,
-    pub differences: Vec<DeclarationDiffDifferencesItem>,
-    pub kind: DeclarationDiffKind,
-    pub name: String,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
-pub enum DeclarationDiffKind {
+pub enum DeclarationChangeKind {
     #[default]
     #[serde(rename = "project")]
     Project,
@@ -10694,7 +10556,7 @@ pub enum DeclarationDiffKind {
     #[serde(rename = "trigger")]
     Trigger,
 }
-impl DeclarationDiffKind {
+impl DeclarationChangeKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Project => "project",
@@ -10703,24 +10565,18 @@ impl DeclarationDiffKind {
         }
     }
 }
-impl ::std::fmt::Display for DeclarationDiffKind {
+impl ::std::fmt::Display for DeclarationChangeKind {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         f.write_str(self.as_str())
     }
 }
-impl AsRef<str> for DeclarationDiffKind {
+impl AsRef<str> for DeclarationChangeKind {
     fn as_ref(&self) -> &str {
         self.as_str()
     }
 }
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct DeclarationDiffDifferencesItem {
-    pub becomes: Option<String>,
-    pub field: String,
-    pub was: Option<String>,
-}
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
-pub enum DeclarationDiffAction {
+pub enum DeclarationChangeAction {
     #[default]
     #[serde(rename = "add")]
     Add,
@@ -10728,22 +10584,25 @@ pub enum DeclarationDiffAction {
     Change,
     #[serde(rename = "unchanged")]
     Unchanged,
+    #[serde(rename = "remove")]
+    Remove,
 }
-impl DeclarationDiffAction {
+impl DeclarationChangeAction {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Add => "add",
             Self::Change => "change",
             Self::Unchanged => "unchanged",
+            Self::Remove => "remove",
         }
     }
 }
-impl ::std::fmt::Display for DeclarationDiffAction {
+impl ::std::fmt::Display for DeclarationChangeAction {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         f.write_str(self.as_str())
     }
 }
-impl AsRef<str> for DeclarationDiffAction {
+impl AsRef<str> for DeclarationChangeAction {
     fn as_ref(&self) -> &str {
         self.as_str()
     }

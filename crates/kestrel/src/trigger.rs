@@ -121,17 +121,6 @@ pub enum Would {
     Ignore,
 }
 
-impl Would {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Would::Open => "open_workspace",
-            Would::Continue => "continue_session",
-            Would::NewSession => "new_session",
-            Would::Ignore => "ignore",
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct Tested {
     pub matches: bool,

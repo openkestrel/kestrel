@@ -26,7 +26,6 @@ use clap::parser::ValueSource;
 use clap::{Args, CommandFactory as _, FromArgMatches as _, Parser, Subcommand};
 use kestrel_operator_types as wire;
 use reqwest::Url;
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::api::ControlPlane;
@@ -1095,22 +1094,22 @@ async fn run(
             let declaration = declaration(&file)?;
             let organization = scoping.resolve().await?.organization;
             if json {
-                let applied = api
-                    .post(
+                let applied: wire::AppliedDeclaration = api
+                    .post_as(
                         &["organizations", &organization, "declaration"],
                         &declaration,
                     )
                     .await?;
-                show_applied_whole(&presentation, &applied)?;
+                show_applied_whole(&presentation, &applied, &applied.admitting_outsiders)?;
             } else {
                 let preview = api
-                    .post(
+                    .post_as(
                         &["organizations", &organization, "declaration", "preview"],
                         &declaration,
                     )
                     .await?;
-                show_declaration(&preview)?;
-                api.post(
+                show_declaration(preview);
+                api.post_as::<wire::AppliedDeclaration>(
                     &["organizations", &organization, "declaration"],
                     &declaration,
                 )
@@ -1612,14 +1611,16 @@ async fn run(
         }
         Command::Event(EventCommand::List { limit }) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
-                &presentation,
-                &view::EVENTS,
-                &api.get_where(
+            let events: wire::ListEventsResponse = api
+                .get_where_as(
                     &["organizations", &organization, "events"],
                     &[("limit", &limit.to_string())],
                 )
-                .await?,
+                .await?;
+            typed::collection(
+                &presentation,
+                &view::EVENTS,
+                &events,
                 &empty_list(
                     &client.control_plane,
                     "Events",
@@ -1629,11 +1630,8 @@ async fn run(
             )?;
         }
         Command::Event(EventCommand::Show { record }) => {
-            show(
-                &presentation,
-                &view::EVENT,
-                &api.get(&["events", &record]).await?,
-            )?;
+            let event: wire::EventRecord = api.get_as(&["events", &record]).await?;
+            typed::show(&presentation, &view::EVENT, &event)?;
         }
         Command::Trigger(TriggerCommand::Declare {
             name,
@@ -1692,13 +1690,13 @@ async fn run(
             if let Some(zone) = zone {
                 declaration.insert("zone".to_owned(), Value::String(zone));
             }
-            let declared = api
-                .post(&["organizations", &organization, "triggers"], &declaration)
+            let declared: wire::Trigger = api
+                .post_as(&["organizations", &organization, "triggers"], &declaration)
                 .await?;
-            if declared["admits_outsiders"] == true {
+            if declared.admits_outsiders {
                 warn_of_outsiders(&name);
             }
-            show(&presentation, &view::DECLARED, &declared)?;
+            typed::show(&presentation, &view::TRIGGER_DECLARED, &declared)?;
         }
         Command::Trigger(TriggerCommand::Apply { file, dry_run }) => {
             let organization = scoping.resolve().await?.organization;
@@ -1707,11 +1705,11 @@ async fn run(
             if dry_run {
                 path.push("preview");
             }
-            let applied = api.post(&path, &declarations).await?;
+            let applied: wire::AppliedTriggers = api.post_as(&path, &declarations).await?;
             if json {
-                show_applied_whole(&presentation, &applied)?;
+                show_applied_whole(&presentation, &applied, &applied.admitting_outsiders)?;
             } else {
-                show_applied_triggers(&applied)?;
+                show_applied_triggers(applied);
             }
         }
         Command::Trigger(TriggerCommand::Dispatch {
@@ -1722,11 +1720,11 @@ async fn run(
             agent,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            let instruction = instruction.as_deref().map(given).transpose()?;
-            show(
-                &presentation,
-                &view::FIRED,
-                &api.post(
+            let mut dispatch = wire::TriggerDispatch::new(integration, issue);
+            dispatch.instruction = instruction.as_deref().map(given).transpose()?.map(Some);
+            dispatch.agent = agent.map(Some);
+            let fired: wire::Fired = api
+                .post_as(
                     &[
                         "organizations",
                         &organization,
@@ -1734,23 +1732,20 @@ async fn run(
                         &name,
                         "dispatch",
                     ],
-                    &json!({
-                        "integration": integration,
-                        "issue": issue,
-                        "instruction": instruction,
-                        "agent": agent,
-                    }),
+                    &dispatch,
                 )
-                .await?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::FIRED, &fired)?;
         }
         Command::Trigger(TriggerCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            let triggers: wire::ListTriggersResponse = api
+                .get_as(&["organizations", &organization, "triggers"])
+                .await?;
+            typed::collection(
                 &presentation,
                 &view::TRIGGERS,
-                &api.get(&["organizations", &organization, "triggers"])
-                    .await?,
+                &triggers,
                 &empty_list(
                     &client.control_plane,
                     "Triggers",
@@ -1761,12 +1756,10 @@ async fn run(
         }
         Command::Trigger(TriggerCommand::Show { name }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
-                &presentation,
-                &view::TRIGGER,
-                &api.get(&["organizations", &organization, "triggers", &name])
-                    .await?,
-            )?;
+            let trigger: wire::Trigger = api
+                .get_as(&["organizations", &organization, "triggers", &name])
+                .await?;
+            typed::show(&presentation, &view::TRIGGER, &trigger)?;
         }
         Command::Trigger(TriggerCommand::Test {
             name,
@@ -1786,10 +1779,8 @@ async fn run(
             }
             let declared = file.as_deref().map(trigger_file).transpose()?;
             let instruction = instruction.as_deref().map(given).transpose()?;
-            show(
-                &presentation,
-                &view::TRIGGER_TEST,
-                &api.post(
+            let tested: wire::TriggerTestResult = api
+                .post_as(
                     &["organizations", &organization, "triggers", &name, "test"],
                     &json!({
                         "event": event,
@@ -1800,32 +1791,28 @@ async fn run(
                         "declared": declared,
                     }),
                 )
-                .await?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::TRIGGER_TEST, &tested)?;
         }
         Command::Trigger(TriggerCommand::Disable { name }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
-                &presentation,
-                &view::TRIGGER_STATE,
-                &api.post(
+            let trigger: wire::Trigger = api
+                .post_as(
                     &["organizations", &organization, "triggers", &name, "disable"],
                     &json!({}),
                 )
-                .await?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::TRIGGER_STATE, &trigger)?;
         }
         Command::Trigger(TriggerCommand::Enable { name }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
-                &presentation,
-                &view::TRIGGER_STATE,
-                &api.post(
+            let trigger: wire::Trigger = api
+                .post_as(
                     &["organizations", &organization, "triggers", &name, "enable"],
                     &json!({}),
                 )
-                .await?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::TRIGGER_STATE, &trigger)?;
         }
         Command::Workspace(WorkspaceCommand::Open {
             project,
@@ -3015,6 +3002,272 @@ fn explain_invalid_subcommand(error: &clap::Error, args: &[String]) -> Option<St
     Some(format!("{try_command}Accepted {noun} verbs: {verbs}\n"))
 }
 
+fn declaration(file: &str) -> Result<Value> {
+    parsed(&read_file(file)?)
+}
+
+/// An empty file is sent as an empty mapping, so the control plane refuses it for the
+/// `triggers` it lacks rather than for being no mapping at all.
+fn trigger_file(file: &str) -> Result<Value> {
+    let text = read_file(file)?;
+    if text.trim().is_empty() {
+        return Ok(json!({}));
+    }
+
+    parsed(&text)
+}
+
+fn parsed(text: &str) -> Result<Value> {
+    yaml_serde::from_str(text).context(Failed::new(Exit::Usage, "reading the declaration file"))
+}
+
+fn read_file(file: &str) -> Result<String> {
+    if file == "-" {
+        return standard_input();
+    }
+
+    std::fs::read_to_string(file)
+        .with_context(|| Failed::new(Exit::Usage, format!("reading the declaration file {file}")))
+}
+
+fn given(value: &str) -> Result<String> {
+    if value == "-" {
+        return standard_input();
+    }
+    match value.strip_prefix('@') {
+        Some(path) => std::fs::read_to_string(path)
+            .with_context(|| Failed::new(Exit::Usage, format!("reading {path}"))),
+        None => Ok(value.to_owned()),
+    }
+}
+
+fn standard_input() -> Result<String> {
+    let mut text = String::new();
+    std::io::stdin()
+        .read_to_string(&mut text)
+        .context("reading standard input")?;
+
+    Ok(text)
+}
+
+fn sign(action: &wire::DeclarationChangeAction) -> char {
+    match action {
+        wire::DeclarationChangeAction::Add => '+',
+        wire::DeclarationChangeAction::Change => '~',
+        wire::DeclarationChangeAction::Unchanged => '=',
+        wire::DeclarationChangeAction::Remove => '-',
+    }
+}
+
+fn show_applied_triggers(applied: wire::AppliedTriggers) {
+    if applied.changes.is_empty() {
+        println!("no changes");
+    }
+    for change in applied.changes {
+        println!("{} {}", sign(&change.action), change.name);
+        show_differences(change.differences);
+    }
+    for name in applied.admitting_outsiders {
+        warn_of_outsiders(&name);
+    }
+}
+
+fn show_differences(differences: Vec<wire::DeclarationDifference>) {
+    for difference in differences {
+        println!("    {}", difference.field);
+        for (sign, value) in [('-', difference.was), ('+', difference.becomes)] {
+            for line in value.iter().flat_map(|value| value.lines()) {
+                println!("      {sign} {line}");
+            }
+        }
+    }
+}
+
+fn show_declaration(applied: wire::AppliedDeclaration) {
+    for declared in applied.declarations {
+        println!(
+            "{} {} {}",
+            sign(&declared.action),
+            declared.kind,
+            declared.name
+        );
+        show_differences(declared.differences);
+    }
+    for name in applied.admitting_outsiders {
+        warn_of_outsiders(&name);
+    }
+}
+
+fn show_applied_whole(
+    presentation: &Presentation,
+    applied: &impl serde::Serialize,
+    admitting_outsiders: &[String],
+) -> Result<()> {
+    for name in admitting_outsiders {
+        warn_of_outsiders(name);
+    }
+    typed::whole(presentation, applied)
+}
+
+fn warn_of_outsiders(name: &str) {
+    eprintln!(
+        "warning: the trigger {name} fires for events from people outside the organization. \
+         Until 0.4, it is an unsupervised agent with your credentials on your repository, \
+         briefed by whatever a stranger writes. Filter on the author_association GitHub \
+         reports as OWNER, MEMBER or COLLABORATOR to decline strangers, or keep it as a \
+         decision you made on purpose."
+    );
+}
+
+async fn status(
+    api: &ControlPlane,
+    presentation: &Presentation,
+    location: Value,
+    derived: Derived,
+) -> Result<()> {
+    let scope = match derived {
+        Derived::Scope(scope) => scope,
+        Derived::Unnamed { existing } => {
+            let next = if existing.is_empty() {
+                format!("{BINARY} organization declare <name>")
+            } else {
+                format!("{BINARY} status --organization <name>")
+            };
+            show(
+                presentation,
+                &view::UNRESOLVED,
+                &merged(
+                    location,
+                    json!({
+                        "organization": null,
+                        "organization_source": null,
+                        "organizations": existing,
+                        "next": next,
+                    }),
+                ),
+            )?;
+            return Ok(());
+        }
+    };
+
+    let organization = scope.organization.as_str();
+    let within = async |records| api.get(&["organizations", organization, records]).await;
+    let (projects, agents, triggers, workspaces, integrations, credentials, profiles) = tokio::try_join!(
+        async {
+            api.get_as::<wire::ListProjectsResponse>(&["organizations", organization, "projects"])
+                .await
+        },
+        async {
+            api.get_as::<wire::ListAgentsResponse>(&["organizations", organization, "agents"])
+                .await
+        },
+        async {
+            api.get_as::<wire::ListTriggersResponse>(&["organizations", organization, "triggers"])
+                .await
+        },
+        within("workspaces"),
+        within("integrations"),
+        within("credentials"),
+        within("profiles"),
+    )?;
+    show(
+        presentation,
+        &view::STATUS,
+        &merged(
+            location,
+            json!({
+                "organization": organization,
+                "organization_source": scope.source.to_string(),
+                "projects": projects.len(),
+                "agents": agents.len(),
+                "triggers": triggers.len(),
+                "workspaces": count(&workspaces),
+                "integrations": count(&integrations),
+                "credentials": count(&credentials),
+                "profiles": count(&profiles),
+                "next": next_command(projects.first(), agents.first()),
+            }),
+        ),
+    )?;
+
+    Ok(())
+}
+
+fn merged(mut record: Value, more: Value) -> Value {
+    if let (Some(record), Value::Object(more)) = (record.as_object_mut(), more) {
+        record.extend(more);
+    }
+    record
+}
+
+fn count(records: &Value) -> usize {
+    records.as_array().map_or(0, Vec::len)
+}
+
+fn next_command(project: Option<&wire::Project>, agent: Option<&wire::Agent>) -> String {
+    match (project, agent) {
+        (Some(project), Some(agent)) => {
+            format!(
+                "{BINARY} workspace open --project {} --agent {}",
+                project.name, agent.name
+            )
+        }
+        (Some(_), None) => format!("{BINARY} agent declare <name>"),
+        (None, _) => {
+            format!("{BINARY} project declare <name> --repository <url> --branch <branch>")
+        }
+    }
+}
+
+/// A file is held exactly as it was read, because it is written back exactly as it was held.
+fn read_the_login(file: bool) -> Result<String> {
+    let read = read_standard_input("a login")?;
+
+    if read.trim().is_empty() {
+        bail!(Failed::new(
+            Exit::Usage,
+            "a login is read from standard input, and nothing was on it"
+        ));
+    }
+
+    Ok(if file { read } else { read.trim().to_owned() })
+}
+
+/// Off standard input rather than out of an argument, so a provider's key is never in a shell
+/// history or in what `ps` shows of this process.
+fn read_the_secret() -> Result<String> {
+    let secret = read_standard_input("a provider credential")?
+        .trim()
+        .to_owned();
+
+    if secret.is_empty() {
+        bail!(Failed::new(
+            Exit::Usage,
+            "a provider credential is read from standard input, and nothing was on it"
+        ));
+    }
+
+    Ok(secret)
+}
+
+/// The asking happens only where someone is there to read it: a pipe is read in silence, so
+/// nothing driving the Client can block on a prompt it cannot see.
+fn read_standard_input(what: &str) -> Result<String> {
+    let mut stdin = std::io::stdin();
+    let unechoed = stdin.is_terminal().then(|| {
+        eprintln!("reading {what} from standard input, unechoed; end it with ctrl-d");
+        terminal::Unechoed::on(&stdin)
+    });
+
+    let mut read = String::new();
+    stdin.read_to_string(&mut read)?;
+    if unechoed.is_some() {
+        eprintln!();
+    }
+
+    Ok(read)
+}
+
 #[cfg(test)]
 mod parser_tests {
     use super::*;
@@ -3111,325 +3364,4 @@ mod parser_tests {
             "{explanation}"
         );
     }
-}
-
-#[derive(Deserialize)]
-struct AppliedDeclaration {
-    declarations: Vec<Declared>,
-    admitting_outsiders: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct Declared {
-    kind: String,
-    name: String,
-    action: Action,
-    differences: Vec<Difference>,
-}
-
-#[derive(Deserialize)]
-struct Difference {
-    field: String,
-    was: Option<String>,
-    becomes: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum Action {
-    Add,
-    Change,
-    Unchanged,
-}
-
-fn declaration(file: &str) -> Result<Value> {
-    parsed(&read_file(file)?)
-}
-
-/// An empty file is sent as an empty mapping, so the control plane refuses it for the
-/// `triggers` it lacks rather than for being no mapping at all.
-fn trigger_file(file: &str) -> Result<Value> {
-    let text = read_file(file)?;
-    if text.trim().is_empty() {
-        return Ok(json!({}));
-    }
-
-    parsed(&text)
-}
-
-fn parsed(text: &str) -> Result<Value> {
-    yaml_serde::from_str(text).context(Failed::new(Exit::Usage, "reading the declaration file"))
-}
-
-fn read_file(file: &str) -> Result<String> {
-    if file == "-" {
-        return standard_input();
-    }
-
-    std::fs::read_to_string(file)
-        .with_context(|| Failed::new(Exit::Usage, format!("reading the declaration file {file}")))
-}
-
-fn given(value: &str) -> Result<String> {
-    if value == "-" {
-        return standard_input();
-    }
-    match value.strip_prefix('@') {
-        Some(path) => std::fs::read_to_string(path)
-            .with_context(|| Failed::new(Exit::Usage, format!("reading {path}"))),
-        None => Ok(value.to_owned()),
-    }
-}
-
-fn standard_input() -> Result<String> {
-    let mut text = String::new();
-    std::io::stdin()
-        .read_to_string(&mut text)
-        .context("reading standard input")?;
-
-    Ok(text)
-}
-
-#[derive(Deserialize)]
-struct AppliedTriggers {
-    changes: Vec<TriggerChange>,
-    admitting_outsiders: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct TriggerChange {
-    name: String,
-    action: TriggerAction,
-    differences: Vec<Difference>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum TriggerAction {
-    Add,
-    Change,
-    Remove,
-}
-
-fn show_applied_triggers(value: &Value) -> Result<()> {
-    let applied: AppliedTriggers = serde_json::from_value(value.clone()).context(Failed::new(
-        Exit::Unavailable,
-        "reading the applied triggers",
-    ))?;
-    if applied.changes.is_empty() {
-        println!("no changes");
-    }
-    for change in applied.changes {
-        let sign = match change.action {
-            TriggerAction::Add => '+',
-            TriggerAction::Change => '~',
-            TriggerAction::Remove => '-',
-        };
-        println!("{sign} {}", change.name);
-        show_differences(change.differences);
-    }
-    for name in applied.admitting_outsiders {
-        warn_of_outsiders(&name);
-    }
-
-    Ok(())
-}
-
-fn show_differences(differences: Vec<Difference>) {
-    for difference in differences {
-        println!("    {}", difference.field);
-        for (sign, value) in [('-', difference.was), ('+', difference.becomes)] {
-            for line in value.iter().flat_map(|value| value.lines()) {
-                println!("      {sign} {line}");
-            }
-        }
-    }
-}
-
-fn show_declaration(value: &Value) -> Result<()> {
-    let applied: AppliedDeclaration = serde_json::from_value(value.clone()).context(
-        Failed::new(Exit::Unavailable, "reading the declaration preview"),
-    )?;
-    for declared in applied.declarations {
-        let sign = match declared.action {
-            Action::Add => '+',
-            Action::Change => '~',
-            Action::Unchanged => '=',
-        };
-        println!("{sign} {} {}", declared.kind, declared.name);
-        show_differences(declared.differences);
-    }
-    for name in applied.admitting_outsiders {
-        warn_of_outsiders(&name);
-    }
-
-    Ok(())
-}
-
-fn show_applied_whole(presentation: &Presentation, applied: &Value) -> Result<()> {
-    for name in applied["admitting_outsiders"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-    {
-        warn_of_outsiders(name);
-    }
-    show(presentation, &view::DECLARED, applied)
-}
-
-fn warn_of_outsiders(name: &str) {
-    eprintln!(
-        "warning: the trigger {name} fires for events from people outside the organization. \
-         Until 0.4, it is an unsupervised agent with your credentials on your repository, \
-         briefed by whatever a stranger writes. Filter on the author_association GitHub \
-         reports as OWNER, MEMBER or COLLABORATOR to decline strangers, or keep it as a \
-         decision you made on purpose."
-    );
-}
-
-async fn status(
-    api: &ControlPlane,
-    presentation: &Presentation,
-    location: Value,
-    derived: Derived,
-) -> Result<()> {
-    let scope = match derived {
-        Derived::Scope(scope) => scope,
-        Derived::Unnamed { existing } => {
-            let next = if existing.is_empty() {
-                format!("{BINARY} organization declare <name>")
-            } else {
-                format!("{BINARY} status --organization <name>")
-            };
-            show(
-                presentation,
-                &view::UNRESOLVED,
-                &merged(
-                    location,
-                    json!({
-                        "organization": null,
-                        "organization_source": null,
-                        "organizations": existing,
-                        "next": next,
-                    }),
-                ),
-            )?;
-            return Ok(());
-        }
-    };
-
-    let organization = scope.organization.as_str();
-    let within = async |records| api.get(&["organizations", organization, records]).await;
-    let (projects, agents, triggers, workspaces, integrations, credentials, profiles) = tokio::try_join!(
-        async {
-            api.get_as::<wire::ListProjectsResponse>(&["organizations", organization, "projects"])
-                .await
-        },
-        async {
-            api.get_as::<wire::ListAgentsResponse>(&["organizations", organization, "agents"])
-                .await
-        },
-        within("triggers"),
-        within("workspaces"),
-        within("integrations"),
-        within("credentials"),
-        within("profiles"),
-    )?;
-    show(
-        presentation,
-        &view::STATUS,
-        &merged(
-            location,
-            json!({
-                "organization": organization,
-                "organization_source": scope.source.to_string(),
-                "projects": projects.len(),
-                "agents": agents.len(),
-                "triggers": count(&triggers),
-                "workspaces": count(&workspaces),
-                "integrations": count(&integrations),
-                "credentials": count(&credentials),
-                "profiles": count(&profiles),
-                "next": next_command(projects.first(), agents.first()),
-            }),
-        ),
-    )?;
-
-    Ok(())
-}
-
-fn merged(mut record: Value, more: Value) -> Value {
-    if let (Some(record), Value::Object(more)) = (record.as_object_mut(), more) {
-        record.extend(more);
-    }
-    record
-}
-
-fn count(records: &Value) -> usize {
-    records.as_array().map_or(0, Vec::len)
-}
-
-fn next_command(project: Option<&wire::Project>, agent: Option<&wire::Agent>) -> String {
-    match (project, agent) {
-        (Some(project), Some(agent)) => {
-            format!(
-                "{BINARY} workspace open --project {} --agent {}",
-                project.name, agent.name
-            )
-        }
-        (Some(_), None) => format!("{BINARY} agent declare <name>"),
-        (None, _) => {
-            format!("{BINARY} project declare <name> --repository <url> --branch <branch>")
-        }
-    }
-}
-
-/// A file is held exactly as it was read, because it is written back exactly as it was held.
-fn read_the_login(file: bool) -> Result<String> {
-    let read = read_standard_input("a login")?;
-
-    if read.trim().is_empty() {
-        bail!(Failed::new(
-            Exit::Usage,
-            "a login is read from standard input, and nothing was on it"
-        ));
-    }
-
-    Ok(if file { read } else { read.trim().to_owned() })
-}
-
-/// Off standard input rather than out of an argument, so a provider's key is never in a shell
-/// history or in what `ps` shows of this process.
-fn read_the_secret() -> Result<String> {
-    let secret = read_standard_input("a provider credential")?
-        .trim()
-        .to_owned();
-
-    if secret.is_empty() {
-        bail!(Failed::new(
-            Exit::Usage,
-            "a provider credential is read from standard input, and nothing was on it"
-        ));
-    }
-
-    Ok(secret)
-}
-
-/// The asking happens only where someone is there to read it: a pipe is read in silence, so
-/// nothing driving the Client can block on a prompt it cannot see.
-fn read_standard_input(what: &str) -> Result<String> {
-    let mut stdin = std::io::stdin();
-    let unechoed = stdin.is_terminal().then(|| {
-        eprintln!("reading {what} from standard input, unechoed; end it with ctrl-d");
-        terminal::Unechoed::on(&stdin)
-    });
-
-    let mut read = String::new();
-    stdin.read_to_string(&mut read)?;
-    if unechoed.is_some() {
-        eprintln!();
-    }
-
-    Ok(read)
 }
