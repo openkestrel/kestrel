@@ -29,9 +29,17 @@ in `crates/kestrel-client/`, and the browser Client in `packages/client`. Both d
   `start` or `queue` whole rather than the child a terminal is shown — and a Transcript as one
   record a line, entries and closed Activities as the stream carries them. Nothing is projected or
   clipped; scripts select with `jq`. Any word directly after `--json` (the old projection syntax
-  took it as a field list) is refused before anything is sent. The exceptions: `workspace read` writes a binary file's bytes
+  took it as a field list) is refused before anything is sent. `--jq EXPR` (`filter.rs`) filters
+  that same complete response through the pinned jaq, and implies JSON: a collection is one array
+  input, a followed Transcript is evaluated one record at a time, a string result prints raw and
+  any other result as JSON, one a line, and no results is success. The expression is compiled
+  before the invocation can reach the control plane, so a malformed filter changes nothing — the
+  same hook a future first-run consumer must call. A filter never hides a failure; one that fails
+  after a successful write exits 1 and does not resend. The exceptions: `workspace read` writes a binary file's bytes
   raw, a `204` (`forget`, `withdraw`, `acknowledge-refusal`) has no response to write, `status`
   writes the record the Client composes from several reads, and `exit-codes` writes the catalog.
+  Raw content has nothing to filter: a `204` has no answer to filter, and `--jq` on `workspace
+  read`'s raw bytes is refused rather than inventing a record.
 - **Secrets** are read from standard input, never from arguments, with echo off at a terminal.
 - **Diagnostics** (`diagnostic/`): every failure reaches stderr as a typed `Diagnostic`, the
   control plane's or one the Client makes for a connection failure, an unreadable or unrecognised

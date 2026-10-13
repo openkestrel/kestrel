@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::io::Write as _;
+use std::io::Write;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow};
@@ -133,24 +133,16 @@ async fn streamed(
         *heard = Instant::now();
         match event.name.as_deref() {
             Some("entry") => {
-                let entry = presented(&event.data, presentation).map_err(Cut::Failed)?;
-                writeln!(stdout, "{entry}")
-                    .and_then(|()| stdout.flush())
-                    .map_err(|error| {
-                        Cut::Failed(anyhow!(error).context("writing the transcript"))
-                    })?;
+                let entry: Value =
+                    serde_json::from_str(&event.data).map_err(|error| Cut::Failed(error.into()))?;
+                write_record(&mut stdout, presentation, &view::ENTRIES, &entry)?;
                 *cursor = event.id;
             }
             Some("activity") => {
                 let activity: Value =
                     serde_json::from_str(&event.data).map_err(|error| Cut::Failed(error.into()))?;
-                if let Some(line) = activities
-                    .observe(activity, presentation)
-                    .map_err(Cut::Failed)?
-                {
-                    writeln!(stdout, "{line}")
-                        .and_then(|()| stdout.flush())
-                        .map_err(|error| Cut::Failed(error.into()))?;
+                if let Some(activity) = activities.observe(activity).map_err(Cut::Failed)? {
+                    write_activity(&mut stdout, presentation, &activity)?;
                 }
                 *cursor = event.id;
             }
@@ -170,10 +162,7 @@ async fn streamed(
                 if !selection.follow
                     && let Some(open) = activities.open.take()
                 {
-                    let line = activity_line(&open, presentation);
-                    writeln!(stdout, "{line}")
-                        .and_then(|()| stdout.flush())
-                        .map_err(|error| Cut::Failed(error.into()))?;
+                    write_activity(&mut stdout, presentation, &open)?;
                 }
                 return Ok(());
             }
@@ -182,6 +171,34 @@ async fn streamed(
     }
 
     Err(Cut::Lost(None))
+}
+
+/// One stream record: a filter runs per record, and a record it yields nothing for writes
+/// nothing at all rather than a blank line.
+fn write_record(
+    out: &mut impl Write,
+    presentation: &Presentation,
+    view: &crate::view::View,
+    record: &Value,
+) -> Result<(), Cut> {
+    crate::output::record(out, presentation, view, record)
+        .and_then(|()| Ok(out.flush()?))
+        .map_err(|error| Cut::Failed(error.context("writing the transcript")))
+}
+
+/// An Activity reaches stdout as a whole record when the invocation asked for JSON, and as one
+/// prose line otherwise.
+fn write_activity(
+    out: &mut impl Write,
+    presentation: &Presentation,
+    activity: &Value,
+) -> Result<(), Cut> {
+    if presentation.json() {
+        return write_record(out, presentation, &view::ENTRIES, activity);
+    }
+    writeln!(out, "{}", activity_line(activity))
+        .and_then(|()| out.flush())
+        .map_err(|error| Cut::Failed(anyhow!(error).context("writing the transcript")))
 }
 
 #[derive(Deserialize)]
@@ -225,13 +242,6 @@ async fn renewing(client: Client, url: Url, every: Duration) {
             _ => {}
         }
     }
-}
-
-fn presented(data: &str, presentation: &Presentation) -> Result<String> {
-    let entry: Value = serde_json::from_str(data)
-        .context(Failed::new(Exit::Unavailable, "reading a transcript entry"))?;
-
-    Ok(crate::output::line(presentation, &view::ENTRIES, &entry))
 }
 
 fn transcript(
@@ -296,14 +306,14 @@ struct Activities {
     open: Option<Value>,
 }
 impl Activities {
-    fn observe(&mut self, activity: Value, presentation: &Presentation) -> Result<Option<String>> {
+    fn observe(&mut self, activity: Value) -> Result<Option<Value>> {
         let first = activity["first_seq"]
             .as_i64()
             .context("an Activity has no first seq")?;
         if activity["closed"] == true {
             self.open = None;
             if self.printed.insert(first) {
-                return Ok(Some(activity_line(&activity, presentation)));
+                return Ok(Some(activity));
             }
         } else if !self.printed.contains(&first) {
             self.open = Some(activity);
@@ -311,10 +321,7 @@ impl Activities {
         Ok(None)
     }
 }
-fn activity_line(activity: &Value, presentation: &Presentation) -> String {
-    if matches!(presentation, Presentation::Json) {
-        return crate::output::line(presentation, &view::ENTRIES, activity);
-    }
+fn activity_line(activity: &Value) -> String {
     let counts = &activity["counts"];
     format!(
         "activity  {}..{}  {} tools, {} failed, {} thoughts, {} plans, {} tombstones{}",

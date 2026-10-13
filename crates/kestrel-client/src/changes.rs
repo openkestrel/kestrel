@@ -4,6 +4,8 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::output::Presentation;
+
 #[derive(Deserialize)]
 struct Repositories {
     repositories: Vec<Repository>,
@@ -20,11 +22,11 @@ struct Repository {
     truncated: bool,
 }
 
-pub fn show(answer: Value, json: bool, empty: &str) -> Result<()> {
+pub fn show(answer: Value, presentation: &Presentation, empty: &str) -> Result<()> {
     let mut out = std::io::stdout().lock();
-    if json {
-        writeln!(out, "{answer}")?;
-        return Ok(());
+    if presentation.json() {
+        crate::output::document(&mut out, presentation, &answer)?;
+        return Ok(out.flush()?);
     }
     let answer: Repositories = serde_json::from_value(answer)?;
     let terminal = std::io::stdout().is_terminal();

@@ -1,8 +1,10 @@
 use std::io::{IsTerminal as _, Write};
 
 use anyhow::{Context as _, Result};
+use jaq_json::Val;
 use serde_json::Value;
 
+use crate::filter::Filter;
 use crate::view::View;
 
 static ABSENT: Value = Value::Null;
@@ -11,17 +13,33 @@ const GAP: &str = "  ";
 pub enum Presentation {
     Human(usize),
     Delimited,
-    Json,
+    /// The complete answer as JSON; `Some` filters it through the embedded jq.
+    Json(Option<Filter>),
 }
 
 impl Presentation {
-    pub fn chosen(json: bool) -> Self {
+    pub fn chosen(json: bool, filter: Option<Filter>) -> Self {
+        if let Some(filter) = filter {
+            return Presentation::Json(Some(filter));
+        }
         if json {
-            Presentation::Json
+            Presentation::Json(None)
         } else if std::io::stdout().is_terminal() {
             Presentation::Human(columns())
         } else {
             Presentation::Delimited
+        }
+    }
+
+    /// Whether the invocation asked for the complete response, with or without a filter.
+    pub fn json(&self) -> bool {
+        matches!(self, Presentation::Json(_))
+    }
+
+    pub fn filter(&self) -> Option<&Filter> {
+        match self {
+            Presentation::Json(filter) => filter.as_ref(),
+            _ => None,
         }
     }
 }
@@ -47,15 +65,35 @@ pub fn show(presentation: &Presentation, view: &View, answer: &Value) -> Result<
     out.flush().context("writing to standard output")
 }
 
+/// The complete answer as JSON, filtered when the invocation asked for it, and the one place a
+/// success answer reaches standard output.
+pub fn document(out: &mut impl Write, presentation: &Presentation, answer: &Value) -> Result<()> {
+    json(out, presentation.filter(), answer)
+}
+
+/// One record of a stream, filtered per record, where a record the filter yields nothing for
+/// writes nothing at all.
+pub fn record(
+    out: &mut impl Write,
+    presentation: &Presentation,
+    view: &View,
+    entry: &Value,
+) -> Result<()> {
+    if let Presentation::Json(Some(filter)) = presentation {
+        return filtered(out, filter, entry);
+    }
+    writeln!(out, "{}", line(presentation, view, entry))?;
+    Ok(())
+}
+
 fn written(
     out: &mut impl Write,
     presentation: &Presentation,
     view: &View,
     answer: &Value,
 ) -> Result<()> {
-    if let Presentation::Json = presentation {
-        writeln!(out, "{answer}")?;
-        return Ok(());
+    if let Presentation::Json(filter) = presentation {
+        return json(out, filter.as_ref(), answer);
     }
     let records: Vec<&Value> = match answer {
         Value::Null => Vec::new(),
@@ -73,11 +111,38 @@ fn written(
     }
 }
 
-/// One record as it arrives, which is every alignment a stream can offer. What a person is
-/// shown is neither clipped nor folded onto one line, because a streamed entry is prose.
+fn json(out: &mut impl Write, filter: Option<&Filter>, answer: &Value) -> Result<()> {
+    match filter {
+        Some(filter) => filtered(out, filter, answer),
+        None => {
+            writeln!(out, "{answer}")?;
+            Ok(())
+        }
+    }
+}
+
+/// A filter's results, where a string prints raw, anything else as JSON, and no results at all is
+/// success.
+fn filtered(out: &mut impl Write, filter: &Filter, answer: &Value) -> Result<()> {
+    filter.each(answer, |value| result(out, &value))
+}
+
+fn result(out: &mut impl Write, value: &Val) -> Result<()> {
+    match value {
+        Val::BStr(bytes) | Val::TStr(bytes) => {
+            out.write_all(&bytes[..])?;
+            out.write_all(b"\n")?;
+        }
+        value => writeln!(out, "{value}")?,
+    }
+    Ok(())
+}
+
+/// One record as it arrives, unclipped and unfolded because a streamed entry is prose; a filtered
+/// presentation runs the filter first, in [`record`] and [`written`].
 pub fn line(presentation: &Presentation, view: &View, record: &Value) -> String {
     match presentation {
-        Presentation::Json => record.to_string(),
+        Presentation::Json(_) => record.to_string(),
         Presentation::Delimited => delimited(record, view),
         Presentation::Human(_) => view
             .fields()
@@ -351,7 +416,7 @@ mod tests {
 
     fn written_as_json(answer: &Value) -> String {
         let mut out = Vec::new();
-        written(&mut out, &Presentation::Json, &AGENTS, answer).expect("written");
+        written(&mut out, &Presentation::Json(None), &AGENTS, answer).expect("written");
         String::from_utf8(out).expect("utf-8")
     }
 
@@ -384,7 +449,7 @@ mod tests {
     fn a_streamed_record_is_one_whole_json_line_however_much_it_spans() {
         let entry = json!({ "seq": 3, "entry": { "text": "one\ntwo\tthree" } });
 
-        let shown = line(&Presentation::Json, &crate::view::ENTRIES, &entry);
+        let shown = line(&Presentation::Json(None), &crate::view::ENTRIES, &entry);
 
         assert!(!shown.contains('\n'), "{shown}");
         assert_eq!(serde_json::from_str::<Value>(&shown).expect("json"), entry);

@@ -1,11 +1,12 @@
 use std::io::{IsTerminal as _, Write};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use reqwest::Response;
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::exit::{Exit, Failed};
+use crate::output::Presentation;
 
 #[derive(Deserialize)]
 struct Listing {
@@ -28,10 +29,10 @@ struct Text {
 }
 
 /// One line an entry, marked the way `ls -F` marks directories and symlinks.
-pub fn list(answer: Value, json: bool, empty: &str) -> Result<()> {
+pub fn list(answer: Value, presentation: &Presentation, empty: &str) -> Result<()> {
     let mut out = std::io::stdout().lock();
-    if json {
-        writeln!(out, "{answer}")?;
+    if presentation.json() {
+        crate::output::document(&mut out, presentation, &answer)?;
         return Ok(out.flush()?);
     }
     let listing: Listing = serde_json::from_value(answer)?;
@@ -64,7 +65,7 @@ pub fn list(answer: Value, json: bool, empty: &str) -> Result<()> {
     Ok(out.flush()?)
 }
 
-pub async fn read(mut response: Response, json: bool) -> Result<()> {
+pub async fn read(mut response: Response, presentation: &Presentation) -> Result<()> {
     let inline = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -73,13 +74,22 @@ pub async fn read(mut response: Response, json: bool) -> Result<()> {
     let mut out = std::io::stdout().lock();
     if inline {
         let answer: Value = response.json().await.context(unreadable())?;
-        if json {
-            writeln!(out, "{answer}")?;
+        if presentation.json() {
+            crate::output::document(&mut out, presentation, &answer)?;
         } else {
             let text: Text = serde_json::from_value(answer)?;
             out.write_all(text.text.as_bytes())?;
         }
         return Ok(out.flush()?);
+    }
+    // A file the control plane hands back as its own bytes has no response to filter, so this is
+    // a raw-content exception rather than an invented record.
+    if presentation.filter().is_some() {
+        bail!(Failed::new(
+            Exit::Usage,
+            "--jq filters a JSON answer, and this file is answered as its own bytes; read it \
+             without --jq"
+        ));
     }
     while let Some(chunk) = response.chunk().await.context(unreadable())? {
         out.write_all(&chunk)?;

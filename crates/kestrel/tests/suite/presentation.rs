@@ -528,3 +528,159 @@ async fn a_transcript_reaches_a_terminal_whole_however_narrow_it_is() {
     }
     kestrel.teardown().await;
 }
+
+#[tokio::test]
+async fn jq_sees_a_collection_whole_prints_a_string_raw_and_yields_nothing_successfully() {
+    let kestrel = an_organization_holding_two_agents().await;
+
+    let mapped = piped(&kestrel, &["agent", "list", "--jq", "map(.name)"]).await;
+    assert!(mapped.status.success(), "{}", mapped.err);
+    assert_eq!(mapped.out, [r#"["builder","reviewer"]"#]);
+
+    let each = piped(&kestrel, &["agent", "list", "--jq", ".[] | .name"]).await;
+    assert_eq!(
+        each.out,
+        ["builder", "reviewer"],
+        "a string result was quoted"
+    );
+
+    let length = piped(&kestrel, &["agent", "list", "--jq", "length"]).await;
+    assert_eq!(length.out, ["2"]);
+
+    let none = piped(
+        &kestrel,
+        &[
+            "agent",
+            "list",
+            "--jq",
+            r#".[] | select(.name == "nobody")"#,
+        ],
+    )
+    .await;
+    assert!(none.status.success(), "{}", none.err);
+    assert!(none.out.is_empty(), "{:?}", none.out);
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_malformed_filter_is_refused_before_anything_is_written() {
+    let kestrel = an_organization_holding_two_agents().await;
+
+    let refused = piped(
+        &kestrel,
+        &["organization", "declare", "globex", "--jq", ".["],
+    )
+    .await;
+
+    assert_eq!(refused.status.code(), Some(2), "{}", refused.err);
+    assert!(refused.out.is_empty(), "{:?}", refused.out);
+    let diagnostic: Value = serde_json::from_str(refused.err.trim()).expect("one diagnostic");
+    assert_eq!(diagnostic["kind"], "client_failure", "{diagnostic}");
+    assert_eq!(
+        diagnostic["context"]["operation"], "organization declare",
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic["message"].as_str().unwrap().contains("filter"),
+        "{diagnostic}"
+    );
+    assert_eq!(
+        kestrel.organizations().await.len(),
+        1,
+        "a refused filter declared an Organization"
+    );
+    kestrel.teardown().await;
+}
+
+/// A filter that cannot run the answer fails after the write has already happened, so the exit
+/// says the operation may have taken effect and nothing is sent again.
+#[tokio::test]
+async fn a_filter_that_fails_after_a_write_keeps_the_writes_truthful_outcome() {
+    let kestrel = an_organization_holding_two_agents().await;
+
+    let failed = piped(
+        &kestrel,
+        &["organization", "declare", "globex", "--jq", r#""x" + 1"#],
+    )
+    .await;
+
+    assert_eq!(failed.status.code(), Some(1), "{}", failed.err);
+    assert!(failed.out.is_empty(), "{:?}", failed.out);
+    let diagnostic: Value = serde_json::from_str(failed.err.trim()).expect("one diagnostic");
+    assert_eq!(diagnostic["kind"], "client_failure", "{diagnostic}");
+    assert_eq!(
+        diagnostic["next_steps"][0]["action"], "inspect_operation",
+        "{diagnostic}"
+    );
+    assert_eq!(
+        diagnostic["next_steps"][0]["uncertain"], true,
+        "{diagnostic}"
+    );
+    assert_eq!(
+        kestrel.organizations().await.len(),
+        2,
+        "the write the filter could not show was lost"
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_filter_does_not_swallow_a_refusal() {
+    let kestrel = an_organization_holding_two_agents().await;
+
+    let refused = piped(
+        &kestrel,
+        &["workspace", "show", "no-such-workspace", "--jq", ".id"],
+    )
+    .await;
+
+    assert_eq!(refused.status.code(), Some(3), "{}", refused.err);
+    assert!(refused.out.is_empty(), "{:?}", refused.out);
+    let diagnostic: Value = serde_json::from_str(refused.err.trim()).expect("one diagnostic");
+    assert_eq!(diagnostic["kind"], "missing_reference", "{diagnostic}");
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn jq_filters_a_followed_stream_one_record_at_a_time() {
+    let kestrel = an_organization_holding_two_agents().await;
+    let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
+    let session = kestrel.dispatch_session(workspace.id).await;
+    kestrel.said(&session, "one line\nand another").await;
+    let workspace = workspace.id.to_string();
+
+    let read = piped(
+        &kestrel,
+        &["workspace", "transcript", &workspace, "--jq", ".seq"],
+    )
+    .await;
+
+    assert!(read.status.success(), "{}", read.err);
+    assert!(read.out.len() > 1, "{:?}", read.out);
+    for line in &read.out {
+        assert!(
+            line.parse::<i64>().is_ok(),
+            "{line} is not one record's seq"
+        );
+    }
+    assert!(read.err.contains("cursor  "), "{}", read.err);
+
+    let quiet = piped(
+        &kestrel,
+        &[
+            "workspace",
+            "transcript",
+            &workspace,
+            "--jq",
+            "select(.seq > 100000)",
+        ],
+    )
+    .await;
+    assert!(quiet.status.success(), "{}", quiet.err);
+    assert!(
+        quiet.out.is_empty(),
+        "a record the filter yielded nothing for wrote a line: {:?}",
+        quiet.out
+    );
+    kestrel.teardown().await;
+}

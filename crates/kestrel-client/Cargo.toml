@@ -13,6 +13,10 @@ workspace = true
 kestrel-operator-types = { path = "../kestrel-operator-types" }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
+# Pinned: the embedded jq (`--jq`) is a fixed jaq, and a moved filter is a behaviour change.
+jaq-core = "=3.1.1"
+jaq-json = { version = "=2.0.3", features = ["serde"] }
+jaq-std = "=3.0.3"
 jiff = { version = "0.2", features = ["serde"] }
 libc = "0.2"
 percent-encoding = "2"

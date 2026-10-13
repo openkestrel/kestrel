@@ -4,38 +4,40 @@ use anyhow::Result;
 use kestrel_operator_types::{WorkInstanceReport, WorkLastReport, WorkRepository, WorkspaceWork};
 use serde_json::Value;
 
-pub fn show(answer: Value, json: bool) -> Result<()> {
+use crate::output::Presentation;
+
+pub fn show(answer: Value, presentation: &Presentation) -> Result<()> {
     let terminal = std::io::stdout().is_terminal();
     let mut out = std::io::stdout().lock();
-    if json {
-        writeln!(out, "{answer}")?;
-    } else {
-        match serde_json::from_value::<WorkspaceWork>(answer)? {
-            WorkspaceWork::WorkNoInstance(work) => {
-                writeln!(out, "no Instance; declared branch {}", work.branch)?;
-                if let Some(pull_request) = work.pull_request {
-                    writeln!(out, "{pull_request}")?;
-                }
-                last_report(&mut out, work.last_report, terminal)?;
-                earlier_reports(&mut out, work.earlier_reports, terminal)?;
+    if presentation.json() {
+        crate::output::document(&mut out, presentation, &answer)?;
+        return Ok(out.flush()?);
+    }
+    match serde_json::from_value::<WorkspaceWork>(answer)? {
+        WorkspaceWork::WorkNoInstance(work) => {
+            writeln!(out, "no Instance; declared branch {}", work.branch)?;
+            if let Some(pull_request) = work.pull_request {
+                writeln!(out, "{pull_request}")?;
             }
-            WorkspaceWork::WorkNotAnswering(work) => {
-                writeln!(out, "{}", work.message)?;
-                last_report(&mut out, work.last_report, terminal)?;
-                earlier_reports(&mut out, work.earlier_reports, terminal)?;
+            last_report(&mut out, work.last_report, terminal)?;
+            earlier_reports(&mut out, work.earlier_reports, terminal)?;
+        }
+        WorkspaceWork::WorkNotAnswering(work) => {
+            writeln!(out, "{}", work.message)?;
+            last_report(&mut out, work.last_report, terminal)?;
+            earlier_reports(&mut out, work.earlier_reports, terminal)?;
+        }
+        WorkspaceWork::WorkReported(work) => {
+            if terminal {
+                writeln!(
+                    out,
+                    "Reported by the supervisor {}s ago ({})",
+                    age(&work.reported_at)?,
+                    work.reported_at
+                )?;
             }
-            WorkspaceWork::WorkReported(work) => {
-                if terminal {
-                    writeln!(
-                        out,
-                        "Reported by the supervisor {}s ago ({})",
-                        age(&work.reported_at)?,
-                        work.reported_at
-                    )?;
-                }
-                repositories(&mut out, work.repositories, terminal)?;
-                earlier_reports(&mut out, work.earlier_reports, terminal)?;
-            }
+            repositories(&mut out, work.repositories, terminal)?;
+            earlier_reports(&mut out, work.earlier_reports, terminal)?;
         }
     }
     out.flush()?;
