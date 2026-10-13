@@ -193,7 +193,11 @@ pub const WORKSPACES: Columns<wire::WorkspaceListed> = Columns::Rows(&[
     Column("opened with", |record| text(&record.opened_with)),
     Column("started by", |record| or_absent(record.started_by.as_ref())),
 ]);
-pub const ENTRIES: View = View::Rows(&["seq", "appended_at", "entry"]);
+pub const ENTRIES: Columns<wire::Recorded> = Columns::Rows(&[
+    Column("seq", |record| text(record.seq)),
+    Column("appended at", |record| text(&record.appended_at)),
+    Column("entry", |record| compound(&record.entry)),
+]);
 pub const WORKSPACE: Columns<wire::Workspace> = Columns::Detail(&[
     Column("id", |record| text(record.id)),
     Column("name", |record| text(&record.name)),

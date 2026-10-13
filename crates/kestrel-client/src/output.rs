@@ -9,7 +9,7 @@ use crate::view::View;
 
 static NULL: Value = Value::Null;
 pub const ABSENT: &str = "-";
-const GAP: &str = "  ";
+pub const GAP: &str = "  ";
 
 pub enum Presentation {
     Human(usize),
@@ -72,21 +72,6 @@ pub fn document(out: &mut impl Write, presentation: &Presentation, answer: &Valu
     json(out, presentation.filter(), answer)
 }
 
-/// One record of a stream, filtered per record, where a record the filter yields nothing for
-/// writes nothing at all.
-pub fn record(
-    out: &mut impl Write,
-    presentation: &Presentation,
-    view: &View,
-    entry: &Value,
-) -> Result<()> {
-    if let Presentation::Json(Some(filter)) = presentation {
-        return filtered(out, filter, entry);
-    }
-    writeln!(out, "{}", line(presentation, view, entry))?;
-    Ok(())
-}
-
 fn written(
     out: &mut impl Write,
     presentation: &Presentation,
@@ -140,7 +125,7 @@ fn result(out: &mut impl Write, value: &Val) -> Result<()> {
 }
 
 /// One record as it arrives, unclipped and unfolded because a streamed entry is prose; a filtered
-/// presentation runs the filter first, in [`record`] and [`written`].
+/// presentation runs the filter first, in [`written`].
 pub fn line(presentation: &Presentation, view: &View, record: &Value) -> String {
     match presentation {
         Presentation::Json(_) => record.to_string(),
@@ -451,7 +436,11 @@ mod tests {
     fn a_streamed_record_is_one_whole_json_line_however_much_it_spans() {
         let entry = json!({ "seq": 3, "entry": { "text": "one\ntwo\tthree" } });
 
-        let shown = line(&Presentation::Json(None), &crate::view::ENTRIES, &entry);
+        let shown = line(
+            &Presentation::Json(None),
+            &View::Rows(&["seq", "entry"]),
+            &entry,
+        );
 
         assert!(!shown.contains('\n'), "{shown}");
         assert_eq!(serde_json::from_str::<Value>(&shown).expect("json"), entry);

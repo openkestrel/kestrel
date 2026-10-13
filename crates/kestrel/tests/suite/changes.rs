@@ -102,12 +102,17 @@ impl Stream {
                 continue;
             }
 
-            let data = if data.is_empty() {
-                Value::Null
-            } else {
-                serde_json::from_str(&data)
-                    .unwrap_or_else(|error| panic!("{data} is not JSON: {error}"))
-            };
+            let typed = kestrel_operator_types::ChangesEvent::from_sse(&name, &data)
+                .unwrap_or_else(|| panic!("the document names no {name} notice"))
+                .unwrap_or_else(|error| panic!("{data} is no {name} notice: {error}"));
+            assert_eq!(typed.event_name(), name);
+            let data: Value = serde_json::from_str(&data)
+                .unwrap_or_else(|error| panic!("{data} is not JSON: {error}"));
+            assert_eq!(
+                serde_json::to_value(&typed).expect("a notice"),
+                data,
+                "the generated {name} notice drops what the boundary serves"
+            );
             return Some(Frame { name, data });
         }
     }

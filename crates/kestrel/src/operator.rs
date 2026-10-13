@@ -198,83 +198,126 @@ struct Following {
     as_name: Option<String>,
 }
 
-#[derive(Serialize)]
-struct Recorded {
-    kind: log::Kind,
-    session_id: Option<crate::domain::SessionId>,
-    seq: i64,
-    appended_at: String,
-    entry: serde_json::Value,
-}
-
-#[derive(Serialize)]
-struct End {
-    because: Because,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Because {
-    CaughtUp,
-    Sealed,
-}
-
-#[derive(Serialize)]
-struct FollowerEvent {
-    id: crate::presence::FollowerId,
-    lease_seconds: u64,
-}
-
-#[derive(Serialize)]
-struct Refetch {}
-
 // The Workspace's name, because a Client addresses every read by it.
-#[derive(Serialize)]
-#[serde(tag = "resource", rename_all = "snake_case")]
-enum Changed {
-    Workspace {
-        id: WorkspaceId,
-        workspace: String,
-    },
-    Session {
-        id: crate::domain::SessionId,
-        workspace: String,
-    },
-    Queue,
+async fn changed(store: &Store, resource: fanout::Resource) -> anyhow::Result<wire::Change> {
+    let mut tx = store.read().await?;
+    Ok(match resource {
+        fanout::Resource::Workspace(id) => wire::Change::ChangeWorkspace(wire::ChangeWorkspace {
+            resource: "workspace".into(),
+            id: id.to_string().parse().expect("a Workspace UUID"),
+            workspace: tx.workspaces().get(id).await?.name,
+        }),
+        fanout::Resource::Session(id) => {
+            let session = tx.workspaces().session(id).await?;
+            wire::Change::ChangeSession(wire::ChangeSession {
+                resource: "session".into(),
+                id: id.to_string().parse().expect("a Session UUID"),
+                workspace: tx.workspaces().get(session.workspace).await?.name,
+            })
+        }
+        fanout::Resource::Queue => wire::Change::ChangeQueue(wire::ChangeQueue {
+            resource: "queue".into(),
+        }),
+    })
 }
 
-impl Changed {
-    async fn named(store: &Store, resource: fanout::Resource) -> anyhow::Result<Self> {
-        let mut tx = store.read().await?;
-        Ok(match resource {
-            fanout::Resource::Workspace(id) => Self::Workspace {
-                id,
-                workspace: tx.workspaces().get(id).await?.name,
-            },
-            fanout::Resource::Session(id) => {
-                let session = tx.workspaces().session(id).await?;
-                Self::Session {
-                    id,
-                    workspace: tx.workspaces().get(session.workspace).await?.name,
-                }
-            }
-            fanout::Resource::Queue => Self::Queue,
-        })
-    }
+fn transcript_event(cursor: Option<Cursor>, event: wire::Event) -> serde_json::Result<Emitted> {
+    Emitted::new(event.event_name(), cursor, &event)
+}
+
+fn changes_event(event: wire::ChangesEvent) -> serde_json::Result<Emitted> {
+    Emitted::new(event.event_name(), None, &event)
+}
+
+fn refetch() -> wire::Refetch {
+    serde_json::json!({})
 }
 
 struct Read {
     page: log::TranscriptPage,
-    session_state: TranscriptSessionState,
+    session_state: ObservedSession,
     sealed: bool,
 }
 
-#[derive(Clone, PartialEq, Serialize)]
-struct TranscriptSessionState {
+#[derive(Clone, PartialEq)]
+struct ObservedSession {
     session_id: Option<domain::SessionId>,
-    #[serde(flatten)]
     state: crate::live_work::SessionState,
     observation: crate::live_work::Observation,
+}
+
+fn transcript_session_state(observed: ObservedSession) -> wire::TranscriptSessionState {
+    let ObservedSession {
+        session_id,
+        state,
+        observation,
+    } = observed;
+    wire::TranscriptSessionState {
+        session_id: session_id.map(|id| id.to_string().parse().expect("a Session UUID")),
+        tools: state.tools.into_iter().map(running_tool).collect(),
+        units: state.units.into_iter().map(running_unit).collect(),
+        message_buffering: state.message_buffering,
+        thought_buffering: state.thought_buffering,
+        usage: state.usage.map(session_usage),
+        last_activity_at: state.last_activity_at.map(|at| at.to_string()),
+        observation: session_observation(observation),
+    }
+}
+
+fn transcript_kind(kind: log::Kind) -> wire::TranscriptKind {
+    match kind {
+        log::Kind::SharedState => wire::TranscriptKind::SharedState,
+        log::Kind::Narration => wire::TranscriptKind::Narration,
+        log::Kind::Detail => wire::TranscriptKind::Detail,
+    }
+}
+
+/// The stored body is the only copy that holds payload references, so it is decoded rather than
+/// rebuilt from the domain entry.
+fn recorded(entry: log::StoredTranscriptEntry) -> serde_json::Result<wire::Recorded> {
+    Ok(wire::Recorded {
+        kind: transcript_kind(entry.kind),
+        session_id: entry
+            .session_id
+            .map(|id| id.to_string().parse().expect("a Session UUID")),
+        seq: entry.seq,
+        appended_at: entry.appended_at.to_string(),
+        entry: serde_json::from_value(entry.entry)?,
+    })
+}
+
+fn activity(activity: log::Activity) -> wire::Activity {
+    let count = |count: u64| -> i64 { count.try_into().expect("a count fits a wire integer") };
+    wire::Activity {
+        first_seq: activity.first_seq,
+        last_seq: activity.last_seq,
+        counts: wire::ActivityCounts {
+            tool_calls: count(activity.counts.tool_calls),
+            failed_calls: count(activity.counts.failed_calls),
+            thoughts: count(activity.counts.thoughts),
+            plans: count(activity.counts.plans),
+            tombstones: count(activity.counts.tombstones),
+        },
+        latest: activity.latest.map(|latest| wire::ActivityLatest {
+            kind: transcript_kind(latest.kind),
+            title: latest.title,
+            status: latest.status,
+        }),
+        started_at: activity.started_at.map(|at| at.to_string()),
+        finished_at: activity.finished_at.map(|at| at.to_string()),
+        anomaly: activity.anomaly,
+        closed: activity.closed,
+    }
+}
+
+fn presence(presence: crate::presence::Presence) -> wire::Presence {
+    wire::Presence {
+        named: presence.named,
+        anonymous: presence
+            .anonymous
+            .try_into()
+            .expect("a follower count fits a wire integer"),
+    }
 }
 
 async fn harnesses(
@@ -4155,56 +4198,58 @@ fn transcribed(
         let mut delivered = from;
         let mut session_state = read.session_state.clone();
         if follow {
-            yield Emitted::new("session_state", None, &session_state)?;
+            yield transcript_event(None, wire::Event::TranscriptSessionState(
+                transcript_session_state(session_state.clone()),
+            ))?;
         }
         loop {
             if follow && read.session_state != session_state {
                 session_state = read.session_state.clone();
-                yield Emitted::new("session_state", None, &session_state)?;
+                yield transcript_event(None, wire::Event::TranscriptSessionState(
+                    transcript_session_state(session_state.clone()),
+                ))?;
             }
             let mut activities = read.page.activities.into_iter().peekable();
             for entry in read.page.entries {
                 while activities.peek().is_some_and(|activity| activity.last_seq < entry.seq) {
-                    let activity = activities.next().unwrap();
-                    delivered = Some(Cursor::at(workspace, activity.last_seq));
-                    yield Emitted::new("activity", delivered, &activity)?;
+                    let summary = activities.next().unwrap();
+                    delivered = Some(Cursor::at(workspace, summary.last_seq));
+                    yield transcript_event(delivered, wire::Event::Activity(activity(summary)))?;
                 }
                 delivered = Some(Cursor::at(workspace, entry.seq));
-                yield Emitted::new("entry", delivered, &Recorded {
-                    kind: entry.kind,
-                    session_id: entry.session_id,
-                    seq: entry.seq,
-                    appended_at: entry.appended_at.to_string(),
-                    entry: entry.entry,
-                })?;
+                yield transcript_event(delivered, wire::Event::Recorded(recorded(entry)?))?;
             }
-            for activity in activities {
-                delivered = Some(Cursor::at(workspace, activity.last_seq));
-                yield Emitted::new("activity", delivered, &activity)?;
+            for summary in activities {
+                delivered = Some(Cursor::at(workspace, summary.last_seq));
+                yield transcript_event(delivered, wire::Event::Activity(activity(summary)))?;
             }
             if let Some(cursor) = read.page.cursor && delivered != Some(cursor) {
                 delivered = Some(cursor);
-                yield Emitted::new("cursor", delivered, &cursor.to_string())?;
+                yield transcript_event(delivered, wire::Event::CursorEvent(cursor.to_string()))?;
             }
             if !read.page.more {
                 let because = match (read.sealed, follow) {
-                    (true, _) => Some(Because::Sealed),
-                    (false, false) => Some(Because::CaughtUp),
-                    (false, true) if range.last_seq.is_some() => Some(Because::CaughtUp),
+                    (true, _) => Some(wire::EndBecause::Sealed),
+                    (false, false) => Some(wire::EndBecause::CaughtUp),
+                    (false, true) if range.last_seq.is_some() => Some(wire::EndBecause::CaughtUp),
                     (false, true) => None,
                 };
                 if let Some(because) = because {
-                    yield Emitted::new(stream::END, None, &End { because })?;
+                    yield transcript_event(None, wire::Event::End(wire::End { because }))?;
                     break;
                 }
 
                 if joined.is_none() {
                     let mut follower = control_plane.followers.join(workspace, name.clone());
-                    yield Emitted::new("follower", None, &FollowerEvent {
-                        id: follower.id,
-                        lease_seconds: follower.lease.as_secs(),
-                    })?;
-                    yield Emitted::new("presence", None, &follower.snapshot())?;
+                    yield transcript_event(None, wire::Event::FollowerEvent(wire::FollowerEvent {
+                        id: follower.id.to_string().parse().expect("a follower UUID"),
+                        lease_seconds: follower
+                            .lease
+                            .as_secs()
+                            .try_into()
+                            .expect("a lease fits a wire integer"),
+                    }))?;
+                    yield transcript_event(None, wire::Event::Presence(presence(follower.snapshot())))?;
                     joined = Some(follower);
                 }
 
@@ -4213,7 +4258,7 @@ fn transcribed(
                     break;
                 }
                 if follower.presence.has_changed().unwrap_or(false) {
-                    yield Emitted::new("presence", None, &follower.snapshot())?;
+                    yield transcript_event(None, wire::Event::Presence(presence(follower.snapshot())))?;
                 }
 
                 tokio::select! {
@@ -4270,7 +4315,7 @@ async fn noticed(
     let control_plane = control_plane.clone();
 
     Ok(Box::pin(async_stream::try_stream! {
-        yield Emitted::new("open", None, &Refetch {})?;
+        yield changes_event(wire::ChangesEvent::ChangesOpen(refetch()))?;
         loop {
             let watch = tokio::select! {
                 () = control_plane.shutdown.cancelled() => break,
@@ -4278,13 +4323,13 @@ async fn noticed(
             };
             match watch {
                 Some(fanout::Watch::Change(resource)) => {
-                    match Changed::named(&control_plane.store, resource).await {
-                        Ok(changed) => yield Emitted::new("change", None, &changed)?,
-                        Err(_) => yield Emitted::new("resync", None, &Refetch {})?,
+                    match changed(&control_plane.store, resource).await {
+                        Ok(changed) => yield changes_event(wire::ChangesEvent::Change(changed))?,
+                        Err(_) => yield changes_event(wire::ChangesEvent::ChangesResync(refetch()))?,
                     }
                 }
                 Some(fanout::Watch::Resync) => {
-                    yield Emitted::new("resync", None, &Refetch {})?;
+                    yield changes_event(wire::ChangesEvent::ChangesResync(refetch()))?;
                 }
                 None => break,
             }
@@ -4514,7 +4559,7 @@ async fn reading(
         .await?
         .map(|holding| holding.session);
     let (observation, state) = control_plane.live.summaries.observed(session.as_ref());
-    let session_state = TranscriptSessionState {
+    let session_state = ObservedSession {
         session_id: session.as_ref().map(|session| session.id),
         state,
         observation,

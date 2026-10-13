@@ -1,4 +1,4 @@
-import type { Activity, Entry, Exit, PayloadReference, RunningTool } from "./generated";
+import type { Activity, Entry, Exit, PayloadReference, PlanStep, RunningTool } from "./generated";
 import type { Delivered } from "./transcript";
 
 export type FlowItem =
@@ -217,9 +217,6 @@ export function payloadReference(value: unknown): PayloadReference | undefined {
 	return { payload_id: value.payload_id, bytes: value.bytes, media_type: media };
 }
 
-export type PlanStep = { content: string; priority: string; status: string };
-
-// The plan schema in openapi/operator.json refers to itself, so the generated Entry cannot type a step.
 export function planStep(value: unknown): PlanStep | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
 	if (!("content" in value) || typeof value.content !== "string") return undefined;
