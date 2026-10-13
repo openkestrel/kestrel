@@ -4155,7 +4155,7 @@ pub enum Entry {
     TurnInterrupted(TurnInterrupted),
     InstanceReleased(InstanceReleased),
     ThoughtEntry(ThoughtEntry),
-    PlanEntry(Box<PlanEntry>),
+    PlanEntry(PlanEntry),
     PullRequestEntry(PullRequestEntry),
     OptionChangedEntry(OptionChangedEntry),
     ToolCallEntry(ToolCallEntry),
@@ -4783,7 +4783,7 @@ impl<'de> serde::Deserialize<'de> for Entry {
                         structural_match =
                             Some((Self::ThoughtEntry(payload), stringify!(ThoughtEntry)));
                     }
-                    if let Ok(payload) = serde_json::from_value::<Box<PlanEntry>>(value.clone()) {
+                    if let Ok(payload) = serde_json::from_value::<PlanEntry>(value.clone()) {
                         if let Some((_, first_name)) = &structural_match {
                             return Err(serde::de::Error::custom(format!(
                                 "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
@@ -4970,7 +4970,7 @@ impl<'de> serde::Deserialize<'de> for Entry {
                         structural_match =
                             Some((Self::ThoughtEntry(payload), stringify!(ThoughtEntry)));
                     }
-                    if let Ok(payload) = serde_json::from_value::<Box<PlanEntry>>(value.clone()) {
+                    if let Ok(payload) = serde_json::from_value::<PlanEntry>(value.clone()) {
                         if let Some((_, first_name)) = &structural_match {
                             return Err(serde::de::Error::custom(format!(
                                 "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
@@ -5157,7 +5157,7 @@ impl<'de> serde::Deserialize<'de> for Entry {
                         structural_match =
                             Some((Self::ThoughtEntry(payload), stringify!(ThoughtEntry)));
                     }
-                    if let Ok(payload) = serde_json::from_value::<Box<PlanEntry>>(value.clone()) {
+                    if let Ok(payload) = serde_json::from_value::<PlanEntry>(value.clone()) {
                         if let Some((_, first_name)) = &structural_match {
                             return Err(serde::de::Error::custom(format!(
                                 "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
@@ -5344,7 +5344,7 @@ impl<'de> serde::Deserialize<'de> for Entry {
                         structural_match =
                             Some((Self::ThoughtEntry(payload), stringify!(ThoughtEntry)));
                     }
-                    if let Ok(payload) = serde_json::from_value::<Box<PlanEntry>>(value.clone()) {
+                    if let Ok(payload) = serde_json::from_value::<PlanEntry>(value.clone()) {
                         if let Some((_, first_name)) = &structural_match {
                             return Err(serde::de::Error::custom(format!(
                                 "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
@@ -5531,7 +5531,7 @@ impl<'de> serde::Deserialize<'de> for Entry {
                         structural_match =
                             Some((Self::ThoughtEntry(payload), stringify!(ThoughtEntry)));
                     }
-                    if let Ok(payload) = serde_json::from_value::<Box<PlanEntry>>(value.clone()) {
+                    if let Ok(payload) = serde_json::from_value::<PlanEntry>(value.clone()) {
                         if let Some((_, first_name)) = &structural_match {
                             return Err(serde::de::Error::custom(format!(
                                 "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
@@ -5718,7 +5718,7 @@ impl<'de> serde::Deserialize<'de> for Entry {
                         structural_match =
                             Some((Self::ThoughtEntry(payload), stringify!(ThoughtEntry)));
                     }
-                    if let Ok(payload) = serde_json::from_value::<Box<PlanEntry>>(value.clone()) {
+                    if let Ok(payload) = serde_json::from_value::<PlanEntry>(value.clone()) {
                         if let Some((_, first_name)) = &structural_match {
                             return Err(serde::de::Error::custom(format!(
                                 "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
@@ -5905,7 +5905,7 @@ impl<'de> serde::Deserialize<'de> for Entry {
                         structural_match =
                             Some((Self::ThoughtEntry(payload), stringify!(ThoughtEntry)));
                     }
-                    if let Ok(payload) = serde_json::from_value::<Box<PlanEntry>>(value.clone()) {
+                    if let Ok(payload) = serde_json::from_value::<PlanEntry>(value.clone()) {
                         if let Some((_, first_name)) = &structural_match {
                             return Err(serde::de::Error::custom(format!(
                                 "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
@@ -6090,7 +6090,7 @@ impl<'de> serde::Deserialize<'de> for Entry {
                         structural_match =
                             Some((Self::ThoughtEntry(payload), stringify!(ThoughtEntry)));
                     }
-                    if let Ok(payload) = serde_json::from_value::<Box<PlanEntry>>(value.clone()) {
+                    if let Ok(payload) = serde_json::from_value::<PlanEntry>(value.clone()) {
                         if let Some((_, first_name)) = &structural_match {
                             return Err(serde::de::Error::custom(format!(
                                 "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
@@ -6277,7 +6277,7 @@ impl<'de> serde::Deserialize<'de> for Entry {
                             stringify!(InstanceReleased),
                         ));
                     }
-                    if let Ok(payload) = serde_json::from_value::<Box<PlanEntry>>(value.clone()) {
+                    if let Ok(payload) = serde_json::from_value::<PlanEntry>(value.clone()) {
                         if let Some((_, first_name)) = &structural_match {
                             return Err(serde::de::Error::custom(format!(
                                 "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
@@ -6352,11 +6352,10 @@ impl<'de> serde::Deserialize<'de> for Entry {
                     }
                 }
                 "plan" => {
-                    let primary_error =
-                        match serde_json::from_value::<Box<PlanEntry>>(value.clone()) {
-                            Ok(payload) => return Ok(Self::PlanEntry(payload)),
-                            Err(error) => error,
-                        };
+                    let primary_error = match serde_json::from_value::<PlanEntry>(value.clone()) {
+                        Ok(payload) => return Ok(Self::PlanEntry(payload)),
+                        Err(error) => error,
+                    };
                     let mut structural_match: Option<(Self, &'static str)> = None;
                     if let Ok(payload) = serde_json::from_value::<ParticipantJoined>(value.clone())
                     {
@@ -6665,7 +6664,7 @@ impl<'de> serde::Deserialize<'de> for Entry {
                         structural_match =
                             Some((Self::ThoughtEntry(payload), stringify!(ThoughtEntry)));
                     }
-                    if let Ok(payload) = serde_json::from_value::<Box<PlanEntry>>(value.clone()) {
+                    if let Ok(payload) = serde_json::from_value::<PlanEntry>(value.clone()) {
                         if let Some((_, first_name)) = &structural_match {
                             return Err(serde::de::Error::custom(format!(
                                 "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
@@ -6850,7 +6849,7 @@ impl<'de> serde::Deserialize<'de> for Entry {
                         structural_match =
                             Some((Self::ThoughtEntry(payload), stringify!(ThoughtEntry)));
                     }
-                    if let Ok(payload) = serde_json::from_value::<Box<PlanEntry>>(value.clone()) {
+                    if let Ok(payload) = serde_json::from_value::<PlanEntry>(value.clone()) {
                         if let Some((_, first_name)) = &structural_match {
                             return Err(serde::de::Error::custom(format!(
                                 "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
@@ -7034,7 +7033,7 @@ impl<'de> serde::Deserialize<'de> for Entry {
                         structural_match =
                             Some((Self::ThoughtEntry(payload), stringify!(ThoughtEntry)));
                     }
-                    if let Ok(payload) = serde_json::from_value::<Box<PlanEntry>>(value.clone()) {
+                    if let Ok(payload) = serde_json::from_value::<PlanEntry>(value.clone()) {
                         if let Some((_, first_name)) = &structural_match {
                             return Err(serde::de::Error::custom(format!(
                                 "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
@@ -7221,7 +7220,7 @@ impl<'de> serde::Deserialize<'de> for Entry {
                         structural_match =
                             Some((Self::ThoughtEntry(payload), stringify!(ThoughtEntry)));
                     }
-                    if let Ok(payload) = serde_json::from_value::<Box<PlanEntry>>(value.clone()) {
+                    if let Ok(payload) = serde_json::from_value::<PlanEntry>(value.clone()) {
                         if let Some((_, first_name)) = &structural_match {
                             return Err(serde::de::Error::custom(format!(
                                 "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
@@ -7502,7 +7501,7 @@ impl AsRef<str> for PullRequestState {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PlanEntry {
     pub completion: Completion,
-    pub entries: Box<PlanEntries>,
+    pub entries: PlanEntries,
     ///Fields containing payload references; absent means every content field is inline.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload_fields: Option<Vec<String>>,
@@ -7512,10 +7511,17 @@ pub struct PlanEntry {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum PlanEntries {
-    InlinePlanEntries(Box<InlinePlanEntries>),
+    InlinePlanEntries(InlinePlanEntries),
     PayloadReference(PayloadReference),
 }
-pub type InlinePlanEntries = Vec<Box<PlanEntry>>;
+pub type InlinePlanEntries = Vec<PlanStep>;
+///One step of a plan, as the Harness reported it.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PlanStep {
+    pub content: String,
+    pub priority: String,
+    pub status: String,
+}
 ///A Participant joined the Workspace.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ParticipantJoined {
@@ -7579,6 +7585,20 @@ pub struct SpokenMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload_fields: Option<Vec<String>>,
 }
+///What a Participant said.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Message {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion: Option<Completion>,
+    pub message: MessageContent,
+    pub participant: String,
+    ///Fields containing payload references; absent means every content field is inline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload_fields: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<uuid::Uuid>,
+    pub r#type: serde_json::Value,
+}
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum MessageContent {
@@ -7586,17 +7606,6 @@ pub enum MessageContent {
     PayloadReference(PayloadReference),
 }
 pub type InlineMessage = String;
-///What a Participant said.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Message {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub completion: Option<Completion>,
-    pub message: String,
-    pub participant: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<uuid::Uuid>,
-    pub r#type: serde_json::Value,
-}
 ///A person released the Workspace's Instance, destroying it and whatever it held that was never pushed.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct InstanceReleased {

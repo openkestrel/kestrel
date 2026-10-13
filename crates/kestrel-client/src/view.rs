@@ -2,7 +2,7 @@
 
 use kestrel_operator_types as wire;
 
-use crate::typed::{Column, Columns, joined, or_absent, text};
+use crate::typed::{Column, Columns, joined, or_absent, text, whole};
 
 /// What a command produces, as dotted paths into the record the control plane answered.
 pub enum View {
@@ -150,7 +150,11 @@ pub const WORKSPACES: Columns<wire::WorkspaceListed> = Columns::Rows(&[
     Column("opened with", |record| text(&record.opened_with)),
     Column("started by", |record| or_absent(record.started_by.as_ref())),
 ]);
-pub const ENTRIES: View = View::Rows(&["seq", "appended_at", "entry"]);
+pub const ENTRIES: Columns<wire::Recorded> = Columns::Rows(&[
+    Column("seq", |record| text(record.seq)),
+    Column("appended at", |record| text(&record.appended_at)),
+    Column("entry", |record| whole(&record.entry)),
+]);
 pub const WORKSPACE: Columns<wire::Workspace> = Columns::Detail(&[
     Column("id", |record| text(record.id)),
     Column("name", |record| text(&record.name)),

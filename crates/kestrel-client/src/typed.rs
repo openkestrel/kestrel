@@ -57,6 +57,30 @@ pub fn joined<V: ToString>(values: &[V]) -> String {
         .join(",")
 }
 
+/// An authored union shown whole, where no one list of columns covers every variant.
+pub fn whole(value: &impl Serialize) -> String {
+    serde_json::to_string(value).unwrap_or_else(|error| format!("unreadable: {error}"))
+}
+
+/// One record of a stream as it arrives, unclipped because a streamed entry is prose; a filter
+/// runs per record, and a record it yields nothing for writes nothing at all.
+pub fn record<T: Serialize>(
+    out: &mut impl Write,
+    presentation: &Presentation,
+    columns: &Columns<T>,
+    record: &T,
+) -> Result<()> {
+    match presentation {
+        Presentation::Json(_) => {
+            output::document(out, presentation, &serde_json::to_value(record)?)?
+        }
+        Presentation::Delimited => writeln!(out, "{}", output::delimited(&columns.cells(record)))?,
+        Presentation::Human(_) => writeln!(out, "{}", columns.cells(record).join(output::GAP))?,
+    }
+
+    Ok(())
+}
+
 pub fn collection<T: Serialize>(
     presentation: &Presentation,
     columns: &Columns<T>,

@@ -7651,10 +7651,17 @@
             "type": "string"
           },
           "message": {
-            "type": "string"
+            "$ref": "#/components/schemas/MessageContent"
           },
           "type": {
             "const": "said"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           },
           "session_id": {
             "type": "string",
@@ -9461,8 +9468,28 @@
       "InlinePlanEntries": {
         "type": "array",
         "items": {
-          "$ref": "#/components/schemas/PlanEntry"
+          "$ref": "#/components/schemas/PlanStep"
         }
+      },
+      "PlanStep": {
+        "description": "One step of a plan, as the Harness reported it.",
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content",
+          "priority",
+          "status"
+        ]
       },
       "PlanEntries": {
         "oneOf": [

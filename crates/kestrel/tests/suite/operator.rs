@@ -7019,7 +7019,11 @@ fn the_published_operator_document_describes_every_transcript_entry() {
         },
         Entry::Plan {
             session_id: SessionId::generate(),
-            entries: Vec::new(),
+            entries: vec![kestrel::log::PlanEntry {
+                content: "read the backlog".to_owned(),
+                priority: "medium".to_owned(),
+                status: "pending".to_owned(),
+            }],
             completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
         Entry::PullRequest {
@@ -7057,22 +7061,17 @@ fn the_published_operator_document_describes_every_transcript_entry() {
     for entry in served {
         let entry = serde_json::to_value(&entry).expect("an entry");
         let kind = entry["type"].as_str().expect("a kind").to_owned();
-        let schema = mapping
-            .get(&kind)
-            .unwrap_or_else(|| panic!("the document describes no {kind} entry"))
-            .as_str()
-            .expect("a reference");
-
-        for field in resolve(&document, schema)["required"]
-            .as_array()
-            .expect("an array of required fields")
-        {
-            let field = field.as_str().expect("a named field");
-            assert!(
-                entry.get(field).is_some(),
-                "the document requires {field} on a {kind} entry, and the boundary does not serve it"
-            );
-        }
+        assert!(
+            mapping.contains_key(&kind),
+            "the document describes no {kind} entry"
+        );
+        let typed: kestrel_operator_types::Entry = serde_json::from_value(entry.clone())
+            .unwrap_or_else(|error| panic!("a {kind} entry is not the documented one: {error}"));
+        assert_eq!(
+            serde_json::to_value(&typed).expect("an entry"),
+            entry,
+            "the generated {kind} entry drops what the boundary serves"
+        );
         kinds.push(kind);
     }
 
@@ -7389,6 +7388,62 @@ async fn transcript_payloads_are_hydrated_for_the_supervisor_context() {
             .await
             .iter()
             .any(|record| record["entry"]["message"]["payload_id"].is_string())
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_transcript_read_decodes_as_the_generated_events_under_their_documented_names() {
+    use kestrel_operator_types as wire;
+
+    let kestrel = Kestrel::boot().await;
+    let (workspace, session) = an_open_workspace(&kestrel, 1).await;
+    kestrel.said(&session, &"x".repeat(65537)).await;
+
+    let read = retention_stream(&kestrel, &workspace, "kinds=shared_state,narration,detail").await;
+    let mut names = Vec::new();
+    let mut references = 0;
+    for frame in read.split("\n\n").filter(|frame| frame.contains("data:")) {
+        let field = |field: &str| {
+            frame
+                .lines()
+                .find_map(|line| line.strip_prefix(field))
+                .map(str::trim)
+        };
+        let (name, data) = (
+            field("event:").expect("a name"),
+            field("data:").expect("data"),
+        );
+        let event = wire::Event::from_sse(name, data)
+            .unwrap_or_else(|| panic!("the document names no {name} event"))
+            .unwrap_or_else(|error| panic!("{data} is no {name} event: {error}"));
+        assert_eq!(event.event_name(), name);
+        assert_eq!(
+            serde_json::to_value(&event).expect("an event"),
+            serde_json::from_str::<Value>(data).expect("json"),
+            "the generated {name} event drops what the boundary serves"
+        );
+        if let wire::Event::Recorded(recorded) = &event {
+            assert_eq!(
+                field("id:"),
+                Some(format!("{workspace}:{}", recorded.seq).as_str())
+            );
+            if let wire::Entry::Message(said) = &recorded.entry
+                && let wire::MessageContent::PayloadReference(reference) = &said.message
+            {
+                assert_eq!(reference.bytes, 65537);
+                assert_eq!(said.payload_fields, Some(vec!["message".to_owned()]));
+                references += 1;
+            }
+        }
+        names.push(name);
+    }
+
+    assert!(names.contains(&"entry"), "{names:?}");
+    assert_eq!(names.last(), Some(&"end"), "{names:?}");
+    assert_eq!(
+        references, 1,
+        "the oversized message was not read as a reference"
     );
     kestrel.teardown().await;
 }

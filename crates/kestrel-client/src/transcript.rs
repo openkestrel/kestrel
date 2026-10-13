@@ -3,14 +3,14 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow};
+use kestrel_operator_types as wire;
 use reqwest::{Client, StatusCode, Url, header};
-use serde::Deserialize;
-use serde_json::Value;
 
 use crate::diagnostic::{self, Request};
 use crate::exit::{Exit, Failed};
 use crate::output::Presentation;
 use crate::sse::Events;
+use crate::typed;
 use crate::view;
 
 /// How long a stream may stay unreachable before the read gives up on it.
@@ -131,34 +131,38 @@ async fn streamed(
     let mut stdout = std::io::stdout().lock();
     while let Some(event) = events.next().await? {
         *heard = Instant::now();
-        match event.name.as_deref() {
-            Some("entry") => {
-                let entry: Value =
-                    serde_json::from_str(&event.data).map_err(|error| Cut::Failed(error.into()))?;
-                write_record(&mut stdout, presentation, &view::ENTRIES, &entry)?;
+        // A name this Client does not know is a later event, and is passed over.
+        let Some(decoded) = event
+            .name
+            .as_deref()
+            .and_then(|name| wire::Event::from_sse(name, &event.data))
+        else {
+            continue;
+        };
+        let decoded = decoded
+            .map_err(|error| Cut::Failed(anyhow!(error).context("reading the transcript")))?;
+        match decoded {
+            wire::Event::Recorded(entry) => {
+                write_entry(&mut stdout, presentation, &entry)?;
                 *cursor = event.id;
             }
-            Some("activity") => {
-                let activity: Value =
-                    serde_json::from_str(&event.data).map_err(|error| Cut::Failed(error.into()))?;
-                if let Some(activity) = activities.observe(activity).map_err(Cut::Failed)? {
+            wire::Event::Activity(activity) => {
+                if let Some(activity) = activities.observe(activity) {
                     write_activity(&mut stdout, presentation, &activity)?;
                 }
                 *cursor = event.id;
             }
-            Some("cursor") => *cursor = event.id,
-            Some("follower") => {
-                let follower: Follower = serde_json::from_str(&event.data)
-                    .map_err(|error| Cut::Failed(anyhow!(error).context("reading the follower")))?;
+            wire::Event::CursorEvent(_) => *cursor = event.id,
+            wire::Event::FollowerEvent(follower) => {
                 // Replacing stops the renewal of a registration this stream no longer holds.
                 let _previous = renewal.replace(Renewal::start(
                     client,
                     followers,
-                    &follower.id,
-                    follower.lease_seconds,
+                    &follower.id.to_string(),
+                    follower.lease_seconds.try_into().unwrap_or(1),
                 ));
             }
-            Some("end") => {
+            wire::Event::End(_) => {
                 if !selection.follow
                     && let Some(open) = activities.open.take()
                 {
@@ -166,24 +170,20 @@ async fn streamed(
                 }
                 return Ok(());
             }
-            _ => {}
+            wire::Event::TranscriptSessionState(_) | wire::Event::Presence(_) => {}
         }
     }
 
     Err(Cut::Lost(None))
 }
 
-/// One stream record: a filter runs per record, and a record it yields nothing for writes
-/// nothing at all rather than a blank line.
-fn write_record(
+fn write_entry(
     out: &mut impl Write,
     presentation: &Presentation,
-    view: &crate::view::View,
-    record: &Value,
+    entry: &wire::Recorded,
 ) -> Result<(), Cut> {
-    crate::output::record(out, presentation, view, record)
-        .and_then(|()| Ok(out.flush()?))
-        .map_err(|error| Cut::Failed(error.context("writing the transcript")))
+    let wrote = typed::record(out, presentation, &view::ENTRIES, entry);
+    written(out, wrote)
 }
 
 /// An Activity reaches stdout as a whole record when the invocation asked for JSON, and as one
@@ -191,20 +191,22 @@ fn write_record(
 fn write_activity(
     out: &mut impl Write,
     presentation: &Presentation,
-    activity: &Value,
+    activity: &wire::Activity,
 ) -> Result<(), Cut> {
-    if presentation.json() {
-        return write_record(out, presentation, &view::ENTRIES, activity);
-    }
-    writeln!(out, "{}", activity_line(activity))
-        .and_then(|()| out.flush())
-        .map_err(|error| Cut::Failed(anyhow!(error).context("writing the transcript")))
+    let wrote = if presentation.json() {
+        serde_json::to_value(activity)
+            .map_err(anyhow::Error::from)
+            .and_then(|whole| crate::output::document(out, presentation, &whole))
+    } else {
+        writeln!(out, "{}", activity_line(activity)).map_err(anyhow::Error::from)
+    };
+    written(out, wrote)
 }
 
-#[derive(Deserialize)]
-struct Follower {
-    id: String,
-    lease_seconds: u64,
+fn written(out: &mut impl Write, wrote: Result<()>) -> Result<(), Cut> {
+    wrote
+        .and_then(|()| Ok(out.flush()?))
+        .map_err(|error| Cut::Failed(error.context("writing the transcript")))
 }
 
 struct Renewal {
@@ -303,39 +305,79 @@ fn workspace_path(
 #[derive(Default)]
 struct Activities {
     printed: HashSet<i64>,
-    open: Option<Value>,
+    open: Option<wire::Activity>,
 }
 impl Activities {
-    fn observe(&mut self, activity: Value) -> Result<Option<Value>> {
-        let first = activity["first_seq"]
-            .as_i64()
-            .context("an Activity has no first seq")?;
-        if activity["closed"] == true {
+    fn observe(&mut self, activity: wire::Activity) -> Option<wire::Activity> {
+        if activity.closed {
             self.open = None;
-            if self.printed.insert(first) {
-                return Ok(Some(activity));
+            if self.printed.insert(activity.first_seq) {
+                return Some(activity);
             }
-        } else if !self.printed.contains(&first) {
+        } else if !self.printed.contains(&activity.first_seq) {
             self.open = Some(activity);
         }
-        Ok(None)
+        None
     }
 }
-fn activity_line(activity: &Value) -> String {
-    let counts = &activity["counts"];
+fn activity_line(activity: &wire::Activity) -> String {
+    let counts = &activity.counts;
     format!(
         "activity  {}..{}  {} tools, {} failed, {} thoughts, {} plans, {} tombstones{}",
-        activity["first_seq"],
-        activity["last_seq"],
-        counts["tool_calls"],
-        counts["failed_calls"],
-        counts["thoughts"],
-        counts["plans"],
-        counts["tombstones"],
-        if activity["anomaly"] == true {
+        activity.first_seq,
+        activity.last_seq,
+        counts.tool_calls,
+        counts.failed_calls,
+        counts.thoughts,
+        counts.plans,
+        counts.tombstones,
+        if activity.anomaly {
             "  interrupted or unresolved"
         } else {
             ""
         }
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn activity(first_seq: i64, closed: bool) -> wire::Activity {
+        let data = serde_json::json!({
+            "first_seq": first_seq, "last_seq": first_seq + 2, "closed": closed, "anomaly": true,
+            "counts": { "tool_calls": 2, "failed_calls": 1, "thoughts": 0, "plans": 1, "tombstones": 0 },
+            "latest": null, "started_at": null, "finished_at": null
+        });
+        match wire::Event::from_sse("activity", &data.to_string()) {
+            Some(Ok(wire::Event::Activity(activity))) => activity,
+            other => panic!("not an Activity: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_closed_activity_is_printed_once_however_often_a_reconnect_replays_it() {
+        let mut activities = Activities::default();
+
+        assert!(activities.observe(activity(4, false)).is_none());
+        assert_eq!(activities.open.as_ref().map(|open| open.first_seq), Some(4));
+        assert_eq!(
+            activities
+                .observe(activity(4, true))
+                .map(|closed| closed.first_seq),
+            Some(4)
+        );
+        assert!(activities.open.is_none());
+        assert!(activities.observe(activity(4, true)).is_none());
+        assert!(activities.observe(activity(4, false)).is_none());
+        assert!(activities.open.is_none());
+    }
+
+    #[test]
+    fn an_activity_reads_as_one_line_of_its_counts() {
+        assert_eq!(
+            activity_line(&activity(4, true)),
+            "activity  4..6  2 tools, 1 failed, 0 thoughts, 1 plans, 0 tombstones  interrupted or unresolved"
+        );
+    }
 }
