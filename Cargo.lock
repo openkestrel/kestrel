@@ -1928,6 +1928,7 @@ dependencies = [
  "serde_json",
  "terminal_size",
  "tokio",
+ "uuid",
  "yaml_serde",
 ]
 

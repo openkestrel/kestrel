@@ -1650,38 +1650,31 @@ async fn run(
                 })
                 .transpose()?;
             let brief = given(&brief)?;
-            let mut declaration = json!({
-                "name": name,
-                "brief": brief,
-                "branch": branch,
-                "correlation": correlation,
-                "on_miss": on_miss,
-                "on_open_workspace": on_open_workspace,
-                "project": project,
-                "agent": agent,
-                "allows": allows,
-                "profile": profile,
-            });
-            let declaration = declaration
-                .as_object_mut()
-                .expect("a trigger declaration is an object");
-            if let Some(filter) = filter {
-                declaration.insert("filter".to_owned(), filter);
-            }
-            if let Some(every) = every {
-                declaration.insert("every".to_owned(), Value::String(every));
-            }
-            if let Some(cron) = cron {
-                declaration.insert("cron".to_owned(), Value::String(cron));
-            }
-            if let Some(zone) = zone {
-                declaration.insert("zone".to_owned(), Value::String(zone));
-            }
+            let declaration = wire::TriggerDeclaration {
+                name,
+                brief,
+                branch: branch.map(Some),
+                correlation: correlation.map(Some),
+                on_miss: on_miss.map(Some),
+                on_open_workspace: on_open_workspace.map(Some),
+                project,
+                agent,
+                allows: Some(allows),
+                profile: profile.map(Some),
+                filter: None,
+                every: None,
+                cron: None,
+                zone: None,
+                model: None,
+                mode: None,
+                thought_level: None,
+                variant: trigger_condition(filter, every, cron, zone),
+            };
             let declared: wire::Trigger = api
                 .post_as(&["organizations", &organization, "triggers"], &declaration)
                 .await?;
             if declared.admits_outsiders {
-                warn_of_outsiders(&name);
+                warn_of_outsiders(&declared.name);
             }
             typed::show(&presentation, &view::TRIGGER_DECLARED, &declared)?;
         }
@@ -1722,7 +1715,12 @@ async fn run(
                     &dispatch,
                 )
                 .await?;
-            typed::show(&presentation, &view::FIRED, &fired)?;
+            typed::show_as(
+                &presentation,
+                &view::FIRED,
+                &fired,
+                &view::FiredShown::of(&fired),
+            )?;
         }
         Command::Trigger(TriggerCommand::List) => {
             let organization = scoping.resolve().await?.organization;
@@ -1764,19 +1762,26 @@ async fn run(
                     "the declaration file and the instruction cannot both be read from standard input"
                 ));
             }
-            let declared = file.as_deref().map(trigger_file).transpose()?;
+            let declared = file.as_deref().map(trigger_document).transpose()?;
             let instruction = instruction.as_deref().map(given).transpose()?;
+            let event = event
+                .map(|event| {
+                    event.parse::<uuid::Uuid>().map_err(|_| {
+                        Failed::new(Exit::Usage, format!("{event} is not an Event's record"))
+                    })
+                })
+                .transpose()?;
             let tested: wire::TriggerTestResult = api
                 .post_as(
                     &["organizations", &organization, "triggers", &name, "test"],
-                    &json!({
-                        "event": event,
-                        "integration": integration,
-                        "issue": issue,
-                        "instruction": instruction,
-                        "agent": agent,
-                        "declared": declared,
-                    }),
+                    &wire::TriggerTest {
+                        event: Some(event),
+                        integration: Some(integration),
+                        issue: Some(issue),
+                        instruction: Some(instruction),
+                        agent: Some(agent),
+                        declared: Some(declared),
+                    },
                 )
                 .await?;
             typed::show(&presentation, &view::TRIGGER_TEST, &tested)?;
@@ -2775,6 +2780,66 @@ fn trigger_file(file: &str) -> Result<Value> {
     parsed(&text)
 }
 
+/// The schedule form as the generated union carries it: exactly one of a filter, an interval,
+/// or a cron expression with its zone.
+fn trigger_condition(
+    filter: Option<Value>,
+    every: Option<String>,
+    cron: Option<String>,
+    zone: Option<String>,
+) -> wire::TriggerDeclarationVariant {
+    match (filter, every, cron) {
+        (Some(filter), _, _) => {
+            wire::TriggerDeclarationVariant::EventTriggerCondition(json!({ "filter": filter }))
+        }
+        (None, Some(every), _) => {
+            wire::TriggerDeclarationVariant::IntervalTriggerCondition(json!({ "every": every }))
+        }
+        (None, None, Some(cron)) => wire::TriggerDeclarationVariant::CronTriggerCondition(
+            json!({ "cron": cron, "zone": zone }),
+        ),
+        (None, None, None) => {
+            unreachable!("clap requires a filter, an interval or a cron expression")
+        }
+    }
+}
+
+/// The declaration file as the generated request carries it, so a document the control plane
+/// could not read is refused before it is sent.
+fn trigger_document(file: &str) -> Result<wire::TriggerFile> {
+    declaration_document(trigger_file(file)?)
+}
+
+fn declaration_document(document: Value) -> Result<wire::TriggerFile> {
+    let typed: wire::TriggerFile = serde_json::from_value(document.clone())
+        .context(Failed::new(Exit::Usage, "reading the declaration file"))?;
+    match unread_field(&document, &typed) {
+        Some(field) => bail!(Failed::new(
+            Exit::Usage,
+            format!("the declaration file: {field}")
+        )),
+        None => Ok(typed),
+    }
+}
+
+/// The generated entry reads past a field it does not know, so a document with one is refused
+/// rather than sent with the field silently dropped.
+fn unread_field(document: &Value, typed: &wire::TriggerFile) -> Option<String> {
+    let read = serde_json::to_value(typed).ok()?;
+    for (name, entry) in document.get("triggers")?.as_object()? {
+        let kept = read.get("triggers")?.get(name)?.as_object()?;
+        if let Some(field) = entry
+            .as_object()?
+            .keys()
+            .find(|field| !kept.contains_key(*field))
+        {
+            return Some(format!("triggers.{name}: unknown field `{field}`"));
+        }
+    }
+
+    None
+}
+
 fn parsed(text: &str) -> Result<Value> {
     yaml_serde::from_str(text).context(Failed::new(Exit::Usage, "reading the declaration file"))
 }
@@ -3147,6 +3212,70 @@ mod parser_tests {
         let parsed = Client::try_parse_from(["kestrel", "agent", "list", "--json"])
             .expect("--json alone is a flag");
         assert!(parsed.json);
+    }
+
+    #[test]
+    fn a_trigger_declaration_is_the_generated_request_the_flags_describe() {
+        let declaration = wire::TriggerDeclaration {
+            name: "ready".to_owned(),
+            brief: "Work on {{ event.type }}".to_owned(),
+            branch: Some(None),
+            correlation: Some(None),
+            on_miss: Some(None),
+            on_open_workspace: Some(None),
+            project: "kestrel".to_owned(),
+            agent: "builder".to_owned(),
+            allows: Some(vec!["reviewer".to_owned()]),
+            profile: Some(None),
+            filter: None,
+            every: None,
+            cron: None,
+            zone: None,
+            model: None,
+            mode: None,
+            thought_level: None,
+            variant: trigger_condition(Some(json!({ "exact": { "type": "x" } })), None, None, None),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&declaration).unwrap(),
+            json!({
+                "name": "ready", "brief": "Work on {{ event.type }}", "project": "kestrel",
+                "agent": "builder", "allows": ["reviewer"], "branch": null, "correlation": null,
+                "on_miss": null, "on_open_workspace": null, "profile": null,
+                "filter": { "exact": { "type": "x" } },
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(trigger_condition(
+                None,
+                None,
+                Some("0 9 * * 1-5".to_owned()),
+                Some("UTC".to_owned()),
+            ))
+            .unwrap(),
+            json!({ "cron": "0 9 * * 1-5", "zone": "UTC" })
+        );
+    }
+
+    #[test]
+    fn a_test_request_carries_the_declaration_file_the_control_plane_reads() {
+        let document = json!({ "triggers": { "ready": {
+            "filter": { "exact": { "type": "x" } }, "brief": "Work", "project": "kestrel",
+            "agent": "builder",
+        } } });
+
+        let typed = declaration_document(document.clone()).expect("the file the document holds");
+        assert_eq!(serde_json::to_value(&typed).unwrap(), document);
+
+        let stray = declaration_document(json!({ "triggers": { "ready": {
+            "filter": { "exact": { "type": "x" } }, "brief": "Work", "project": "kestrel",
+            "agent": "builder", "agnet": "builder",
+        } } }));
+        assert_eq!(
+            stray.unwrap_err().to_string(),
+            "the declaration file: triggers.ready: unknown field `agnet`"
+        );
     }
 
     #[test]

@@ -56,12 +56,10 @@ pub fn joined<V: ToString>(values: &[V]) -> String {
         .join(",")
 }
 
-/// A field that is itself a JSON value, shown as the value it is.
 pub fn compound(value: &impl Serialize) -> String {
     output::rendered(serde_json::to_value(value).ok().as_ref())
 }
 
-/// The complete answer of a command with no columns to show it in.
 pub fn whole(presentation: &Presentation, answer: &impl Serialize) -> Result<()> {
     let mut out = std::io::stdout().lock();
     output::document(&mut out, presentation, &serde_json::to_value(answer)?)?;
@@ -154,7 +152,7 @@ pub fn show_as<T>(
     out.flush().context("writing to standard output")
 }
 
-/// `whole` is the answer as the control plane gave it, which for one record is not an array.
+/// JSON answers `whole`, the answer as the control plane gave it; the columns read `records`.
 fn written<T>(
     out: &mut impl Write,
     presentation: &Presentation,

@@ -194,31 +194,50 @@ pub const TRIGGER_TEST: Columns<wire::TriggerTestResult> = Columns::Detail(&[
     }),
     Column("brief", |tested| text(&tested.brief)),
 ]);
-pub const FIRED: Columns<wire::Fired> = Columns::Detail(&[
-    Column("outcome", |fired| match fired {
-        wire::Fired::FiredOpened(opened) => compound(&opened.outcome),
-        wire::Fired::FiredFed(fed) => compound(&fed.outcome),
-        wire::Fired::FiredIgnored(ignored) => compound(&ignored.outcome),
-    }),
-    Column("workspace", |fired| match fired {
-        wire::Fired::FiredOpened(opened) => text(opened.workspace),
-        wire::Fired::FiredFed(fed) => text(fed.workspace),
-        wire::Fired::FiredIgnored(_) => or_absent(None::<&String>),
-    }),
-    Column("session", |fired| match fired {
-        wire::Fired::FiredOpened(opened) => text(opened.session),
-        wire::Fired::FiredFed(fed) => or_absent(fed.session.as_ref()),
-        wire::Fired::FiredIgnored(_) => or_absent(None::<&String>),
-    }),
-    Column("event", |fired| match fired {
-        wire::Fired::FiredOpened(opened) => text(opened.event),
-        wire::Fired::FiredFed(fed) => text(fed.event),
-        wire::Fired::FiredIgnored(ignored) => text(ignored.event),
-    }),
-    Column("correlation", |fired| match fired {
-        wire::Fired::FiredIgnored(ignored) => text(&ignored.correlation),
-        wire::Fired::FiredOpened(_) | wire::Fired::FiredFed(_) => or_absent(None::<&String>),
-    }),
+/// A Fired as a person reads it: the variant is chosen once, and every column reads the one
+/// record it answered.
+pub struct FiredShown {
+    outcome: serde_json::Value,
+    workspace: Option<String>,
+    session: Option<String>,
+    event: String,
+    correlation: Option<String>,
+}
+
+impl FiredShown {
+    pub fn of(fired: &wire::Fired) -> Self {
+        match fired {
+            wire::Fired::FiredOpened(opened) => Self {
+                outcome: opened.outcome.clone(),
+                workspace: Some(opened.workspace.to_string()),
+                session: Some(opened.session.to_string()),
+                event: opened.event.to_string(),
+                correlation: None,
+            },
+            wire::Fired::FiredFed(fed) => Self {
+                outcome: fed.outcome.clone(),
+                workspace: Some(fed.workspace.to_string()),
+                session: fed.session.map(|session| session.to_string()),
+                event: fed.event.to_string(),
+                correlation: None,
+            },
+            wire::Fired::FiredIgnored(ignored) => Self {
+                outcome: ignored.outcome.clone(),
+                workspace: None,
+                session: None,
+                event: ignored.event.to_string(),
+                correlation: Some(ignored.correlation.clone()),
+            },
+        }
+    }
+}
+
+pub const FIRED: Columns<FiredShown> = Columns::Detail(&[
+    Column("outcome", |shown| compound(&shown.outcome)),
+    Column("workspace", |shown| or_absent(shown.workspace.as_ref())),
+    Column("session", |shown| or_absent(shown.session.as_ref())),
+    Column("event", |shown| text(&shown.event)),
+    Column("correlation", |shown| or_absent(shown.correlation.as_ref())),
 ]);
 pub const WORKSPACES: Columns<wire::WorkspaceListed> = Columns::Rows(&[
     Column("id", |record| text(record.id)),
@@ -233,6 +252,9 @@ pub const ENTRIES: Columns<wire::Recorded> = Columns::Rows(&[
     Column("appended at", |record| text(&record.appended_at)),
     Column("entry", |record| compound(&record.entry)),
 ]);
+pub const SESSION_STATE: Columns<wire::TranscriptSessionState> =
+    Columns::Value(Column("session state", session_state_line));
+pub const PRESENCE: Columns<wire::Presence> = Columns::Value(Column("presence", presence_line));
 pub const WORKSPACE: Columns<wire::Workspace> = Columns::Detail(&[
     Column("id", |record| text(record.id)),
     Column("name", |record| text(&record.name)),
@@ -463,6 +485,45 @@ fn structured(value: &impl serde::Serialize) -> String {
     ))
 }
 
+fn session_state_line(state: &wire::TranscriptSessionState) -> String {
+    let observation = match &state.observation {
+        wire::SessionObservation::SessionObservationCurrent(_) => "current",
+        wire::SessionObservation::SessionObservationUnavailable(_) => "unavailable",
+    };
+    let mut said = vec![
+        "session state".to_owned(),
+        or_absent(state.session_id.as_ref()),
+        observation.to_owned(),
+        format!("{} tools, {} units", state.tools.len(), state.units.len()),
+    ];
+    if let Some(usage) = &state.usage {
+        said.push(format!(
+            "{} of {} context used",
+            usage.context_used, usage.context_size
+        ));
+    }
+    if let Some(last) = &state.last_activity_at {
+        said.push(format!("last active {last}"));
+    }
+
+    said.join(crate::output::GAP)
+}
+
+fn presence_line(presence: &wire::Presence) -> String {
+    let named = if presence.named.is_empty() {
+        crate::output::ABSENT.to_owned()
+    } else {
+        presence.named.join(", ")
+    };
+
+    format!(
+        "presence{}{named}{}{} anonymous",
+        crate::output::GAP,
+        crate::output::GAP,
+        presence.anonymous
+    )
+}
+
 pub const WORKSPACE_DECLARED: Columns<wire::Workspace> =
     Columns::Value(Column("id", |record| text(record.id)));
 pub const SESSION_DECLARED: Columns<wire::Session> =
@@ -493,4 +554,55 @@ fn option_summary(options: &[wire::SessionOption]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    const EVENT: &str = "00000000-0000-0000-0000-000000000009";
+    const WORKSPACE: &str = "00000000-0000-0000-0000-000000000002";
+    const SESSION: &str = "00000000-0000-0000-0000-000000000001";
+
+    fn fired(value: serde_json::Value) -> wire::Fired {
+        serde_json::from_value(value).expect("a firing")
+    }
+
+    /// The line a pipe reads, joined the way `typed::record` joins a delimited record.
+    fn said(fired: &wire::Fired) -> String {
+        let Columns::Detail(columns) = FIRED else {
+            panic!("a firing is a detail");
+        };
+        let shown = FiredShown::of(fired);
+
+        columns
+            .iter()
+            .map(|column| (column.1)(&shown))
+            .collect::<Vec<_>>()
+            .join("\t")
+            + "\n"
+    }
+
+    #[test]
+    fn a_firing_reads_as_the_cells_its_variant_answers() {
+        let opened = fired(json!({
+            "outcome": "opened", "event": EVENT, "workspace": WORKSPACE, "session": SESSION,
+        }));
+        assert_eq!(
+            said(&opened),
+            format!("opened\t{WORKSPACE}\t{SESSION}\t{EVENT}\t-\n")
+        );
+
+        let fed = fired(json!({
+            "outcome": "fed", "event": EVENT, "workspace": WORKSPACE, "session": null,
+        }));
+        assert_eq!(said(&fed), format!("fed\t{WORKSPACE}\t-\t{EVENT}\t-\n"));
+
+        let ignored = fired(json!({
+            "outcome": "ignored", "event": EVENT, "correlation": "issue-1",
+        }));
+        assert_eq!(said(&ignored), format!("ignored\t-\t-\t{EVENT}\tissue-1\n"));
+    }
 }

@@ -12,7 +12,6 @@ pub const GAP: &str = "  ";
 pub enum Presentation {
     Human(usize),
     Delimited,
-    /// The complete answer as JSON; `Some` filters it through the embedded jq.
     Json(Option<Filter>),
 }
 
@@ -30,7 +29,7 @@ impl Presentation {
         }
     }
 
-    /// Whether the invocation asked for the complete response, with or without a filter.
+    /// A `--jq` filter implies the complete response, so this is true for one without `--json`.
     pub fn json(&self) -> bool {
         matches!(self, Presentation::Json(_))
     }

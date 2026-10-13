@@ -572,3 +572,44 @@ async fn the_cli_follow_is_counted_renews_and_prints_no_presence() {
 
     kestrel.teardown().await;
 }
+
+/// The CLI's human rendering carries the transient events its JSON stream leaves out, in the
+/// order the boundary sends them.
+#[tokio::test]
+async fn the_cli_follow_renders_the_session_state_and_presence_a_person_reads() {
+    let kestrel = Kestrel::boot_with_follow_lease(LEASE).await;
+    let workspace = an_open_workspace(&kestrel).await;
+    kestrel.post(workspace.id, "operator", "go").await;
+
+    let mut cli = support::client::Client::spawn(
+        &kestrel.operator(),
+        &[
+            "workspace",
+            "transcript",
+            &workspace.id.to_string(),
+            "--follow",
+            "--as-participant",
+            "Ada",
+            "--no-summaries",
+        ],
+    );
+
+    let mut state_seen = false;
+    loop {
+        let (returned, line) = printed(cli).await;
+        cli = returned;
+        if line.starts_with("session state") {
+            state_seen = true;
+        } else if line.starts_with("presence") {
+            assert!(
+                state_seen,
+                "the follow's session state was never shown: {line}"
+            );
+            assert!(line.contains("Ada"), "{line}");
+            break;
+        }
+    }
+
+    drop(cli);
+    kestrel.teardown().await;
+}

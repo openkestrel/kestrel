@@ -19,6 +19,26 @@ pub(crate) struct Row {
     pub(crate) enqueued_at: String,
 }
 
+fn row(
+    position: Option<i64>,
+    name: &str,
+    state: &str,
+    agent: &str,
+    workspace: &impl std::fmt::Display,
+    enqueued_at: &str,
+    why: String,
+) -> Row {
+    Row {
+        position,
+        name: name.to_owned(),
+        state: state.to_owned(),
+        agent: agent.to_owned(),
+        workspace: workspace.to_string(),
+        enqueued_at: enqueued_at.to_owned(),
+        why,
+    }
+}
+
 pub fn show(
     presentation: &Presentation,
     snapshot: &wire::Queue,
@@ -84,78 +104,77 @@ pub fn show(
     let mut rows = Vec::new();
     let mut diagnoses = Vec::new();
     for occupant in &slots.occupants {
-        rows.push(Row {
-            position: None,
-            name: occupant.name.clone(),
-            state: occupant.phase.to_string(),
-            agent: occupant.agent.clone(),
-            workspace: occupant.workspace.to_string(),
-            enqueued_at: occupant.enqueued_at.clone(),
-            why: match occupant.phase {
+        rows.push(row(
+            None,
+            &occupant.name,
+            occupant.phase.as_ref(),
+            &occupant.agent,
+            &occupant.workspace,
+            &occupant.enqueued_at,
+            match occupant.phase {
                 wire::OccupantPhase::Working => "in a turn",
                 wire::OccupantPhase::Trailing => "answered; its agent is still working",
             }
             .to_owned(),
-        });
+        ));
     }
     for queued in &snapshot.queued {
-        rows.push(Row {
-            position: queued.position,
-            name: queued.name.clone(),
-            state: "queued".to_owned(),
-            agent: queued.agent.clone(),
-            workspace: queued.workspace.to_string(),
-            enqueued_at: queued.enqueued_at.clone(),
-            why: why(
-                "queued",
-                None,
-                None,
-                None,
+        rows.push(row(
+            queued.position,
+            &queued.name,
+            "queued",
+            &queued.agent,
+            &queued.workspace,
+            &queued.enqueued_at,
+            why(
+                Standing::of("queued"),
                 &queued.reasons,
                 invocation,
                 presentation,
             ),
-        });
+        ));
         diagnoses.extend(diagnostics(&queued.name, &queued.reasons));
     }
     for waiting in &snapshot.waiting {
-        rows.push(Row {
-            position: waiting.position,
-            name: waiting.name.clone(),
-            state: "waiting".to_owned(),
-            agent: waiting.agent.clone(),
-            workspace: waiting.workspace.to_string(),
-            enqueued_at: waiting.enqueued_at.clone(),
-            why: why(
-                "waiting",
-                None,
-                None,
-                waiting.pending_since.as_deref(),
+        rows.push(row(
+            waiting.position,
+            &waiting.name,
+            "waiting",
+            &waiting.agent,
+            &waiting.workspace,
+            &waiting.enqueued_at,
+            why(
+                Standing {
+                    pending_since: waiting.pending_since.as_deref(),
+                    ..Standing::of("waiting")
+                },
                 &waiting.reasons,
                 invocation,
                 presentation,
             ),
-        });
+        ));
         diagnoses.extend(diagnostics(&waiting.name, &waiting.reasons));
     }
     for unbriefed in &snapshot.unbriefed {
-        rows.push(Row {
-            position: unbriefed.position,
-            name: unbriefed.name.clone(),
-            state: "unbriefed".to_owned(),
-            agent: unbriefed.agent.clone(),
-            workspace: unbriefed.workspace.to_string(),
-            enqueued_at: unbriefed.enqueued_at.clone(),
-            why: why(
-                "unbriefed",
-                unbriefed.preparing.as_ref(),
-                unbriefed.brief_since.as_deref(),
-                unbriefed.pending_since.as_deref(),
+        rows.push(row(
+            unbriefed.position,
+            &unbriefed.name,
+            "unbriefed",
+            &unbriefed.agent,
+            &unbriefed.workspace,
+            &unbriefed.enqueued_at,
+            why(
+                Standing {
+                    preparing: unbriefed.preparing.as_ref(),
+                    brief_since: unbriefed.brief_since.as_deref(),
+                    pending_since: unbriefed.pending_since.as_deref(),
+                    ..Standing::of("unbriefed")
+                },
                 &unbriefed.reasons,
                 invocation,
                 presentation,
             ),
-        });
+        ));
         diagnoses.extend(diagnostics(&unbriefed.name, &unbriefed.reasons));
     }
     if !rows.is_empty() {
@@ -188,17 +207,33 @@ fn diagnostics<'a>(
     })
 }
 
+/// A Session standing in the queue: what it is doing, and since when.
+struct Standing<'a> {
+    state: &'a str,
+    preparing: Option<&'a wire::UnbriefedSessionPreparing>,
+    brief_since: Option<&'a str>,
+    pending_since: Option<&'a str>,
+}
+
+impl<'a> Standing<'a> {
+    fn of(state: &'a str) -> Self {
+        Self {
+            state,
+            preparing: None,
+            brief_since: None,
+            pending_since: None,
+        }
+    }
+}
+
 fn why(
-    state: &str,
-    preparing: Option<&wire::UnbriefedSessionPreparing>,
-    brief_since: Option<&str>,
-    pending_since: Option<&str>,
+    standing: Standing<'_>,
     reasons: &[wire::QueueReason],
     invocation: &Invocation,
     presentation: &Presentation,
 ) -> String {
     let mut said = Vec::new();
-    if let Some(preparing) = preparing {
+    if let Some(preparing) = standing.preparing {
         said.push(
             match preparing {
                 wire::UnbriefedSessionPreparing::StartingHarness => "starting harness",
@@ -208,10 +243,10 @@ fn why(
             .to_owned(),
         );
     }
-    if let Some(since) = brief_since {
+    if let Some(since) = standing.brief_since {
         said.push(format!("Brief since {since}"));
     }
-    if let Some(since) = pending_since {
+    if let Some(since) = standing.pending_since {
         said.push(format!("input since {since}"));
     }
     said.extend(
@@ -221,7 +256,7 @@ fn why(
     );
     if said.is_empty() {
         said.push(
-            match state {
+            match standing.state {
                 "waiting" => "waiting for a turn",
                 "unbriefed" => "getting ready for its first message",
                 _ => "ready",

@@ -170,7 +170,12 @@ async fn streamed(
                 }
                 return Ok(());
             }
-            wire::Event::TranscriptSessionState(_) | wire::Event::Presence(_) => {}
+            wire::Event::TranscriptSessionState(state) => {
+                write_transient(&mut stdout, presentation, &view::SESSION_STATE, &state)?;
+            }
+            wire::Event::Presence(presence) => {
+                write_transient(&mut stdout, presentation, &view::PRESENCE, &presence)?;
+            }
         }
     }
 
@@ -200,6 +205,21 @@ fn write_activity(
     } else {
         writeln!(out, "{}", activity_line(activity)).map_err(anyhow::Error::from)
     };
+    written(out, wrote)
+}
+
+/// A transient event reaches a person as its line; the complete answer keeps the records it
+/// already carried, so JSON writes nothing for one.
+fn write_transient<T: serde::Serialize>(
+    out: &mut impl Write,
+    presentation: &Presentation,
+    columns: &typed::Columns<T>,
+    event: &T,
+) -> Result<(), Cut> {
+    if presentation.json() {
+        return Ok(());
+    }
+    let wrote = typed::record(out, presentation, columns, event);
     written(out, wrote)
 }
 
@@ -379,5 +399,83 @@ mod tests {
             activity_line(&activity(4, true)),
             "activity  4..6  2 tools, 1 failed, 0 thoughts, 1 plans, 0 tombstones  interrupted or unresolved"
         );
+    }
+
+    fn session_state(patch: serde_json::Value) -> wire::TranscriptSessionState {
+        let mut record = serde_json::json!({
+            "message_buffering": false, "thought_buffering": false,
+            "observation": { "availability": "unavailable", "last": null },
+            "session_id": null, "tools": [], "units": [], "usage": null
+        });
+        record
+            .as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        serde_json::from_value(record).unwrap()
+    }
+
+    fn presence(patch: serde_json::Value) -> wire::Presence {
+        let mut record = serde_json::json!({ "named": [], "anonymous": 0 });
+        record
+            .as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        serde_json::from_value(record).unwrap()
+    }
+
+    #[test]
+    fn a_session_state_and_a_presence_read_as_their_own_lines_a_person_can_see() {
+        let state = session_state(serde_json::json!({
+            "session_id": "00000000-0000-0000-0000-000000000001",
+            "usage": { "context_size": 200000, "context_used": 1200, "cost": null },
+        }));
+        let presence = presence(serde_json::json!({ "named": ["Ada"], "anonymous": 2 }));
+        let mut out = Vec::new();
+
+        write_transient(
+            &mut out,
+            &Presentation::Delimited,
+            &view::SESSION_STATE,
+            &state,
+        )
+        .unwrap_or_else(|_| panic!("a session state"));
+        write_transient(
+            &mut out,
+            &Presentation::Delimited,
+            &view::PRESENCE,
+            &presence,
+        )
+        .unwrap_or_else(|_| panic!("a presence"));
+
+        assert_eq!(
+            String::from_utf8(out).expect("utf-8"),
+            "session state  00000000-0000-0000-0000-000000000001  unavailable  0 tools, 0 units  \
+             1200 of 200000 context used\n\
+             presence  Ada  2 anonymous\n"
+        );
+    }
+
+    #[test]
+    fn a_json_stream_keeps_only_the_records_it_already_carried() {
+        let state = session_state(serde_json::json!({}));
+        let presence = presence(serde_json::json!({}));
+        let mut out = Vec::new();
+
+        write_transient(
+            &mut out,
+            &Presentation::Json(None),
+            &view::SESSION_STATE,
+            &state,
+        )
+        .unwrap_or_else(|_| panic!("a session state"));
+        write_transient(
+            &mut out,
+            &Presentation::Json(None),
+            &view::PRESENCE,
+            &presence,
+        )
+        .unwrap_or_else(|_| panic!("a presence"));
+
+        assert!(out.is_empty(), "{}", String::from_utf8_lossy(&out));
     }
 }
