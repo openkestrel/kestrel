@@ -6836,6 +6836,68 @@ async fn kestrel_queue_json_agrees_with_the_operator_read() {
 
     assert_eq!(shown, queue);
 
+    let decoded: kestrel_operator_types::Queue = serde_json::from_value(shown.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), queue);
+    let listed = client(
+        &kestrel,
+        &["workspace", "list", "--organization", "acme", "--json"],
+    )
+    .await
+    .json();
+    let workspaces: kestrel_operator_types::ListWorkspacesResponse =
+        serde_json::from_value(listed).unwrap();
+    for workspace in workspaces {
+        let standing = workspace.queue.as_ref();
+        let expected = decoded
+            .queued
+            .iter()
+            .find(|session| session.workspace == workspace.id)
+            .map(|session| (session.position, &session.reasons, None))
+            .or_else(|| {
+                decoded
+                    .waiting
+                    .iter()
+                    .find(|session| session.workspace == workspace.id)
+                    .map(|session| {
+                        (
+                            session.position,
+                            &session.reasons,
+                            session.pending_since.as_ref(),
+                        )
+                    })
+            })
+            .or_else(|| {
+                decoded
+                    .unbriefed
+                    .iter()
+                    .find(|session| session.workspace == workspace.id)
+                    .map(|session| {
+                        (
+                            session.position,
+                            &session.reasons,
+                            session
+                                .brief_since
+                                .as_ref()
+                                .or(session.pending_since.as_ref()),
+                        )
+                    })
+            });
+        match expected {
+            Some((position, reasons, pending_since)) => {
+                let standing =
+                    standing.expect("a queued, waiting or unbriefed Workspace has a standing");
+                assert_eq!(standing.position, position);
+                assert_eq!(
+                    serde_json::to_value(&standing.reasons).unwrap(),
+                    serde_json::to_value(reasons).unwrap()
+                );
+                assert_eq!(standing.pending_since.as_ref(), pending_since);
+                assert!(workspace.session.is_some());
+            }
+            None => assert!(standing.is_none()),
+        }
+    }
+
     kestrel.teardown().await;
 }
 
