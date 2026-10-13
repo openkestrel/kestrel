@@ -4,11 +4,12 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
+use kestrel_operator_types as wire;
 
 use crate::api::ControlPlane;
 use crate::exit::{Exit, Failed};
 use crate::shell::quoted;
-use crate::{BINARY, ORGANIZATION_VARIABLE, names};
+use crate::{BINARY, ORGANIZATION_VARIABLE};
 
 const BINDING: &str = ".kestrel/organization";
 
@@ -74,7 +75,7 @@ impl<'a> Scoping<'a> {
         match bound()? {
             Binding::Scope(scope) => return Ok(Derived::Scope(scope)),
             Binding::Empty(path) => {
-                let existing = names(&self.api.get(&["organizations"]).await?);
+                let existing = organizations(self.api).await?;
                 let next = existing.first().map_or_else(
                     || format!("`{BINARY} organization declare default`, then `{BINARY} status --organization default`"),
                     |name| format!("`{BINARY} status --organization {}`", quoted(name)),
@@ -87,7 +88,7 @@ impl<'a> Scoping<'a> {
             Binding::None => {}
         }
 
-        let mut existing = names(&self.api.get(&["organizations"]).await?);
+        let mut existing = organizations(self.api).await?;
         if existing.len() == 1 {
             return Ok(Derived::Scope(Scope {
                 organization: existing.remove(0),
@@ -97,6 +98,15 @@ impl<'a> Scoping<'a> {
 
         Ok(Derived::Unnamed { existing })
     }
+}
+
+pub async fn organizations(api: &ControlPlane) -> Result<Vec<String>> {
+    let organizations: wire::ListOrganizationsResponse = api.get_as(&["organizations"]).await?;
+
+    Ok(organizations
+        .into_iter()
+        .map(|organization| organization.name)
+        .collect())
 }
 
 pub fn several(existing: &[String]) -> Failed {
@@ -117,7 +127,7 @@ pub fn several(existing: &[String]) -> Failed {
 
 /// Naming the Operator declares their Organization, so with neither the gap is the name.
 pub async fn nothing_to_scope(api: &ControlPlane) -> anyhow::Error {
-    match api.get(&["operator"]).await {
+    match api.get_as::<wire::Operator>(&["operator"]).await {
         Ok(_) => Failed::new(
             Exit::Unresolved,
             format!(

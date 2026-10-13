@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use reqwest::{Client, RequestBuilder, Response, Url};
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::diagnostic::{self, Request};
@@ -34,6 +35,10 @@ impl ControlPlane {
         self.answered(self.client.get(url), false).await
     }
 
+    pub async fn get_as<T: DeserializeOwned>(&self, path: &[&str]) -> Result<T> {
+        self.answered(self.client.get(self.url(path)?), false).await
+    }
+
     pub async fn get_response(&self, path: &[&str], query: &[(&str, &str)]) -> Result<Response> {
         let mut url = self.url(path)?;
         if !query.is_empty() {
@@ -53,6 +58,24 @@ impl ControlPlane {
             .await
     }
 
+    pub async fn post_as<T: DeserializeOwned>(
+        &self,
+        path: &[&str],
+        body: &impl Serialize,
+    ) -> Result<T> {
+        self.answered(self.client.post(self.url(path)?).json(body), true)
+            .await
+    }
+
+    pub async fn put_as<T: DeserializeOwned>(
+        &self,
+        path: &[&str],
+        body: &impl Serialize,
+    ) -> Result<T> {
+        self.answered(self.client.put(self.url(path)?).json(body), true)
+            .await
+    }
+
     pub async fn patch(&self, path: &[&str], body: &impl Serialize) -> Result<Value> {
         self.answered(self.client.patch(self.url(path)?).json(body), true)
             .await
@@ -64,7 +87,11 @@ impl ControlPlane {
         Ok(())
     }
 
-    async fn answered(&self, request: RequestBuilder, write: bool) -> Result<Value> {
+    async fn answered<T: DeserializeOwned>(
+        &self,
+        request: RequestBuilder,
+        write: bool,
+    ) -> Result<T> {
         let response = self.sent(request, write).await?;
         let status = response.status();
         response

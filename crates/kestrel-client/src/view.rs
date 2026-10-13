@@ -1,5 +1,9 @@
 //! What each command shows, and the three shapes it can be shown in.
 
+use kestrel_operator_types as wire;
+
+use crate::typed::{Column, Columns, joined, or_absent, text};
+
 /// What a command produces, as dotted paths into the record the control plane answered.
 pub enum View {
     /// The one field a `$(…)` captures.
@@ -17,11 +21,37 @@ impl View {
     }
 }
 
-pub const OPERATOR: View = View::Detail(&["id", "name"]);
-pub const ORGANIZATIONS: View = View::Rows(&["id", "name", "max_live_instances"]);
-pub const PROJECTS: View = View::Rows(&["id", "name", "branch", "repositories"]);
-pub const AGENTS: View = View::Rows(&["id", "name", "harness", "model"]);
-pub const AGENT_MODEL: View = View::Value("model");
+pub const OPERATOR: Columns<wire::Operator> = Columns::Detail(&[
+    Column("id", |operator| text(operator.id)),
+    Column("name", |operator| text(&operator.name)),
+]);
+pub const ORGANIZATIONS: Columns<wire::Organization> = Columns::Rows(&[
+    Column("id", |organization| text(organization.id)),
+    Column("name", |organization| text(&organization.name)),
+    Column("max live instances", |organization| {
+        or_absent(organization.max_live_instances.as_ref())
+    }),
+]);
+pub const ORGANIZATION_DECLARED: Columns<wire::Organization> =
+    Columns::Value(Column("id", |organization| text(organization.id)));
+pub const PROJECTS: Columns<wire::Project> = Columns::Rows(&[
+    Column("id", |project| text(project.id)),
+    Column("name", |project| text(&project.name)),
+    Column("branch", |project| text(&project.branch)),
+    Column("repositories", |project| joined(&project.repositories)),
+]);
+pub const PROJECT_DECLARED: Columns<wire::Project> =
+    Columns::Value(Column("id", |project| text(project.id)));
+pub const AGENTS: Columns<wire::Agent> = Columns::Rows(&[
+    Column("id", |agent| text(agent.id)),
+    Column("name", |agent| text(&agent.name)),
+    Column("harness", |agent| text(&agent.harness)),
+    Column("model", |agent| or_absent(agent.model.as_ref())),
+]);
+pub const AGENT_DECLARED: Columns<wire::Agent> =
+    Columns::Value(Column("id", |agent| text(agent.id)));
+pub const AGENT_MODEL: Columns<wire::Agent> =
+    Columns::Value(Column("model", |agent| or_absent(agent.model.as_ref())));
 pub const CREDENTIAL: View = View::Value("variable");
 pub const CREDENTIALS: View = View::Rows(&["variable", "set_at"]);
 pub const PROFILES: View = View::Rows(&["id", "name", "owner", "holds"]);

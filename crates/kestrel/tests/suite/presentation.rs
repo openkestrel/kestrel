@@ -197,6 +197,163 @@ async fn json_answers_an_empty_collection_with_an_empty_array() {
 }
 
 #[tokio::test]
+async fn a_catalogue_is_one_read_shown_three_ways() {
+    let kestrel = Kestrel::boot().await;
+    let unbounded = piped(&kestrel, &["organization", "declare", "acme"]).await;
+    let capped = piped(
+        &kestrel,
+        &[
+            "organization",
+            "declare",
+            "globex",
+            "--max-live-instances",
+            "3",
+        ],
+    )
+    .await;
+    let acme = kestrel.organizations().await.remove(0);
+    kestrel
+        .declare_project(
+            &acme,
+            "kestrel",
+            &[REPOSITORY.to_owned(), format!("{REPOSITORY}-docs")],
+            "main",
+        )
+        .await;
+    let scoped = ["--organization", "acme"];
+
+    let organizations = piped(&kestrel, &["organization", "list"]).await;
+    let watched = on_a_terminal(&kestrel, &["organization", "list"], 120).await;
+    let projects = piped(&kestrel, &[&scoped[..], &["project", "list"]].concat()).await;
+    let whole = piped(&kestrel, &["organization", "list", "--json"]).await;
+
+    assert_eq!(
+        organizations.out,
+        [
+            format!("{}\tacme\t-", unbounded.out[0]),
+            format!("{}\tglobex\t3", capped.out[0]),
+        ]
+    );
+    let header: Vec<&str> = watched.lines()[0]
+        .split("  ")
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .collect();
+    assert_eq!(
+        header,
+        ["id", "name", "max live instances"],
+        "{}",
+        watched.said
+    );
+    let project: Vec<&str> = projects.out[0].split('\t').collect();
+    assert_eq!(
+        project[1..],
+        [
+            "kestrel",
+            "main",
+            &format!("{REPOSITORY},{REPOSITORY}-docs")
+        ]
+    );
+    assert_eq!(whole.json(), answered(&kestrel, "organizations").await);
+    assert_eq!(
+        whole.jq("map(.max_live_instances)"),
+        "[null,3]",
+        "an unbounded Organization lost its null"
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_empty_catalogue_is_an_empty_array_nothing_on_a_pipe_and_guidance_at_a_terminal() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+
+    for records in ["project", "agent"] {
+        let whole = piped(&kestrel, &[records, "list", "--json"]).await;
+        let scripted = piped(&kestrel, &[records, "list"]).await;
+        let watched = on_a_terminal(&kestrel, &[records, "list"], 120).await;
+
+        assert_eq!(whole.out, ["[]"], "{records}");
+        assert!(scripted.status.success(), "{}", scripted.err);
+        assert!(scripted.out.is_empty(), "{:?}", scripted.out);
+        assert!(
+            watched.said.contains(&format!("{records} declare --help")),
+            "{}",
+            watched.said
+        );
+    }
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_declaration_answers_its_identifier_and_json_answers_the_record() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+
+    let project = piped(
+        &kestrel,
+        &[
+            "project",
+            "declare",
+            "kestrel",
+            "--repository",
+            REPOSITORY,
+            "--branch",
+            "main",
+        ],
+    )
+    .await;
+    let agent = piped(&kestrel, &["agent", "declare", "builder"]).await;
+    let again = piped(&kestrel, &["agent", "declare", "builder", "--json"]).await;
+
+    let projects = answered(&kestrel, "organizations/acme/projects").await;
+    let agents = answered(&kestrel, "organizations/acme/agents").await;
+    assert_eq!(project.out, [projects[0]["id"].as_str().expect("an id")]);
+    assert_eq!(agent.out, [agents[0]["id"].as_str().expect("an id")]);
+    assert_eq!(again.json(), agents[0]);
+    assert_eq!(
+        again.jq("[.model, .mode, .thought_level]"),
+        "[null,null,null]",
+        "a default the Agent leaves to its Harness lost its null"
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_agents_model_is_the_value_a_pipe_captures_and_a_dash_when_it_names_none() {
+    let kestrel = an_organization_holding_two_agents().await;
+
+    let set = piped(
+        &kestrel,
+        &["agent", "model", "reviewer", "--model", "claude-sonnet-5"],
+    )
+    .await;
+    let whole = piped(
+        &kestrel,
+        &[
+            "agent",
+            "model",
+            "reviewer",
+            "--model",
+            "claude-sonnet-5",
+            "--json",
+        ],
+    )
+    .await;
+    let cleared = piped(&kestrel, &["agent", "model", "reviewer"]).await;
+
+    assert_eq!(set.out, ["claude-sonnet-5"]);
+    assert_eq!(
+        whole.jq("[.name, .harness, .model]"),
+        r#"["reviewer","opencode","claude-sonnet-5"]"#
+    );
+    assert_eq!(cleared.out, ["-"]);
+    let agents = answered(&kestrel, "organizations/acme/agents").await;
+    assert_eq!(agents[1]["model"], Value::Null);
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn json_is_the_whole_record_however_little_a_terminal_is_shown() {
     let kestrel = an_organization_holding_two_agents().await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;

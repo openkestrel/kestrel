@@ -21,8 +21,11 @@ in `crates/kestrel-client/`, and the browser Client in `packages/client`. Both d
 - **The Operator**: `kestrel operator name NAME` names or renames them and `operator show` reads
   them. Every `--as-participant` is optional and sent only when given; the Client supplies no
   name of its own.
-- **Output** (`output.rs`, `view.rs`): most commands declare a `View` of dotted paths into the
-  answer. Live work inspection follows git-style prose even when piped. For commands with a
+- **Output** (`output.rs`, `typed.rs`, `view.rs`): a migrated command decodes the answer into its
+  `kestrel-operator-types` value with `ControlPlane::get_as`, `post_as` or `put_as` and declares
+  `Columns` that read its fields; the Operator, Organization, Project and Agent commands, scope
+  resolution and `status`'s Project and Agent reads do. Every other command still declares a `View`
+  of dotted paths into an untyped answer, and both draw through one table. Live work inspection follows git-style prose even when piped. For commands with a
   `View`, a terminal gets aligned columns and a pipe gets delimited rows. `--json` is a flag on
   every command: it writes the complete operator response as one JSON document — a collection as
   one array, `[]` when empty, and a compound answer such as `workspace open`, `workspace post`,
