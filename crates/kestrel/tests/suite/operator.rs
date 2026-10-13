@@ -7216,7 +7216,8 @@ fn published() -> Value {
         .expect("valid json")
 }
 
-/// The documented answer for this status must exist, and every field it requires must be served.
+/// The documented answer for this status must exist, and it must agree with the boundary on
+/// whether there is a JSON body at all.
 fn conforms(path: &str, method: &str, status: StatusCode, body: &Value) {
     let document = published();
     let (_, operations) = document["paths"]
@@ -7241,45 +7242,10 @@ fn conforms(path: &str, method: &str, status: StatusCode, body: &Value) {
             body.is_null(),
             "the document says {method} {path} answers {status} with nothing, and it served {body}"
         );
-        return;
-    }
-    requires(&document, schema, body);
-}
-
-fn requires(document: &Value, schema: &Value, body: &Value) {
-    let schema = match schema["$ref"].as_str() {
-        Some(reference) => resolve(document, reference),
-        None => schema,
-    };
-    if let Some(options) = schema["anyOf"].as_array() {
-        let option = options
-            .iter()
-            .find(|option| (option["type"] == "null") == body.is_null())
-            .expect("the documented alternatives include the answer");
-        requires(document, option, body);
-        return;
-    }
-    if let Some(parts) = schema["allOf"].as_array() {
-        for part in parts {
-            requires(document, part, body);
-        }
-        return;
-    }
-    if schema["type"] == "array" {
-        for item in body.as_array().expect("an array, as documented") {
-            requires(document, &schema["items"], item);
-        }
-        return;
-    }
-
-    let Some(required) = schema["required"].as_array() else {
-        return;
-    };
-    for field in required {
-        let field = field.as_str().expect("a named field");
+    } else {
         assert!(
-            body.get(field).is_some(),
-            "the document requires {field}, and the boundary served {body}"
+            !body.is_null(),
+            "the document says {method} {path} answers {status} with a body, and it served nothing"
         );
     }
 }

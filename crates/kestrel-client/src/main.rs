@@ -33,7 +33,7 @@ use serde_json::{Value, json};
 use crate::api::ControlPlane;
 use crate::diagnostic::Invocation;
 use crate::exit::{Exit, Failed};
-use crate::output::{Presentation, show};
+use crate::output::Presentation;
 use crate::scope::{Derived, Scope, Scoping, Source};
 
 const BINARY: &str = "kestrel";
@@ -1065,11 +1065,7 @@ async fn run(
     }
     if let Some(Command::ExitCodes) = client.command {
         let catalog = Exit::ALL.map(Exit::record);
-        return show(
-            &presentation,
-            &view::EXIT_CODES,
-            &Value::from(catalog.to_vec()),
-        );
+        return typed::collection(&presentation, &view::EXIT_CODES, &catalog, "");
     }
 
     let control_plane: Url = client.control_plane.parse().with_context(|| {
@@ -2463,13 +2459,12 @@ fn selections(
 }
 
 async fn resolved(api: &ControlPlane, repositories: Vec<String>) -> Result<Vec<String>> {
-    let resolution: wire::RepositoryResolution = serde_json::from_value(
-        api.post(
+    let resolution: wire::RepositoryResolution = api
+        .post_as(
             &["repository-resolutions"],
             &wire::RepositoryResolutionRequest::new(repositories),
         )
-        .await?,
-    )?;
+        .await?;
 
     Ok(resolution
         .repositories

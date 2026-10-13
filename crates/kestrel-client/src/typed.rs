@@ -1,5 +1,4 @@
-//! Shows a decoded operator answer through columns that read its fields, beside `output`'s
-//! dotted paths until every family is decoded.
+//! Shows a decoded operator answer through columns that read its fields.
 
 use std::io::Write;
 
@@ -385,5 +384,22 @@ mod tests {
             said(&Presentation::Json(None), &AGENTS, &none, &none),
             "[]\n"
         );
+    }
+
+    #[test]
+    fn a_streamed_record_is_one_whole_json_line_however_much_it_spans() {
+        let mut out = Vec::new();
+        let entry = Agent {
+            id: 3,
+            name: "one\ntwo\tthree",
+            model: None,
+            tags: Vec::new(),
+        };
+
+        record(&mut out, &Presentation::Json(None), &AGENT, &entry).expect("a record");
+
+        let shown = String::from_utf8(out).expect("utf-8");
+        assert_eq!(shown.lines().count(), 1, "{shown}");
+        assert!(shown.contains("one\\ntwo\\tthree"), "{shown}");
     }
 }

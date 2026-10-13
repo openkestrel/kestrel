@@ -2,7 +2,6 @@ use anyhow::{Result, anyhow};
 use reqwest::{Client, RequestBuilder, Response, Url};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::Value;
 
 use crate::diagnostic::{self, Request};
 use crate::exit::{Exit, Failed};
@@ -20,15 +19,6 @@ impl ControlPlane {
             base,
             operation: operation.to_owned(),
         }
-    }
-
-    pub async fn get_where(&self, path: &[&str], query: &[(&str, &str)]) -> Result<Value> {
-        let mut url = self.url(path)?;
-        if !query.is_empty() {
-            url.query_pairs_mut().extend_pairs(query);
-        }
-
-        self.answered(self.client.get(url), false).await
     }
 
     pub async fn get_as<T: DeserializeOwned>(&self, path: &[&str]) -> Result<T> {
@@ -55,11 +45,6 @@ impl ControlPlane {
         }
 
         self.sent(self.client.get(url), false).await
-    }
-
-    pub async fn post(&self, path: &[&str], body: &impl Serialize) -> Result<Value> {
-        self.answered(self.client.post(self.url(path)?).json(body), true)
-            .await
     }
 
     pub async fn post_as<T: DeserializeOwned>(

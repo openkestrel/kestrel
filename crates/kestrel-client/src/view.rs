@@ -1,28 +1,8 @@
-//! What each command shows, and the three shapes it can be shown in.
+//! What each command shows, and the columns it reads those fields through.
 
 use kestrel_operator_types as wire;
 
 use crate::typed::{Column, Columns, compound, joined, object, objects, or_absent, text};
-
-/// What a command produces, as dotted paths into the record the control plane answered.
-///
-/// `Value` and `Rows` have no command left, but the renderer's tests still read them.
-#[allow(dead_code)]
-pub enum View {
-    /// The one field a `$(…)` captures.
-    Value(&'static str),
-    Rows(&'static [&'static str]),
-    Detail(&'static [&'static str]),
-}
-
-impl View {
-    pub fn fields(&self) -> &[&'static str] {
-        match self {
-            View::Value(field) => std::slice::from_ref(field),
-            View::Rows(fields) | View::Detail(fields) => fields,
-        }
-    }
-}
 
 pub const OPERATOR: Columns<wire::Operator> = Columns::Detail(&[
     Column("id", |operator| text(operator.id)),
@@ -455,7 +435,12 @@ pub const UNRESOLVED: Columns<crate::UnresolvedStatus> = Columns::Detail(&[
     Column("organizations", |record| joined(&record.organizations)),
     Column("next", |record| text(&record.next)),
 ]);
-pub const EXIT_CODES: View = View::Detail(&["code", "name", "meaning", "branch"]);
+pub const EXIT_CODES: Columns<crate::exit::Record> = Columns::Detail(&[
+    Column("code", |record| text(record.code)),
+    Column("name", |record| text(record.name)),
+    Column("meaning", |record| text(record.meaning)),
+    Column("branch", |record| text(record.branch)),
+]);
 
 pub const STARTED: Columns<wire::Started> = Columns::Detail(&[
     Column("organization", |record| text(&record.organization.name)),
