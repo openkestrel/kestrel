@@ -5,6 +5,7 @@ mod exit;
 mod files;
 mod filter;
 mod output;
+mod queue;
 mod readiness;
 mod scope;
 mod shell;
@@ -26,7 +27,7 @@ use clap::parser::ValueSource;
 use clap::{Args, CommandFactory as _, FromArgMatches as _, Parser, Subcommand};
 use kestrel_operator_types as wire;
 use reqwest::Url;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::api::ControlPlane;
@@ -2280,11 +2281,15 @@ async fn run(
         }
         Command::Instance(InstanceCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            typed::collection(
                 &presentation,
                 &view::INSTANCES,
-                &api.get(&["organizations", &organization, "instances"])
-                    .await?,
+                &api.get_as::<wire::ListHeldInstancesResponse>(&[
+                    "organizations",
+                    &organization,
+                    "instances",
+                ])
+                .await?,
                 &empty_list(
                     &client.control_plane,
                     "Instances",
@@ -2298,10 +2303,10 @@ async fn run(
             as_participant,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            typed::show(
                 &presentation,
                 &view::RELEASED,
-                &api.post(
+                &api.post_as::<wire::ReleasedInstance>(
                     &[
                         "organizations",
                         &organization,
@@ -2310,22 +2315,26 @@ async fn run(
                         "instance",
                         "release",
                     ],
-                    &json!({ "participant": as_participant }),
+                    &wire::InstanceRelease {
+                        participant: as_participant.map(Some),
+                    },
                 )
                 .await?,
             )?;
         }
         Command::Status => {
-            let location = json!({
-                "control_plane": client.control_plane,
-                "control_plane_source": control_plane_source,
-            });
+            let location = StatusLocation {
+                control_plane: client.control_plane.clone(),
+                control_plane_source: control_plane_source.to_string(),
+            };
             status(&api, &presentation, location, scoping.derive().await?).await?;
         }
         Command::Queue => {
             let organization = scoping.resolve().await?.organization;
-            let snapshot = api.get(&["organizations", &organization, "queue"]).await?;
-            shown_queue(&presentation, &snapshot, invocation)?;
+            let snapshot: wire::Queue = api
+                .get_as(&["organizations", &organization, "queue"])
+                .await?;
+            queue::show(&presentation, &snapshot, invocation)?;
         }
         Command::ExitCodes => unreachable!("the catalog is shown before the control plane is"),
     }
@@ -2649,251 +2658,6 @@ fn declares(category: &str) -> bool {
     matches!(category, "model" | "mode" | "thought_level")
 }
 
-fn shown_queue(
-    presentation: &Presentation,
-    snapshot: &Value,
-    invocation: &Invocation,
-) -> Result<()> {
-    if presentation.json() {
-        return show(presentation, &view::QUEUE, snapshot);
-    }
-    let slots = &snapshot["active_work"];
-    let instances = &snapshot["instances"];
-
-    {
-        let mut out = std::io::stdout().lock();
-        let said = [
-            (
-                "active-work slots",
-                occupancy(slots, "no dispatch configuration recorded", "occupied"),
-            ),
-            (
-                "live instances",
-                occupancy(instances, "unbounded", "counted"),
-            ),
-            ("environment", environment(snapshot)),
-        ];
-        let width = said
-            .iter()
-            .map(|(label, _)| label.chars().count())
-            .max()
-            .unwrap_or_default();
-        for (label, line) in said {
-            writeln!(out, "{label:width$}  {line}").context("writing the queue's limits")?;
-        }
-        out.flush().context("writing to standard output")?;
-    }
-
-    let mut rows = Vec::new();
-    let mut diagnoses = Vec::new();
-    for occupant in slots["occupants"].as_array().into_iter().flatten() {
-        let mut record = occupant.as_object().cloned().with_context(|| {
-            Failed::new(
-                Exit::Unavailable,
-                "reading one of the snapshot's Active-Work Slot occupants",
-            )
-        })?;
-        let phase = record.remove("phase").unwrap_or(Value::Null);
-        record.insert("state".to_owned(), phase);
-        record.insert("position".to_owned(), Value::Null);
-        record.insert("pending_since".to_owned(), Value::Null);
-        record.insert("preparing".to_owned(), Value::Null);
-        record.insert("brief_since".to_owned(), Value::Null);
-        record.insert("reasons".to_owned(), Value::Array(Vec::new()));
-        record.insert(
-            "why".to_owned(),
-            Value::from(why(&record, invocation, presentation)?),
-        );
-        record.insert("active_work".to_owned(), slots.clone());
-        record.insert("instances".to_owned(), instances.clone());
-        rows.push(Value::Object(record));
-    }
-    for state in ["queued", "waiting", "unbriefed"] {
-        let section = snapshot[state].as_array().with_context(|| {
-            Failed::new(
-                Exit::Unavailable,
-                format!("reading the snapshot's {state} Sessions"),
-            )
-        })?;
-        for row in section {
-            let mut record = row.as_object().cloned().with_context(|| {
-                Failed::new(
-                    Exit::Unavailable,
-                    format!("reading one of the snapshot's {state} Sessions"),
-                )
-            })?;
-            record.insert("state".to_owned(), Value::from(state));
-            record.entry("position").or_insert(Value::Null);
-            record.entry("pending_since").or_insert(Value::Null);
-            record.entry("brief_since").or_insert(Value::Null);
-            record.entry("preparing").or_insert(Value::Null);
-            record.entry("reasons").or_insert(Value::Array(Vec::new()));
-            if matches!(presentation, Presentation::Human(_)) {
-                for reason in record["reasons"].as_array().into_iter().flatten() {
-                    if reason["kind"] == "subscription_profile" {
-                        diagnoses.push((record["name"].clone(), queue_diagnosis(reason)?));
-                    }
-                }
-            }
-            record.insert(
-                "why".to_owned(),
-                Value::from(why(&record, invocation, presentation)?),
-            );
-            record.insert("active_work".to_owned(), slots.clone());
-            record.insert("instances".to_owned(), instances.clone());
-            rows.push(Value::Object(record));
-        }
-    }
-
-    show(presentation, &view::QUEUE, &Value::from(rows))?;
-    let mut out = std::io::stdout().lock();
-    for (session, diagnostic) in diagnoses {
-        writeln!(
-            out,
-            "\n{}:\n{}",
-            session.as_str().unwrap_or_default(),
-            diagnostic::inline(&diagnostic, invocation)
-        )
-        .context("writing the queue's sign-in repairs")?;
-    }
-    out.flush().context("writing to standard output")
-}
-
-fn why(
-    row: &serde_json::Map<String, Value>,
-    invocation: &Invocation,
-    presentation: &Presentation,
-) -> Result<String> {
-    let mut said: Vec<String> = Vec::new();
-    if let Some(preparing) = row["preparing"].as_str() {
-        said.push(match preparing {
-            "starting_harness" => "starting harness".to_owned(),
-            "harness_ready" => "harness ready".to_owned(),
-            step => step.to_owned(),
-        });
-    }
-    if let Some(since) = row["brief_since"].as_str() {
-        said.push(format!("Brief since {since}"));
-    }
-    if let Some(since) = row["pending_since"].as_str() {
-        said.push(format!("input since {since}"));
-    }
-    said.extend(
-        row["reasons"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|reason| reason_in_words(reason, invocation, presentation))
-            .collect::<Result<Vec<_>>>()?,
-    );
-    if said.is_empty() {
-        said.push(
-            match row["state"].as_str() {
-                Some("working") => "in a turn",
-                Some("trailing") => "answered; its agent is still working",
-                Some("waiting") => "waiting for a turn",
-                Some("unbriefed") => "getting ready for its first message",
-                _ => "ready",
-            }
-            .to_owned(),
-        );
-    }
-
-    Ok(said.join("; "))
-}
-
-fn environment(snapshot: &Value) -> String {
-    snapshot["work_role"]["driver"].as_str().map_or_else(
-        || "no dispatch configuration recorded".to_owned(),
-        str::to_owned,
-    )
-}
-
-fn queue_diagnosis(reason: &Value) -> Result<wire::Diagnostic> {
-    serde_json::from_value(reason["diagnostic"].clone())
-        .context("reading the queue's sign-in diagnosis")
-}
-
-fn reason_in_words(
-    reason: &Value,
-    invocation: &Invocation,
-    presentation: &Presentation,
-) -> Result<String> {
-    let names = |field: &str| {
-        reason[field]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let text = |field: &str| reason[field].as_str().unwrap_or("?").to_owned();
-    let limit = reason["limit"].as_u64().unwrap_or_default();
-    let plural = if limit == 1 { "" } else { "s" };
-
-    Ok(match reason["kind"].as_str().unwrap_or_default() {
-        "dependencies" => format!("waits on {}", names("sessions")),
-        "subscription_profile" => {
-            let diagnostic = queue_diagnosis(reason)?;
-            if matches!(presentation, Presentation::Human(_)) {
-                diagnostic::message(&diagnostic).to_owned()
-            } else {
-                diagnostic::inline(&diagnostic, invocation)
-            }
-        }
-        "instance_archiving" => {
-            format!("waits for the Instance {} to be archived", text("instance"))
-        }
-        "live_instance_limit" => format!("at the limit of {limit} live Instance{plural}"),
-        "active_work_slots" => format!("all {limit} Active-Work Slot{plural} occupied"),
-        "ahead" => {
-            let mut ahead = names("sessions");
-            if let Some(elsewhere) = reason["elsewhere"].as_u64() {
-                if !ahead.is_empty() {
-                    ahead.push_str(", ");
-                }
-                ahead.push_str(&format!(
-                    "{elsewhere} Session{} in other Organizations",
-                    if elsewhere == 1 { "" } else { "s" }
-                ));
-            }
-            format!("behind {ahead}")
-        }
-        kind => kind.to_owned(),
-    })
-}
-
-/// A limit and what counts against it as one line, naming what the Organization can name.
-fn occupancy(section: &Value, without_limit: &str, unit: &str) -> String {
-    let limit = match section["limit"].as_u64() {
-        Some(limit) => format!("limit {limit};"),
-        None => format!("{without_limit};"),
-    };
-    let counted = section["count"]
-        .as_u64()
-        .or_else(|| section["occupied"].as_u64())
-        .unwrap_or(0);
-    let mut line = format!("{limit} {counted} {unit}");
-    let named = named_in(section);
-    if !named.is_empty() {
-        line.push_str(&format!(" ({})", named.join(", ")));
-    }
-
-    line
-}
-
-fn named_in(section: &Value) -> Vec<&str> {
-    let of = section["counted"]
-        .as_array()
-        .or_else(|| section["occupants"].as_array());
-    of.map_or_else(Vec::new, |of| {
-        of.iter()
-            .filter_map(|named| named.as_str().or_else(|| named["name"].as_str()))
-            .collect()
-    })
-}
-
 fn confirmed() -> Result<bool> {
     loop {
         eprint!("apply this plan? [Y/n] ");
@@ -3030,19 +2794,15 @@ mod parser_tests {
                 "next_steps": [{ "action": "inspect_resource", "resource": "session", "reference": "holding", "organization": "acme" }]
             }
         });
-        let rendered = reason_in_words(
+        let reason: wire::QueueReason = serde_json::from_value(reason).unwrap();
+        let rendered = queue::reason_in_words(
             &reason,
             &diagnostic::tests::invocation(),
             &Presentation::Delimited,
-        )
-        .unwrap();
+        );
         assert!(
-            reason_in_words(
-                &json!({ "kind": "subscription_profile" }),
-                &diagnostic::tests::invocation(),
-                &Presentation::Delimited
-            )
-            .is_err()
+            serde_json::from_value::<wire::QueueReason>(json!({ "kind": "subscription_profile" }))
+                .is_err()
         );
         assert!(rendered.contains("the sign-in is in use"), "{rendered}");
         assert!(
@@ -3288,10 +3048,42 @@ fn warn_of_outsiders(name: &str) {
     );
 }
 
+#[derive(Serialize)]
+struct StatusLocation {
+    control_plane: String,
+    control_plane_source: String,
+}
+
+#[derive(Serialize)]
+struct Status {
+    #[serde(flatten)]
+    location: StatusLocation,
+    organization: String,
+    organization_source: String,
+    projects: usize,
+    agents: usize,
+    triggers: usize,
+    workspaces: usize,
+    integrations: usize,
+    credentials: usize,
+    profiles: usize,
+    next: String,
+}
+
+#[derive(Serialize)]
+struct UnresolvedStatus {
+    #[serde(flatten)]
+    location: StatusLocation,
+    organization: Option<String>,
+    organization_source: Option<String>,
+    organizations: Vec<String>,
+    next: String,
+}
+
 async fn status(
     api: &ControlPlane,
     presentation: &Presentation,
-    location: Value,
+    location: StatusLocation,
     derived: Derived,
 ) -> Result<()> {
     let scope = match derived {
@@ -3302,18 +3094,16 @@ async fn status(
             } else {
                 format!("{BINARY} status --organization <name>")
             };
-            show(
+            typed::show(
                 presentation,
                 &view::UNRESOLVED,
-                &merged(
+                &UnresolvedStatus {
                     location,
-                    json!({
-                        "organization": null,
-                        "organization_source": null,
-                        "organizations": existing,
-                        "next": next,
-                    }),
-                ),
+                    organization: None,
+                    organization_source: None,
+                    organizations: existing,
+                    next,
+                },
             )?;
             return Ok(());
         }
@@ -3331,39 +3121,37 @@ async fn status(
                 .await
         },
         within("triggers"),
-        within("workspaces"),
+        async {
+            api.get_as::<wire::ListWorkspacesResponse>(&[
+                "organizations",
+                organization,
+                "workspaces",
+            ])
+            .await
+        },
         within("integrations"),
         within("credentials"),
         within("profiles"),
     )?;
-    show(
+    typed::show(
         presentation,
         &view::STATUS,
-        &merged(
+        &Status {
             location,
-            json!({
-                "organization": organization,
-                "organization_source": scope.source.to_string(),
-                "projects": projects.len(),
-                "agents": agents.len(),
-                "triggers": count(&triggers),
-                "workspaces": count(&workspaces),
-                "integrations": count(&integrations),
-                "credentials": count(&credentials),
-                "profiles": count(&profiles),
-                "next": next_command(projects.first(), agents.first()),
-            }),
-        ),
+            organization: organization.to_owned(),
+            organization_source: scope.source.to_string(),
+            projects: projects.len(),
+            agents: agents.len(),
+            triggers: count(&triggers),
+            workspaces: workspaces.len(),
+            integrations: count(&integrations),
+            credentials: count(&credentials),
+            profiles: count(&profiles),
+            next: next_command(projects.first(), agents.first()),
+        },
     )?;
 
     Ok(())
-}
-
-fn merged(mut record: Value, more: Value) -> Value {
-    if let (Some(record), Value::Object(more)) = (record.as_object_mut(), more) {
-        record.extend(more);
-    }
-    record
 }
 
 fn count(records: &Value) -> usize {

@@ -179,6 +179,31 @@ async fn unpublished_work_outlasts_the_idle_window_held_with_a_reason_until_rele
             workspace.checkout.branch
         )
     );
+    let listed = support::client::ran_by(
+        &kestrel,
+        &["instance", "list", "--organization", "acme", "--json"],
+        support::client::Invocation::default(),
+    )
+    .await
+    .json();
+    let instances: kestrel_operator_types::ListHeldInstancesResponse =
+        serde_json::from_value(listed).unwrap();
+    assert_eq!(instances.len(), 1);
+    assert_eq!(instances[0].workspace.to_string(), workspace.id.to_string());
+    assert_eq!(instances[0].instance, instance);
+    assert_eq!(instances[0].because, held[0].because);
+    let rows = support::client::ran_by(
+        &kestrel,
+        &["instance", "list", "--organization", "acme"],
+        support::client::Invocation::default(),
+    )
+    .await;
+    assert!(rows.status.success(), "{}", rows.err);
+    assert_eq!(
+        rows.out.join("\n").trim(),
+        format!("{}\t{}\t{}", workspace.id, instance, held[0].because)
+    );
+
     let refused = kestrel
         .try_seal_workspace(workspace.id)
         .await
@@ -189,7 +214,25 @@ async fn unpublished_work_outlasts_the_idle_window_held_with_a_reason_until_rele
     );
     assert!(Environment::root_of(&instance).is_dir());
 
-    assert_eq!(kestrel.release_instance(workspace.id).await, instance);
+    let released = support::client::ran_by(
+        &kestrel,
+        &[
+            "instance",
+            "release",
+            &workspace.id.to_string(),
+            "--organization",
+            "acme",
+            "--as-participant",
+            "operator",
+            "--json",
+        ],
+        support::client::Invocation::default(),
+    )
+    .await
+    .json();
+    let released: kestrel_operator_types::ReleasedInstance =
+        serde_json::from_value(released).unwrap();
+    assert_eq!(released.instance, instance);
 
     archived(&instance).await;
     assert!(kestrel.held_instances("acme").await.is_empty());

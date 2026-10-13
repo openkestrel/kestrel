@@ -300,38 +300,58 @@ pub const INTERRUPTED: Columns<wire::Session> = Columns::Detail(&[
 pub const STOPPED: Columns<wire::Session> = Columns::Value(Column("status", |record| {
     or_absent(record.exit.as_ref().map(|exit| &exit.status))
 }));
-pub const INSTANCES: View = View::Rows(&["workspace", "instance", "because"]);
-pub const QUEUE: View = View::Rows(&[
-    "position",
-    "name",
-    "state",
-    "agent",
-    "why",
-    "workspace",
-    "enqueued_at",
+pub const QUEUE: Columns<crate::queue::Row> = Columns::Rows(&[
+    Column("position", |row| or_absent(row.position.as_ref())),
+    Column("name", |row| text(&row.name)),
+    Column("state", |row| text(&row.state)),
+    Column("agent", |row| text(&row.agent)),
+    Column("why", |row| text(&row.why)),
+    Column("workspace", |row| text(&row.workspace)),
+    Column("enqueued at", |row| text(&row.enqueued_at)),
 ]);
-pub const RELEASED: View = View::Value("instance");
-pub const STATUS: View = View::Detail(&[
-    "control_plane",
-    "control_plane_source",
-    "organization",
-    "organization_source",
-    "projects",
-    "agents",
-    "triggers",
-    "workspaces",
-    "integrations",
-    "credentials",
-    "profiles",
-    "next",
+
+pub const INSTANCES: Columns<wire::HeldInstance> = Columns::Rows(&[
+    Column("workspace", |record| text(record.workspace)),
+    Column("instance", |record| text(&record.instance)),
+    Column("because", |record| text(&record.because)),
 ]);
-pub const UNRESOLVED: View = View::Detail(&[
-    "control_plane",
-    "control_plane_source",
-    "organization",
-    "organization_source",
-    "organizations",
-    "next",
+pub const RELEASED: Columns<wire::ReleasedInstance> =
+    Columns::Value(Column("instance", |record| text(&record.instance)));
+pub const STATUS: Columns<crate::Status> = Columns::Detail(&[
+    Column("control plane", |record| {
+        text(&record.location.control_plane)
+    }),
+    Column("control plane source", |record| {
+        text(&record.location.control_plane_source)
+    }),
+    Column("organization", |record| text(&record.organization)),
+    Column("organization source", |record| {
+        text(&record.organization_source)
+    }),
+    Column("projects", |record| text(record.projects)),
+    Column("agents", |record| text(record.agents)),
+    Column("triggers", |record| text(record.triggers)),
+    Column("workspaces", |record| text(record.workspaces)),
+    Column("integrations", |record| text(record.integrations)),
+    Column("credentials", |record| text(record.credentials)),
+    Column("profiles", |record| text(record.profiles)),
+    Column("next", |record| text(&record.next)),
+]);
+pub const UNRESOLVED: Columns<crate::UnresolvedStatus> = Columns::Detail(&[
+    Column("control plane", |record| {
+        text(&record.location.control_plane)
+    }),
+    Column("control plane source", |record| {
+        text(&record.location.control_plane_source)
+    }),
+    Column("organization", |record| {
+        or_absent(record.organization.as_ref())
+    }),
+    Column("organization source", |record| {
+        or_absent(record.organization_source.as_ref())
+    }),
+    Column("organizations", |record| joined(&record.organizations)),
+    Column("next", |record| text(&record.next)),
 ]);
 pub const EXIT_CODES: View = View::Detail(&["code", "name", "meaning", "branch"]);
 

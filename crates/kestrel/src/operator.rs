@@ -581,11 +581,6 @@ struct TriggerDispatch {
     agent: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct Release {
-    participant: Option<String>,
-}
-
 fn selected(integrations: Vec<domain::SelectedIntegration>) -> Vec<wire::SelectedIntegration> {
     integrations
         .into_iter()
@@ -597,55 +592,44 @@ fn selected(integrations: Vec<domain::SelectedIntegration>) -> Vec<wire::Selecte
         .collect()
 }
 
-#[derive(Serialize)]
-struct WorkspaceListedRecord {
-    #[serde(flatten)]
-    workspace: wire::Workspace,
-    session: Option<wire::Session>,
-    queue: Option<QueueStandingRecord>,
-}
-
-#[derive(Serialize)]
-struct QueueStandingRecord {
-    position: Option<usize>,
-    reasons: Vec<ReasonRecord>,
-    pending_since: Option<Timestamp>,
-}
-
-impl QueueStandingRecord {
-    fn of(snapshot: &scheduling::Snapshot, workspace: WorkspaceId) -> Option<Self> {
-        if let Some(queued) = snapshot
-            .queued
-            .iter()
-            .find(|queued| queued.session.workspace == workspace)
-        {
-            return Some(Self {
-                position: queued.position,
-                reasons: reasons(queued.reasons.clone()),
-                pending_since: None,
-            });
-        }
-        if let Some(waiting) = snapshot
-            .waiting
-            .iter()
-            .find(|waiting| waiting.session.workspace == workspace)
-        {
-            return Some(Self {
-                position: waiting.position,
-                reasons: reasons(waiting.reasons.clone()),
-                pending_since: waiting.pending_since,
-            });
-        }
-        snapshot
-            .unbriefed
-            .iter()
-            .find(|unbriefed| unbriefed.session.workspace == workspace)
-            .map(|unbriefed| Self {
-                position: unbriefed.position,
-                reasons: reasons(unbriefed.reasons.clone()),
-                pending_since: unbriefed.brief_since.or(unbriefed.pending_since),
-            })
+fn queue_standing(
+    snapshot: &scheduling::Snapshot,
+    workspace: WorkspaceId,
+) -> Option<wire::QueueStanding> {
+    if let Some(queued) = snapshot
+        .queued
+        .iter()
+        .find(|queued| queued.session.workspace == workspace)
+    {
+        return Some(wire::QueueStanding {
+            position: queued.position.map(|position| position as i64),
+            reasons: reasons(queued.reasons.clone()),
+            pending_since: None,
+        });
     }
+    if let Some(waiting) = snapshot
+        .waiting
+        .iter()
+        .find(|waiting| waiting.session.workspace == workspace)
+    {
+        return Some(wire::QueueStanding {
+            position: waiting.position.map(|position| position as i64),
+            reasons: reasons(waiting.reasons.clone()),
+            pending_since: waiting.pending_since.map(|since| since.to_string()),
+        });
+    }
+    snapshot
+        .unbriefed
+        .iter()
+        .find(|unbriefed| unbriefed.session.workspace == workspace)
+        .map(|unbriefed| wire::QueueStanding {
+            position: unbriefed.position.map(|position| position as i64),
+            reasons: reasons(unbriefed.reasons.clone()),
+            pending_since: unbriefed
+                .brief_since
+                .or(unbriefed.pending_since)
+                .map(|since| since.to_string()),
+        })
 }
 
 fn supplied_material(harness: &str, supplied: &domain::Supplied) -> wire::SuppliedMaterial {
@@ -3091,23 +3075,16 @@ fn named_refusal(error: anyhow::Error) -> Refused {
     Refused::Unprocessable(error.to_string())
 }
 
-#[derive(Serialize)]
-struct HeldRecord {
-    workspace: String,
-    instance: String,
-    because: String,
-}
-
 async fn instances(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<HeldRecord>>, Refused> {
+) -> Result<Json<Vec<wire::HeldInstance>>, Refused> {
     let held = instance::held(&control_plane.store, &organization).await?;
 
     Ok(Json(
         held.into_iter()
-            .map(|held| HeldRecord {
-                workspace: held.workspace.to_string(),
+            .map(|held| wire::HeldInstance {
+                workspace: held.workspace.to_string().parse().expect("a uuid"),
                 instance: held.instance,
                 because: held.because,
             })
@@ -3115,268 +3092,199 @@ async fn instances(
     ))
 }
 
-#[derive(Serialize)]
-struct ReleasedRecord {
-    instance: String,
-}
-
-#[derive(Serialize)]
-struct WorkRoleRecord {
-    active_work_slots: usize,
-    serialized_harnesses: Vec<String>,
-    driver: String,
-}
-
-#[derive(Serialize)]
-struct ActiveWorkRecord {
-    limit: Option<usize>,
-    occupied: usize,
-    occupants: Vec<OccupantRecord>,
-    elsewhere: usize,
-}
-
-#[derive(Serialize)]
-struct OccupantRecord {
-    name: String,
-    workspace: String,
-    agent: String,
-    phase: OccupantPhase,
-    enqueued_at: Timestamp,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-enum OccupantPhase {
-    Working,
-    Trailing,
-}
-
-#[derive(Serialize)]
-struct InstancesRecord {
-    limit: Option<usize>,
-    count: usize,
-    counted: Vec<String>,
-}
-
-#[derive(Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum ReasonRecord {
-    Dependencies {
-        sessions: Vec<String>,
-    },
-    SubscriptionProfile {
-        profile: String,
-        session: Option<String>,
-        diagnostic: Box<wire::Diagnostic>,
-    },
-    InstanceArchiving {
-        instance: String,
-    },
-    LiveInstanceLimit {
-        limit: usize,
-    },
-    ActiveWorkSlots {
-        limit: usize,
-    },
-    Ahead {
-        sessions: Vec<String>,
-        #[serde(skip_serializing_if = "is_zero")]
-        elsewhere: usize,
-    },
-}
-
-fn is_zero(value: &usize) -> bool {
-    *value == 0
-}
-
-impl From<scheduling::Reason> for ReasonRecord {
-    fn from(reason: scheduling::Reason) -> Self {
-        match reason {
-            scheduling::Reason::Dependencies(sessions) => Self::Dependencies { sessions },
-            scheduling::Reason::SubscriptionProfile(busy) => {
-                let profile = busy.profile.clone();
-                let session = busy.holder.session().map(str::to_owned);
-                let (_, diagnostic) = diagnosis(Reason::SignInBusy(busy), None);
-                Self::SubscriptionProfile {
+fn queue_reason(reason: scheduling::Reason) -> wire::QueueReason {
+    match reason {
+        scheduling::Reason::Dependencies(sessions) => {
+            wire::QueueReason::QueueReasonDependencies(wire::QueueReasonDependencies {
+                kind: serde_json::json!("dependencies"),
+                sessions,
+            })
+        }
+        scheduling::Reason::SubscriptionProfile(busy) => {
+            let profile = busy.profile.clone();
+            let session = busy.holder.session().map(str::to_owned);
+            let (_, diagnostic) = diagnosis(Reason::SignInBusy(busy), None);
+            wire::QueueReason::QueueReasonSubscriptionProfile(
+                wire::QueueReasonSubscriptionProfile {
                     profile,
                     session,
-                    diagnostic: Box::new(diagnostic),
-                }
-            }
-            scheduling::Reason::InstanceArchiving(instance) => Self::InstanceArchiving { instance },
-            scheduling::Reason::LiveInstanceLimit(limit) => Self::LiveInstanceLimit { limit },
-            scheduling::Reason::ActiveWorkSlots(limit) => Self::ActiveWorkSlots { limit },
-            scheduling::Reason::Ahead {
-                sessions,
-                elsewhere,
-            } => Self::Ahead {
-                sessions,
-                elsewhere,
-            },
+                    diagnostic,
+                    kind: serde_json::json!("subscription_profile"),
+                },
+            )
         }
+        scheduling::Reason::InstanceArchiving(instance) => {
+            wire::QueueReason::QueueReasonInstanceArchiving(wire::QueueReasonInstanceArchiving {
+                kind: serde_json::json!("instance_archiving"),
+                instance,
+            })
+        }
+        scheduling::Reason::LiveInstanceLimit(limit) => {
+            wire::QueueReason::QueueReasonLiveInstanceLimit(wire::QueueReasonLiveInstanceLimit {
+                kind: serde_json::json!("live_instance_limit"),
+                limit: limit as i64,
+            })
+        }
+        scheduling::Reason::ActiveWorkSlots(limit) => {
+            wire::QueueReason::QueueReasonActiveWorkSlots(wire::QueueReasonActiveWorkSlots {
+                kind: serde_json::json!("active_work_slots"),
+                limit: limit as i64,
+            })
+        }
+        scheduling::Reason::Ahead {
+            sessions,
+            elsewhere,
+        } => wire::QueueReason::QueueReasonAhead(wire::QueueReasonAhead {
+            sessions,
+            elsewhere: (elsewhere != 0).then_some(elsewhere as i64),
+            kind: serde_json::json!("ahead"),
+        }),
     }
 }
 
-fn reasons(reasons: Vec<scheduling::Reason>) -> Vec<ReasonRecord> {
-    reasons.into_iter().map(ReasonRecord::from).collect()
+fn reasons(reasons: Vec<scheduling::Reason>) -> Vec<wire::QueueReason> {
+    reasons.into_iter().map(queue_reason).collect()
 }
 
-#[derive(Serialize)]
-struct QueuedSessionRecord {
-    position: Option<usize>,
-    name: String,
-    workspace: String,
-    agent: String,
-    reasons: Vec<ReasonRecord>,
-    enqueued_at: Timestamp,
-}
+fn queue_record(snapshot: scheduling::Snapshot) -> wire::Queue {
+    let recorded = snapshot.recorded.map(|recorded| wire::QueueWorkRole {
+        active_work_slots: recorded.active_work_slots as i64,
+        serialized_harnesses: recorded.serialized_harnesses,
+        driver: recorded.driver,
+    });
 
-#[derive(Serialize)]
-struct WaitingSessionRecord {
-    position: Option<usize>,
-    name: String,
-    workspace: String,
-    agent: String,
-    pending_since: Option<Timestamp>,
-    reasons: Vec<ReasonRecord>,
-    enqueued_at: Timestamp,
-}
-
-#[derive(Serialize)]
-struct UnbriefedSessionRecord {
-    position: Option<usize>,
-    brief_since: Option<Timestamp>,
-    reasons: Vec<ReasonRecord>,
-    name: String,
-    workspace: String,
-    agent: String,
-    preparing: Option<String>,
-    pending_since: Option<Timestamp>,
-    enqueued_at: Timestamp,
-}
-
-#[derive(Serialize)]
-struct QueueRecord {
-    work_role: Option<WorkRoleRecord>,
-    active_work: ActiveWorkRecord,
-    instances: InstancesRecord,
-    queued: Vec<QueuedSessionRecord>,
-    waiting: Vec<WaitingSessionRecord>,
-    unbriefed: Vec<UnbriefedSessionRecord>,
-}
-
-impl QueueRecord {
-    fn of(snapshot: scheduling::Snapshot) -> Self {
-        let recorded = snapshot.recorded.map(|recorded| WorkRoleRecord {
-            active_work_slots: recorded.active_work_slots,
-            serialized_harnesses: recorded.serialized_harnesses,
-            driver: recorded.driver,
-        });
-
-        Self {
-            work_role: recorded,
-            active_work: ActiveWorkRecord {
-                limit: snapshot.active_work.limit,
-                occupied: snapshot.active_work.occupied,
-                occupants: snapshot
-                    .active_work
-                    .occupants
-                    .into_iter()
-                    .map(|session| OccupantRecord {
-                        name: session.name,
-                        workspace: session.workspace.to_string(),
-                        agent: session.agent.name,
-                        phase: match session.state {
-                            domain::SessionState::Trailing => OccupantPhase::Trailing,
-                            _ => OccupantPhase::Working,
-                        },
-                        enqueued_at: session.enqueued_at,
-                    })
-                    .collect(),
-                elsewhere: snapshot.active_work.elsewhere,
-            },
-            instances: InstancesRecord {
-                limit: snapshot.instances.limit,
-                count: snapshot.instances.count,
-                counted: snapshot.instances.counted,
-            },
-            queued: snapshot
-                .queued
+    wire::Queue {
+        work_role: recorded,
+        active_work: wire::ActiveWork {
+            limit: snapshot.active_work.limit.map(|limit| limit as i64),
+            occupied: snapshot.active_work.occupied as i64,
+            occupants: snapshot
+                .active_work
+                .occupants
                 .into_iter()
-                .map(|queued| QueuedSessionRecord {
-                    position: queued.position,
-                    name: queued.session.name,
-                    workspace: queued.session.workspace.to_string(),
-                    agent: queued.session.agent.name,
-                    reasons: reasons(queued.reasons),
-                    enqueued_at: queued.session.enqueued_at,
+                .map(|session| wire::Occupant {
+                    name: session.name,
+                    workspace: session.workspace.to_string().parse().expect("a uuid"),
+                    agent: session.agent.name,
+                    phase: match session.state {
+                        domain::SessionState::Trailing => wire::OccupantPhase::Trailing,
+                        _ => wire::OccupantPhase::Working,
+                    },
+                    enqueued_at: session.enqueued_at.to_string(),
                 })
                 .collect(),
-            waiting: snapshot
-                .waiting
-                .into_iter()
-                .map(|waiting| WaitingSessionRecord {
-                    position: waiting.position,
-                    name: waiting.session.name,
-                    workspace: waiting.session.workspace.to_string(),
-                    agent: waiting.session.agent.name,
-                    pending_since: waiting.pending_since,
-                    reasons: reasons(waiting.reasons),
-                    enqueued_at: waiting.session.enqueued_at,
-                })
-                .collect(),
-            unbriefed: snapshot
-                .unbriefed
-                .into_iter()
-                .map(|unbriefed| UnbriefedSessionRecord {
-                    position: unbriefed.position,
-                    brief_since: unbriefed.brief_since,
-                    reasons: reasons(unbriefed.reasons),
-                    name: unbriefed.session.name,
-                    workspace: unbriefed.session.workspace.to_string(),
-                    agent: unbriefed.session.agent.name,
-                    preparing: unbriefed
-                        .session
-                        .preparing
-                        .map(|preparing| preparing.as_str().to_owned()),
-                    pending_since: unbriefed.pending_since,
-                    enqueued_at: unbriefed.session.enqueued_at,
-                })
-                .collect(),
-        }
+            elsewhere: snapshot.active_work.elsewhere as i64,
+        },
+        instances: wire::QueueInstances {
+            limit: snapshot.instances.limit.map(|limit| limit as i64),
+            count: snapshot.instances.count as i64,
+            counted: snapshot.instances.counted,
+        },
+        queued: snapshot
+            .queued
+            .into_iter()
+            .map(|queued| wire::QueuedSession {
+                position: queued.position.map(|position| position as i64),
+                name: queued.session.name,
+                workspace: queued
+                    .session
+                    .workspace
+                    .to_string()
+                    .parse()
+                    .expect("a uuid"),
+                agent: queued.session.agent.name,
+                reasons: reasons(queued.reasons),
+                enqueued_at: queued.session.enqueued_at.to_string(),
+            })
+            .collect(),
+        waiting: snapshot
+            .waiting
+            .into_iter()
+            .map(|waiting| wire::WaitingSession {
+                position: waiting.position.map(|position| position as i64),
+                name: waiting.session.name,
+                workspace: waiting
+                    .session
+                    .workspace
+                    .to_string()
+                    .parse()
+                    .expect("a uuid"),
+                agent: waiting.session.agent.name,
+                pending_since: waiting.pending_since.map(|since| since.to_string()),
+                reasons: reasons(waiting.reasons),
+                enqueued_at: waiting.session.enqueued_at.to_string(),
+            })
+            .collect(),
+        unbriefed: snapshot
+            .unbriefed
+            .into_iter()
+            .map(|unbriefed| wire::UnbriefedSession {
+                position: unbriefed.position.map(|position| position as i64),
+                brief_since: unbriefed.brief_since.map(|since| since.to_string()),
+                reasons: reasons(unbriefed.reasons),
+                name: unbriefed.session.name,
+                workspace: unbriefed
+                    .session
+                    .workspace
+                    .to_string()
+                    .parse()
+                    .expect("a uuid"),
+                agent: unbriefed.session.agent.name,
+                preparing: unbriefed
+                    .session
+                    .preparing
+                    .map(|preparing| match preparing {
+                        domain::Preparing::Provisioning => {
+                            wire::UnbriefedSessionPreparing::Provisioning
+                        }
+                        domain::Preparing::Cloning => wire::UnbriefedSessionPreparing::Cloning,
+                        domain::Preparing::StartingHarness => {
+                            wire::UnbriefedSessionPreparing::StartingHarness
+                        }
+                        domain::Preparing::HarnessReady => {
+                            wire::UnbriefedSessionPreparing::HarnessReady
+                        }
+                    }),
+                pending_since: unbriefed.pending_since.map(|since| since.to_string()),
+                enqueued_at: unbriefed.session.enqueued_at.to_string(),
+            })
+            .collect(),
     }
 }
 
 async fn show_queue(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<QueueRecord>, Refused> {
+) -> Result<Json<wire::Queue>, Refused> {
     let snapshot = scheduling::snapshot(&control_plane.store, &organization).await?;
 
-    Ok(Json(QueueRecord::of(snapshot)))
+    Ok(Json(queue_record(snapshot)))
 }
 
 async fn release_instance(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
-    release: Result<Json<Release>, JsonRejection>,
-) -> Result<Json<ReleasedRecord>, Refused> {
+    release: Result<Json<wire::InstanceRelease>, JsonRejection>,
+) -> Result<Json<wire::ReleasedInstance>, Refused> {
     let Json(release) = release?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     let instance = instance::release(
         &control_plane.store,
         workspace.id,
-        release.participant.as_deref(),
+        release
+            .participant
+            .as_ref()
+            .and_then(|participant| participant.as_deref()),
     )
     .await?;
 
-    Ok(Json(ReleasedRecord { instance }))
+    Ok(Json(wire::ReleasedInstance { instance }))
 }
 
 async fn workspaces(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<WorkspaceListedRecord>>, Refused> {
+) -> Result<Json<wire::ListWorkspacesResponse>, Refused> {
     let workspaces = workspace::workspaces(&control_plane.store, &organization).await?;
     let snapshot = scheduling::snapshot(&control_plane.store, &organization).await?;
     let mut records = Vec::with_capacity(workspaces.len());
@@ -3386,10 +3294,31 @@ async fn workspaces(
             .await?
             .pop()
             .map(|session| session_record(session, &organization, &control_plane.live.summaries));
-        records.push(WorkspaceListedRecord {
-            workspace: workspace_record(&control_plane.store, workspace).await?,
+        let workspace = workspace_record(&control_plane.store, workspace).await?;
+        records.push(wire::WorkspaceListed {
+            checkout: workspace.checkout,
+            continued_by: workspace.continued_by,
+            continues: workspace.continues,
+            correlation: workspace.correlation,
+            held: workspace.held,
+            held_messages: workspace.held_messages,
+            id: workspace.id,
+            instance: workspace.instance,
+            integrations: workspace.integrations,
+            last_active_at: workspace.last_active_at,
+            name: workspace.name,
+            opened_at: workspace.opened_at,
+            opened_with: workspace.opened_with,
+            organization: workspace.organization,
+            profile: workspace.profile,
+            project: workspace.project,
+            pull_requests: workspace.pull_requests,
+            sealed_at: workspace.sealed_at,
+            started_by: workspace.started_by,
+            state: workspace.state,
+            unfinished_session: workspace.unfinished_session,
             session,
-            queue: QueueStandingRecord::of(&snapshot, id),
+            queue: queue_standing(&snapshot, id),
         });
     }
 
