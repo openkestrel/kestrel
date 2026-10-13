@@ -1864,7 +1864,7 @@ async fn run(
         Command::Workspace(WorkspaceCommand::Work { workspace }) => {
             let organization = scoping.resolve().await?.organization;
             let answer = api
-                .get(&[
+                .get_as::<wire::WorkspaceWork>(&[
                     "organizations",
                     &organization,
                     "workspaces",
@@ -1872,7 +1872,7 @@ async fn run(
                     "work",
                 ])
                 .await?;
-            work::show(answer, &presentation)?;
+            work::show(&presentation, &answer)?;
         }
         Command::Workspace(WorkspaceCommand::Changes {
             workspace,
@@ -1894,7 +1894,7 @@ async fn run(
             let mut query = vec![("scope", scope.as_str())];
             query.extend(paths.iter().map(|path| ("path", path.as_str())));
             let answer = api
-                .get_where(
+                .get_where_as::<wire::WorkspaceChanges>(
                     &[
                         "organizations",
                         &organization,
@@ -1906,8 +1906,8 @@ async fn run(
                 )
                 .await?;
             changes::show(
-                answer,
                 &presentation,
+                &changes::Read::Changes(answer),
                 &empty_list(
                     &client.control_plane,
                     "changes in this comparison",
@@ -1925,18 +1925,21 @@ async fn run(
                 _ => unreachable!(),
             };
             let organization = scoping.resolve().await?.organization;
-            let answer = api
-                .get(&[
-                    "organizations",
-                    &organization,
-                    "workspaces",
-                    &workspace,
-                    read,
-                ])
-                .await?;
+            let path = [
+                "organizations",
+                &organization,
+                "workspaces",
+                &workspace,
+                read,
+            ];
+            let answer = if read == "commits" {
+                changes::Read::Commits(api.get_as::<wire::WorkspaceCommits>(&path).await?)
+            } else {
+                changes::Read::Stashes(api.get_as::<wire::WorkspaceStashes>(&path).await?)
+            };
             changes::show(
-                answer,
                 &presentation,
+                &answer,
                 &empty_list(
                     &client.control_plane,
                     read,
@@ -1949,7 +1952,7 @@ async fn run(
             let organization = scoping.resolve().await?.organization;
             let path = path.unwrap_or_default();
             let answer = api
-                .get_where(
+                .get_where_as::<wire::FileListing>(
                     &[
                         "organizations",
                         &organization,
@@ -1961,8 +1964,8 @@ async fn run(
                 )
                 .await?;
             files::list(
-                answer,
                 &presentation,
+                &answer,
                 &empty_list(
                     &client.control_plane,
                     "directory entries",

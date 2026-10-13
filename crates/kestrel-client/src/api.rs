@@ -22,10 +22,6 @@ impl ControlPlane {
         }
     }
 
-    pub async fn get(&self, path: &[&str]) -> Result<Value> {
-        self.get_where(path, &[]).await
-    }
-
     pub async fn get_where(&self, path: &[&str], query: &[(&str, &str)]) -> Result<Value> {
         let mut url = self.url(path)?;
         if !query.is_empty() {

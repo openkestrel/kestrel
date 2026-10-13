@@ -1,55 +1,81 @@
 use std::io::{IsTerminal as _, Write};
 
 use anyhow::Result;
-use serde::Deserialize;
-use serde_json::Value;
+use kestrel_operator_types as wire;
 
 use crate::output::Presentation;
+use crate::typed;
 
-#[derive(Deserialize)]
-struct Repositories {
-    repositories: Vec<Repository>,
+/// Which read answered: changes carry a diff and complete per-file statistics, commits and
+/// stashes carry prose, and neither is ever diffed here.
+pub enum Read {
+    Changes(wire::WorkspaceChanges),
+    Commits(wire::WorkspaceCommits),
+    Stashes(wire::WorkspaceStashes),
 }
 
-#[derive(Deserialize)]
-struct Repository {
-    repository: String,
-    #[serde(default)]
-    diff: String,
-    #[serde(default)]
-    text: String,
-    #[serde(default)]
+/// One repository's answer, whichever read it came from.
+struct Body<'a> {
+    repository: &'a str,
+    text: &'a str,
     truncated: bool,
 }
 
-pub fn show(answer: Value, presentation: &Presentation, empty: &str) -> Result<()> {
-    let mut out = std::io::stdout().lock();
-    if presentation.json() {
-        crate::output::document(&mut out, presentation, &answer)?;
-        return Ok(out.flush()?);
+impl Read {
+    fn bodies(&self) -> Vec<Body<'_>> {
+        match self {
+            Read::Changes(answer) => answer
+                .repositories
+                .iter()
+                .map(|repository| Body {
+                    repository: &repository.repository,
+                    text: &repository.diff,
+                    truncated: repository.truncated,
+                })
+                .collect(),
+            Read::Commits(answer) => prose(&answer.repositories),
+            Read::Stashes(answer) => prose(&answer.repositories),
+        }
     }
-    let answer: Repositories = serde_json::from_value(answer)?;
+}
+
+fn prose(repositories: &[wire::RepositoryText]) -> Vec<Body<'_>> {
+    repositories
+        .iter()
+        .map(|repository| Body {
+            repository: &repository.repository,
+            text: &repository.text,
+            truncated: false,
+        })
+        .collect()
+}
+
+pub fn show(presentation: &Presentation, answer: &Read, empty: &str) -> Result<()> {
+    if presentation.json() {
+        return match answer {
+            Read::Changes(answer) => typed::whole(presentation, answer),
+            Read::Commits(answer) => typed::whole(presentation, answer),
+            Read::Stashes(answer) => typed::whole(presentation, answer),
+        };
+    }
+    let repositories = answer.bodies();
+    let mut out = std::io::stdout().lock();
     let terminal = std::io::stdout().is_terminal();
-    if terminal
-        && answer
-            .repositories
-            .iter()
-            .all(|repository| repository.diff.is_empty() && repository.text.is_empty())
-    {
+    if terminal && repositories.iter().all(|body| body.text.is_empty()) {
         writeln!(out, "{empty}")?;
         return Ok(());
     }
-    for repository in answer.repositories {
-        if terminal && (!repository.diff.is_empty() || !repository.text.is_empty()) {
-            writeln!(out, "{}:", repository.repository)?;
+    for body in repositories {
+        if terminal && !body.text.is_empty() {
+            writeln!(out, "{}:", body.repository)?;
         }
-        write!(out, "{}{}", repository.diff, repository.text)?;
-        if terminal && repository.truncated {
+        write!(out, "{}", body.text)?;
+        if terminal && body.truncated {
             writeln!(
                 out,
                 "\n[diff truncated at 2 MiB; per-file stats are complete]"
             )?;
         }
     }
-    Ok(())
+    Ok(out.flush()?)
 }
