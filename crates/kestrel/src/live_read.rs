@@ -60,18 +60,150 @@ pub struct Request {
     pub read: Read,
 }
 
-/// The supervisor's answer, read into the shapes the operator document publishes: the link's own
-/// vocabulary stays the supervisor's, and only this boundary maps it.
+/// The supervisor's answer in the link's own shapes, which only this module maps onto the ones
+/// the operator document publishes.
 #[derive(Deserialize)]
 #[serde(tag = "answer", rename_all = "snake_case")]
 enum Answer {
-    Listing(wire::FileListing),
-    Text(wire::FileText),
-    Changes(wire::WorkspaceChanges),
-    Commits(wire::WorkspaceCommits),
-    Stashes(wire::WorkspaceStashes),
+    Listing(Listing),
+    Text(Text),
+    Changes { repositories: Vec<RepositoryDiff> },
+    Commits { repositories: Vec<RepositoryText> },
+    Stashes { repositories: Vec<RepositoryText> },
     Refused { message: String },
     Missing { message: String },
+}
+
+#[derive(Deserialize)]
+struct Listing {
+    path: String,
+    entries: Vec<Entry>,
+    total: u64,
+    truncated: bool,
+}
+
+#[derive(Deserialize)]
+struct Entry {
+    name: String,
+    kind: EntryKind,
+    size: Option<u64>,
+    git: Option<Tracking>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum EntryKind {
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Tracking {
+    Tracked,
+    Untracked,
+    Ignored,
+}
+
+#[derive(Deserialize)]
+struct Text {
+    path: String,
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct RepositoryDiff {
+    repository: String,
+    diff: String,
+    files: Vec<FileStat>,
+    truncated: bool,
+}
+
+#[derive(Deserialize)]
+struct FileStat {
+    path: String,
+    added: Option<u64>,
+    removed: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct RepositoryText {
+    repository: String,
+    text: String,
+}
+
+impl From<Listing> for wire::FileListing {
+    fn from(listing: Listing) -> Self {
+        Self {
+            path: listing.path,
+            entries: listing.entries.into_iter().map(Into::into).collect(),
+            total: counted(listing.total),
+            truncated: listing.truncated,
+        }
+    }
+}
+
+impl From<Entry> for wire::FileEntry {
+    fn from(entry: Entry) -> Self {
+        Self {
+            name: entry.name,
+            kind: match entry.kind {
+                EntryKind::File => wire::FileEntryKind::File,
+                EntryKind::Directory => wire::FileEntryKind::Directory,
+                EntryKind::Symlink => wire::FileEntryKind::Symlink,
+                EntryKind::Other => wire::FileEntryKind::Other,
+            },
+            size: entry.size.map(counted),
+            git: entry.git.map(|tracking| match tracking {
+                Tracking::Tracked => wire::FileEntryGit::Tracked,
+                Tracking::Untracked => wire::FileEntryGit::Untracked,
+                Tracking::Ignored => wire::FileEntryGit::Ignored,
+            }),
+        }
+    }
+}
+
+impl From<Text> for wire::FileText {
+    fn from(text: Text) -> Self {
+        Self {
+            path: text.path,
+            text: text.text,
+        }
+    }
+}
+
+impl From<RepositoryDiff> for wire::RepositoryDiff {
+    fn from(diff: RepositoryDiff) -> Self {
+        Self {
+            repository: diff.repository,
+            diff: diff.diff,
+            files: diff
+                .files
+                .into_iter()
+                .map(|file| wire::FileStat {
+                    path: file.path,
+                    added: file.added.map(counted),
+                    removed: file.removed.map(counted),
+                })
+                .collect(),
+            truncated: diff.truncated,
+        }
+    }
+}
+
+impl From<RepositoryText> for wire::RepositoryText {
+    fn from(text: RepositoryText) -> Self {
+        Self {
+            repository: text.repository,
+            text: text.text,
+        }
+    }
+}
+
+fn counted(count: u64) -> i64 {
+    i64::try_from(count).unwrap_or(i64::MAX)
 }
 
 pub enum AnswerBody {
@@ -306,11 +438,17 @@ impl Reads {
 
         let outcome = match axum::body::to_bytes(arrived.body, BUFFERED_UP_TO).await {
             Ok(json) => match serde_json::from_slice::<Answer>(&json) {
-                Ok(Answer::Listing(listing)) => serialized(&listing),
-                Ok(Answer::Text(text)) => serialized(&text),
-                Ok(Answer::Changes(changes)) => serialized(&changes),
-                Ok(Answer::Commits(commits)) => serialized(&commits),
-                Ok(Answer::Stashes(stashes)) => serialized(&stashes),
+                Ok(Answer::Listing(listing)) => serialized(&wire::FileListing::from(listing)),
+                Ok(Answer::Text(text)) => serialized(&wire::FileText::from(text)),
+                Ok(Answer::Changes { repositories }) => serialized(&wire::WorkspaceChanges {
+                    repositories: repositories.into_iter().map(Into::into).collect(),
+                }),
+                Ok(Answer::Commits { repositories }) => serialized(&wire::WorkspaceCommits {
+                    repositories: repositories.into_iter().map(Into::into).collect(),
+                }),
+                Ok(Answer::Stashes { repositories }) => serialized(&wire::WorkspaceStashes {
+                    repositories: repositories.into_iter().map(Into::into).collect(),
+                }),
                 Ok(Answer::Refused { message }) => Outcome::Refused(message),
                 Ok(Answer::Missing { message }) => Outcome::Missing(message),
                 Err(_) => Outcome::NotAnswering,

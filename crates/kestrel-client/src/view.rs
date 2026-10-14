@@ -276,9 +276,9 @@ pub const WORKSPACE: Columns<wire::Workspace> = Columns::Detail(&[
     Column("started by", |record| or_absent(record.started_by.as_ref())),
     Column("continues", |record| or_absent(record.continues.as_ref())),
     Column("continued by", |record| joined(&record.continued_by)),
-    Column("held messages", |record| structured(&record.held_messages)),
-    Column("pull requests", |record| structured(&record.pull_requests)),
-    Column("state", |record| {
+    Column("held messages", |record| compound(&record.held_messages)),
+    Column("pull requests", |record| compound(&record.pull_requests)),
+    Column("unfinished session state", |record| {
         or_absent(
             record
                 .unfinished_session
@@ -319,73 +319,135 @@ pub const SESSIONS: Columns<wire::Session> = Columns::Rows(&[
         or_absent(record.worked_model.as_ref())
     }),
 ]);
-pub const SESSION: Columns<wire::Session> = Columns::Detail(&[
-    Column("id", |record| text(record.id)),
-    Column("name", |record| text(&record.name)),
-    Column("workspace", |record| text(record.workspace)),
-    Column("state", |record| text(&record.state)),
-    Column("preparing", |record| or_absent(record.preparing.as_ref())),
-    Column("status", |record| {
-        or_absent(record.exit.as_ref().map(|exit| &exit.status))
-    }),
-    Column("because", |record| {
-        or_absent(record.exit.as_ref().and_then(|exit| exit.because.as_ref()))
-    }),
-    Column("diagnostic", |record| structured(&record.diagnostic)),
-    Column("outcome message", |record| {
-        or_absent(record.outcome_message.as_ref())
-    }),
-    Column("instance", |record| or_absent(record.instance.as_ref())),
-    Column("supervisor", |record| or_absent(record.supervisor.as_ref())),
-    Column("agent", |record| text(&record.agent)),
-    Column("harness", |record| text(&record.harness)),
-    Column("model", |record| or_absent(record.model.as_ref())),
-    Column("worked model", |record| {
-        or_absent(record.worked_model.as_ref())
-    }),
-    Column("title", |record| or_absent(record.title.as_ref())),
-    Column("options", |record| option_summary(&record.options)),
-    Column("changing options", |record| {
-        record
-            .changing_options
-            .iter()
-            .map(|change| {
-                format!(
-                    "{}: {} ({})",
-                    change.option, change.value, change.participant
+/// A Session as a person reads it: the record the boundary answered, with its diagnostic as the
+/// invocation at hand words it, and its nested records as prose where a person is reading.
+pub struct SessionShown {
+    pub session: wire::Session,
+    pub diagnostic: String,
+    pub prose: bool,
+}
+
+pub const SESSION: Columns<SessionShown> =
+    Columns::Detail(&[
+        Column("id", |shown| text(shown.session.id)),
+        Column("name", |shown| text(&shown.session.name)),
+        Column("workspace", |shown| text(shown.session.workspace)),
+        Column("state", |shown| text(&shown.session.state)),
+        Column("preparing", |shown| {
+            or_absent(shown.session.preparing.as_ref())
+        }),
+        Column("status", |shown| {
+            or_absent(shown.session.exit.as_ref().map(|exit| &exit.status))
+        }),
+        Column("because", |shown| {
+            or_absent(
+                shown
+                    .session
+                    .exit
+                    .as_ref()
+                    .and_then(|exit| exit.because.as_ref()),
+            )
+        }),
+        Column("diagnostic", |shown| text(&shown.diagnostic)),
+        Column("outcome message", |shown| {
+            or_absent(shown.session.outcome_message.as_ref())
+        }),
+        Column("instance", |shown| {
+            or_absent(shown.session.instance.as_ref())
+        }),
+        Column("supervisor", |shown| {
+            or_absent(shown.session.supervisor.as_ref())
+        }),
+        Column("agent", |shown| text(&shown.session.agent)),
+        Column("harness", |shown| text(&shown.session.harness)),
+        Column("model", |shown| or_absent(shown.session.model.as_ref())),
+        Column("worked model", |shown| {
+            or_absent(shown.session.worked_model.as_ref())
+        }),
+        Column("title", |shown| or_absent(shown.session.title.as_ref())),
+        Column("options", |shown| option_summary(&shown.session.options)),
+        Column("changing options", |shown| {
+            shown
+                .session
+                .changing_options
+                .iter()
+                .map(|change| {
+                    format!(
+                        "{}: {} ({})",
+                        change.option, change.value, change.participant
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }),
+        Column("commands", |shown| {
+            shown
+                .session
+                .commands
+                .iter()
+                .map(|command| command.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }),
+        Column("enqueued at", |shown| text(&shown.session.enqueued_at)),
+        Column("started at", |shown| {
+            or_absent(shown.session.started_at.as_ref())
+        }),
+        Column("ended at", |shown| {
+            or_absent(shown.session.ended_at.as_ref())
+        }),
+        Column("lease expires at", |shown| {
+            or_absent(shown.session.lease_expires_at.as_ref())
+        }),
+        Column("connected at", |shown| {
+            or_absent(shown.session.connected_at.as_ref())
+        }),
+        Column("supervisor version", |shown| {
+            or_absent(shown.session.supervisor_version.as_ref())
+        }),
+        Column("usage", |shown| compound(&shown.session.usage)),
+        Column("depends on", |shown| {
+            if shown.prose {
+                joined(
+                    &shown
+                        .session
+                        .depends_on
+                        .iter()
+                        .map(|dependency| &dependency.name)
+                        .collect::<Vec<_>>(),
                 )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }),
-    Column("commands", |record| {
-        record
-            .commands
-            .iter()
-            .map(|command| command.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    }),
-    Column("enqueued at", |record| text(&record.enqueued_at)),
-    Column("started at", |record| or_absent(record.started_at.as_ref())),
-    Column("ended at", |record| or_absent(record.ended_at.as_ref())),
-    Column("lease expires at", |record| {
-        or_absent(record.lease_expires_at.as_ref())
-    }),
-    Column("connected at", |record| {
-        or_absent(record.connected_at.as_ref())
-    }),
-    Column("supervisor version", |record| {
-        or_absent(record.supervisor_version.as_ref())
-    }),
-    Column("usage", |record| structured(&record.usage)),
-    Column("depends on", |record| structured(&record.depends_on)),
-    Column("tools", |record| structured(&record.tools)),
-    Column("units", |record| structured(&record.units)),
-    Column("last activity at", |record| {
-        or_absent(record.last_activity_at.as_ref())
-    }),
-]);
+            } else {
+                compound(&shown.session.depends_on)
+            }
+        }),
+        Column("tools", |shown| {
+            if shown.prose {
+                lines(
+                    shown.session.tools.iter().map(|tool| {
+                        format!("{}\n{}  {}", tool.title, tool.status, tool.started_at)
+                    }),
+                )
+            } else {
+                compound(&shown.session.tools)
+            }
+        }),
+        Column("units", |shown| {
+            if shown.prose {
+                lines(
+                    shown
+                        .session
+                        .units
+                        .iter()
+                        .map(|unit| format!("{}\n{}  {}", unit.title, unit.kind, unit.started_at)),
+                )
+            } else {
+                compound(&shown.session.units)
+            }
+        }),
+        Column("last activity at", |shown| {
+            or_absent(shown.session.last_activity_at.as_ref())
+        }),
+    ]);
 pub const INTERRUPTED: Columns<wire::Session> = Columns::Detail(&[
     Column("id", |record| text(record.id)),
     Column("state", |record| text(&record.state)),
@@ -479,10 +541,8 @@ pub const OPENED: Columns<wire::Opened> = Columns::Detail(&[
     Column("session id", |record| text(record.session.id)),
 ]);
 
-fn structured(value: &impl serde::Serialize) -> String {
-    crate::output::rendered(Some(
-        &serde_json::to_value(value).expect("a wire field serializes"),
-    ))
+fn lines(said: impl Iterator<Item = String>) -> String {
+    said.collect::<Vec<_>>().join("\n")
 }
 
 fn session_state_line(state: &wire::TranscriptSessionState) -> String {
@@ -536,7 +596,7 @@ pub const POSTED: Columns<wire::Posted> = Columns::Value(Column("id", |record| {
         .as_ref()
         .map(|session| text(session.id))
         .or_else(|| record.held_message.as_ref().map(|held| text(held.id)))
-        .unwrap_or_else(|| "-".to_owned())
+        .unwrap_or_else(|| crate::output::ABSENT.to_owned())
 }));
 
 fn option_summary(options: &[wire::SessionOption]) -> String {

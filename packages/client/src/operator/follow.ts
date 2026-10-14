@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import type { Change } from "./generated";
 import { useParticipant } from "./participant";
 import { operator, refetchNoticed, refetchOrganization } from "./queries";
+import { ChangesEventNames } from "./sse.gen";
 import { type Subscribed, TabStream } from "./tab-stream";
 import { FollowSession, TranscriptMirror, type TranscriptSnapshot } from "./transcript";
 
@@ -26,10 +27,13 @@ export function followChanges(
 	return stream.subscribe({
 		subscription: () => ({ kind: "notices", organization }),
 		deliver: (event) => {
-			if (event.event === "change") {
+			if (event.event === ChangesEventNames.Change) {
 				const change = changeOf(event.data);
 				if (change) void refetchNoticed(client, organization, change);
-			} else if (event.event === "open" || event.event === "resync") {
+			} else if (
+				event.event === ChangesEventNames.ChangesOpen ||
+				event.event === ChangesEventNames.ChangesResync
+			) {
 				void refetchOrganization(client, organization);
 			}
 		},

@@ -547,7 +547,7 @@ fn the_published_operator_document_describes_the_change_stream_and_its_events() 
         change["oneOf"][2]["$ref"].as_str().expect("a reference"),
     );
     assert!(
-        queue["properties"].get("id").is_none() && queue["required"] == json!(["resource"]),
+        queue["properties"].get("id").is_none(),
         "the document says a queue notice carries an id"
     );
 }

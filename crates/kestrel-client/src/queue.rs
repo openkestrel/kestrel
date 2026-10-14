@@ -19,35 +19,13 @@ pub(crate) struct Row {
     pub(crate) enqueued_at: String,
 }
 
-fn row(
-    position: Option<i64>,
-    name: &str,
-    state: &str,
-    agent: &str,
-    workspace: &impl std::fmt::Display,
-    enqueued_at: &str,
-    why: String,
-) -> Row {
-    Row {
-        position,
-        name: name.to_owned(),
-        state: state.to_owned(),
-        agent: agent.to_owned(),
-        workspace: workspace.to_string(),
-        enqueued_at: enqueued_at.to_owned(),
-        why,
-    }
-}
-
 pub fn show(
     presentation: &Presentation,
     snapshot: &wire::Queue,
     invocation: &Invocation,
 ) -> Result<()> {
     if presentation.json() {
-        let mut out = std::io::stdout().lock();
-        crate::output::document(&mut out, presentation, &serde_json::to_value(snapshot)?)?;
-        return out.flush().context("writing to standard output");
+        return typed::whole(presentation, snapshot);
     }
     let slots = &snapshot.active_work;
     let instances = &snapshot.instances;
@@ -104,77 +82,65 @@ pub fn show(
     let mut rows = Vec::new();
     let mut diagnoses = Vec::new();
     for occupant in &slots.occupants {
-        rows.push(row(
-            None,
-            &occupant.name,
-            occupant.phase.as_ref(),
-            &occupant.agent,
-            &occupant.workspace,
-            &occupant.enqueued_at,
-            match occupant.phase {
+        rows.push(Row {
+            position: None,
+            name: occupant.name.clone(),
+            state: occupant.phase.to_string(),
+            agent: occupant.agent.clone(),
+            workspace: occupant.workspace.to_string(),
+            enqueued_at: occupant.enqueued_at.clone(),
+            why: match occupant.phase {
                 wire::OccupantPhase::Working => "in a turn",
                 wire::OccupantPhase::Trailing => "answered; its agent is still working",
             }
             .to_owned(),
-        ));
+        });
     }
     for queued in &snapshot.queued {
-        rows.push(row(
-            queued.position,
-            &queued.name,
-            "queued",
-            &queued.agent,
-            &queued.workspace,
-            &queued.enqueued_at,
-            why(
-                Standing::of("queued"),
-                &queued.reasons,
-                invocation,
-                presentation,
-            ),
-        ));
+        let standing = Standing::of(State::Queued);
+        rows.push(Row {
+            position: queued.position,
+            name: queued.name.clone(),
+            state: standing.state.as_str().to_owned(),
+            agent: queued.agent.clone(),
+            workspace: queued.workspace.to_string(),
+            enqueued_at: queued.enqueued_at.clone(),
+            why: why(&standing, &queued.reasons, invocation, presentation),
+        });
         diagnoses.extend(diagnostics(&queued.name, &queued.reasons));
     }
     for waiting in &snapshot.waiting {
-        rows.push(row(
-            waiting.position,
-            &waiting.name,
-            "waiting",
-            &waiting.agent,
-            &waiting.workspace,
-            &waiting.enqueued_at,
-            why(
-                Standing {
-                    pending_since: waiting.pending_since.as_deref(),
-                    ..Standing::of("waiting")
-                },
-                &waiting.reasons,
-                invocation,
-                presentation,
-            ),
-        ));
+        let standing = Standing {
+            pending_since: waiting.pending_since.as_deref(),
+            ..Standing::of(State::Waiting)
+        };
+        rows.push(Row {
+            position: waiting.position,
+            name: waiting.name.clone(),
+            state: standing.state.as_str().to_owned(),
+            agent: waiting.agent.clone(),
+            workspace: waiting.workspace.to_string(),
+            enqueued_at: waiting.enqueued_at.clone(),
+            why: why(&standing, &waiting.reasons, invocation, presentation),
+        });
         diagnoses.extend(diagnostics(&waiting.name, &waiting.reasons));
     }
     for unbriefed in &snapshot.unbriefed {
-        rows.push(row(
-            unbriefed.position,
-            &unbriefed.name,
-            "unbriefed",
-            &unbriefed.agent,
-            &unbriefed.workspace,
-            &unbriefed.enqueued_at,
-            why(
-                Standing {
-                    preparing: unbriefed.preparing.as_ref(),
-                    brief_since: unbriefed.brief_since.as_deref(),
-                    pending_since: unbriefed.pending_since.as_deref(),
-                    ..Standing::of("unbriefed")
-                },
-                &unbriefed.reasons,
-                invocation,
-                presentation,
-            ),
-        ));
+        let standing = Standing {
+            preparing: unbriefed.preparing.as_ref(),
+            brief_since: unbriefed.brief_since.as_deref(),
+            pending_since: unbriefed.pending_since.as_deref(),
+            ..Standing::of(State::Unbriefed)
+        };
+        rows.push(Row {
+            position: unbriefed.position,
+            name: unbriefed.name.clone(),
+            state: standing.state.as_str().to_owned(),
+            agent: unbriefed.agent.clone(),
+            workspace: unbriefed.workspace.to_string(),
+            enqueued_at: unbriefed.enqueued_at.clone(),
+            why: why(&standing, &unbriefed.reasons, invocation, presentation),
+        });
         diagnoses.extend(diagnostics(&unbriefed.name, &unbriefed.reasons));
     }
     if !rows.is_empty() {
@@ -207,16 +173,40 @@ fn diagnostics<'a>(
     })
 }
 
-/// A Session standing in the queue: what it is doing, and since when.
+#[derive(Clone, Copy)]
+enum State {
+    Queued,
+    Waiting,
+    Unbriefed,
+}
+
+impl State {
+    const fn as_str(self) -> &'static str {
+        match self {
+            State::Queued => "queued",
+            State::Waiting => "waiting",
+            State::Unbriefed => "unbriefed",
+        }
+    }
+
+    const fn unexplained(self) -> &'static str {
+        match self {
+            State::Queued => "ready",
+            State::Waiting => "waiting for a turn",
+            State::Unbriefed => "getting ready for its first message",
+        }
+    }
+}
+
 struct Standing<'a> {
-    state: &'a str,
+    state: State,
     preparing: Option<&'a wire::UnbriefedSessionPreparing>,
     brief_since: Option<&'a str>,
     pending_since: Option<&'a str>,
 }
 
-impl<'a> Standing<'a> {
-    fn of(state: &'a str) -> Self {
+impl Standing<'_> {
+    const fn of(state: State) -> Self {
         Self {
             state,
             preparing: None,
@@ -227,7 +217,7 @@ impl<'a> Standing<'a> {
 }
 
 fn why(
-    standing: Standing<'_>,
+    standing: &Standing<'_>,
     reasons: &[wire::QueueReason],
     invocation: &Invocation,
     presentation: &Presentation,
@@ -255,14 +245,7 @@ fn why(
             .map(|reason| reason_in_words(reason, invocation, presentation)),
     );
     if said.is_empty() {
-        said.push(
-            match standing.state {
-                "waiting" => "waiting for a turn",
-                "unbriefed" => "getting ready for its first message",
-                _ => "ready",
-            }
-            .to_owned(),
-        );
+        said.push(standing.state.unexplained().to_owned());
     }
     said.join("; ")
 }

@@ -39,7 +39,7 @@ pub async fn show(
 
     let mut out = std::io::stdout().lock();
     if presentation.json() {
-        crate::output::document(&mut out, presentation, &serde_json::to_value(&read)?)?;
+        crate::typed::document(&mut out, presentation, &read)?;
     } else {
         let decorated = out.is_terminal() && !undecorated_by_request();
         write!(out, "{}", summary(&read, invocation, named, decorated))?;

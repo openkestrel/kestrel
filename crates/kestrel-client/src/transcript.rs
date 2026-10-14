@@ -199,9 +199,7 @@ fn write_activity(
     activity: &wire::Activity,
 ) -> Result<(), Cut> {
     let wrote = if presentation.json() {
-        serde_json::to_value(activity)
-            .map_err(anyhow::Error::from)
-            .and_then(|whole| crate::output::document(out, presentation, &whole))
+        crate::typed::document(out, presentation, activity)
     } else {
         writeln!(out, "{}", activity_line(activity)).map_err(anyhow::Error::from)
     };

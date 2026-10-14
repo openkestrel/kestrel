@@ -204,14 +204,14 @@ async fn changed(store: &Store, resource: fanout::Resource) -> anyhow::Result<wi
     Ok(match resource {
         fanout::Resource::Workspace(id) => wire::Change::ChangeWorkspace(wire::ChangeWorkspace {
             resource: "workspace".into(),
-            id: id.to_string().parse().expect("a Workspace UUID"),
+            id: wire_id(&id),
             workspace: tx.workspaces().get(id).await?.name,
         }),
         fanout::Resource::Session(id) => {
             let session = tx.workspaces().session(id).await?;
             wire::Change::ChangeSession(wire::ChangeSession {
                 resource: "session".into(),
-                id: id.to_string().parse().expect("a Session UUID"),
+                id: wire_id(&id),
                 workspace: tx.workspaces().get(session.workspace).await?.name,
             })
         }
@@ -253,7 +253,7 @@ fn transcript_session_state(observed: ObservedSession) -> wire::TranscriptSessio
         observation,
     } = observed;
     wire::TranscriptSessionState {
-        session_id: session_id.map(|id| id.to_string().parse().expect("a Session UUID")),
+        session_id: session_id.map(|id| wire_id(&id)),
         tools: state.tools.into_iter().map(running_tool).collect(),
         units: state.units.into_iter().map(running_unit).collect(),
         message_buffering: state.message_buffering,
@@ -277,9 +277,7 @@ fn transcript_kind(kind: log::Kind) -> wire::TranscriptKind {
 fn recorded(entry: log::StoredTranscriptEntry) -> serde_json::Result<wire::Recorded> {
     Ok(wire::Recorded {
         kind: transcript_kind(entry.kind),
-        session_id: entry
-            .session_id
-            .map(|id| id.to_string().parse().expect("a Session UUID")),
+        session_id: entry.session_id.map(|id| wire_id(&id)),
         seq: entry.seq,
         appended_at: entry.appended_at.to_string(),
         entry: serde_json::from_value(entry.entry)?,
@@ -582,7 +580,7 @@ fn selected(integrations: Vec<domain::SelectedIntegration>) -> Vec<wire::Selecte
         .map(|selected| wire::SelectedIntegration {
             repository: selected.repository,
             integration: selected.name,
-            integration_id: selected.integration.to_string().parse().expect("a uuid"),
+            integration_id: wire_id(&selected.integration),
         })
         .collect()
 }
@@ -919,11 +917,7 @@ fn warns_cache(harness: &str, category: Option<&str>) -> bool {
 impl From<Organization> for wire::Organization {
     fn from(organization: Organization) -> Self {
         Self {
-            id: organization
-                .id
-                .to_string()
-                .parse()
-                .expect("an Organization UUID"),
+            id: wire_id(&organization.id),
             name: organization.name,
             max_live_instances: organization
                 .max_live_instances
@@ -935,7 +929,7 @@ impl From<Organization> for wire::Organization {
 impl From<Project> for wire::Project {
     fn from(project: Project) -> Self {
         Self {
-            id: project.id.to_string().parse().expect("a Project UUID"),
+            id: wire_id(&project.id),
             name: project.name,
             repositories: project.repositories,
             integrations: selected(project.integrations),
@@ -947,7 +941,7 @@ impl From<Project> for wire::Project {
 impl From<Agent> for wire::Agent {
     fn from(agent: Agent) -> Self {
         Self {
-            id: agent.id.to_string().parse().expect("an Agent UUID"),
+            id: wire_id(&agent.id),
             name: agent.name,
             harness: agent.harness,
             model: agent.declared.model,
@@ -1033,7 +1027,7 @@ fn pull_request_availability(value: pull_request::Availability) -> wire::PullReq
                     head_branch: pr.head_branch,
                     head_revision: pr.head_revision,
                     updated_at: pr.updated_at.to_string(),
-                    event: pr.event.to_string().parse().expect("an Event UUID"),
+                    event: wire_id(&pr.event),
                 })
                 .collect()
         }),
@@ -1123,8 +1117,6 @@ pub(crate) fn session_observation(
     }
 }
 
-/// What the Workspace's live work reads: a live report, no Instance, or an Instance that isn't
-/// answering, each carrying the last durable report and every earlier Instance's.
 pub(crate) fn workspace_work(work: crate::live_work::Work) -> wire::WorkspaceWork {
     let crate::live_work::Work {
         current,
@@ -1294,7 +1286,7 @@ pub(crate) async fn workspace_record(
     let unfinished_session = workspace::unfinished(store, workspace.id)
         .await?
         .map(|session| wire::UnfinishedSession {
-            id: session.id.to_string().parse().expect("a Session UUID"),
+            id: wire_id(&session.id),
             name: session.name,
             state: unfinished_state(session.state),
             preparing: session.preparing.map(unfinished_preparing),
@@ -1306,7 +1298,7 @@ pub(crate) async fn workspace_record(
         .collect();
 
     Ok(wire::Workspace {
-        id: workspace.id.to_string().parse().expect("a Workspace UUID"),
+        id: wire_id(&workspace.id),
         name: workspace.name,
         organization: workspace.organization.name,
         project: workspace.project.name,
@@ -1328,9 +1320,7 @@ pub(crate) async fn workspace_record(
         opened_at: workspace.opened_at.to_string(),
         last_active_at: workspace.last_active_at.to_string(),
         sealed_at: workspace.sealed_at.map(|at| at.to_string()),
-        continues: workspace
-            .continues
-            .map(|workspace| workspace.to_string().parse().expect("a Workspace UUID")),
+        continues: workspace.continues.map(|workspace| wire_id(&workspace)),
         started_by: workspace.started_by.map(|started| match started {
             StartedBy::Event(event) => event.to_string(),
             StartedBy::Participant(participant) => participant,
@@ -1365,13 +1355,9 @@ pub(crate) fn session_record(
         .map(|option| shown_option(option, &harness))
         .collect();
     wire::Session {
-        id: session.id.to_string().parse().expect("a Session UUID"),
+        id: wire_id(&session.id),
         name: session.name,
-        workspace: session
-            .workspace
-            .to_string()
-            .parse()
-            .expect("a Workspace UUID"),
+        workspace: wire_id(&session.workspace),
         state: session_state(session.state),
         preparing: session.preparing.map(session_preparing),
         exit: session.exit.map(session_exit),
@@ -1427,7 +1413,7 @@ pub(crate) fn session_record(
             .depends_on
             .into_iter()
             .map(|blocker| wire::SessionReference {
-                id: blocker.id.to_string().parse().expect("a Session UUID"),
+                id: blocker.id.to_string(),
                 name: blocker.name,
             })
             .collect(),
@@ -1464,7 +1450,7 @@ impl From<Trigger> for wire::Trigger {
         let correlation = trigger.templates.correlation;
 
         Self {
-            id: trigger.id.to_string().parse().expect("a Trigger UUID"),
+            id: wire_id(&trigger.id),
             organization: trigger.organization.name,
             name: trigger.name,
             state: match trigger.state {
@@ -1838,6 +1824,11 @@ fn closed<T: DeserializeOwned>(sent: &serde_json::Value) -> Result<T, String> {
     }
 }
 
+/// A body whose schema the document leaves open, refused by the path of what it could not read.
+fn open<T: DeserializeOwned>(sent: &serde_json::Value) -> Result<T, Refused> {
+    serde_path_to_error::deserialize(sent).map_err(|error| malformed(None, error.to_string()))
+}
+
 fn project_declaration(declaration: wire::ProjectDeclaration) -> declaration::Project {
     declaration::Project {
         name: declaration.name,
@@ -2011,12 +2002,10 @@ async fn forget_credential(
 impl From<SubscriptionProfile> for wire::SubscriptionProfile {
     fn from(profile: SubscriptionProfile) -> Self {
         Self {
-            id: profile.id.to_string().parse().expect("a Profile UUID"),
+            id: wire_id(&profile.id),
             name: profile.name,
             owner: profile.owner,
-            owner_operator: profile
-                .owner_operator
-                .map(|id| id.to_string().parse().expect("an Operator UUID")),
+            owner_operator: profile.owner_operator.map(|id| wire_id(&id)),
         }
     }
 }
@@ -2601,11 +2590,7 @@ fn integration_record(integration: Integration, organization: &str) -> wire::Int
     };
 
     wire::Integration {
-        id: integration
-            .id
-            .to_string()
-            .parse()
-            .expect("an Integration UUID"),
+        id: wire_id(&integration.id),
         name: integration.name,
         kind,
         repository,
@@ -2627,7 +2612,7 @@ fn integration_record(integration: Integration, organization: &str) -> wire::Int
             .canceled_posts
             .into_iter()
             .map(|post| wire::CanceledPost {
-                session: post.session.to_string().parse().expect("a Session UUID"),
+                session: wire_id(&post.session),
                 turn: post.turn,
                 canceled_at: post.canceled_at.to_string(),
                 reason: post.because,
@@ -2716,11 +2701,7 @@ async fn change_integration(
             ),
         ));
     }
-    let change: wire::IntegrationChange =
-        serde_json::from_value(change).map_err(|error| Refused::Malformed {
-            field: None,
-            why: error.to_string(),
-        })?;
+    let change: wire::IntegrationChange = open(&change)?;
     if let Some(name) = &change.name {
         named("change_integration", name)?;
     }
@@ -3103,8 +3084,7 @@ async fn test_trigger(
     tested: Result<Json<serde_json::Value>, JsonRejection>,
 ) -> Result<Json<wire::TriggerTestResult>, Refused> {
     let Json(sent) = tested?;
-    let tested: wire::TriggerTest = serde_path_to_error::deserialize(&sent)
-        .map_err(|error| malformed(None, error.to_string()))?;
+    let tested: wire::TriggerTest = open(&sent)?;
     let declared = match tested.declared.flatten() {
         Some(_) => Some(trigger_file(&sent["declared"])?),
         None => None,
@@ -3369,7 +3349,7 @@ async fn instances(
     Ok(Json(
         held.into_iter()
             .map(|held| wire::HeldInstance {
-                workspace: held.workspace.to_string().parse().expect("a uuid"),
+                workspace: wire_id(&held.workspace),
                 instance: held.instance,
                 because: held.because,
             })
@@ -3449,7 +3429,7 @@ fn queue_record(snapshot: scheduling::Snapshot) -> wire::Queue {
                 .into_iter()
                 .map(|session| wire::Occupant {
                     name: session.name,
-                    workspace: session.workspace.to_string().parse().expect("a uuid"),
+                    workspace: wire_id(&session.workspace),
                     agent: session.agent.name,
                     phase: match session.state {
                         domain::SessionState::Trailing => wire::OccupantPhase::Trailing,
@@ -3471,12 +3451,7 @@ fn queue_record(snapshot: scheduling::Snapshot) -> wire::Queue {
             .map(|queued| wire::QueuedSession {
                 position: queued.position.map(|position| position as i64),
                 name: queued.session.name,
-                workspace: queued
-                    .session
-                    .workspace
-                    .to_string()
-                    .parse()
-                    .expect("a uuid"),
+                workspace: wire_id(&queued.session.workspace),
                 agent: queued.session.agent.name,
                 reasons: reasons(queued.reasons),
                 enqueued_at: queued.session.enqueued_at.to_string(),
@@ -3488,12 +3463,7 @@ fn queue_record(snapshot: scheduling::Snapshot) -> wire::Queue {
             .map(|waiting| wire::WaitingSession {
                 position: waiting.position.map(|position| position as i64),
                 name: waiting.session.name,
-                workspace: waiting
-                    .session
-                    .workspace
-                    .to_string()
-                    .parse()
-                    .expect("a uuid"),
+                workspace: wire_id(&waiting.session.workspace),
                 agent: waiting.session.agent.name,
                 pending_since: waiting.pending_since.map(|since| since.to_string()),
                 reasons: reasons(waiting.reasons),
@@ -3508,12 +3478,7 @@ fn queue_record(snapshot: scheduling::Snapshot) -> wire::Queue {
                 brief_since: unbriefed.brief_since.map(|since| since.to_string()),
                 reasons: reasons(unbriefed.reasons),
                 name: unbriefed.session.name,
-                workspace: unbriefed
-                    .session
-                    .workspace
-                    .to_string()
-                    .parse()
-                    .expect("a uuid"),
+                workspace: wire_id(&unbriefed.session.workspace),
                 agent: unbriefed.session.agent.name,
                 preparing: unbriefed
                     .session
@@ -4395,7 +4360,7 @@ fn transcribed(
                 if joined.is_none() {
                     let mut follower = control_plane.followers.join(workspace, name.clone());
                     yield transcript_event(None, wire::Event::FollowerEvent(wire::FollowerEvent {
-                        id: follower.id.to_string().parse().expect("a follower UUID"),
+                        id: wire_id(&follower.id),
                         lease_seconds: follower
                             .lease
                             .as_secs()
@@ -4982,7 +4947,7 @@ fn diagnostic_message(diagnostic: &wire::Diagnostic) -> &str {
 impl From<domain::Operator> for wire::Operator {
     fn from(operator: domain::Operator) -> Self {
         Self {
-            id: operator.id.to_string().parse().expect("an Operator UUID"),
+            id: wire_id(&operator.id),
             name: operator.name,
         }
     }

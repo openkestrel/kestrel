@@ -62,8 +62,16 @@ pub fn compound(value: &impl Serialize) -> String {
 
 pub fn whole(presentation: &Presentation, answer: &impl Serialize) -> Result<()> {
     let mut out = std::io::stdout().lock();
-    output::document(&mut out, presentation, &serde_json::to_value(answer)?)?;
+    document(&mut out, presentation, answer)?;
     out.flush().context("writing to standard output")
+}
+
+pub fn document(
+    out: &mut impl Write,
+    presentation: &Presentation,
+    answer: &impl Serialize,
+) -> Result<()> {
+    output::document(out, presentation, &serde_json::to_value(answer)?)
 }
 
 /// One record of a stream as it arrives, unclipped because a streamed entry is prose; a filter
@@ -75,9 +83,7 @@ pub fn record<T: Serialize>(
     record: &T,
 ) -> Result<()> {
     match presentation {
-        Presentation::Json(_) => {
-            output::document(out, presentation, &serde_json::to_value(record)?)?
-        }
+        Presentation::Json(_) => document(out, presentation, record)?,
         Presentation::Delimited => writeln!(out, "{}", output::delimited(&columns.cells(record)))?,
         Presentation::Human(_) => writeln!(out, "{}", columns.cells(record).join(output::GAP))?,
     }
@@ -161,9 +167,7 @@ fn written<T>(
     records: &[T],
 ) -> Result<()> {
     match presentation {
-        Presentation::Json(_) => {
-            output::document(out, presentation, &serde_json::to_value(whole)?)?
-        }
+        Presentation::Json(_) => document(out, presentation, whole)?,
         Presentation::Delimited => {
             for record in records {
                 writeln!(out, "{}", output::delimited(&columns.cells(record)))?;
@@ -182,36 +186,6 @@ fn written<T>(
     }
 
     Ok(())
-}
-
-pub fn show_with<T: Serialize>(
-    presentation: &Presentation,
-    columns: &Columns<T>,
-    record: &T,
-    cell: impl Fn(&str, String) -> String,
-) -> Result<()> {
-    if presentation.json() {
-        return show(presentation, columns, record);
-    }
-    let labels: Vec<String> = columns
-        .all()
-        .iter()
-        .map(|column| column.0.to_owned())
-        .collect();
-    let cells: Vec<String> = columns
-        .all()
-        .iter()
-        .map(|column| cell(column.0, (column.1)(record)))
-        .collect();
-    let mut out = std::io::stdout().lock();
-    match presentation {
-        Presentation::Human(width) => {
-            output::table(&mut out, &columns.shape(), &labels, &[cells], *width)?
-        }
-        Presentation::Delimited => writeln!(out, "{}", output::delimited(&cells))?,
-        Presentation::Json(_) => unreachable!(),
-    }
-    out.flush().context("writing to standard output")
 }
 
 #[cfg(test)]
@@ -282,12 +256,21 @@ mod tests {
         serde_json::from_value(record).unwrap()
     }
 
-    fn session_output(
+    fn session_shown(
         presentation: &Presentation,
-        columns: &Columns<kestrel_operator_types::Session>,
         record: &kestrel_operator_types::Session,
     ) -> String {
-        said(presentation, columns, record, std::slice::from_ref(record))
+        let shown = crate::view::SessionShown {
+            session: record.clone(),
+            diagnostic: output::ABSENT.to_owned(),
+            prose: matches!(presentation, Presentation::Human(_)),
+        };
+        said(
+            presentation,
+            &crate::view::SESSION,
+            record,
+            std::slice::from_ref(&shown),
+        )
     }
 
     #[test]
@@ -295,11 +278,11 @@ mod tests {
         let record = session(
             serde_json::json!({"tools":[{"call_id":"one","title":"read README.md","status":"in_progress","tool_kind":"read","started_at":"2026-09-30T12:00:00Z"}]}),
         );
-        let shown = session_output(&Presentation::Delimited, &crate::view::SESSION, &record);
+        let shown = session_shown(&Presentation::Delimited, &record);
         assert!(shown.contains("read README.md"));
         assert!(shown.contains("in_progress"));
         assert!(shown.contains("2026-09-30T12:00:00Z"));
-        let shown = session_output(&Presentation::Human(240), &crate::view::SESSION, &record);
+        let shown = session_shown(&Presentation::Human(240), &record);
         assert!(shown.contains("read README.md"));
         assert!(shown.contains("in_progress"));
         assert!(shown.contains("2026-09-30T12:00:00Z"));
@@ -310,7 +293,7 @@ mod tests {
         let record = session(
             serde_json::json!({"units":[{"id":"task","kind":"background_task","title":"cargo test","started_at":"2026-10-02T12:00:00Z"}]}),
         );
-        let shown = session_output(&Presentation::Human(240), &crate::view::SESSION, &record);
+        let shown = session_shown(&Presentation::Human(240), &record);
         assert!(shown.contains("cargo test"), "{shown}");
         assert!(shown.contains("background_task"), "{shown}");
         assert!(shown.contains("2026-10-02T12:00:00Z"), "{shown}");
@@ -321,10 +304,15 @@ mod tests {
         let record = session(
             serde_json::json!({"state":"trailing","last_activity_at":"2026-10-02T12:00:00Z"}),
         );
-        let shown = session_output(&Presentation::Human(240), &crate::view::SESSION, &record);
+        let shown = session_shown(&Presentation::Human(240), &record);
         assert!(shown.contains("trailing"), "{shown}");
         assert!(shown.contains("2026-10-02T12:00:00Z"), "{shown}");
-        let listed = session_output(&Presentation::Delimited, &crate::view::SESSIONS, &record);
+        let listed = said(
+            &Presentation::Delimited,
+            &crate::view::SESSIONS,
+            &record,
+            std::slice::from_ref(&record),
+        );
         assert!(listed.contains("trailing"), "{listed}");
     }
 

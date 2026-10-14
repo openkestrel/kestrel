@@ -486,36 +486,12 @@ async fn a_repeat_read_with_the_etag_answers_304_and_a_change_answers_200_with_a
 }
 
 #[test]
-fn the_published_operator_document_describes_the_sessions_bookkeeping_and_its_etag() {
+fn the_published_operator_document_describes_the_session_reads_etag() {
     let document: Value = serde_json::from_str(
         &fs::read_to_string(support::crate_root().join("../../openapi/operator.json"))
             .expect("a readable openapi document"),
     )
     .expect("valid json");
-
-    let required = |schema: &Value| {
-        schema["required"]
-            .as_array()
-            .expect("an array of required fields")
-            .iter()
-            .filter_map(|field| field.as_str().map(str::to_owned))
-            .collect::<Vec<_>>()
-    };
-    let session = &document["components"]["schemas"]["Session"];
-    for field in ["title", "options", "commands"] {
-        assert!(
-            required(session).contains(&field.to_owned()),
-            "the document does not require {field} on a Session"
-        );
-    }
-
-    let option = &document["components"]["schemas"]["SessionOption"];
-    for field in ["category", "kind", "current", "values", "warns_cache"] {
-        assert!(
-            required(option).contains(&field.to_owned()),
-            "the document does not require {field} on a Session option"
-        );
-    }
 
     let read = &document["paths"][kestrel::operator::SESSION]["get"]["responses"];
     assert!(

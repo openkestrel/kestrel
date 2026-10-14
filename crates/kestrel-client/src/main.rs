@@ -1446,11 +1446,7 @@ async fn run(
                 .await?;
             let mut out = std::io::stdout().lock();
             if presentation.json() {
-                crate::output::document(
-                    &mut out,
-                    &presentation,
-                    &serde_json::to_value(repositories)?,
-                )?;
+                typed::document(&mut out, &presentation, &repositories)?;
             } else {
                 for repository in repositories.repositories {
                     writeln!(
@@ -1920,23 +1916,26 @@ async fn run(
         Command::Workspace(
             command @ (WorkspaceCommand::Commits { .. } | WorkspaceCommand::Stashes { .. }),
         ) => {
-            let (workspace, read) = match command {
-                WorkspaceCommand::Commits { workspace } => (workspace, "commits"),
-                WorkspaceCommand::Stashes { workspace } => (workspace, "stashes"),
-                _ => unreachable!(),
-            };
             let organization = scoping.resolve().await?.organization;
-            let path = [
-                "organizations",
-                &organization,
-                "workspaces",
-                &workspace,
-                read,
-            ];
-            let answer = if read == "commits" {
-                changes::Read::Commits(api.get_as::<wire::WorkspaceCommits>(&path).await?)
-            } else {
-                changes::Read::Stashes(api.get_as::<wire::WorkspaceStashes>(&path).await?)
+            let path = |workspace, read| {
+                [
+                    "organizations",
+                    organization.as_str(),
+                    "workspaces",
+                    workspace,
+                    read,
+                ]
+            };
+            let (workspace, read, answer) = match command {
+                WorkspaceCommand::Commits { workspace } => {
+                    let commits = api.get_as(&path(&workspace, "commits")).await?;
+                    (workspace, "commits", changes::Read::Commits(commits))
+                }
+                WorkspaceCommand::Stashes { workspace } => {
+                    let stashes = api.get_as(&path(&workspace, "stashes")).await?;
+                    (workspace, "stashes", changes::Read::Stashes(stashes))
+                }
+                _ => unreachable!(),
             };
             changes::show(
                 &presentation,
@@ -2572,8 +2571,10 @@ fn shown_integration(
 }
 
 fn direction(given: &str) -> Result<wire::Direction, String> {
-    serde_json::from_value(Value::from(given))
-        .map_err(|_| format!("{given} is not a direction: inbound or outbound"))
+    [wire::Direction::Inbound, wire::Direction::Outbound]
+        .into_iter()
+        .find(|direction| direction.as_str() == given)
+        .ok_or_else(|| format!("{given} is not a direction: inbound or outbound"))
 }
 
 /// A failed Session is still a successful read: its diagnostic is shown, never raised.
@@ -2582,46 +2583,16 @@ fn shown_session(
     invocation: &Invocation,
     session: &wire::Session,
 ) -> Result<()> {
-    typed::show_with(presentation, &view::SESSION, session, |label, cell| {
-        if matches!(presentation, Presentation::Human(_)) {
-            match label {
-                "tools" => {
-                    return session
-                        .tools
-                        .iter()
-                        .map(|tool| format!("{}\n{}  {}", tool.title, tool.status, tool.started_at))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                }
-                "units" => {
-                    return session
-                        .units
-                        .iter()
-                        .map(|unit| format!("{}\n{}  {}", unit.title, unit.kind, unit.started_at))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                }
-                "depends on" => {
-                    return typed::joined(
-                        &session
-                            .depends_on
-                            .iter()
-                            .map(|dependency| &dependency.name)
-                            .collect::<Vec<_>>(),
-                    );
-                }
-                _ => {}
-            }
-        }
-        if label == "diagnostic" {
-            session.diagnostic.as_ref().map_or_else(
-                || "-".to_owned(),
-                |diagnostic| diagnostic::inline(diagnostic, invocation),
-            )
-        } else {
-            cell
-        }
-    })
+    let shown = view::SessionShown {
+        session: session.clone(),
+        diagnostic: session.diagnostic.as_ref().map_or_else(
+            || crate::output::ABSENT.to_owned(),
+            |diagnostic| diagnostic::inline(diagnostic, invocation),
+        ),
+        prose: matches!(presentation, Presentation::Human(_)),
+    };
+
+    typed::show_as(presentation, &view::SESSION, session, &shown)
 }
 
 fn warn_about_cache(changed: &wire::Session, named: &str) {
@@ -2813,7 +2784,7 @@ fn trigger_document(file: &str) -> Result<wire::TriggerFile> {
 fn declaration_document(document: Value) -> Result<wire::TriggerFile> {
     let typed: wire::TriggerFile = serde_json::from_value(document.clone())
         .context(Failed::new(Exit::Usage, "reading the declaration file"))?;
-    match unread_field(&document, &typed) {
+    match unread_field(&document, &serde_json::to_value(&typed)?) {
         Some(field) => bail!(Failed::new(
             Exit::Usage,
             format!("the declaration file: {field}")
@@ -2822,22 +2793,31 @@ fn declaration_document(document: Value) -> Result<wire::TriggerFile> {
     }
 }
 
-/// The generated entry reads past a field it does not know, so a document with one is refused
+/// The generated file reads past a field it does not know, so a document with one is refused
 /// rather than sent with the field silently dropped.
-fn unread_field(document: &Value, typed: &wire::TriggerFile) -> Option<String> {
-    let read = serde_json::to_value(typed).ok()?;
-    for (name, entry) in document.get("triggers")?.as_object()? {
-        let kept = read.get("triggers")?.get(name)?.as_object()?;
-        if let Some(field) = entry
-            .as_object()?
-            .keys()
-            .find(|field| !kept.contains_key(*field))
-        {
-            return Some(format!("triggers.{name}: unknown field `{field}`"));
+fn unread_field(sent: &Value, read: &Value) -> Option<String> {
+    fn within(sent: &Value, read: &Value, path: &mut Vec<String>) -> Option<String> {
+        for (name, value) in sent.as_object()? {
+            let Some(kept) = read.get(name) else {
+                return Some(name.clone());
+            };
+            path.push(name.clone());
+            if let Some(field) = within(value, kept, path) {
+                return Some(field);
+            }
+            path.pop();
         }
+
+        None
     }
 
-    None
+    let mut path = Vec::new();
+    let field = within(sent, read, &mut path)?;
+    Some(if path.is_empty() {
+        format!("unknown field `{field}`")
+    } else {
+        format!("{}: unknown field `{field}`", path.join("."))
+    })
 }
 
 fn parsed(text: &str) -> Result<Value> {

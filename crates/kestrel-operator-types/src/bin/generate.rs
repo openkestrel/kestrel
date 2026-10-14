@@ -89,7 +89,7 @@ fn write_output(path: &Path, content: &[u8], check: bool) -> Result<()> {
     if check {
         if fs::read(path).ok().as_deref() != Some(content) {
             return Err(anyhow!(
-                "{} is stale; run cargo run -p kestrel-operator-types --bin generate",
+                "{} is stale; run cargo run -p kestrel-operator-types --bin generate --features generate",
                 path.display()
             ));
         }

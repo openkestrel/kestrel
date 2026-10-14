@@ -8,6 +8,7 @@ import type {
 	TranscriptKind,
 	TranscriptSessionState,
 } from "./generated";
+import { EventNames } from "./sse.gen";
 import type { Subscribed, Subscriber, TabStream } from "./tab-stream";
 import { operatorPath, type StreamEvent, type Transport } from "./transport";
 
@@ -72,17 +73,17 @@ export class TranscriptMirror {
 
 	apply(event: StreamEvent): void {
 		switch (event.event) {
-			case "entry": {
+			case EventNames.Recorded: {
 				const recorded = parsed<Recorded>(event.data);
 				if (recorded) this.entry(recorded, event.id);
 				break;
 			}
-			case "activity": {
+			case EventNames.Activity: {
 				const activity = parsed<Activity>(event.data);
 				if (activity) this.summary(activity, event.id);
 				break;
 			}
-			case "session_state": {
+			case EventNames.TranscriptSessionState: {
 				const state = parsed<TranscriptSessionState>(event.data);
 				if (state) {
 					this.sessionStateValue = state;
@@ -90,18 +91,18 @@ export class TranscriptMirror {
 				}
 				break;
 			}
-			case "cursor":
+			case EventNames.CursorEvent:
 				this.advance(event.id ?? event.data);
 				break;
-			case "presence": {
+			case EventNames.Presence: {
 				const presence = parsed<Presence>(event.data);
 				if (presence) this.present(presence);
 				break;
 			}
-			case "follower":
+			case EventNames.FollowerEvent:
 				this.connect({ state: "live" });
 				break;
-			case "end": {
+			case EventNames.End: {
 				const end = parsed<{ because?: string }>(event.data);
 				if (end?.because === "sealed") {
 					this.sealedValue = true;
@@ -262,7 +263,7 @@ export class FollowSession implements Subscriber {
 
 	deliver(event: StreamEvent): void {
 		this.options.mirror.apply(event);
-		if (event.event === "follower") {
+		if (event.event === EventNames.FollowerEvent) {
 			const follower = parsed<FollowerEvent>(event.data);
 			if (follower) this.schedule(follower);
 		}
@@ -317,11 +318,11 @@ export async function readRange(
 	const path = `${operatorPath("organizations", organization, "workspaces", workspace, "transcript")}?${parameters}`;
 	const entries: Delivered[] = [];
 	for await (const event of operations.stream(path, { signal })) {
-		if (event.event === "entry") {
+		if (event.event === EventNames.Recorded) {
 			const recorded = parsed<Recorded>(event.data);
 			if (recorded) entries.push(delivered(recorded));
 		}
-		if (event.event === "end") break;
+		if (event.event === EventNames.End) break;
 	}
 	return entries;
 }
