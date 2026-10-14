@@ -1,6 +1,8 @@
 # Operator boundary
 
-The HTTP API a Client drives the control plane through. Server: `crates/kestrel/src/operator.rs`.
+The HTTP API a Client drives the control plane through. Server: `crates/kestrel/src/operator.rs`
+holds the paths, the router and the `operation` mapping; a handler and its wire builders live in
+their area's file under `crates/kestrel/src/operator/`, each with its own imports.
 Contract: `openapi/operator.json`, which `crates/kestrel/tests/suite/operator.rs` checks against the
 served routes. This page holds what every route shares: the listener, errors, references and
 declarations. [Setup and sign-ins](operator-setup.md) and [reads and streams](operator-reads.md)
