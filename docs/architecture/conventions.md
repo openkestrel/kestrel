@@ -60,7 +60,8 @@ Patterns the code relies on that no single file states. Comment style is in `COD
 
 - **The primary seam is the whole control plane.** `crates/kestrel/tests/support/` boots it in
   process against a temp SQLite file and drives it through the operator boundary and link. Assert in
-  Workspaces, Sessions and Transcripts; reach `Store` and `Log` only through it.
+  Workspaces, Sessions and Transcripts; reach `Store` and `Log` only through it. A new `Kestrel`
+  method goes in its area's file under `support/drive/` with its own imports, not in `mod.rs`.
 - **Declare with `Fixture`; reach past the store only through `Database`.** `support::fixture`
   declares the Organization, Project and Agents a test needs, with knobs for what it varies. A
   fault the store has no path to, or an observation of what it keeps at rest, is a named method on
