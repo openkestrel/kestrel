@@ -1,4 +1,4 @@
-// Generated from openapi/operator.json by the generate binary.
+// Generated from openapi/operator/ by the generate binary.
 use crate::*;
 impl ChangesEvent {
     pub fn event_name(&self) -> &'static str {

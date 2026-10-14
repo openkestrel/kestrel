@@ -1,0 +1,411 @@
+{
+  "paths": {
+    "/": {
+      "get": {
+        "operationId": "showApiRoot",
+        "summary": "Say that this is the operator API, and where the browser Client is",
+        "description": "For a person who opens the operator port in a browser. The Client URL is the control plane's `KESTREL_CLIENT_URL`; nothing parses this text.",
+        "responses": {
+          "200": {
+            "description": "Plain text naming the API and the configured Client URL.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/operator": {
+      "get": {
+        "operationId": "showOperator",
+        "responses": {
+          "200": {
+            "description": "Operator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operator"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "put": {
+        "operationId": "nameOperator",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorDeclaration"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Operator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operator"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Operator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operator"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/install": {
+      "get": {
+        "operationId": "showInstall",
+        "summary": "Read what is true of the install whatever is declared in it.",
+        "responses": {
+          "200": {
+            "description": "Install",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Install"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/readiness": {
+      "get": {
+        "operationId": "showReadiness",
+        "summary": "Read whether work can start, and what is missing when it cannot.",
+        "description": "A successful read whatever it finds (ADR-0052): `outcome` says ready, blocked or unavailable. With no harness, Sign-in Method, Profile or Project named it looks for any usable path, so a broken sign-in nothing depends on is a warning; with one named it tests that path. It writes nothing, asks no provider, starts no relay and never pulls an image.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "query",
+            "required": false,
+            "description": "The Organization to read. Omitted, it is the only one that exists; several and none named is an `ambiguous_reference`, never a choice.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "harness",
+            "in": "query",
+            "required": false,
+            "description": "Test the path that starts work on this harness, rather than looking for any usable one.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "description": "Hold the path to what is known of this model: another model's result never stands in for it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "profile",
+            "in": "query",
+            "required": false,
+            "description": "The Subscription Profile the work would name. Omitted, it is the Operator's own that holds the harness's subscription, as an open takes it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sign_in_method",
+            "in": "query",
+            "required": false,
+            "description": "Test this Sign-in Method, rather than the one an open naming none would take.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "description": "Test that this Project is declared, rather than that any is.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Readiness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Install": {
+        "type": "object",
+        "properties": {
+          "initial_setup_complete": {
+            "type": "boolean",
+            "description": "Whether the first confirmed start has committed its Workspace and Session. Durable, and independent of current readiness, of the Operator's name and of what remains to declare: naming the Operator, saving a sign-in, opening a Workspace or enqueueing a Session never sets it, and no later failure clears it."
+          }
+        },
+        "required": [
+          "initial_setup_complete"
+        ]
+      },
+      "Readiness": {
+        "type": "object",
+        "description": "Whether work can start in an Organization, read at this request. Ready means a usable path exists, not that every saved sign-in works.",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "blocked",
+              "unavailable"
+            ],
+            "description": "`blocked` when `gaps` holds a prerequisite known to be missing. `unavailable` when none is known missing but an inspection in `unavailable` failed, so readiness could not be established. `ready` otherwise."
+          },
+          "organization": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Organization read: the one named, or the only one. Null when none exists."
+          },
+          "client_url": {
+            "type": "string",
+            "description": "The browser Client's configured URL, never one derived from this API's port."
+          },
+          "initial_setup_complete": {
+            "type": "boolean",
+            "description": "As `Install` reads it: durable, and independent of `outcome`."
+          },
+          "selected": {
+            "$ref": "#/components/schemas/ReadinessSelection"
+          },
+          "sign_in": {
+            "description": "The saved sign-in the selected path would use, when exactly one is established. Never its material.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SavedSignIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "saved": {
+            "$ref": "#/components/schemas/ReadinessSaved"
+          },
+          "gaps": {
+            "type": "array",
+            "description": "Every blocking prerequisite that could be established, in the order to repair them: the Operator, a usable sign-in on a harness the image carries, a selected sign-in needing attention, a repository, a Project. Each names its scope in `context` and its repair in `next_steps`.",
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "description": "What does not block the path: selected material nothing has checked, and broken material the path does not use.",
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            }
+          },
+          "unavailable": {
+            "type": "array",
+            "description": "Inspections that failed. Nothing is claimed about what one would have established: a harness is never absent, nor present, because its image could not be inspected.",
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            }
+          }
+        },
+        "required": [
+          "outcome",
+          "organization",
+          "client_url",
+          "initial_setup_complete",
+          "selected",
+          "sign_in",
+          "saved",
+          "gaps",
+          "warnings",
+          "unavailable"
+        ],
+        "additionalProperties": false
+      },
+      "ReadinessSelection": {
+        "type": "object",
+        "description": "The path read: each value as it was named, or as it resolved when exactly one choice exists. Null where nothing was named and several remain, because none is chosen for the reader.",
+        "properties": {
+          "harness": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sign_in_method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "harness",
+          "model",
+          "profile",
+          "sign_in_method",
+          "project"
+        ],
+        "additionalProperties": false
+      },
+      "ReadinessSaved": {
+        "type": "object",
+        "description": "The prerequisites already saved, whether or not the selected path uses them.",
+        "properties": {
+          "operator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Operator"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sign_ins": {
+            "type": "array",
+            "description": "Every catalogued sign-in saved where this path would look, as the sign-ins read lists them.",
+            "items": {
+              "$ref": "#/components/schemas/SavedSignIn"
+            }
+          },
+          "github_integrations": {
+            "type": "array",
+            "description": "The names of the GitHub Integrations that lend a repository authority now: enabled, and carrying outbound.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "projects": {
+            "type": "array",
+            "description": "The names of the Projects declared.",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "operator",
+          "sign_ins",
+          "github_integrations",
+          "projects"
+        ],
+        "additionalProperties": false
+      },
+      "Operator": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "OperatorDeclaration": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    }
+  }
+}

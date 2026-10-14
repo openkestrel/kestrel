@@ -1,0 +1,964 @@
+{
+  "paths": {
+    "/operator/organizations/{organization}/triggers": {
+      "get": {
+        "operationId": "listTriggers",
+        "summary": "List every Trigger in an Organization.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every Trigger, ordered by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Trigger"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "post": {
+        "operationId": "declareTrigger",
+        "summary": "Declare a Trigger.",
+        "description": "Desired state: a Trigger by this name keeps its identity and takes on this declaration. Events recorded before a changed declaration never fire it.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerDeclaration"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The existing Trigger, converged on this declaration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Trigger"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The newly declared Trigger.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Trigger"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/triggers/{trigger}": {
+      "get": {
+        "operationId": "showTrigger",
+        "summary": "Show a Trigger.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trigger",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The named Trigger.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Trigger"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/triggers/{trigger}/test": {
+      "post": {
+        "operationId": "testTrigger",
+        "summary": "Test a Trigger without starting work.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trigger",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerTest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Whether it matches and what a firing would render.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerTestResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/triggers/{trigger}/disable": {
+      "post": {
+        "operationId": "disableTrigger",
+        "summary": "Disable a Trigger.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trigger",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The disabled Trigger.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Trigger"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/triggers/{trigger}/enable": {
+      "post": {
+        "operationId": "enableTrigger",
+        "summary": "Enable a Trigger.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trigger",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The enabled Trigger.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Trigger"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/triggers/{trigger}/dispatch": {
+      "post": {
+        "operationId": "dispatchTrigger",
+        "summary": "Start a Trigger's work on an issue now.",
+        "description": "The issue is read through the named GitHub Integration and recorded as a dev.kestrel.dispatched Event, which fires the Trigger whether or not its filter matches.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trigger",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerDispatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What the firing did: opened a Workspace, fed an open one, or found none to feed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Fired"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/applied-triggers": {
+      "post": {
+        "operationId": "applyTriggers",
+        "summary": "Make an Organization's applied Triggers what a file declares.",
+        "description": "Triggers the file does not name are removed if a file applied them, and left alone if flags declared them. One transaction: a file that cannot be applied whole changes nothing.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerFile"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The diff applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppliedTriggers"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/applied-triggers/preview": {
+      "post": {
+        "operationId": "previewAppliedTriggers",
+        "summary": "Preview a trigger file without changing control-plane state.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerFile"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The diff applying it would make.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppliedTriggers"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Trigger": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "enabled",
+              "disabled:operator",
+              "disabled:firing-budget"
+            ]
+          },
+          "disabled_because": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "firing_budget": {
+            "type": "object",
+            "properties": {
+              "limit": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "window": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "limit",
+              "window"
+            ]
+          },
+          "filter": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "every": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cron": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "zone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "admits_outsiders": {
+            "type": "boolean",
+            "description": "Whether the filter fires for Events from people outside the Organization."
+          },
+          "brief": {
+            "type": "string"
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "correlation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "on_miss": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "open",
+              "ignore",
+              null
+            ]
+          },
+          "on_open_workspace": {
+            "type": "string",
+            "enum": [
+              "continue",
+              "new-session"
+            ]
+          },
+          "project": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "allows": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The model its Sessions run with, or null for the Agent's or Harness's default."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The mode its Sessions run in, or null for the Agent's or Harness's default."
+          },
+          "thought_level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The thought level its Sessions run at, or null for the Agent's or Harness's default."
+          },
+          "applied": {
+            "type": "boolean",
+            "description": "Whether a trigger file declared it, rather than flags."
+          },
+          "declared_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "organization",
+          "name",
+          "state",
+          "disabled_because",
+          "firing_budget",
+          "filter",
+          "every",
+          "cron",
+          "zone",
+          "admits_outsiders",
+          "brief",
+          "branch",
+          "correlation",
+          "on_miss",
+          "on_open_workspace",
+          "project",
+          "agent",
+          "allows",
+          "profile",
+          "model",
+          "mode",
+          "thought_level",
+          "applied",
+          "declared_at"
+        ]
+      },
+      "TriggerTest": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "integration": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The GitHub Integration the issue is read through; named with `issue`."
+          },
+          "issue": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Render against the Event a dispatch of this issue would record, recording nothing. Excludes `event`."
+          },
+          "instruction": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "declared": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TriggerFile"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A trigger file, to test the Trigger as it declares it rather than as it was applied."
+          }
+        }
+      },
+      "TriggerTestResult": {
+        "type": "object",
+        "properties": {
+          "matches": {
+            "type": "boolean"
+          },
+          "brief": {
+            "type": "string"
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "correlation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agent": {
+            "type": "string"
+          },
+          "would": {
+            "type": "string",
+            "enum": [
+              "open_workspace",
+              "continue_session",
+              "new_session",
+              "ignore"
+            ],
+            "description": "What a firing would do now: open a Workspace, continue the waiting Session of the open one it correlates to, start a new Session there, or ignore a correlation miss."
+          },
+          "elapsing": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "matches",
+          "brief",
+          "branch",
+          "correlation",
+          "agent",
+          "would",
+          "elapsing"
+        ]
+      },
+      "TriggerFile": {
+        "type": "object",
+        "properties": {
+          "triggers": {
+            "type": "object",
+            "description": "Each Trigger the file applies, keyed by its name; `{}` removes every Trigger a file applied.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TriggerFileEntry"
+            }
+          }
+        },
+        "required": [
+          "triggers"
+        ],
+        "additionalProperties": false
+      },
+      "TriggerFileEntry": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object"
+          },
+          "brief": {
+            "type": "string"
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "correlation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "on_miss": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What a correlation miss does: `open` or `ignore`."
+          },
+          "on_open_workspace": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What a firing that correlates to an open Workspace does: `continue` or `new-session`. Absent continues."
+          },
+          "project": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "allows": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The model its Sessions run with. Omitted, the Agent's, then the Harness's default."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The mode its Sessions run in. Omitted, the Agent's, then the Harness's default."
+          },
+          "thought_level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The thought level its Sessions run at. Omitted, the Agent's, then the Harness's default."
+          }
+        },
+        "required": [
+          "filter",
+          "brief",
+          "project",
+          "agent"
+        ],
+        "additionalProperties": false
+      },
+      "AppliedTriggers": {
+        "type": "object",
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeclarationChange"
+            }
+          },
+          "admitting_outsiders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "changes",
+          "admitting_outsiders"
+        ]
+      },
+      "TriggerDispatch": {
+        "type": "object",
+        "properties": {
+          "integration": {
+            "type": "string"
+          },
+          "issue": {
+            "type": "integer"
+          },
+          "instruction": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "integration",
+          "issue"
+        ]
+      },
+      "Fired": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/FiredOpened"
+          },
+          {
+            "$ref": "#/components/schemas/FiredFed"
+          },
+          {
+            "$ref": "#/components/schemas/FiredIgnored"
+          }
+        ]
+      },
+      "FiredOpened": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "const": "opened"
+          },
+          "event": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspace": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "outcome",
+          "event",
+          "workspace",
+          "session"
+        ]
+      },
+      "FiredFed": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "const": "fed"
+          },
+          "event": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspace": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "outcome",
+          "event",
+          "workspace",
+          "session"
+        ]
+      },
+      "FiredIgnored": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "const": "ignored"
+          },
+          "event": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "correlation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "event",
+          "correlation"
+        ]
+      }
+    }
+  }
+}

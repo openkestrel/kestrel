@@ -1,0 +1,473 @@
+{
+  "paths": {
+    "/operator/organizations": {
+      "get": {
+        "operationId": "listOrganizations",
+        "summary": "List every Organization.",
+        "responses": {
+          "200": {
+            "description": "Every record, ordered by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Organization"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "post": {
+        "operationId": "declareOrganization",
+        "summary": "Declare an Organization.",
+        "description": "Declaring an Organization that already exists changes nothing and answers the one that exists.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationDeclaration"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A record by this name already existed, and is now what the declaration describes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Organization"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "No record by this name existed, and one was made.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Organization"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/projects": {
+      "get": {
+        "operationId": "listProjects",
+        "summary": "List every Project in an Organization.",
+        "responses": {
+          "200": {
+            "description": "Every record, ordered by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Project"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        },
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "declareProject",
+        "summary": "Declare a Project.",
+        "description": "Desired state: a Project by this name that already exists keeps its identity and takes on the repositories, selected Integrations and branch declared. Selecting an Integration for a repository, or changing that repository or the branch under a selection, first asks the selected App for the repository and the branch: an App GitHub does not accept, a repository it does not reach, a rate limit or an outage saves nothing and leaves the previous declaration, and a repository the App cannot read is never reported as one that does not exist. The Integration is read again in the saving transaction, so maintenance that landed meanwhile refuses with 409. A check that passed says the App reached the repository and branch then, never that an Instance will check them out. A Workspace already open keeps the Integrations it opened with.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectDeclaration"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A record by this name already existed, and is now what the declaration describes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "No record by this name existed, and one was made.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/agents": {
+      "get": {
+        "operationId": "listAgents",
+        "summary": "List every Agent in an Organization.",
+        "responses": {
+          "200": {
+            "description": "Every record, ordered by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Agent"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        },
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "declareAgent",
+        "summary": "Declare an Agent.",
+        "description": "Desired state: an Agent by this name that already exists keeps its identity and takes on the harness and model declared, so a declaration naming no model leaves it naming none. A named model is taken at its word: what a harness offers is only learned from a Session, and a Subscription Profile added since can widen it. A Session already in flight keeps the model it was dispatched with. A harness the configured image does not declare is a `setup_gap` (409) naming the image, and an image that could not be inspected is `unavailable` (503); either way nothing is declared.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentDeclaration"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A record by this name already existed, and is now what the declaration describes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "No record by this name existed, and one was made.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/agents/{agent}/model": {
+      "put": {
+        "operationId": "setAgentModel",
+        "summary": "Change the model an Agent works with.",
+        "description": "Every Session already in flight keeps the model it was dispatched with.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentModel"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Agent, working with the model it names from its next Session on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "OrganizationDeclaration": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "max_live_instances": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "The most active, idle, or held Instances this Organization may keep live. Null means unbounded."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "Organization": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "max_live_instances": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "max_live_instances"
+        ]
+      },
+      "Project": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "integrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SelectedIntegration"
+            },
+            "description": "The Integration each connected repository selects, for the Workspaces opened from now on."
+          },
+          "branch": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "repositories",
+          "integrations",
+          "branch"
+        ]
+      },
+      "Agent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thought_level": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "harness",
+          "model",
+          "mode",
+          "thought_level"
+        ]
+      },
+      "AgentModel": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

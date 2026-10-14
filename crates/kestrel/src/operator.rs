@@ -1,4 +1,4 @@
-//! The boundary a Client reaches the control plane over, specified by `openapi/operator.json`.
+//! The boundary a Client reaches the control plane over, specified by `openapi/operator/`.
 //! It authenticates nobody, so it is served apart from the link and on loopback (ADR-0015).
 
 use std::net::IpAddr;
@@ -517,9 +517,10 @@ mod tests {
 
     #[test]
     fn every_route_is_diagnosed_under_the_operation_it_is_documented_as() {
-        let document: serde_json::Value =
-            serde_json::from_str(include_str!("../../../openapi/operator.json"))
-                .expect("a valid operator document");
+        let fragments =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../openapi/operator");
+        let document =
+            kestrel_operator_types::document::read(&fragments).expect("a valid operator document");
         let paths = document["paths"].as_object().expect("paths");
 
         for (path, operations) in paths {

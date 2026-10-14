@@ -9,7 +9,7 @@
 !images/kestrel-env/package-lock.json
 !package.json
 !bun.lock
-!openapi/operator.json
+!openapi/operator
 !images/kestrel-client/Caddyfile
 !packages/client
 packages/client/node_modules

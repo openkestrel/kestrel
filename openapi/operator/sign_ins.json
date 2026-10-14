@@ -1,0 +1,605 @@
+{
+  "paths": {
+    "/operator/harnesses": {
+      "get": {
+        "operationId": "listHarnesses",
+        "summary": "Read the product harness catalogue",
+        "responses": {
+          "200": {
+            "description": "Catalogue metadata, each row with its availability in the configured image, inspected afresh; no sign-in is performed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HarnessCatalogueEntry"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/harnesses/{harness}/sign-in-methods/{method}": {
+      "get": {
+        "operationId": "showSignInMethod",
+        "summary": "Read a supported harness and Sign-in Method combination",
+        "responses": {
+          "200": {
+            "description": "Catalogue metadata; no image inspection or sign-in is performed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInMethod"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          }
+        },
+        "parameters": [
+          {
+            "name": "harness",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "method",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/operator/organizations/{organization}/sign-ins": {
+      "get": {
+        "operationId": "listSignIns",
+        "summary": "List the material saved for catalogued Sign-in Methods.",
+        "description": "One item per catalogued method with material saved: subscriptions from the Operator's own Profiles, keys from the Organization's Provider Credentials. A key two harnesses offer appears once for each, sharing its revision and authentication evidence but never its model-use evidence. An empty slot is absent; the harness catalogue describes what could be saved. Nothing read here is the material, a hash of it, a login file or a provider's own words.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every catalogued method with material saved, in catalogue order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SavedSignIn"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}": {
+      "put": {
+        "operationId": "saveSignIn",
+        "summary": "Save material for a catalogued Sign-in Method.",
+        "description": "A subscription is held in the Operator's own Profile, declared after the Operator when they have none; a key is held as the Organization's Provider Credential the method fills. Nobody is asked which. The value is checked for shape before anything is stored, and a key whose provider documents an authenticated model-metadata read is checked that way, bounded to ten seconds; nothing ever spends model usage. A provider refusing the key itself is 422 and keeps what was saved before; a refusal about permission, credit or another matter saves the key unchecked. A provider that cannot be asked, times out or limits the rate saves it unchecked and answers 503 carrying what was saved. Material replaced while this was being checked is 409, and the replacement stands.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "harness",
+            "in": "path",
+            "required": true,
+            "description": "A catalogued harness.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "method",
+            "in": "path",
+            "required": true,
+            "description": "One of that harness's Sign-in Method ids.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInMaterial"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved, with whatever authentication evidence its check established.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedSignIn"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}/tests": {
+      "post": {
+        "operationId": "testSignIn",
+        "summary": "Test saved material with one model call.",
+        "description": "Starts an explicit test of the material saved for a catalogued Sign-in Method and answers before it runs; read the test by its id for how it went. It spends model usage: one prompt asking for a one-word reply, sent once and never retried, by the harness in a short-lived Instance of the configured image that has no checkout, belongs to no Workspace and is handed only the selected material. Saving never does this. With no `model` the harness's own default is tested and reported; a method listing `test_providers` requires a `model` whose provider is one of them, and only that provider is enabled. The image is inspected first and never pulled: a harness it does not carry is 409 and an image that cannot be inspected 503. Nothing saved is 409 `sign_in_not_saved`. A subscription already in use by a Session of a serialized harness, or by another test, is 409 `credential_in_use`; the test is not queued behind it.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "harness",
+            "in": "path",
+            "required": true,
+            "description": "A catalogued harness.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "method",
+            "in": "path",
+            "required": true,
+            "description": "One of that harness's Sign-in Method ids.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInTestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The test was accepted and is pending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInTest"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}/tests/{test}": {
+      "get": {
+        "operationId": "readSignInTest",
+        "summary": "Read how a test of saved material went.",
+        "description": "Answers 200 whatever the test found: a failed, timed-out or interrupted test is a successful read. Reading never starts, repeats or extends the test, so a Client that lost its connection reads the id it was given.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "harness",
+            "in": "path",
+            "required": true,
+            "description": "A catalogued harness.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "method",
+            "in": "path",
+            "required": true,
+            "description": "One of that harness's Sign-in Method ids.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "test",
+            "in": "path",
+            "required": true,
+            "description": "The id a started test answered with.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The test as it stands.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInTest"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HarnessCatalogueEntry": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string",
+            "description": "The default ACP command; explicit harness-command configuration remains authoritative."
+          },
+          "sign_in_methods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignInMethod"
+            }
+          },
+          "availability": {
+            "description": "Whether the configured image declares this harness, read from the image at this request. Null only in the catalogue's own data, never in a response.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HarnessAvailability"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "command",
+          "sign_in_methods",
+          "availability"
+        ],
+        "additionalProperties": false
+      },
+      "HarnessAvailability": {
+        "type": "object",
+        "description": "`available` and `not_carried` come from inspecting the configured image's `dev.kestrel.harnesses` label (ADR-0048). `unavailable` means the inspection failed, so nothing is claimed about the harness, and carries why. `unchecked` means the compute driver runs no image.",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "available",
+              "not_carried",
+              "unchecked",
+              "unavailable"
+            ]
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The configured image reference."
+          },
+          "identity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The immutable local image ID the reference resolved to when it was inspected."
+          },
+          "diagnostic": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Diagnostic"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "image",
+          "identity",
+          "diagnostic"
+        ],
+        "additionalProperties": false
+      },
+      "SignInMethod": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "subscription",
+              "key"
+            ]
+          },
+          "ownership": {
+            "type": "string",
+            "enum": [
+              "operator",
+              "organization"
+            ]
+          },
+          "fills": {
+            "$ref": "#/components/schemas/SignInFill"
+          },
+          "input": {
+            "type": "string",
+            "enum": [
+              "token",
+              "file"
+            ]
+          },
+          "relay": {
+            "type": "string",
+            "enum": [
+              "claude-setup-token",
+              "codex-device-auth"
+            ]
+          },
+          "console_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "test_providers": {
+            "type": "array",
+            "description": "The providers a model test of this method may name as the `provider/` prefix of its model. Present where a test requires a model; absent where the harness's own default is tested when none is named.",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "ownership",
+          "fills",
+          "input"
+        ],
+        "additionalProperties": false
+      },
+      "SignInTestRequest": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "The model to test, as the harness names it. Required, as `provider/model`, by a method listing `test_providers`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SignInTest": {
+        "type": "object",
+        "description": "One explicit test of saved material. What it established is specific to the revision, harness, model and image named here, and to no aliased harness or other model.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The material revision selected when the test started; material replaced before it was handed over fails the test rather than being tested instead."
+          },
+          "requested_model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The model the harness resolved, known before the prompt is sent; null until then, and for a harness that reports none."
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The identity of the image inspected when the test started; null where the compute driver runs no image."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "failed",
+              "interrupted"
+            ],
+            "description": "`completed` only when the model answered. `interrupted` is a test the control plane stopped under, which a restart never resumes."
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignInTestOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null until the test ends, and for an interrupted one."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display only, with the material redacted."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "harness",
+          "method",
+          "revision",
+          "requested_model",
+          "model",
+          "image",
+          "state",
+          "outcome",
+          "message",
+          "created_at",
+          "started_at",
+          "finished_at"
+        ],
+        "additionalProperties": false
+      },
+      "SignInTestOutcome": {
+        "type": "string",
+        "enum": [
+          "worked",
+          "authentication_failed",
+          "not_covered",
+          "unavailable",
+          "harness_failed",
+          "material_replaced"
+        ],
+        "description": "`authentication_failed` and `not_covered` are recorded as evidence against the revision, the latter for this harness and model alone. `unavailable` (the two-minute deadline, or nowhere to run an Instance), `harness_failed` and `material_replaced` record nothing and leave earlier evidence and its time as they were."
+      },
+      "SignInMaterial": {
+        "type": "object",
+        "description": "Never answered back, logged or kept in a diagnostic.",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "The token or key, or the login file's whole contents, as the method's input says."
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

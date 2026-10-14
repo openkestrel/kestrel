@@ -15,7 +15,7 @@ bun run e2e        # builds, then drives it over plain HTTP through images/kestr
 bun run check      # oxlint and oxfmt
 ```
 
-- **Types** are generated from `openapi/operator.json` by `@hey-api/openapi-ts` into
+- **Types** are generated from `openapi/operator/` by `@hey-api/openapi-ts` into
   `src/operator/generated` on every `generate`, `build` and `typecheck`; they are not committed.
   Only types are generated: `src/operator/transport.ts` owns every request, refusal and stream.
 - **Routes** mirror the operator paths without `/operator`: `/organizations/$organization`,

@@ -1,0 +1,299 @@
+{
+  "paths": {
+    "/operator/starts": {
+      "post": {
+        "operationId": "start",
+        "summary": "Take a control plane from whatever it holds to a Session carrying a Brief, in one step.",
+        "description": "Declares the Organization, Project and Agent the plan names where they do not exist, holds the Provider Credentials it carries, opens a Workspace with the Brief, and enqueues its Session, all in one transaction: a refused plan leaves nothing behind. A start never changes a declaration that exists, and refuses one that would. A Project it declares with selected Integrations passes the same App check as declaring one, before anything is written, and needs its Organization to exist already. The Agent's harness passes the same image capability check as declaring an Agent, before anything is written.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartPlan"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "What the plan settled on, and the Workspace and Session it reached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Started"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/repository-resolutions": {
+      "post": {
+        "operationId": "resolveRepositories",
+        "summary": "Resolve repositories the way a declaration would, saving nothing.",
+        "description": "Checks each repository's syntax, expands `owner/repo` and `github.com/owner/repo` to their HTTPS `.git` address, and finds the directory each is checked out into, refusing a list two of which would share one. A repository given an Integration must be the one that Integration watches, and resolves to its HTTPS address whatever transport it was given by, since an App lends no SSH authority; the Integration must be an enabled GitHub one that carries outbound. An SSH address given no Integration is kept as it is, and nothing provisions it a credential. It contacts no source: a resolved repository is not one the Instance can reach or check out, and a local path names the Instance's filesystem.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepositoryResolutionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Each repository as a declaration would hold it, in order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryResolution"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "RepositoryResolutionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/RepositoryPurpose"
+          },
+          "organization": {
+            "type": "string",
+            "description": "The Organization whose Integrations `integrations` names; required with it."
+          },
+          "integrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepositoryIntegrationSelection"
+            },
+            "description": "As a Project declaration selects them. Only a `declaration` takes any."
+          }
+        },
+        "required": [
+          "repositories"
+        ]
+      },
+      "RepositoryPurpose": {
+        "type": "string",
+        "enum": [
+          "declaration",
+          "public_setup"
+        ],
+        "description": "`declaration`, the default, takes every transport a Project does. `public_setup` takes only an HTTPS address or GitHub shorthand, since public-repository setup selects no Integration."
+      },
+      "RepositoryResolution": {
+        "type": "object",
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResolvedRepository"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepositoryWarning"
+            }
+          }
+        },
+        "required": [
+          "repositories",
+          "warnings"
+        ]
+      },
+      "ResolvedRepository": {
+        "type": "object",
+        "properties": {
+          "given": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string",
+            "description": "What a declaration holds and a checkout clones."
+          },
+          "checkout_directory": {
+            "type": "string",
+            "description": "The directory under the Workspace the repository is checked out into."
+          },
+          "integration": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Integration selected for it, whose App a declaration would ask for the repository and branch before saving."
+          }
+        },
+        "required": [
+          "given",
+          "address",
+          "checkout_directory",
+          "integration"
+        ]
+      },
+      "RepositoryWarning": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/RepositoryWarningCode"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "RepositoryWarningCode": {
+        "type": "string",
+        "enum": [
+          "no_app_push_authority"
+        ]
+      },
+      "StartPlan": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "organization": {
+            "type": "string",
+            "minLength": 1
+          },
+          "project": {
+            "$ref": "#/components/schemas/ProjectDeclaration"
+          },
+          "agent": {
+            "$ref": "#/components/schemas/AgentDeclaration"
+          },
+          "brief": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The Brief the Workspace starts with, handed to the agent exactly as given."
+          },
+          "credentials": {
+            "type": "array",
+            "description": "Provider Credentials the Organization holds from this start on, each replacing any it holds under the same variable.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "variable": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "secret": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "variable",
+                "secret"
+              ]
+            }
+          }
+        },
+        "required": [
+          "organization",
+          "project",
+          "agent",
+          "brief"
+        ]
+      },
+      "Settled": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "Whether the start declared it, rather than finding it declared."
+          }
+        },
+        "required": [
+          "name",
+          "created"
+        ]
+      },
+      "Started": {
+        "type": "object",
+        "properties": {
+          "organization": {
+            "$ref": "#/components/schemas/Settled"
+          },
+          "project": {
+            "$ref": "#/components/schemas/Settled"
+          },
+          "agent": {
+            "$ref": "#/components/schemas/Settled"
+          },
+          "workspace": {
+            "$ref": "#/components/schemas/Workspace"
+          },
+          "session": {
+            "$ref": "#/components/schemas/Session"
+          }
+        },
+        "required": [
+          "organization",
+          "project",
+          "agent",
+          "workspace",
+          "session"
+        ]
+      }
+    }
+  }
+}

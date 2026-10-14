@@ -1,6 +1,6 @@
 # Operator wire types
 
-`openapi/operator.json` is the authored contract. This leaf exposes its generated Rust types
+`openapi/operator/` is the authored contract. This leaf exposes its generated Rust types
 and SSE name mappings; domain builders stay in the control plane and presentation stays in
 the Clients. Both Rust consumers depend on the leaf, with their endpoint migrations separate.
 

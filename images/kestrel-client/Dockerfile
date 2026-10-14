@@ -7,7 +7,7 @@ WORKDIR /src
 COPY package.json bun.lock ./
 COPY packages/client/package.json ./packages/client/
 RUN bun install --frozen-lockfile --filter @kestrel/client
-COPY openapi/operator.json ./openapi/
+COPY openapi/operator ./openapi/operator
 COPY packages/client ./packages/client
 RUN cd packages/client && bun --bun run build
 

@@ -21,9 +21,7 @@ fn main() -> Result<()> {
         _ => return Err(anyhow!("usage: generate [--check]")),
     };
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let document: Value = serde_json::from_str(&fs::read_to_string(
-        root.join("../../openapi/operator.json"),
-    )?)?;
+    let document = kestrel_operator_types::document::read(&root.join("../../openapi/operator"))?;
     let types = TypeMappingConfig {
         date_time: DateStrategy::String,
         uuid: UuidStrategy::Uuid,
@@ -100,10 +98,9 @@ fn write_output(path: &Path, content: &[u8], check: bool) -> Result<()> {
 }
 
 fn sse_mappings(document: &Value) -> Result<(String, String)> {
-    let mut browser =
-        String::from("// Generated from openapi/operator.json by the generate binary.\n");
+    let mut browser = String::from("// Generated from openapi/operator/ by the generate binary.\n");
     let mut source = String::from(
-        "// Generated from openapi/operator.json by the generate binary.\nuse crate::*;\n",
+        "// Generated from openapi/operator/ by the generate binary.\nuse crate::*;\n",
     );
     let schemas = document["components"]["schemas"]
         .as_object()

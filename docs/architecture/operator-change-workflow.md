@@ -2,7 +2,7 @@
 
 The [Operator boundary](operator-boundary.md) owns routing, errors and domain-to-wire mapping;
 [setup](operator-setup.md), [reads and streams](operator-reads.md), and the [Clients](client.md)
-describe the consumers. `openapi/operator.json` is the contract, including operation IDs,
+describe the consumers. `openapi/operator/` is the contract, including operation IDs,
 required fields and typed refusals.
 
 ## Schema or response changes

@@ -895,7 +895,7 @@ fn the_published_documents_describe_trailing() {
         )
         .expect("valid json")
     };
-    let operator = document("operator.json");
+    let operator = support::document::operator();
     let session = &operator["components"]["schemas"]["Session"];
     assert!(
         session["properties"]["state"]["enum"]

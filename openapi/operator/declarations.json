@@ -1,0 +1,187 @@
+{
+  "paths": {
+    "/operator/organizations/{organization}/declaration": {
+      "post": {
+        "operationId": "applyDeclaration",
+        "summary": "Apply a Project, Agent and Trigger declaration together.",
+        "description": "The three records converge in one transaction. A Trigger declared here never fires for Events already retained. A Project selecting Integrations passes the same App check as declaring one, before anything is written: a preview asks too, and an apply never relies on what a preview found. The Agent's harness passes the same image capability check as declaring an Agent and a preview, before anything is written.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeclarationDocument"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The declaration's diff from the previous state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppliedDeclaration"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/declaration/preview": {
+      "post": {
+        "operationId": "previewDeclaration",
+        "summary": "Preview a declaration without changing control-plane state.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeclarationDocument"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The declaration's diff from the current state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppliedDeclaration"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DeclarationDocument": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "project": {
+            "$ref": "#/components/schemas/ProjectDeclaration"
+          },
+          "agent": {
+            "$ref": "#/components/schemas/AgentDeclaration"
+          },
+          "trigger": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TriggerDeclaration"
+              },
+              {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "every"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "cron"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "zone"
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "required": [
+          "project",
+          "agent",
+          "trigger"
+        ]
+      },
+      "AppliedDeclaration": {
+        "type": "object",
+        "properties": {
+          "declarations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeclarationChange"
+            }
+          },
+          "admitting_outsiders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "declarations",
+          "admitting_outsiders"
+        ]
+      }
+    }
+  }
+}

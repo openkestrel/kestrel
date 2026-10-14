@@ -1,0 +1,1431 @@
+{
+  "paths": {
+    "/operator/organizations/{organization}/workspaces": {
+      "get": {
+        "operationId": "listWorkspaces",
+        "summary": "List every Workspace in an Organization.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every Workspace, ordered by when it opened, with its latest Session and its place in the queue.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceListed"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "post": {
+        "operationId": "openWorkspace",
+        "summary": "Open a Workspace.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceDeclaration"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The opened Workspace and its first Session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Opened"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}": {
+      "get": {
+        "operationId": "showWorkspace",
+        "summary": "Show a Workspace.",
+        "description": "A Workspace is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Workspace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/work": {
+      "get": {
+        "operationId": "workspaceWork",
+        "summary": "Read the live and last reported work of a Workspace.",
+        "description": "Returns the latest supervisor report and its arrival time, per repository, while the supervisor is on the link; otherwise why it is unavailable. Alongside either, `last_report` is the last complete report kept durably with the Instance that sent it. The read writes nothing to the Store, Transcript or Event log, and neither the durable checkout observation nor `last_report` is presented as live state.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The live summary, or why no summary is available.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceWork"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/commits": {
+      "get": {
+        "operationId": "workspaceCommits",
+        "summary": "Read commits from a Workspace's live Instance.",
+        "description": "Commits no remote-tracking branch reaches, on any local branch or detached HEAD, grouped by repository in git log format. Reads never write Store, Transcript or Events.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The directory's entries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceCommits"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "504": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/stashes": {
+      "get": {
+        "operationId": "workspaceStashes",
+        "summary": "Read stashes from a Workspace's live Instance.",
+        "description": "Stashes grouped by repository in git stash list format; never diffed. Reads never write Store, Transcript or Events.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The directory's entries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceStashes"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "504": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/files": {
+      "get": {
+        "operationId": "workspaceFiles",
+        "summary": "List one directory of a Workspace's live Instance.",
+        "description": "Asked of the Instance's supervisor over the link and answered live; never written to the Store, Transcript or Event log. Each entry is marked tracked, untracked or ignored. A directory past 5,000 entries is truncated, and `total` says how many it holds. Symlinks are resolved, and a path outside the Workspace's checkouts is refused. Concurrent identical reads share one request, and an answer is reused for about 5 s.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "description": "`<repo>/<path>`. Absent or empty lists the Workspace's repositories.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The directory's entries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileListing"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "504": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/file": {
+      "get": {
+        "operationId": "workspaceFile",
+        "summary": "Read one file of a Workspace's live Instance.",
+        "description": "Asked of the Instance's supervisor over the link and answered live; never written to the Store, Transcript or Event log. UTF-8 text up to 1 MiB is answered inline as JSON. A binary file, a file past 1 MiB, or a `raw` read is streamed as `application/octet-stream`, unbuffered and with no cap, and never shared or cached. Symlinks are resolved, and a path outside the Workspace's checkouts is refused.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "description": "`<repo>/<path>`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "raw",
+            "in": "query",
+            "required": false,
+            "description": "Stream the bytes even when the file is text under the inline bound.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file, inline or raw.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileText"
+                }
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "contentMediaType": "application/octet-stream"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "504": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/messages": {
+      "post": {
+        "operationId": "postToWorkspace",
+        "summary": "Post to a Workspace.",
+        "description": "A Workspace is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceMessage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Session the message reached: the one it started, woke, or wrote the first Brief for, and the Held Message it left, if it was held rather than recorded at once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Posted"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/messages/{id}": {
+      "put": {
+        "operationId": "editWorkspaceMessage",
+        "summary": "Edit a Held Message.",
+        "description": "The message is named by the id a post answered with. Only its author's name is accepted. A message a Turn already took is refused 409, and one its author withdrew is refused 409.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id a post answered with.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceMessage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The edited Held Message.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeldMessage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "withdrawWorkspaceMessage",
+        "summary": "Withdraw a Held Message.",
+        "description": "The message is named by the id a post answered with. Only its author's name is accepted. A message a Turn already took is refused 409, and one already withdrawn is refused 409.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The id a post answered with.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceMessageWithdrawal"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "The message is withdrawn, and no Turn will see it."
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/seal": {
+      "post": {
+        "operationId": "sealWorkspace",
+        "summary": "Seal a Workspace.",
+        "description": "A Workspace is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sealed Workspace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/instance/release": {
+      "post": {
+        "operationId": "releaseInstance",
+        "summary": "Destroy a Workspace's Instance.",
+        "description": "A Workspace is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization. Whatever the Instance holds that was never pushed is discarded.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstanceRelease"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Instance released, and recorded as released in the Transcript.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleasedInstance"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "RepositoryText": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "text"
+        ]
+      },
+      "WorkspaceCommits": {
+        "type": "object",
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepositoryText"
+            }
+          }
+        },
+        "required": [
+          "repositories"
+        ]
+      },
+      "WorkspaceStashes": {
+        "type": "object",
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepositoryText"
+            }
+          }
+        },
+        "required": [
+          "repositories"
+        ]
+      },
+      "WorkChanges": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "added": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "removed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "files",
+          "added",
+          "removed"
+        ]
+      },
+      "WorkCommits": {
+        "type": "object",
+        "properties": {
+          "commits": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "added": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "removed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "commits",
+          "added",
+          "removed"
+        ]
+      },
+      "WorkRepositoryRead": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "git": {
+            "const": "read"
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changed": {
+            "$ref": "#/components/schemas/WorkChanges"
+          },
+          "staged": {
+            "$ref": "#/components/schemas/WorkChanges"
+          },
+          "committed": {
+            "$ref": "#/components/schemas/WorkCommits"
+          },
+          "pushed": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "untracked": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "stashed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "repository",
+          "git",
+          "branch",
+          "changed",
+          "staged",
+          "committed",
+          "pushed",
+          "untracked",
+          "stashed"
+        ]
+      },
+      "WorkRepositoryUnreadable": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "git": {
+            "const": "unreadable"
+          },
+          "because": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "git",
+          "because"
+        ]
+      },
+      "WorkRepository": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/WorkRepositoryRead"
+          },
+          {
+            "$ref": "#/components/schemas/WorkRepositoryUnreadable"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "git",
+          "mapping": {
+            "read": "#/components/schemas/WorkRepositoryRead",
+            "unreadable": "#/components/schemas/WorkRepositoryUnreadable"
+          }
+        }
+      },
+      "WorkReported": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "const": "reported"
+          },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkRepository"
+            }
+          },
+          "reported_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_report": {
+            "$ref": "#/components/schemas/WorkLastReport"
+          },
+          "earlier_reports": {
+            "type": "array",
+            "description": "The last report of each other Instance the Workspace has had, newest first, each history for its own Instance.",
+            "items": {
+              "$ref": "#/components/schemas/WorkInstanceReport"
+            }
+          }
+        },
+        "required": [
+          "state",
+          "repositories",
+          "reported_at",
+          "last_report",
+          "earlier_reports"
+        ]
+      },
+      "WorkNoInstance": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "const": "no_instance"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "pull_request": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_report": {
+            "$ref": "#/components/schemas/WorkLastReport"
+          },
+          "earlier_reports": {
+            "type": "array",
+            "description": "The last report of each other Instance the Workspace has had, newest first, each history for its own Instance.",
+            "items": {
+              "$ref": "#/components/schemas/WorkInstanceReport"
+            }
+          }
+        },
+        "required": [
+          "state",
+          "branch",
+          "pull_request",
+          "last_report",
+          "earlier_reports"
+        ]
+      },
+      "WorkNotAnswering": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "const": "not_answering"
+          },
+          "message": {
+            "type": "string"
+          },
+          "last_report": {
+            "$ref": "#/components/schemas/WorkLastReport"
+          },
+          "earlier_reports": {
+            "type": "array",
+            "description": "The last report of each other Instance the Workspace has had, newest first, each history for its own Instance.",
+            "items": {
+              "$ref": "#/components/schemas/WorkInstanceReport"
+            }
+          }
+        },
+        "required": [
+          "state",
+          "message",
+          "last_report",
+          "earlier_reports"
+        ]
+      },
+      "WorkLastReport": {
+        "description": "The last complete work report any of the Workspace's Instances sent, kept across link loss, release and restart. It is history: it is no evidence of current Unpublished Work, authorizes no seal or release, and makes no Files or Changes read live.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/WorkNoReport"
+          },
+          {
+            "$ref": "#/components/schemas/WorkInstanceReport"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "report",
+          "mapping": {
+            "none": "#/components/schemas/WorkNoReport",
+            "received": "#/components/schemas/WorkInstanceReport"
+          }
+        }
+      },
+      "WorkNoReport": {
+        "description": "No Instance of the Workspace has sent a work report.",
+        "type": "object",
+        "properties": {
+          "report": {
+            "const": "none"
+          }
+        },
+        "required": [
+          "report"
+        ]
+      },
+      "WorkInstanceReport": {
+        "type": "object",
+        "properties": {
+          "report": {
+            "const": "received"
+          },
+          "instance": {
+            "type": "string",
+            "description": "The Instance that sent the report."
+          },
+          "current_instance": {
+            "type": "boolean",
+            "description": "Whether the Workspace still holds that Instance. When false the report belongs to an Instance it released or replaced, never to its current one."
+          },
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkRepository"
+            }
+          },
+          "reported_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "report",
+          "instance",
+          "current_instance",
+          "repositories",
+          "reported_at"
+        ]
+      },
+      "FileListing": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The directory listed, or empty for the Workspace's repositories."
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FileEntry"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How many entries the directory holds, including any not listed."
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "entries",
+          "total",
+          "truncated"
+        ]
+      },
+      "FileEntry": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "file",
+              "directory",
+              "symlink",
+              "other"
+            ]
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Bytes, for a file."
+          },
+          "git": {
+            "enum": [
+              "tracked",
+              "untracked",
+              "ignored"
+            ],
+            "description": "Absent for a repository in the Workspace's list of them."
+          }
+        },
+        "required": [
+          "name",
+          "kind"
+        ]
+      },
+      "FileText": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "text"
+        ]
+      },
+      "WorkspaceWork": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/WorkReported"
+          },
+          {
+            "$ref": "#/components/schemas/WorkNoInstance"
+          },
+          {
+            "$ref": "#/components/schemas/WorkNotAnswering"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "state",
+          "mapping": {
+            "reported": "#/components/schemas/WorkReported",
+            "no_instance": "#/components/schemas/WorkNoInstance",
+            "not_answering": "#/components/schemas/WorkNotAnswering"
+          }
+        }
+      },
+      "Opened": {
+        "type": "object",
+        "description": "A Workspace and the first Session its open enqueued, in one transaction.",
+        "properties": {
+          "workspace": {
+            "$ref": "#/components/schemas/Workspace"
+          },
+          "session": {
+            "$ref": "#/components/schemas/Session"
+          }
+        },
+        "required": [
+          "workspace",
+          "session"
+        ]
+      },
+      "InstanceRelease": {
+        "type": "object",
+        "properties": {
+          "participant": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The person releasing it, by the participant name rule. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one."
+          }
+        }
+      },
+      "ReleasedInstance": {
+        "type": "object",
+        "properties": {
+          "instance": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance"
+        ]
+      },
+      "WorkspaceDeclaration": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "minLength": 1
+          },
+          "agent": {
+            "type": "string",
+            "minLength": 1
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Subscription Profile its Sessions use. Omitted, the Operator's own Profile holding a subscription for the Agent's harness, whose one held subscription is then the selected `sign_in_method`; with none, the Organization's Provider Credentials. Several such Profiles are a 409 `several_operator_profiles`, never a choice. A Profile named here is never replaced."
+          },
+          "sign_in_method": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The catalogued Sign-in Method the first Session's harness is handed, by id: one its harness offers, saved in the Organization or in the Profile named here. Selecting one withholds the harness's other catalogued sign-ins, so a refusal never falls back to another. Omitted, everything the Organization and the Profile hold is handed over."
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Omitted, a branch of the Workspace's own. A continuation runs on the branch of the Workspace it continues."
+          },
+          "continues": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sealed Workspace this one carries on from, by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The model the first Session runs on. Omitted, the Agent's, then the Harness's default."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The mode the first Session runs in. Omitted, the Agent's, then the Harness's default."
+          },
+          "thought_level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The thought level the first Session runs at. Omitted, the Agent's, then the Harness's default."
+          },
+          "brief": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Brief the Workspace starts with, handed to the agent exactly as given. Omitted, the first Session waits for its first message to become the Brief."
+          },
+          "participant": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name the Brief is written under. Omitted, the install's Operator; with none named, its source is the operator and no one joins."
+          },
+          "depends_on": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Sessions of the Organization the new Session waits on, each named as a Session is anywhere else. It is dispatched only once every one has ended successfully. One the Organization does not have is refused with 404, and one that ended without success or is unreachable with 409; either refusal leaves nothing behind. No request adds a Dependency to a Session that already exists."
+          }
+        },
+        "required": [
+          "project",
+          "agent"
+        ]
+      },
+      "WorkspaceMessage": {
+        "type": "object",
+        "properties": {
+          "participant": {
+            "type": "string",
+            "description": "The person posting, by declared name. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one."
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "WorkspaceMessageWithdrawal": {
+        "type": "object",
+        "properties": {
+          "participant": {
+            "type": "string",
+            "description": "The person who wrote the message, by declared name. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one."
+          }
+        }
+      },
+      "Posted": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Session"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Session the message started or woke, if it started or woke one."
+          },
+          "held_message": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HeldMessage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Held Message the post left, if a Turn could not take it at once."
+          }
+        },
+        "required": [
+          "session",
+          "held_message"
+        ]
+      },
+      "WorkspaceListed": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Workspace"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "session": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Session"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The Workspace's latest Session, as the Session read answers it; null before it has one."
+              },
+              "queue": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/QueueStanding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Where that Session stands in the Organization's queue; null when it is in none of the queue's lists."
+              }
+            },
+            "required": [
+              "session",
+              "queue"
+            ]
+          }
+        ]
+      },
+      "QueueStanding": {
+        "type": "object",
+        "description": "A Workspace's Session as the queue sees it: queued with a position or reasons, waiting with reasons and held input, or unbriefed with held input.",
+        "properties": {
+          "position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "Its global place among eligible requests for an Active-Work Slot; null when blocked, not requesting a slot, or dispatch configuration is unknown."
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueueReason"
+            }
+          },
+          "pending_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the oldest input held for its next turn arrived."
+          }
+        },
+        "required": [
+          "position",
+          "reasons",
+          "pending_since"
+        ]
+      }
+    }
+  }
+}

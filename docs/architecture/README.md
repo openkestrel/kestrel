@@ -104,7 +104,7 @@ image and served beside the control plane on the operator interface's origin
 The four crates never depend on each other or form a cycle
 ([ADR-0050](../adr/0050-the-crate-rule-forbids-cycles-not-a-shared-leaf.md)); `kestrel-operator-types`
 is a generated leaf both Rust consumers share. The two HTTP contracts are `openapi/link.json` and
-`openapi/operator.json`; each side of the link defines its own types, the browser Client generates
+`openapi/operator/`; each side of the link defines its own types, the browser Client generates
 its own from the operator document, and tests on both sides read them.
 
 ## The control plane

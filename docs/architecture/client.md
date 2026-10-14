@@ -89,7 +89,7 @@ leaves a page that says so. Its Caddyfile answers:
 | Anything else | The file if it exists, else `index.html`, uncached, so a deep link survives a refresh |
 
 The Client's types come from
-`openapi/operator.json`; its transport (`src/operator/transport.ts`) turns every failure into a
+`openapi/operator/`; its transport (`src/operator/transport.ts`) turns every failure into a
 typed diagnostic: the control plane's own, or an `unknown_response`, `connection_failed` or
 `client_failure` it makes for a plain `Refusal`, a non-JSON answer, no answer or a fault in the
 page, naming its own origin as the control plane. The Caddyfile's `connection_failed` becomes the
