@@ -86,4 +86,6 @@ Patterns the code relies on that no single file states. Comment style is in `COD
 - **CI is the merge gate** and a merge queue lands batches ([ADR-0027](../adr/0027-ci-gates-the-merge-and-a-queue-lands-the-batch.md)).
   Change detection is a job in the workflow, never a path filter. A queue entry whose exact tree
   already passed is not run again, and a test that passes only on retry fails the gate
-  ([ADR-0042](../adr/0042-a-tree-that-passed-the-gate-is-not-run-again.md)).
+  ([ADR-0042](../adr/0042-a-tree-that-passed-the-gate-is-not-run-again.md)). A pull request based on
+  `main` must also name the issue it closes, checked by `issue-link.yml`, the second required check
+  ([ADR-0058](../adr/0058-a-second-required-check-for-the-issue-link.md)).
