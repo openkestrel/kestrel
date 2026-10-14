@@ -73,6 +73,14 @@ the user supplies another baseline. The test seams documented in
 [conventions](docs/architecture/conventions.md#tests) are pre-agreed; confirm a new seam before
 writing tests against it.
 
+### Pull requests
+
+A pull request that closes an issue names it in the body, and only one based on `main` can: GitHub
+ignores a closing keyword on any other base. The `issue-link` check fails a `main`-based pull request
+that names none, so name the issue the work came from — it is in the brief that dispatched it — or,
+when it genuinely closes none, write a `No issue: <reason>` line. A stack names its tickets on the
+top pull request; the rest is in `docs/agents/issue-tracker.md`.
+
 ### Visual evidence
 
 A pull request that changes what the browser Client shows carries screenshots, and a recording when

@@ -99,9 +99,13 @@ under Wayfinding operations).
 
 ## When a skill closes work through PRs
 
-A PR closes work: `Closes #<ticket>` in its body closes the ticket on merge. A spec implemented
-across tickets lands as one PR on its integration branch, or, when the user asks for stacked PRs,
-as a **stack** with one PR per ticket:
+A PR closes work: `Closes #<ticket>` in its body closes the ticket when it merges. GitHub reads that
+keyword **only on a PR whose base is the default branch**: on any other base it is ignored, no link
+is made, and merging closes nothing. So a lone PR names the ticket it closes, and a stack names every
+ticket it carries on its top PR — the one based on `main`.
+
+A spec implemented across tickets lands as one PR on its integration branch, or, when the user asks
+for stacked PRs, as a **stack** with one PR per ticket:
 
 - **Order** the stack by when tickets finish, not by ticket number, so it stays linear even when the
   ticket graph is not.
@@ -115,7 +119,8 @@ as a **stack** with one PR per ticket:
   put and `gh stack` needs no force-push.
 - **Fix low, merge up.** A fix lands on the lowest branch whose PR introduced the problem, then
   each branch above merges the one below, so every PR goes green on its own.
-- The top PR also closes the spec. Mark every PR ready together once all are green.
+- The top PR names every ticket in the stack and the spec, so all of them close together when it
+  merges. Mark every PR ready together once all are green.
 
 ## When a skill says "fetch the relevant ticket"
 
