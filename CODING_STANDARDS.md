@@ -5,7 +5,7 @@ Read at review, with the diff in hand. Each rule lives in one place:
 | Source | Holds |
 | --- | --- |
 | Comments, below | which comments a diff may add |
-| `AGENTS.md`, Compatibility | no shims, no data migrations; migrations are edited in place |
+| `AGENTS.md`, Compatibility | no shims, no backfills; merged migrations are never edited, a change is a new one |
 | `docs/architecture/conventions.md` | transactions, errors, abstraction, tests |
 | `GLOSSARY.md` | the terms for names, messages and docs, and each entry's _Avoid_ list |
 | `packages/client/AGENTS.md` | a diff under `packages/client` |

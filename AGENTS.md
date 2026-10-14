@@ -102,9 +102,11 @@ takes the flag as `--cargo-profile full-debug`.
 
 ### Compatibility
 
-Kestrel is an unreleased early prototype with no users. Do not preserve backward compatibility or
-write data migrations for existing installations; change the original schema and migrations
-directly until the project is released.
+Kestrel is unreleased but dogfooded, so its schema moves forward. A migration on `main` is never
+edited, renumbered or deleted; a schema change is a new migration, named by UTC timestamp
+(`20261013154500_<name>.sql`) so two branches never claim the same number. That migration may be
+backwards-incompatible and may drop data: the previous schema is never a reason to keep a shape you
+would not choose now, and there are no compatibility shims or backfills for an earlier build's data.
 
 ### Comments
 
