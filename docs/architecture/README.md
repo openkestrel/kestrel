@@ -142,7 +142,7 @@ The rest of `crates/kestrel/src`, grouped by the page that covers them:
 | Sessions | `work.rs`, `workspace.rs`, `instance.rs`, `scheduling.rs`, `role/work.rs` |
 | Link | `link/`, `provider.rs`, `profile.rs`, `keyring.rs` |
 | Triggers | `trigger.rs`, `filter.rs`, `template.rs`, `cron.rs`, `readiness.rs`, `follow_up.rs`, `pull_request.rs`, `integration/` |
-| Operator | `operator.rs`, `operator_identity.rs`, `declaration.rs`, `declaration/triggers.rs`, `start.rs`, `start_readiness.rs`, `agent.rs`, `reference.rs`, `declined.rs`, `capability.rs` |
+| Operator | `operator.rs`, `operator/`, `operator_identity.rs`, `declaration.rs`, `declaration/triggers.rs`, `start.rs`, `start_readiness.rs`, `agent.rs`, `reference.rs`, `declined.rs`, `capability.rs` |
 | Shared | `domain.rs` (every record type), `log.rs`, `store/`, `timer.rs`, `cli.rs`, `telemetry.rs`, `shutdown.rs`, `hex.rs`, `participant.rs` (the one rule a declared name obeys) |
 
 ## Trust boundaries
