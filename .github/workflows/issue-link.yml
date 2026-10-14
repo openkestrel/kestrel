@@ -1,0 +1,43 @@
+name: Issue link
+
+# A second required check beside CI's `gate`, not a job inside it (ADR-0058). Whether a pull request
+# closes an issue is a fact about the pull request, not about the tree, and a body edit must not land
+# in CI's concurrency group, where it would cancel the run testing the tree and let the gate record a
+# pass for a tree nothing tested.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  # A required check that never reports strands a queue entry, so a merge group runs this workflow
+  # too and the job below reports success without checking anything.
+  merge_group:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.merge_group.head_sha || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  issue-link:
+    name: issue-link
+    runs-on: ubuntu-latest
+    steps:
+      # A merge group is a synthetic merge with no pull request of its own, and every entry in it
+      # already passed this check.
+      - name: Report a merge group
+        if: github.event_name != 'pull_request'
+        run: echo "A merge group carries no pull request body; its entries passed this check."
+
+      - uses: actions/checkout@v5
+        if: github.event_name == 'pull_request'
+
+      - name: Check the pull request closes an issue
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: .github/scripts/issue-link.sh "$PR"
