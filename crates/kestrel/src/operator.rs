@@ -2461,11 +2461,7 @@ async fn github_app_installed(
         .query_pairs_mut()
         .append_pair("organization", &status.organization)
         .append_pair("github_app_flow", &query.state);
-    let mut response = setup_page(format!(
-        "<!doctype html><title>Choose a repository</title><h1>The App is installed</h1><p><a href=\"{}?state={}\">Choose one repository here</a> or return to the Client.</p>",
-        integration::manifest::PAGE,
-        query.state
-    ));
+    let mut response = setup_page(integration::manifest::installed_page(&query.state));
     *response.status_mut() = StatusCode::SEE_OTHER;
     response.headers_mut().insert(
         "location",

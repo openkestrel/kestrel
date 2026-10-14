@@ -942,3 +942,10 @@ async fn manifest_requests_cannot_choose_an_arbitrary_upstream() {
     }
     assert!(kestrel.integrations("acme").await.is_empty());
 }
+
+#[test]
+fn a_hostile_flow_state_cannot_inject_markup_into_the_installed_page() {
+    let html = kestrel::integration::manifest::installed_page("\"><script>alert(1)</script>");
+    assert!(!html.contains("<script>"));
+    assert!(html.contains("?state=&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"));
+}
