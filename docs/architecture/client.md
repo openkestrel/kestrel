@@ -6,6 +6,8 @@ in `crates/kestrel-client/`, and the browser Client in `packages/client`. Both d
 
 ## The Client
 
+- **One file per subcommand**: `src/command/<name>.rs` holds a subcommand's arguments and what it
+  does with them; `main.rs` parses, builds what every subcommand runs with, and dispatches.
 - **Where it points**: `KESTREL_CONTROL_PLANE`, default `http://127.0.0.1:7718`.
 - **Scope is derived, never stored** ([ADR-0016](../adr/0016-scope-is-derived-never-switched.md),
   `scope.rs`): `--organization`, then `KESTREL_ORGANIZATION`, then a `.kestrel/organization` file
