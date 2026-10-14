@@ -1,6 +1,6 @@
 use std::io::{IsTerminal as _, Write};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Result, bail};
 use kestrel_operator_types as wire;
 
 use crate::BINARY;
@@ -35,13 +35,11 @@ pub async fn show(
         .iter()
         .map(|organization| ("organization", organization.as_str()))
         .collect();
-    let answer = api.get_where(&["readiness"], &scoped).await?;
-    let read: wire::Readiness = serde_json::from_value(answer.clone())
-        .with_context(|| Failed::new(Exit::Unavailable, "reading readiness"))?;
+    let read: wire::Readiness = api.get_where_as(&["readiness"], &scoped).await?;
 
     let mut out = std::io::stdout().lock();
     if presentation.json() {
-        crate::output::document(&mut out, presentation, &answer)?;
+        crate::typed::document(&mut out, presentation, &read)?;
     } else {
         let decorated = out.is_terminal() && !undecorated_by_request();
         write!(out, "{}", summary(&read, invocation, named, decorated))?;

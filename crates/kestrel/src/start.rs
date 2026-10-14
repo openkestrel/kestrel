@@ -1,5 +1,4 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 
 use crate::capability::Images;
 use crate::declaration;
@@ -12,19 +11,14 @@ use crate::sign_in::{Authentication, Source};
 use crate::store::{Declared as DeclaredRecord, Store};
 use crate::workspace;
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Plan {
     pub organization: String,
     pub project: declaration::Project,
     pub agent: declaration::Agent,
     pub brief: String,
-    #[serde(default)]
     pub credentials: Vec<Credential>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Credential {
     pub variable: String,
     pub secret: String,
@@ -38,7 +32,6 @@ pub struct Started {
     pub session: Session,
 }
 
-#[derive(Serialize)]
 pub struct Settled {
     pub name: String,
     pub created: bool,

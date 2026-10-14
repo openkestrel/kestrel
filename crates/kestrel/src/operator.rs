@@ -16,8 +16,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{BoxError, Form, Json, Router};
 use futures_core::Stream;
-use jiff::{SignedDuration, Timestamp};
+use jiff::SignedDuration;
 use kestrel_operator_types as wire;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 use tokio_stream::{StreamExt as _, StreamMap};
@@ -32,9 +33,10 @@ use crate::declined::{
     Resource, Step, Within,
 };
 use crate::domain::{
-    self, Agent, Connection, Declared, Direction, EventRecordId, Fires, Firing, HeldMessage,
-    Integration, IntegrationKind, IntegrationState, Occurrence, Organization, Project, Schedule,
-    Session, StartedBy, SubscriptionProfile, Trigger, Workspace, WorkspaceId, WorkspaceState,
+    self, Agent, Connection, CorrelationMiss, Declared, Direction, DisableReason, EventRecordId,
+    Fires, HeldMessage, Integration, IntegrationKind, IntegrationState, OnOpenWorkspace,
+    Organization, Project, Schedule, Session, StartedBy, SubscriptionProfile, Trigger,
+    TriggerState, Workspace, WorkspaceId, WorkspaceState,
 };
 use crate::fanout;
 use crate::integration::github::{self, Github};
@@ -196,83 +198,124 @@ struct Following {
     as_name: Option<String>,
 }
 
-#[derive(Serialize)]
-struct Recorded {
-    kind: log::Kind,
-    session_id: Option<crate::domain::SessionId>,
-    seq: i64,
-    appended_at: String,
-    entry: serde_json::Value,
-}
-
-#[derive(Serialize)]
-struct End {
-    because: Because,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Because {
-    CaughtUp,
-    Sealed,
-}
-
-#[derive(Serialize)]
-struct FollowerEvent {
-    id: crate::presence::FollowerId,
-    lease_seconds: u64,
-}
-
-#[derive(Serialize)]
-struct Refetch {}
-
 // The Workspace's name, because a Client addresses every read by it.
-#[derive(Serialize)]
-#[serde(tag = "resource", rename_all = "snake_case")]
-enum Changed {
-    Workspace {
-        id: WorkspaceId,
-        workspace: String,
-    },
-    Session {
-        id: crate::domain::SessionId,
-        workspace: String,
-    },
-    Queue,
+async fn changed(store: &Store, resource: fanout::Resource) -> anyhow::Result<wire::Change> {
+    let mut tx = store.read().await?;
+    Ok(match resource {
+        fanout::Resource::Workspace(id) => wire::Change::ChangeWorkspace(wire::ChangeWorkspace {
+            resource: "workspace".into(),
+            id: wire_id(&id),
+            workspace: tx.workspaces().get(id).await?.name,
+        }),
+        fanout::Resource::Session(id) => {
+            let session = tx.workspaces().session(id).await?;
+            wire::Change::ChangeSession(wire::ChangeSession {
+                resource: "session".into(),
+                id: wire_id(&id),
+                workspace: tx.workspaces().get(session.workspace).await?.name,
+            })
+        }
+        fanout::Resource::Queue => wire::Change::ChangeQueue(wire::ChangeQueue {
+            resource: "queue".into(),
+        }),
+    })
 }
 
-impl Changed {
-    async fn named(store: &Store, resource: fanout::Resource) -> anyhow::Result<Self> {
-        let mut tx = store.read().await?;
-        Ok(match resource {
-            fanout::Resource::Workspace(id) => Self::Workspace {
-                id,
-                workspace: tx.workspaces().get(id).await?.name,
-            },
-            fanout::Resource::Session(id) => {
-                let session = tx.workspaces().session(id).await?;
-                Self::Session {
-                    id,
-                    workspace: tx.workspaces().get(session.workspace).await?.name,
-                }
-            }
-            fanout::Resource::Queue => Self::Queue,
-        })
-    }
+fn transcript_event(cursor: Option<Cursor>, event: wire::Event) -> serde_json::Result<Emitted> {
+    Emitted::new(event.event_name(), cursor, &event)
+}
+
+fn changes_event(event: wire::ChangesEvent) -> serde_json::Result<Emitted> {
+    Emitted::new(event.event_name(), None, &event)
+}
+
+fn refetch() -> wire::Refetch {
+    serde_json::json!({})
 }
 
 struct Read {
     page: log::TranscriptPage,
-    session_state: TranscriptSessionState,
+    session_state: ObservedSession,
     sealed: bool,
 }
 
-#[derive(Clone, PartialEq, Serialize)]
-struct TranscriptSessionState {
+#[derive(Clone, PartialEq)]
+struct ObservedSession {
     session_id: Option<domain::SessionId>,
-    #[serde(flatten)]
     state: crate::live_work::SessionState,
     observation: crate::live_work::Observation,
+}
+
+fn transcript_session_state(observed: ObservedSession) -> wire::TranscriptSessionState {
+    let ObservedSession {
+        session_id,
+        state,
+        observation,
+    } = observed;
+    wire::TranscriptSessionState {
+        session_id: session_id.map(|id| wire_id(&id)),
+        tools: state.tools.into_iter().map(running_tool).collect(),
+        units: state.units.into_iter().map(running_unit).collect(),
+        message_buffering: state.message_buffering,
+        thought_buffering: state.thought_buffering,
+        usage: state.usage.map(session_usage),
+        last_activity_at: state.last_activity_at.map(|at| at.to_string()),
+        observation: session_observation(observation),
+    }
+}
+
+fn transcript_kind(kind: log::Kind) -> wire::TranscriptKind {
+    match kind {
+        log::Kind::SharedState => wire::TranscriptKind::SharedState,
+        log::Kind::Narration => wire::TranscriptKind::Narration,
+        log::Kind::Detail => wire::TranscriptKind::Detail,
+    }
+}
+
+/// The stored body is the only copy that holds payload references, so it is decoded rather than
+/// rebuilt from the domain entry.
+fn recorded(entry: log::StoredTranscriptEntry) -> serde_json::Result<wire::Recorded> {
+    Ok(wire::Recorded {
+        kind: transcript_kind(entry.kind),
+        session_id: entry.session_id.map(|id| wire_id(&id)),
+        seq: entry.seq,
+        appended_at: entry.appended_at.to_string(),
+        entry: serde_json::from_value(entry.entry)?,
+    })
+}
+
+fn activity(activity: log::Activity) -> wire::Activity {
+    let count = |count: u64| -> i64 { count.try_into().expect("a count fits a wire integer") };
+    wire::Activity {
+        first_seq: activity.first_seq,
+        last_seq: activity.last_seq,
+        counts: wire::ActivityCounts {
+            tool_calls: count(activity.counts.tool_calls),
+            failed_calls: count(activity.counts.failed_calls),
+            thoughts: count(activity.counts.thoughts),
+            plans: count(activity.counts.plans),
+            tombstones: count(activity.counts.tombstones),
+        },
+        latest: activity.latest.map(|latest| wire::ActivityLatest {
+            kind: transcript_kind(latest.kind),
+            title: latest.title,
+            status: latest.status,
+        }),
+        started_at: activity.started_at.map(|at| at.to_string()),
+        finished_at: activity.finished_at.map(|at| at.to_string()),
+        anomaly: activity.anomaly,
+        closed: activity.closed,
+    }
+}
+
+fn presence(presence: crate::presence::Presence) -> wire::Presence {
+    wire::Presence {
+        named: presence.named,
+        anonymous: presence
+            .anonymous
+            .try_into()
+            .expect("a follower count fits a wire integer"),
+    }
 }
 
 async fn harnesses(
@@ -523,175 +566,12 @@ fn is_loopback_host(host: &str) -> bool {
             .is_ok_and(|address| address.is_loopback())
 }
 
-#[derive(Deserialize)]
-struct OrganizationDeclaration {
-    name: String,
-    max_live_instances: Option<std::num::NonZeroUsize>,
-}
-
-#[derive(Deserialize)]
-struct AgentDeclaration {
-    name: String,
-    harness: String,
-    model: Option<String>,
-    mode: Option<String>,
-    thought_level: Option<String>,
-}
-
-impl AgentDeclaration {
-    fn declared(&self) -> Declared {
-        Declared::named(Declared {
-            model: self.model.clone(),
-            mode: self.mode.clone(),
-            thought_level: self.thought_level.clone(),
-        })
-    }
-}
-
-#[derive(Deserialize)]
-struct WorkspaceDeclaration {
-    project: String,
-    agent: String,
-    profile: Option<String>,
-    sign_in_method: Option<String>,
-    branch: Option<String>,
-    continues: Option<String>,
-    model: Option<String>,
-    mode: Option<String>,
-    thought_level: Option<String>,
-    brief: Option<String>,
-    participant: Option<String>,
-    depends_on: Option<Vec<String>>,
-}
-
-impl WorkspaceDeclaration {
-    fn declared(&self) -> Declared {
-        Declared {
-            model: self.model.clone(),
-            mode: self.mode.clone(),
-            thought_level: self.thought_level.clone(),
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct WorkspaceMessage {
-    participant: Option<String>,
-    message: String,
-}
-
-#[derive(Deserialize)]
-struct WorkspaceMessageWithdrawal {
-    participant: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct SessionDeclaration {
-    agent: Option<String>,
-    sign_in_method: Option<String>,
-    model: Option<String>,
-    mode: Option<String>,
-    thought_level: Option<String>,
-    depends_on: Option<Vec<String>>,
-}
-
-#[derive(Deserialize)]
-struct SessionInterrupt {
-    participant: Option<String>,
-}
-
-impl SessionDeclaration {
-    fn declared(&self) -> Declared {
-        Declared {
-            model: self.model.clone(),
-            mode: self.mode.clone(),
-            thought_level: self.thought_level.clone(),
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct OptionChange {
-    participant: Option<String>,
-    option: Option<String>,
-    category: Option<String>,
-    value: String,
-}
-
-#[derive(Deserialize)]
-struct TriggerDeclaration {
-    name: String,
-    filter: Option<serde_json::Value>,
-    every: Option<String>,
-    cron: Option<String>,
-    zone: Option<String>,
-    brief: String,
-    branch: Option<String>,
-    correlation: Option<String>,
-    on_miss: Option<String>,
-    on_open_workspace: Option<String>,
-    project: String,
-    agent: String,
-    #[serde(default)]
-    allows: Vec<String>,
-    profile: Option<String>,
-    model: Option<String>,
-    mode: Option<String>,
-    thought_level: Option<String>,
-}
-
-impl TriggerDeclaration {
-    fn declared(&self) -> Declared {
-        Declared::named(Declared {
-            model: self.model.clone(),
-            mode: self.mode.clone(),
-            thought_level: self.thought_level.clone(),
-        })
-    }
-}
-
-#[derive(Deserialize)]
-struct TriggerTest {
-    event: Option<String>,
-    integration: Option<String>,
-    issue: Option<i64>,
-    instruction: Option<String>,
-    agent: Option<String>,
-    declared: Option<triggers::File>,
-}
-
-#[derive(Deserialize)]
-struct TriggerDispatch {
-    integration: String,
-    issue: i64,
-    instruction: Option<String>,
-    agent: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct AgentModel {
-    model: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct Release {
-    participant: Option<String>,
-}
-
-#[derive(Serialize)]
-struct OrganizationRecord {
-    id: String,
-    name: String,
-    max_live_instances: Option<std::num::NonZeroUsize>,
-}
-
-#[derive(Serialize)]
-struct ProjectRecord {
-    id: String,
-    name: String,
-    repositories: Vec<String>,
-    integrations: Vec<wire::SelectedIntegration>,
-    branch: String,
+fn agent_defaults(declaration: &wire::AgentDeclaration) -> Declared {
+    Declared::named(Declared {
+        model: declaration.model.clone().flatten(),
+        mode: declaration.mode.clone().flatten(),
+        thought_level: declaration.thought_level.clone().flatten(),
+    })
 }
 
 fn selected(integrations: Vec<domain::SelectedIntegration>) -> Vec<wire::SelectedIntegration> {
@@ -700,198 +580,49 @@ fn selected(integrations: Vec<domain::SelectedIntegration>) -> Vec<wire::Selecte
         .map(|selected| wire::SelectedIntegration {
             repository: selected.repository,
             integration: selected.name,
-            integration_id: selected.integration.to_string().parse().expect("a uuid"),
+            integration_id: wire_id(&selected.integration),
         })
         .collect()
 }
 
-#[derive(Serialize)]
-struct AgentRecord {
-    id: String,
-    name: String,
-    harness: String,
-    model: Option<String>,
-    mode: Option<String>,
-    thought_level: Option<String>,
-}
-
-#[derive(Serialize)]
-struct WorkspaceRecord {
-    id: String,
-    name: String,
-    organization: String,
-    project: String,
-    opened_with: String,
-    profile: Option<String>,
-    checkout: domain::Checkout,
-    integrations: Vec<wire::SelectedIntegration>,
-    instance: Option<String>,
-    held: Option<String>,
-    correlation: Option<String>,
-    state: String,
-    opened_at: Timestamp,
-    last_active_at: Timestamp,
-    sealed_at: Option<Timestamp>,
-    continues: Option<String>,
-    started_by: Option<String>,
-    continued_by: Vec<String>,
-    held_messages: Vec<HeldMessage>,
-    pull_requests: Vec<PullRequestAvailabilityRecord>,
-    unfinished_session: Option<UnfinishedSessionRecord>,
-}
-
-#[derive(Serialize)]
-struct WorkspaceListedRecord {
-    #[serde(flatten)]
-    workspace: WorkspaceRecord,
-    session: Option<SessionRecord>,
-    queue: Option<QueueStandingRecord>,
-}
-
-#[derive(Serialize)]
-struct QueueStandingRecord {
-    position: Option<usize>,
-    reasons: Vec<ReasonRecord>,
-    pending_since: Option<Timestamp>,
-}
-
-impl QueueStandingRecord {
-    fn of(snapshot: &scheduling::Snapshot, workspace: WorkspaceId) -> Option<Self> {
-        if let Some(queued) = snapshot
-            .queued
-            .iter()
-            .find(|queued| queued.session.workspace == workspace)
-        {
-            return Some(Self {
-                position: queued.position,
-                reasons: reasons(queued.reasons.clone()),
-                pending_since: None,
-            });
-        }
-        if let Some(waiting) = snapshot
-            .waiting
-            .iter()
-            .find(|waiting| waiting.session.workspace == workspace)
-        {
-            return Some(Self {
-                position: waiting.position,
-                reasons: reasons(waiting.reasons.clone()),
-                pending_since: waiting.pending_since,
-            });
-        }
-        snapshot
-            .unbriefed
-            .iter()
-            .find(|unbriefed| unbriefed.session.workspace == workspace)
-            .map(|unbriefed| Self {
-                position: unbriefed.position,
-                reasons: reasons(unbriefed.reasons.clone()),
-                pending_since: unbriefed.brief_since.or(unbriefed.pending_since),
-            })
+fn queue_standing(
+    snapshot: &scheduling::Snapshot,
+    workspace: WorkspaceId,
+) -> Option<wire::QueueStanding> {
+    if let Some(queued) = snapshot
+        .queued
+        .iter()
+        .find(|queued| queued.session.workspace == workspace)
+    {
+        return Some(wire::QueueStanding {
+            position: queued.position.map(|position| position as i64),
+            reasons: reasons(queued.reasons.clone()),
+            pending_since: None,
+        });
     }
-}
-
-#[derive(Serialize)]
-struct UnfinishedSessionRecord {
-    id: String,
-    name: String,
-    state: String,
-    preparing: Option<String>,
-}
-
-#[derive(Serialize)]
-struct PostedRecord {
-    session: Option<SessionRecord>,
-    held_message: Option<HeldMessage>,
-}
-
-#[derive(Serialize)]
-struct PullRequestAvailabilityRecord {
-    repository: String,
-    availability: &'static str,
-    known: Option<Vec<PullRequestRecord>>,
-}
-
-#[derive(Serialize)]
-struct PullRequestRecord {
-    repository: String,
-    number: i64,
-    url: String,
-    title: String,
-    state: domain::PullRequestState,
-    head_branch: String,
-    head_revision: String,
-    updated_at: Timestamp,
-    event: String,
-}
-
-impl From<pull_request::Availability> for PullRequestAvailabilityRecord {
-    fn from(availability: pull_request::Availability) -> Self {
-        Self {
-            repository: availability.repository,
-            availability: match availability.known {
-                Some(_) => "available",
-                None => "unavailable",
-            },
-            known: availability.known.map(|known| {
-                known
-                    .into_iter()
-                    .map(|pull_request| PullRequestRecord {
-                        repository: pull_request.repository,
-                        number: pull_request.number,
-                        url: pull_request.url,
-                        title: pull_request.title,
-                        state: pull_request.state,
-                        head_branch: pull_request.head_branch,
-                        head_revision: pull_request.head_revision,
-                        updated_at: pull_request.updated_at,
-                        event: pull_request.event.to_string(),
-                    })
-                    .collect()
-            }),
-        }
+    if let Some(waiting) = snapshot
+        .waiting
+        .iter()
+        .find(|waiting| waiting.session.workspace == workspace)
+    {
+        return Some(wire::QueueStanding {
+            position: waiting.position.map(|position| position as i64),
+            reasons: reasons(waiting.reasons.clone()),
+            pending_since: waiting.pending_since.map(|since| since.to_string()),
+        });
     }
-}
-
-#[derive(Serialize)]
-struct SessionRecord {
-    id: String,
-    name: String,
-    workspace: String,
-    state: String,
-    preparing: Option<String>,
-    exit: Option<domain::Exit>,
-    outcome_message: Option<String>,
-    diagnostic: Option<wire::Diagnostic>,
-    instance: Option<String>,
-    supervisor: Option<String>,
-    agent: String,
-    harness: String,
-    model: Option<String>,
-    mode: Option<String>,
-    thought_level: Option<String>,
-    worked_model: Option<String>,
-    sign_in_method: Option<String>,
-    supplied: Vec<wire::SuppliedMaterial>,
-    title: Option<String>,
-    options: Vec<wire::SessionOption>,
-    changing_options: Vec<domain::ChangingOption>,
-    commands: Vec<domain::SessionCommand>,
-    interrupting: Option<domain::Interrupting>,
-    enqueued_at: Timestamp,
-    started_at: Option<Timestamp>,
-    ended_at: Option<Timestamp>,
-    lease_expires_at: Option<Timestamp>,
-    connected_at: Option<Timestamp>,
-    supervisor_version: Option<String>,
-    usage: Option<domain::Usage>,
-    depends_on: Vec<SessionReferenceRecord>,
-    tools: Vec<crate::live_work::RunningTool>,
-    units: Vec<crate::live_work::RunningUnit>,
-    message_buffering: bool,
-    thought_buffering: bool,
-    last_activity_at: Option<Timestamp>,
-    observation: crate::live_work::Observation,
+    snapshot
+        .unbriefed
+        .iter()
+        .find(|unbriefed| unbriefed.session.workspace == workspace)
+        .map(|unbriefed| wire::QueueStanding {
+            position: unbriefed.position.map(|position| position as i64),
+            reasons: reasons(unbriefed.reasons.clone()),
+            pending_since: unbriefed
+                .brief_since
+                .or(unbriefed.pending_since)
+                .map(|since| since.to_string()),
+        })
 }
 
 fn supplied_material(harness: &str, supplied: &domain::Supplied) -> wire::SuppliedMaterial {
@@ -1117,14 +848,8 @@ fn diagnosed_failure(
     }
 }
 
-#[derive(Serialize)]
-struct SessionReferenceRecord {
-    id: String,
-    name: String,
-}
-
 // The contract carries both lists on every option, which the domain's boolean has none of.
-fn shown_option(option: domain::SessionOption, harness: &str) -> wire::SessionOption {
+pub(crate) fn shown_option(option: domain::SessionOption, harness: &str) -> wire::SessionOption {
     let offered = |value: domain::SessionOptionValue| wire::SessionOptionValue {
         value: value.value,
         name: value.name,
@@ -1189,66 +914,22 @@ fn warns_cache(harness: &str, category: Option<&str>) -> bool {
     !CACHE_KEPT_ACROSS.contains(&(harness, category))
 }
 
-#[derive(Serialize)]
-struct TriggerRecord {
-    id: String,
-    organization: String,
-    name: String,
-    state: String,
-    disabled_because: Option<String>,
-    firing_budget: FiringBudgetRecord,
-    filter: Option<serde_json::Value>,
-    every: Option<String>,
-    cron: Option<String>,
-    zone: Option<String>,
-    admits_outsiders: bool,
-    brief: String,
-    branch: Option<String>,
-    correlation: Option<String>,
-    on_miss: Option<String>,
-    on_open_workspace: String,
-    project: String,
-    agent: String,
-    allows: Vec<String>,
-    profile: Option<String>,
-    model: Option<String>,
-    mode: Option<String>,
-    thought_level: Option<String>,
-    applied: bool,
-    declared_at: Timestamp,
-}
-
-#[derive(Serialize)]
-struct FiringBudgetRecord {
-    limit: usize,
-    window: String,
-}
-
-#[derive(Serialize)]
-struct TriggerTestRecord {
-    matches: bool,
-    brief: String,
-    branch: Option<String>,
-    correlation: Option<String>,
-    agent: String,
-    would: &'static str,
-    elapsing: Option<Timestamp>,
-}
-
-impl From<Organization> for OrganizationRecord {
+impl From<Organization> for wire::Organization {
     fn from(organization: Organization) -> Self {
         Self {
-            id: organization.id.to_string(),
+            id: wire_id(&organization.id),
             name: organization.name,
-            max_live_instances: organization.max_live_instances,
+            max_live_instances: organization
+                .max_live_instances
+                .map(|most| i64::try_from(most.get()).unwrap_or(i64::MAX)),
         }
     }
 }
 
-impl From<Project> for ProjectRecord {
+impl From<Project> for wire::Project {
     fn from(project: Project) -> Self {
         Self {
-            id: project.id.to_string(),
+            id: wire_id(&project.id),
             name: project.name,
             repositories: project.repositories,
             integrations: selected(project.integrations),
@@ -1257,10 +938,10 @@ impl From<Project> for ProjectRecord {
     }
 }
 
-impl From<Agent> for AgentRecord {
+impl From<Agent> for wire::Agent {
     fn from(agent: Agent) -> Self {
         Self {
-            id: agent.id.to_string(),
+            id: wire_id(&agent.id),
             name: agent.name,
             harness: agent.harness,
             model: agent.declared.model,
@@ -1270,135 +951,485 @@ impl From<Agent> for AgentRecord {
     }
 }
 
-impl WorkspaceRecord {
-    async fn read(store: &Store, workspace: Workspace) -> Result<Self, Refused> {
-        let continued_by = workspace::continuations(store, workspace.id)
-            .await?
-            .into_iter()
-            .map(|workspace| workspace.to_string())
-            .collect();
-        let instance = work::instance(store, workspace.id).await?;
-        let held = instance::held_by(store, workspace.id)
-            .await?
-            .map(|held| held.because);
-        let pull_requests = pull_request::availability(store, &workspace)
-            .await?
-            .into_iter()
-            .map(PullRequestAvailabilityRecord::from)
-            .collect();
-        let unfinished_session = workspace::unfinished(store, workspace.id)
-            .await?
-            .map(|session| UnfinishedSessionRecord {
-                id: session.id.to_string(),
-                name: session.name,
-                state: session.state.as_str().to_owned(),
-                preparing: session
-                    .preparing
-                    .map(|preparing| preparing.as_str().to_owned()),
-            });
-        let held_messages = workspace::held_messages(store, workspace.id).await?;
-
-        Ok(Self {
-            id: workspace.id.to_string(),
-            name: workspace.name,
-            organization: workspace.organization.name,
-            project: workspace.project.name,
-            opened_with: workspace.opened_with.name,
-            profile: workspace.profile.map(|profile| profile.name),
-            checkout: workspace.checkout,
-            integrations: selected(workspace.integrations),
-            instance,
-            held,
-            correlation: workspace.correlation,
-            state: workspace.state.as_str().to_owned(),
-            opened_at: workspace.opened_at,
-            last_active_at: workspace.last_active_at,
-            sealed_at: workspace.sealed_at,
-            continues: workspace.continues.map(|workspace| workspace.to_string()),
-            started_by: workspace.started_by.map(|started| match started {
-                StartedBy::Event(event) => event.to_string(),
-                StartedBy::Participant(participant) => participant,
-            }),
-            continued_by,
-            held_messages,
-            pull_requests,
-            unfinished_session,
-        })
+fn session_state(value: domain::SessionState) -> wire::SessionState {
+    match value {
+        domain::SessionState::Queued => wire::SessionState::Queued,
+        domain::SessionState::Working => wire::SessionState::Working,
+        domain::SessionState::Trailing => wire::SessionState::Trailing,
+        domain::SessionState::Waiting => wire::SessionState::Waiting,
+        domain::SessionState::Unbriefed => wire::SessionState::Unbriefed,
+        domain::SessionState::Ended => wire::SessionState::Ended,
+        domain::SessionState::Unreachable => wire::SessionState::Unreachable,
     }
 }
 
-impl SessionRecord {
-    fn read(session: Session, organization: &str, summaries: &crate::live_work::Summaries) -> Self {
-        let (observation, state) = summaries.observed(Some(&session));
-        let trailing = session.state == domain::SessionState::Trailing;
-        let harness = session.agent.harness.clone();
-        let diagnostic = session
-            .evidence
-            .clone()
-            .map(|evidence| diagnosed_failure(&session, organization, evidence));
-        let supplied = session
-            .supplied
-            .iter()
-            .map(|supplied| supplied_material(&harness, supplied))
-            .collect();
-        let options = session
-            .options
-            .into_iter()
-            .map(|option| shown_option(option, &harness))
-            .collect();
-        Self {
-            id: session.id.to_string(),
-            name: session.name,
-            workspace: session.workspace.to_string(),
-            state: session.state.as_str().to_owned(),
-            preparing: session
-                .preparing
-                .map(|preparing| preparing.as_str().to_owned()),
-            exit: session.exit,
-            outcome_message: session.outcome_message,
-            diagnostic,
-            instance: session.instance,
-            supervisor: session.supervisor,
-            agent: session.agent.name,
-            harness,
-            model: session.agent.declared.model,
-            mode: session.agent.declared.mode,
-            thought_level: session.agent.declared.thought_level,
-            worked_model: session.worked_model,
-            sign_in_method: session.sign_in_method,
-            supplied,
-            title: session.title,
-            options,
-            changing_options: session.changing_options,
-            commands: session.commands,
-            interrupting: session.interrupting,
-            enqueued_at: session.enqueued_at,
-            started_at: session.started_at,
-            ended_at: session.ended_at,
-            lease_expires_at: session.lease_expires_at,
-            connected_at: session.connected.as_ref().map(|connected| connected.at),
-            supervisor_version: session.connected.map(|connected| connected.version),
-            // The live figure is the Turn in flight; the recorded one is the last Turn answered.
-            usage: state.usage.or(session.usage),
-            depends_on: session
-                .depends_on
+fn unfinished_state(value: domain::SessionState) -> wire::UnfinishedSessionState {
+    match value {
+        domain::SessionState::Queued => wire::UnfinishedSessionState::Queued,
+        domain::SessionState::Working => wire::UnfinishedSessionState::Working,
+        domain::SessionState::Trailing => wire::UnfinishedSessionState::Trailing,
+        domain::SessionState::Waiting => wire::UnfinishedSessionState::Waiting,
+        domain::SessionState::Unbriefed => wire::UnfinishedSessionState::Unbriefed,
+        domain::SessionState::Ended => wire::UnfinishedSessionState::Ended,
+        domain::SessionState::Unreachable => wire::UnfinishedSessionState::Unreachable,
+    }
+}
+
+fn session_preparing(value: domain::Preparing) -> wire::SessionPreparing {
+    match value {
+        domain::Preparing::Provisioning => wire::SessionPreparing::Provisioning,
+        domain::Preparing::Cloning => wire::SessionPreparing::Cloning,
+        domain::Preparing::StartingHarness => wire::SessionPreparing::StartingHarness,
+        domain::Preparing::HarnessReady => wire::SessionPreparing::HarnessReady,
+    }
+}
+
+fn unfinished_preparing(value: domain::Preparing) -> wire::UnfinishedSessionPreparing {
+    match value {
+        domain::Preparing::Provisioning => wire::UnfinishedSessionPreparing::Provisioning,
+        domain::Preparing::Cloning => wire::UnfinishedSessionPreparing::Cloning,
+        domain::Preparing::StartingHarness => wire::UnfinishedSessionPreparing::StartingHarness,
+        domain::Preparing::HarnessReady => wire::UnfinishedSessionPreparing::HarnessReady,
+    }
+}
+
+pub(crate) fn held_message(message: HeldMessage) -> wire::HeldMessage {
+    wire::HeldMessage {
+        id: message.id,
+        participant: message.participant,
+        message: message.message,
+        posted_at: message.posted_at.to_string(),
+        edited_at: message.edited_at.map(|at| at.to_string()),
+    }
+}
+
+fn pull_request_availability(value: pull_request::Availability) -> wire::PullRequestAvailability {
+    wire::PullRequestAvailability {
+        repository: value.repository,
+        availability: if value.known.is_some() {
+            wire::PullRequestAvailabilityAvailability::Available
+        } else {
+            wire::PullRequestAvailabilityAvailability::Unavailable
+        },
+        known: value.known.map(|known| {
+            known
                 .into_iter()
-                .map(|blocker| SessionReferenceRecord {
-                    id: blocker.id.to_string(),
-                    name: blocker.name,
+                .map(|pr| wire::PullRequest {
+                    repository: pr.repository,
+                    number: pr.number,
+                    url: pr.url,
+                    title: pr.title,
+                    state: match pr.state {
+                        domain::PullRequestState::Open => wire::PullRequestState::Open,
+                        domain::PullRequestState::Closed => wire::PullRequestState::Closed,
+                        domain::PullRequestState::Merged => wire::PullRequestState::Merged,
+                    },
+                    head_branch: pr.head_branch,
+                    head_revision: pr.head_revision,
+                    updated_at: pr.updated_at.to_string(),
+                    event: wire_id(&pr.event),
                 })
-                .collect(),
-            tools: state.tools,
-            units: state.units,
-            message_buffering: state.message_buffering,
-            thought_buffering: state.thought_buffering,
-            last_activity_at: state.last_activity_at.filter(|_| trailing),
-            observation,
+                .collect()
+        }),
+    }
+}
+
+pub(crate) fn session_exit(exit: domain::Exit) -> wire::Exit {
+    match exit {
+        domain::Exit::Succeeded => wire::Exit {
+            status: wire::ExitStatus::Succeeded,
+            because: None,
+        },
+        domain::Exit::Failed { because } => wire::Exit {
+            status: wire::ExitStatus::Failed,
+            because: Some(because),
+        },
+    }
+}
+
+pub(crate) fn session_usage(usage: domain::Usage) -> wire::Usage {
+    wire::Usage {
+        context_used: usage
+            .context_used
+            .try_into()
+            .expect("context usage fits a wire integer"),
+        context_size: usage
+            .context_size
+            .try_into()
+            .expect("context size fits a wire integer"),
+        cost: usage.cost.map(|cost| wire::Cost {
+            amount: cost.amount,
+            currency: cost.currency,
+        }),
+    }
+}
+
+pub(crate) fn running_tool(tool: crate::live_work::RunningTool) -> wire::RunningTool {
+    wire::RunningTool {
+        call_id: tool.call_id,
+        title: tool.title,
+        tool_kind: tool.tool_kind,
+        status: match tool.status {
+            crate::log::ToolStatus::Pending => "pending",
+            crate::log::ToolStatus::InProgress => "in_progress",
+            crate::log::ToolStatus::Completed => "completed",
+            crate::log::ToolStatus::Failed => "failed",
+        }
+        .to_owned(),
+        started_at: tool.started_at.to_string(),
+    }
+}
+
+pub(crate) fn running_unit(unit: crate::live_work::RunningUnit) -> wire::RunningUnit {
+    wire::RunningUnit {
+        id: unit.id,
+        title: unit.title,
+        started_at: unit.started_at.to_string(),
+        kind: match unit.kind {
+            crate::live_work::UnitKind::BackgroundTask => wire::RunningUnitKind::BackgroundTask,
+            crate::live_work::UnitKind::Subagent => wire::RunningUnitKind::Subagent,
+        },
+    }
+}
+
+pub(crate) fn session_observation(
+    observation: crate::live_work::Observation,
+) -> wire::SessionObservation {
+    match observation {
+        crate::live_work::Observation::Current { observed_at } => {
+            wire::SessionObservation::SessionObservationCurrent(wire::SessionObservationCurrent {
+                availability: "current".into(),
+                observed_at: observed_at.to_string(),
+            })
+        }
+        crate::live_work::Observation::Unavailable { last } => {
+            wire::SessionObservation::SessionObservationUnavailable(
+                wire::SessionObservationUnavailable {
+                    availability: "unavailable".into(),
+                    last: last.map(|last| wire::LastObservation {
+                        observed_at: last.observed_at.to_string(),
+                        tools: last.tools.into_iter().map(running_tool).collect(),
+                        units: last.units.into_iter().map(running_unit).collect(),
+                    }),
+                },
+            )
         }
     }
 }
 
-impl From<Trigger> for TriggerRecord {
+pub(crate) fn workspace_work(work: crate::live_work::Work) -> wire::WorkspaceWork {
+    let crate::live_work::Work {
+        current,
+        last_report,
+        earlier_reports,
+    } = work;
+    let earlier = work_earlier_reports(earlier_reports);
+    match current {
+        crate::live_work::Current::Reported { summary } => {
+            wire::WorkspaceWork::WorkReported(wire::WorkReported {
+                state: serde_json::json!("reported"),
+                repositories: summary
+                    .repositories
+                    .into_iter()
+                    .map(work_repository)
+                    .collect(),
+                reported_at: summary.reported_at.to_string(),
+                last_report: work_last_report(last_report),
+                earlier_reports: earlier,
+            })
+        }
+        crate::live_work::Current::NoInstance {
+            branch,
+            pull_request,
+        } => wire::WorkspaceWork::WorkNoInstance(wire::WorkNoInstance {
+            state: serde_json::json!("no_instance"),
+            branch,
+            pull_request,
+            last_report: work_last_report(last_report),
+            earlier_reports: earlier,
+        }),
+        crate::live_work::Current::NotAnswering { message } => {
+            wire::WorkspaceWork::WorkNotAnswering(wire::WorkNotAnswering {
+                state: serde_json::json!("not_answering"),
+                message: message.to_owned(),
+                last_report: work_last_report(last_report),
+                earlier_reports: earlier,
+            })
+        }
+    }
+}
+
+fn work_last_report(report: crate::live_work::LastReport) -> wire::WorkLastReport {
+    match report {
+        crate::live_work::LastReport::None => {
+            wire::WorkLastReport::WorkNoReport(wire::WorkNoReport {
+                report: serde_json::json!("none"),
+            })
+        }
+        crate::live_work::LastReport::Received {
+            instance,
+            current_instance,
+            summary,
+        } => wire::WorkLastReport::WorkInstanceReport(work_instance_report(
+            instance,
+            current_instance,
+            summary,
+        )),
+    }
+}
+
+/// Every earlier report is one an Instance sent: `live_work::read` collects them from stored rows.
+fn work_earlier_reports(
+    reports: Vec<crate::live_work::LastReport>,
+) -> Vec<wire::WorkInstanceReport> {
+    reports
+        .into_iter()
+        .filter_map(|report| match report {
+            crate::live_work::LastReport::Received {
+                instance,
+                current_instance,
+                summary,
+            } => Some(work_instance_report(instance, current_instance, summary)),
+            crate::live_work::LastReport::None => None,
+        })
+        .collect()
+}
+
+fn work_instance_report(
+    instance: String,
+    current_instance: bool,
+    summary: crate::live_work::Summary,
+) -> wire::WorkInstanceReport {
+    wire::WorkInstanceReport {
+        report: serde_json::json!("received"),
+        instance,
+        current_instance,
+        repositories: summary
+            .repositories
+            .into_iter()
+            .map(work_repository)
+            .collect(),
+        reported_at: summary.reported_at.to_string(),
+    }
+}
+
+fn work_repository(repository: crate::live_work::Repository) -> wire::WorkRepository {
+    let crate::live_work::Repository { repository, git } = repository;
+    match git {
+        crate::live_work::Git::Read {
+            branch,
+            changed,
+            staged,
+            committed,
+            pushed,
+            untracked,
+            stashed,
+        } => wire::WorkRepository::WorkRepositoryRead(wire::WorkRepositoryRead {
+            repository,
+            git: serde_json::json!("read"),
+            branch,
+            changed: work_changes(changed),
+            staged: work_changes(staged),
+            committed: work_commits(committed),
+            pushed,
+            untracked: wire_count(untracked),
+            stashed: wire_count(stashed),
+        }),
+        crate::live_work::Git::Unreadable { because } => {
+            wire::WorkRepository::WorkRepositoryUnreadable(wire::WorkRepositoryUnreadable {
+                repository,
+                git: serde_json::json!("unreadable"),
+                because,
+            })
+        }
+    }
+}
+
+fn work_changes(changes: crate::live_work::Changes) -> wire::WorkChanges {
+    wire::WorkChanges {
+        files: wire_count(changes.files),
+        added: wire_count(changes.added),
+        removed: wire_count(changes.removed),
+    }
+}
+
+fn work_commits(commits: crate::live_work::Commits) -> wire::WorkCommits {
+    wire::WorkCommits {
+        commits: wire_count(commits.commits),
+        added: wire_count(commits.added),
+        removed: wire_count(commits.removed),
+    }
+}
+
+fn wire_count(counted: u64) -> i64 {
+    counted.try_into().expect("a count fits a wire integer")
+}
+
+pub(crate) async fn workspace_record(
+    store: &Store,
+    workspace: Workspace,
+) -> anyhow::Result<wire::Workspace> {
+    let continued_by = workspace::continuations(store, workspace.id)
+        .await?
+        .into_iter()
+        .map(|workspace| workspace.to_string())
+        .collect();
+    let instance = work::instance(store, workspace.id).await?;
+    let held = instance::held_by(store, workspace.id)
+        .await?
+        .map(|held| held.because);
+    let pull_requests = pull_request::availability(store, &workspace)
+        .await?
+        .into_iter()
+        .map(pull_request_availability)
+        .collect();
+    let unfinished_session = workspace::unfinished(store, workspace.id)
+        .await?
+        .map(|session| wire::UnfinishedSession {
+            id: wire_id(&session.id),
+            name: session.name,
+            state: unfinished_state(session.state),
+            preparing: session.preparing.map(unfinished_preparing),
+        });
+    let held_messages = workspace::held_messages(store, workspace.id)
+        .await?
+        .into_iter()
+        .map(held_message)
+        .collect();
+
+    Ok(wire::Workspace {
+        id: wire_id(&workspace.id),
+        name: workspace.name,
+        organization: workspace.organization.name,
+        project: workspace.project.name,
+        opened_with: workspace.opened_with.name,
+        profile: workspace.profile.map(|profile| profile.name),
+        checkout: wire::Checkout {
+            base: workspace.checkout.base,
+            branch: workspace.checkout.branch,
+            repositories: workspace.checkout.repositories,
+        },
+        integrations: Some(selected(workspace.integrations)),
+        instance,
+        held,
+        correlation: workspace.correlation,
+        state: match workspace.state {
+            domain::WorkspaceState::Open => wire::WorkspaceState::Open,
+            domain::WorkspaceState::Sealed => wire::WorkspaceState::Sealed,
+        },
+        opened_at: workspace.opened_at.to_string(),
+        last_active_at: workspace.last_active_at.to_string(),
+        sealed_at: workspace.sealed_at.map(|at| at.to_string()),
+        continues: workspace.continues.map(|workspace| wire_id(&workspace)),
+        started_by: workspace.started_by.map(|started| match started {
+            StartedBy::Event(event) => event.to_string(),
+            StartedBy::Participant(participant) => participant,
+        }),
+        continued_by,
+        held_messages,
+        pull_requests,
+        unfinished_session,
+    })
+}
+
+pub(crate) fn session_record(
+    session: Session,
+    organization: &str,
+    summaries: &crate::live_work::Summaries,
+) -> wire::Session {
+    let (observation, state) = summaries.observed(Some(&session));
+    let trailing = session.state == domain::SessionState::Trailing;
+    let harness = session.agent.harness.clone();
+    let diagnostic = session
+        .evidence
+        .clone()
+        .map(|evidence| diagnosed_failure(&session, organization, evidence));
+    let supplied = session
+        .supplied
+        .iter()
+        .map(|supplied| supplied_material(&harness, supplied))
+        .collect();
+    let options = session
+        .options
+        .into_iter()
+        .map(|option| shown_option(option, &harness))
+        .collect();
+    wire::Session {
+        id: wire_id(&session.id),
+        name: session.name,
+        workspace: wire_id(&session.workspace),
+        state: session_state(session.state),
+        preparing: session.preparing.map(session_preparing),
+        exit: session.exit.map(session_exit),
+        outcome_message: session.outcome_message,
+        diagnostic,
+        instance: session.instance,
+        supervisor: session.supervisor,
+        agent: session.agent.name,
+        harness,
+        model: session.agent.declared.model,
+        mode: session.agent.declared.mode,
+        thought_level: session.agent.declared.thought_level,
+        worked_model: session.worked_model,
+        sign_in_method: session.sign_in_method,
+        supplied,
+        title: session.title,
+        options,
+        changing_options: session
+            .changing_options
+            .into_iter()
+            .map(|change| wire::ChangingOption {
+                category: change.category,
+                option: change.option,
+                participant: change.participant,
+                value: change.value,
+            })
+            .collect(),
+        commands: session
+            .commands
+            .into_iter()
+            .map(|command| wire::SessionCommand {
+                name: command.name,
+                description: command.description,
+                input_hint: command.input_hint,
+            })
+            .collect(),
+        interrupting: session.interrupting.map(|interrupt| wire::Interrupting {
+            participant: interrupt.participant,
+            requested_at: interrupt.requested_at.to_string(),
+        }),
+        enqueued_at: session.enqueued_at.to_string(),
+        started_at: session.started_at.map(|at| at.to_string()),
+        ended_at: session.ended_at.map(|at| at.to_string()),
+        lease_expires_at: session.lease_expires_at.map(|at| at.to_string()),
+        connected_at: session
+            .connected
+            .as_ref()
+            .map(|connected| connected.at.to_string()),
+        supervisor_version: session.connected.map(|connected| connected.version),
+        // The live figure is the Turn in flight; the recorded one is the last Turn answered.
+        usage: state.usage.or(session.usage).map(session_usage),
+        depends_on: session
+            .depends_on
+            .into_iter()
+            .map(|blocker| wire::SessionReference {
+                id: blocker.id.to_string(),
+                name: blocker.name,
+            })
+            .collect(),
+        tools: state.tools.into_iter().map(running_tool).collect(),
+        units: state.units.into_iter().map(running_unit).collect(),
+        message_buffering: state.message_buffering,
+        thought_buffering: state.thought_buffering,
+        last_activity_at: state
+            .last_activity_at
+            .filter(|_| trailing)
+            .map(|at| at.to_string()),
+        observation: session_observation(observation),
+    }
+}
+
+impl From<Trigger> for wire::Trigger {
     fn from(trigger: Trigger) -> Self {
         let (filter, every, cron, zone, admits_outsiders) = match trigger.fires {
             Fires::On(filter) => {
@@ -1416,15 +1447,25 @@ impl From<Trigger> for TriggerRecord {
                 false,
             ),
         };
+        let correlation = trigger.templates.correlation;
 
         Self {
-            id: trigger.id.to_string(),
+            id: wire_id(&trigger.id),
             organization: trigger.organization.name,
             name: trigger.name,
-            state: trigger.state.as_str().to_owned(),
+            state: match trigger.state {
+                TriggerState::Enabled => wire::TriggerState::Enabled,
+                TriggerState::Disabled(DisableReason::Operator) => {
+                    wire::TriggerState::DisabledOperator
+                }
+                TriggerState::Disabled(DisableReason::FiringBudget) => {
+                    wire::TriggerState::DisabledFiringBudget
+                }
+            },
             disabled_because: trigger.disabled_because,
-            firing_budget: FiringBudgetRecord {
-                limit: trigger.firing_budget.limit.get(),
+            firing_budget: wire::TriggerFiringBudget {
+                limit: i64::try_from(trigger.firing_budget.limit.get())
+                    .expect("a firing budget's limit fits the wire"),
                 window: format!("{:#}", trigger.firing_budget.window),
             },
             filter,
@@ -1434,22 +1475,15 @@ impl From<Trigger> for TriggerRecord {
             admits_outsiders,
             brief: trigger.templates.brief.to_string(),
             branch: trigger.templates.branch.map(|branch| branch.to_string()),
-            correlation: trigger
-                .templates
-                .correlation
-                .template()
-                .map(ToString::to_string),
-            on_miss: trigger
-                .templates
-                .correlation
-                .on_miss()
-                .map(|miss| miss.as_str().to_owned()),
-            on_open_workspace: trigger
-                .templates
-                .correlation
-                .on_open_workspace()
-                .as_str()
-                .to_owned(),
+            correlation: correlation.template().map(ToString::to_string),
+            on_miss: correlation.on_miss().map(|miss| match miss {
+                CorrelationMiss::Open => wire::TriggerOnMiss::Open,
+                CorrelationMiss::Ignore => wire::TriggerOnMiss::Ignore,
+            }),
+            on_open_workspace: match correlation.on_open_workspace() {
+                OnOpenWorkspace::Continue => wire::TriggerOnOpenWorkspace::Continue_,
+                OnOpenWorkspace::NewSession => wire::TriggerOnOpenWorkspace::NewSession,
+            },
             project: trigger.project.name,
             agent: trigger.agent.name,
             allows: trigger.allows.into_iter().map(|agent| agent.name).collect(),
@@ -1458,31 +1492,51 @@ impl From<Trigger> for TriggerRecord {
             mode: trigger.declared.mode,
             thought_level: trigger.declared.thought_level,
             applied: trigger.applied,
-            declared_at: trigger.declared_at,
+            declared_at: trigger.declared_at.to_string(),
         }
     }
 }
 
-#[derive(Serialize)]
-struct StartedRecord {
-    organization: start::Settled,
-    project: start::Settled,
-    agent: start::Settled,
-    workspace: WorkspaceRecord,
-    session: SessionRecord,
-}
-
-#[derive(Serialize)]
-struct OpenedRecord {
-    workspace: WorkspaceRecord,
-    session: SessionRecord,
-}
-
 async fn start(
     State(control_plane): State<ControlPlane>,
-    plan: Result<Json<start::Plan>, JsonRejection>,
-) -> Result<(StatusCode, Json<StartedRecord>), Refused> {
+    plan: Result<Json<wire::StartPlan>, JsonRejection>,
+) -> Result<(StatusCode, Json<wire::Started>), Refused> {
     let Json(plan) = plan?;
+    let plan = start::Plan {
+        organization: plan.organization,
+        brief: plan.brief,
+        project: declaration::Project {
+            name: plan.project.name,
+            repositories: plan.project.repositories,
+            branch: plan.project.branch,
+            integrations: plan
+                .project
+                .integrations
+                .unwrap_or_default()
+                .into_iter()
+                .map(|selection| crate::repository::Selection {
+                    repository: selection.repository,
+                    integration: selection.integration,
+                })
+                .collect(),
+        },
+        agent: declaration::Agent {
+            name: plan.agent.name,
+            harness: plan.agent.harness,
+            model: plan.agent.model.flatten(),
+            mode: plan.agent.mode.flatten(),
+            thought_level: plan.agent.thought_level.flatten(),
+        },
+        credentials: plan
+            .credentials
+            .unwrap_or_default()
+            .into_iter()
+            .map(|credential| start::Credential {
+                variable: credential.variable,
+                secret: credential.secret,
+            })
+            .collect(),
+    };
     let started = start::start(
         &control_plane.store,
         &control_plane.images,
@@ -1493,12 +1547,21 @@ async fn start(
 
     Ok((
         StatusCode::CREATED,
-        Json(StartedRecord {
-            organization: started.organization,
-            project: started.project,
-            agent: started.agent,
-            workspace: WorkspaceRecord::read(&control_plane.store, started.workspace).await?,
-            session: SessionRecord::read(
+        Json(wire::Started {
+            organization: wire::Settled {
+                name: started.organization.name,
+                created: started.organization.created,
+            },
+            project: wire::Settled {
+                name: started.project.name,
+                created: started.project.created,
+            },
+            agent: wire::Settled {
+                name: started.agent.name,
+                created: started.agent.created,
+            },
+            workspace: workspace_record(&control_plane.store, started.workspace).await?,
+            session: session_record(
                 started.session,
                 &plan.organization,
                 &control_plane.live.summaries,
@@ -1558,7 +1621,7 @@ async fn resolve_repositories(
 
 async fn organizations(
     State(control_plane): State<ControlPlane>,
-) -> Result<Json<Vec<OrganizationRecord>>, Refused> {
+) -> Result<Json<wire::ListOrganizationsResponse>, Refused> {
     let mut tx = control_plane.store.begin().await?;
     let organizations = tx.organizations().all().await?;
 
@@ -1567,25 +1630,38 @@ async fn organizations(
 
 async fn declare_organization(
     State(control_plane): State<ControlPlane>,
-    declaration: Result<Json<OrganizationDeclaration>, JsonRejection>,
+    declaration: Result<Json<wire::OrganizationDeclaration>, JsonRejection>,
 ) -> Result<Response, Refused> {
     let Json(declaration) = declaration?;
+    let max_live_instances = declaration
+        .max_live_instances
+        .flatten()
+        .map(|most| {
+            usize::try_from(most)
+                .ok()
+                .and_then(std::num::NonZeroUsize::new)
+                .ok_or_else(|| Refused::Malformed {
+                    field: Some("max_live_instances"),
+                    why: format!("max_live_instances is a count of at least 1, not {most}"),
+                })
+        })
+        .transpose()?;
     named("declare_organization", &declaration.name)?;
 
     let mut tx = control_plane.store.begin().await?;
     let declared = tx
         .organizations()
-        .declare(&declaration.name, declaration.max_live_instances)
+        .declare(&declaration.name, max_live_instances)
         .await?;
     tx.commit().await?;
 
-    Ok(answered::<_, OrganizationRecord>(declared))
+    Ok(answered::<_, wire::Organization>(declared))
 }
 
 async fn projects(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<ProjectRecord>>, Refused> {
+) -> Result<Json<wire::ListProjectsResponse>, Refused> {
     let mut tx = control_plane.store.begin().await?;
     let organization = tx.organizations().named(&organization).await?;
     let projects = tx.projects().all(&organization).await?;
@@ -1603,12 +1679,7 @@ async fn declare_project(
         &control_plane.store,
         &Github::unfenced()?,
         &organization,
-        &declaration::Project {
-            name: declaration.name.clone(),
-            repositories: declaration.repositories.clone(),
-            integrations: declaration.integrations.clone().unwrap_or_default(),
-            branch: declaration.branch.clone(),
-        },
+        &project_declaration(declaration),
         "declare_project",
     )
     .await
@@ -1625,13 +1696,13 @@ async fn declare_project(
     .await?;
     tx.commit().await?;
 
-    Ok(answered::<_, ProjectRecord>(declared))
+    Ok(answered::<_, wire::Project>(declared))
 }
 
 async fn agents(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<AgentRecord>>, Refused> {
+) -> Result<Json<wire::ListAgentsResponse>, Refused> {
     let agents = agent::agents(&control_plane.store, &organization).await?;
 
     Ok(Json(agents.into_iter().map(Into::into).collect()))
@@ -1640,14 +1711,14 @@ async fn agents(
 async fn set_agent_model(
     State(control_plane): State<ControlPlane>,
     Path((organization, name)): Path<(String, String)>,
-    model: Result<Json<AgentModel>, JsonRejection>,
-) -> Result<Json<AgentRecord>, Refused> {
+    model: Result<Json<wire::AgentModel>, JsonRejection>,
+) -> Result<Json<wire::Agent>, Refused> {
     let Json(model) = model?;
     let agent = agent::set_model(
         &control_plane.store,
         &organization,
         &name,
-        model.model.as_deref(),
+        model.model.flatten().as_deref(),
     )
     .await
     .map_err(named_refusal)?;
@@ -1658,14 +1729,14 @@ async fn set_agent_model(
 async fn declare_agent(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    declaration: Result<Json<AgentDeclaration>, JsonRejection>,
+    declaration: Result<Json<wire::AgentDeclaration>, JsonRejection>,
 ) -> Result<Response, Refused> {
     let Json(declaration) = declaration?;
     let checked = declaration::check_agent(
         &control_plane.images,
         &declaration.name,
         &declaration.harness,
-        &declaration.declared(),
+        &agent_defaults(&declaration),
         "declare_agent",
     )
     .await
@@ -1682,14 +1753,14 @@ async fn declare_agent(
     .await?;
     tx.commit().await?;
 
-    Ok(answered::<_, AgentRecord>(declared))
+    Ok(answered::<_, wire::Agent>(declared))
 }
 
 async fn apply_declaration(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    declaration: Result<Json<declaration::Document>, JsonRejection>,
-) -> Result<Json<declaration::Applied>, Refused> {
+    declaration: Result<Json<serde_json::Value>, JsonRejection>,
+) -> Result<Json<wire::AppliedDeclaration>, Refused> {
     declared_declaration(
         control_plane,
         organization,
@@ -1702,8 +1773,8 @@ async fn apply_declaration(
 async fn preview_declaration(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    declaration: Result<Json<declaration::Document>, JsonRejection>,
-) -> Result<Json<declaration::Applied>, Refused> {
+    declaration: Result<Json<serde_json::Value>, JsonRejection>,
+) -> Result<Json<wire::AppliedDeclaration>, Refused> {
     declared_declaration(
         control_plane,
         organization,
@@ -1716,10 +1787,11 @@ async fn preview_declaration(
 async fn declared_declaration(
     control_plane: ControlPlane,
     organization: String,
-    declaration: Result<Json<declaration::Document>, JsonRejection>,
+    declaration: Result<Json<serde_json::Value>, JsonRejection>,
     mode: declaration::ApplyMode,
-) -> Result<Json<declaration::Applied>, Refused> {
-    let Json(declaration) = declaration?;
+) -> Result<Json<wire::AppliedDeclaration>, Refused> {
+    let Json(sent) = declaration?;
+    let declaration = document(closed(&sent).map_err(|why| malformed(None, why))?)?;
     let applied = declaration::apply(
         &control_plane.store,
         &control_plane.images,
@@ -1731,25 +1803,163 @@ async fn declared_declaration(
     .await
     .map_err(named_refusal)?;
 
-    Ok(Json(applied))
+    Ok(Json(wire::AppliedDeclaration {
+        declarations: applied.declarations.into_iter().map(change).collect(),
+        admitting_outsiders: applied.admitting_outsiders,
+    }))
 }
 
-#[derive(Deserialize)]
-struct Secret {
-    secret: String,
+/// A generated type reads past a field it has no place for, so a body whose schema the
+/// document closes is read here, where one is refused by its path.
+fn closed<T: DeserializeOwned>(sent: &serde_json::Value) -> Result<T, String> {
+    let mut stray = None;
+    let mut ignored = |path: serde_ignored::Path<'_>| {
+        stray.get_or_insert_with(|| path.to_string());
+    };
+    let read =
+        serde_path_to_error::deserialize(serde_ignored::Deserializer::new(sent, &mut ignored));
+    match stray {
+        Some(field) => Err(format!("unknown field `{field}`")),
+        None => read.map_err(|error| error.to_string()),
+    }
 }
 
-#[derive(Serialize)]
-struct CredentialRecord {
-    variable: String,
-    set_at: Timestamp,
+/// A body whose schema the document leaves open, refused by the path of what it could not read.
+fn open<T: DeserializeOwned>(sent: &serde_json::Value) -> Result<T, Refused> {
+    serde_path_to_error::deserialize(sent).map_err(|error| malformed(None, error.to_string()))
 }
 
-impl From<Held> for CredentialRecord {
+fn project_declaration(declaration: wire::ProjectDeclaration) -> declaration::Project {
+    declaration::Project {
+        name: declaration.name,
+        repositories: declaration.repositories,
+        integrations: declaration.integrations.unwrap_or_default(),
+        branch: declaration.branch,
+    }
+}
+
+/// The document's trigger fires on a filter alone, which the generated type cannot say.
+fn document(document: wire::DeclarationDocument) -> Result<declaration::Document, Refused> {
+    let trigger = document.trigger;
+    for (field, schedule) in [
+        ("trigger.every", &trigger.every),
+        ("trigger.cron", &trigger.cron),
+        ("trigger.zone", &trigger.zone),
+    ] {
+        if schedule.is_some() {
+            return Err(malformed(
+                Some(field),
+                "a declaration document's trigger fires on a filter, not a schedule",
+            ));
+        }
+    }
+
+    Ok(declaration::Document {
+        project: project_declaration(document.project),
+        agent: declaration::Agent {
+            name: document.agent.name,
+            harness: document.agent.harness,
+            model: document.agent.model.flatten(),
+            mode: document.agent.mode.flatten(),
+            thought_level: document.agent.thought_level.flatten(),
+        },
+        trigger: declaration::TriggerDeclaration {
+            name: trigger.name,
+            filter: trigger.filter.ok_or_else(|| {
+                malformed(
+                    Some("trigger.filter"),
+                    "a declaration document's trigger declares its filter",
+                )
+            })?,
+            brief: trigger.brief,
+            branch: trigger.branch.flatten(),
+            correlation: trigger.correlation.flatten(),
+            on_miss: trigger.on_miss.flatten(),
+            on_open_workspace: trigger.on_open_workspace.flatten(),
+            project: trigger.project,
+            agent: trigger.agent,
+            allows: trigger.allows.unwrap_or_default(),
+            profile: trigger.profile.flatten(),
+            model: trigger.model.flatten(),
+            mode: trigger.mode.flatten(),
+            thought_level: trigger.thought_level.flatten(),
+        },
+    })
+}
+
+/// The generated file flattens its entries out of serde's sight, so each is read alone first
+/// for a refusal to name the entry it is in.
+fn trigger_file(sent: &serde_json::Value) -> Result<triggers::File, Refused> {
+    let entries = sent.get("triggers").and_then(serde_json::Value::as_object);
+    for (name, entry) in entries.into_iter().flatten() {
+        closed::<wire::TriggerFileEntry>(entry)
+            .map_err(|why| malformed(None, format!("triggers.{name}: {why}")))?;
+    }
+    let file: wire::TriggerFile = closed(sent).map_err(|why| malformed(None, why))?;
+
+    Ok(triggers::File {
+        triggers: file
+            .triggers
+            .additional_properties
+            .into_iter()
+            .map(|(name, entry)| {
+                (
+                    name,
+                    triggers::Entry {
+                        filter: entry.filter,
+                        brief: entry.brief,
+                        branch: entry.branch.flatten(),
+                        correlation: entry.correlation.flatten(),
+                        on_miss: entry.on_miss.flatten(),
+                        on_open_workspace: entry.on_open_workspace.flatten(),
+                        project: entry.project,
+                        agent: entry.agent,
+                        allows: entry.allows.unwrap_or_default(),
+                        profile: entry.profile.flatten(),
+                        model: entry.model.flatten(),
+                        mode: entry.mode.flatten(),
+                        thought_level: entry.thought_level.flatten(),
+                    },
+                )
+            })
+            .collect(),
+    })
+}
+
+fn change(change: declaration::Declaration) -> wire::DeclarationChange {
+    wire::DeclarationChange {
+        kind: match change.kind {
+            declaration::Kind::Project => wire::DeclarationChangeKind::Project,
+            declaration::Kind::Agent => wire::DeclarationChangeKind::Agent,
+            declaration::Kind::Trigger => wire::DeclarationChangeKind::Trigger,
+        },
+        name: change.name,
+        action: match change.action {
+            declaration::Action::Add => wire::DeclarationChangeAction::Add,
+            declaration::Action::Change => wire::DeclarationChangeAction::Change,
+            declaration::Action::Unchanged => wire::DeclarationChangeAction::Unchanged,
+            declaration::Action::Remove => wire::DeclarationChangeAction::Remove,
+        },
+        differences: differences(change.differences),
+    }
+}
+
+fn differences(differences: Vec<declaration::Difference>) -> Vec<wire::DeclarationDifference> {
+    differences
+        .into_iter()
+        .map(|difference| wire::DeclarationDifference {
+            field: difference.field.to_owned(),
+            was: difference.was,
+            becomes: difference.becomes,
+        })
+        .collect()
+}
+
+impl From<Held> for wire::ProviderCredential {
     fn from(held: Held) -> Self {
         Self {
             variable: held.variable,
-            set_at: held.set_at,
+            set_at: held.set_at.to_string(),
         }
     }
 }
@@ -1757,7 +1967,7 @@ impl From<Held> for CredentialRecord {
 async fn credentials(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<CredentialRecord>>, Refused> {
+) -> Result<Json<Vec<wire::ProviderCredential>>, Refused> {
     let held = provider::held(&control_plane.store, &organization).await?;
 
     Ok(Json(held.into_iter().map(Into::into).collect()))
@@ -1766,10 +1976,16 @@ async fn credentials(
 async fn hold_credential(
     State(control_plane): State<ControlPlane>,
     Path((organization, variable)): Path<(String, String)>,
-    secret: Result<Json<Secret>, JsonRejection>,
-) -> Result<Json<CredentialRecord>, Refused> {
-    let Json(Secret { secret }) = secret?;
-    let held = provider::hold(&control_plane.store, &organization, &variable, &secret).await?;
+    secret: Result<Json<wire::ProviderCredentialSecret>, JsonRejection>,
+) -> Result<Json<wire::ProviderCredential>, Refused> {
+    let Json(secret) = secret?;
+    let held = provider::hold(
+        &control_plane.store,
+        &organization,
+        &variable,
+        &secret.secret,
+    )
+    .await?;
 
     Ok(Json(held.into()))
 }
@@ -1786,12 +2002,10 @@ async fn forget_credential(
 impl From<SubscriptionProfile> for wire::SubscriptionProfile {
     fn from(profile: SubscriptionProfile) -> Self {
         Self {
-            id: profile.id.to_string().parse().expect("a Profile UUID"),
+            id: wire_id(&profile.id),
             name: profile.name,
             owner: profile.owner,
-            owner_operator: profile
-                .owner_operator
-                .map(|id| id.to_string().parse().expect("an Operator UUID")),
+            owner_operator: profile.owner_operator.map(|id| wire_id(&id)),
         }
     }
 }
@@ -1854,7 +2068,7 @@ async fn declare_profile(
 async fn hold_profile_variable(
     State(control_plane): State<ControlPlane>,
     Path((organization, profile, variable)): Path<(String, String, String)>,
-    secret: Result<Json<Secret>, JsonRejection>,
+    secret: Result<Json<wire::ProviderCredentialSecret>, JsonRejection>,
 ) -> Result<Json<wire::SubscriptionProfileLogin>, Refused> {
     let entry = Entry::variable(&variable)?;
     held_in_profile(&control_plane, &organization, &profile, &entry, secret).await
@@ -1863,7 +2077,7 @@ async fn hold_profile_variable(
 async fn hold_profile_file(
     State(control_plane): State<ControlPlane>,
     Path((organization, profile, path)): Path<(String, String, String)>,
-    secret: Result<Json<Secret>, JsonRejection>,
+    secret: Result<Json<wire::ProviderCredentialSecret>, JsonRejection>,
 ) -> Result<Json<wire::SubscriptionProfileLogin>, Refused> {
     let entry = Entry::file(&path)?;
     held_in_profile(&control_plane, &organization, &profile, &entry, secret).await
@@ -1874,10 +2088,17 @@ async fn held_in_profile(
     organization: &str,
     profile: &str,
     entry: &Entry,
-    secret: Result<Json<Secret>, JsonRejection>,
+    secret: Result<Json<wire::ProviderCredentialSecret>, JsonRejection>,
 ) -> Result<Json<wire::SubscriptionProfileLogin>, Refused> {
-    let Json(Secret { secret }) = secret?;
-    let held = profile::hold(&control_plane.store, organization, profile, entry, &secret).await?;
+    let Json(secret) = secret?;
+    let held = profile::hold(
+        &control_plane.store,
+        organization,
+        profile,
+        entry,
+        &secret.secret,
+    )
+    .await?;
 
     Ok(Json(held.into()))
 }
@@ -2240,11 +2461,7 @@ async fn github_app_installed(
         .query_pairs_mut()
         .append_pair("organization", &status.organization)
         .append_pair("github_app_flow", &query.state);
-    let mut response = setup_page(format!(
-        "<!doctype html><title>Choose a repository</title><h1>The App is installed</h1><p><a href=\"{}?state={}\">Choose one repository here</a> or return to the Client.</p>",
-        integration::manifest::PAGE,
-        query.state
-    ));
+    let mut response = setup_page(integration::manifest::installed_page(&query.state));
     *response.status_mut() = StatusCode::SEE_OTHER;
     response.headers_mut().insert(
         "location",
@@ -2339,31 +2556,6 @@ async fn github_app_setup_finish(
     ))
 }
 
-#[derive(Deserialize)]
-struct IntegrationRegistration {
-    name: String,
-    carries: Option<Vec<Direction>>,
-    #[serde(flatten)]
-    connection: ConnectionRegistration,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum ConnectionRegistration {
-    Github {
-        repository: String,
-        app_id: i64,
-        installation: i64,
-        private_key: String,
-        interval: Option<String>,
-        webhook_secret: Option<String>,
-        api: Option<String>,
-    },
-    Webhook {
-        secret: String,
-    },
-}
-
 /// Never the private key or a webhook secret: what an Integration presents stays behind the
 /// boundary. The bot login is not a secret — it is the name GitHub already shows in public.
 fn integration_record(integration: Integration, organization: &str) -> wire::Integration {
@@ -2394,11 +2586,7 @@ fn integration_record(integration: Integration, organization: &str) -> wire::Int
     };
 
     wire::Integration {
-        id: integration
-            .id
-            .to_string()
-            .parse()
-            .expect("an Integration UUID"),
+        id: wire_id(&integration.id),
         name: integration.name,
         kind,
         repository,
@@ -2420,7 +2608,7 @@ fn integration_record(integration: Integration, organization: &str) -> wire::Int
             .canceled_posts
             .into_iter()
             .map(|post| wire::CanceledPost {
-                session: post.session.to_string().parse().expect("a Session UUID"),
+                session: wire_id(&post.session),
                 turn: post.turn,
                 canceled_at: post.canceled_at.to_string(),
                 reason: post.because,
@@ -2509,11 +2697,7 @@ async fn change_integration(
             ),
         ));
     }
-    let change: wire::IntegrationChange =
-        serde_json::from_value(change).map_err(|error| Refused::Malformed {
-            field: None,
-            why: error.to_string(),
-        })?;
+    let change: wire::IntegrationChange = open(&change)?;
     if let Some(name) = &change.name {
         named("change_integration", name)?;
     }
@@ -2644,52 +2828,78 @@ async fn replace_integration_private_key(
     Ok(Json(integration_record(replaced, &organization)))
 }
 
+fn registration_name(registration: &wire::IntegrationRegistration) -> &str {
+    match registration {
+        wire::IntegrationRegistration::GithubRegistration(github) => &github.name,
+        wire::IntegrationRegistration::WebhookRegistration(webhook) => &webhook.name,
+    }
+}
+
+fn registration_connecting(
+    registration: &wire::IntegrationRegistration,
+) -> Result<(&[wire::Direction], Connecting<'_>), Refused> {
+    match registration {
+        wire::IntegrationRegistration::GithubRegistration(github) => {
+            let interval = github
+                .interval
+                .as_ref()
+                .and_then(|interval| interval.as_deref());
+            Ok((
+                github
+                    .carries
+                    .as_deref()
+                    .unwrap_or(&[wire::Direction::Inbound, wire::Direction::Outbound]),
+                Connecting::Github {
+                    repository: &github.repository,
+                    api: github
+                        .api
+                        .as_ref()
+                        .and_then(|api| api.as_deref())
+                        .unwrap_or(github::API),
+                    app_id: github.app_id,
+                    installation: github.installation,
+                    private_key: &github.private_key,
+                    interval: interval
+                        .map_or(Ok(SignedDuration::from_mins(1)), str::parse)
+                        .map_err(|error| {
+                            Refused::Unprocessable(format!("an interval is a duration: {error}"))
+                        })?,
+                    signing_secret: github
+                        .webhook_secret
+                        .as_ref()
+                        .and_then(|secret| secret.as_deref()),
+                },
+            ))
+        }
+        wire::IntegrationRegistration::WebhookRegistration(webhook) => Ok((
+            webhook
+                .carries
+                .as_deref()
+                .unwrap_or(&[wire::Direction::Inbound]),
+            Connecting::Webhook {
+                secret: &webhook.secret,
+            },
+        )),
+    }
+}
+
 async fn register_integration(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    registration: Result<Json<IntegrationRegistration>, JsonRejection>,
+    registration: Result<Json<wire::IntegrationRegistration>, JsonRejection>,
 ) -> Result<(StatusCode, Json<wire::Integration>), Refused> {
     let Json(registration) = registration?;
-    named("register_integration", &registration.name)?;
-
-    let (connecting, carries) = match &registration.connection {
-        ConnectionRegistration::Github {
-            repository,
-            app_id,
-            installation,
-            private_key,
-            interval,
-            webhook_secret,
-            api,
-        } => (
-            Connecting::Github {
-                repository,
-                api: api.as_deref().unwrap_or(github::API),
-                app_id: *app_id,
-                installation: *installation,
-                private_key,
-                interval: interval
-                    .as_deref()
-                    .map_or(Ok(SignedDuration::from_mins(1)), str::parse)
-                    .map_err(|error| {
-                        Refused::Unprocessable(format!("an interval is a duration: {error}"))
-                    })?,
-                signing_secret: webhook_secret.as_deref(),
-            },
-            &[Direction::Inbound, Direction::Outbound][..],
-        ),
-        ConnectionRegistration::Webhook { secret } => {
-            (Connecting::Webhook { secret }, &[Direction::Inbound][..])
-        }
-    };
+    named("register_integration", registration_name(&registration))?;
+    let (carries, connecting) = registration_connecting(&registration)?;
+    let carries: Vec<Direction> = carries.iter().map(domain_direction).collect();
     let github = Github::unfenced()?;
     let registered = integration::register(
         &control_plane.store,
         &github,
         Registration {
             organization: &organization,
-            name: &registration.name,
-            carries: registration.carries.as_deref().unwrap_or(carries),
+            name: registration_name(&registration),
+            carries: &carries,
             connecting,
         },
     )
@@ -2716,34 +2926,53 @@ struct Limited {
     limit: Option<usize>,
 }
 
-#[derive(Serialize)]
-struct EventRecord {
-    record: String,
-    organization: String,
-    integration: Option<String>,
-    recorded_at: Timestamp,
-    event: Occurrence,
-    firings: Vec<Firing>,
+async fn event_record(store: &Store, event: domain::Event) -> Result<wire::EventRecord, Refused> {
+    let mut firings = Vec::new();
+    for firing in trigger::firings(store, event.record_id).await? {
+        firings.push(wire::Firing {
+            outcome: match firing.outcome.as_str() {
+                "opened" => wire::FiringOutcome::Opened,
+                "fed" => wire::FiringOutcome::Fed,
+                "ignored" => wire::FiringOutcome::Ignored,
+                "failed" => wire::FiringOutcome::Failed,
+                "held" => wire::FiringOutcome::Held,
+                "canceled" => wire::FiringOutcome::Canceled,
+                outcome => return Err(anyhow::anyhow!("a firing ended {outcome}").into()),
+            },
+            trigger: firing.trigger,
+            workspace: firing.workspace.map(|workspace| wire_id(&workspace)),
+            failure: firing.failure,
+            worked_ahead: firing.worked_ahead,
+        });
+    }
+
+    Ok(wire::EventRecord {
+        record: wire_id(&event.record_id),
+        organization: wire_id(&event.organization),
+        integration: event.integration.map(|integration| wire_id(&integration)),
+        recorded_at: event.recorded_at.to_string(),
+        event: wire::CloudEvent {
+            id: event.occurrence.id,
+            source: event.occurrence.source,
+            specversion: event.occurrence.specversion,
+            r#type: event.occurrence.r#type,
+            subject: event.occurrence.subject,
+            time: event.occurrence.time.to_string(),
+            data: event.occurrence.data,
+        },
+        firings,
+    })
 }
 
-impl EventRecord {
-    async fn read(store: &Store, event: domain::Event) -> Result<Self, Refused> {
-        Ok(Self {
-            record: event.record_id.to_string(),
-            organization: event.organization.to_string(),
-            integration: event.integration.map(|integration| integration.to_string()),
-            recorded_at: event.recorded_at,
-            firings: trigger::firings(store, event.record_id).await?,
-            event: event.occurrence,
-        })
-    }
+fn wire_id(id: &impl ToString) -> uuid::Uuid {
+    id.to_string().parse().expect("an identifier is a UUID")
 }
 
 async fn events(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
     Query(limited): Query<Limited>,
-) -> Result<Json<Vec<EventRecord>>, Refused> {
+) -> Result<Json<wire::ListEventsResponse>, Refused> {
     let events = integration::events(
         &control_plane.store,
         &organization,
@@ -2752,7 +2981,7 @@ async fn events(
     .await?;
     let mut records = Vec::new();
     for event in events {
-        records.push(EventRecord::read(&control_plane.store, event).await?);
+        records.push(event_record(&control_plane.store, event).await?);
     }
 
     Ok(Json(records))
@@ -2761,17 +2990,17 @@ async fn events(
 async fn event(
     State(control_plane): State<ControlPlane>,
     Path(record): Path<String>,
-) -> Result<Json<EventRecord>, Refused> {
+) -> Result<Json<wire::EventRecord>, Refused> {
     let record: EventRecordId = record.parse().map_err(|_| no_event(&record, None))?;
     let event = integration::event(&control_plane.store, record).await?;
 
-    Ok(Json(EventRecord::read(&control_plane.store, event).await?))
+    Ok(Json(event_record(&control_plane.store, event).await?))
 }
 
 async fn triggers(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<TriggerRecord>>, Refused> {
+) -> Result<Json<wire::ListTriggersResponse>, Refused> {
     let triggers = trigger::triggers(&control_plane.store, &organization)
         .await
         .map_err(named_refusal)?;
@@ -2782,8 +3011,8 @@ async fn triggers(
 async fn declare_trigger(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    declaration: Result<Json<TriggerDeclaration>, JsonRejection>,
-) -> Result<(StatusCode, Json<TriggerRecord>), Refused> {
+    declaration: Result<Json<wire::TriggerDeclaration>, JsonRejection>,
+) -> Result<(StatusCode, Json<wire::Trigger>), Refused> {
     let Json(declaration) = declaration?;
     let checked = declaration::check_trigger(&declaration::TriggerFields {
         name: &declaration.name,
@@ -2795,16 +3024,23 @@ async fn declare_trigger(
         },
         templates: declaration::TemplateFields {
             brief: &declaration.brief,
-            branch: declaration.branch.as_deref(),
-            correlation: declaration.correlation.as_deref(),
-            on_miss: declaration.on_miss.as_deref(),
-            on_open_workspace: declaration.on_open_workspace.as_deref(),
+            branch: declaration.branch.as_ref().and_then(Option::as_deref),
+            correlation: declaration.correlation.as_ref().and_then(Option::as_deref),
+            on_miss: declaration.on_miss.as_ref().and_then(Option::as_deref),
+            on_open_workspace: declaration
+                .on_open_workspace
+                .as_ref()
+                .and_then(Option::as_deref),
         },
         project: &declaration.project,
         agent: &declaration.agent,
-        declared: declaration.declared(),
-        allows: &declaration.allows,
-        profile: declaration.profile.as_deref(),
+        declared: Declared::named(Declared {
+            model: declaration.model.clone().flatten(),
+            mode: declaration.mode.clone().flatten(),
+            thought_level: declaration.thought_level.clone().flatten(),
+        }),
+        allows: declaration.allows.as_deref().unwrap_or_default(),
+        profile: declaration.profile.as_ref().and_then(Option::as_deref),
     })
     .map_err(|error| declaration::scoped(declaration::Prefix::Root, "declare_trigger", error))?;
     let mut tx = control_plane.store.begin().await?;
@@ -2830,7 +3066,7 @@ async fn declare_trigger(
 async fn show_trigger(
     State(control_plane): State<ControlPlane>,
     Path((organization, name)): Path<(String, String)>,
-) -> Result<Json<TriggerRecord>, Refused> {
+) -> Result<Json<wire::Trigger>, Refused> {
     let trigger = trigger::show(&control_plane.store, &organization, &name)
         .await
         .map_err(named_refusal)?;
@@ -2841,20 +3077,25 @@ async fn show_trigger(
 async fn test_trigger(
     State(control_plane): State<ControlPlane>,
     Path((organization, name)): Path<(String, String)>,
-    tested: Result<Json<TriggerTest>, JsonRejection>,
-) -> Result<Json<TriggerTestRecord>, Refused> {
-    let Json(tested) = tested?;
-    let event = tested
-        .event
-        .as_deref()
-        .map(|event| {
-            event
-                .parse()
-                .map_err(|_| no_event(event, Some(&organization)))
-        })
-        .transpose()?;
+    tested: Result<Json<serde_json::Value>, JsonRejection>,
+) -> Result<Json<wire::TriggerTestResult>, Refused> {
+    let Json(sent) = tested?;
+    let tested: wire::TriggerTest = open(&sent)?;
+    let declared = match tested.declared.flatten() {
+        Some(_) => Some(trigger_file(&sent["declared"])?),
+        None => None,
+    };
+    let event: Option<EventRecordId> = tested.event.flatten().map(|event| {
+        event
+            .to_string()
+            .parse()
+            .expect("an Event's identifier is a UUID")
+    });
+    let integration = tested.integration.flatten();
+    let instruction = tested.instruction.flatten();
+    let agent = tested.agent.flatten();
     let github;
-    let against = match (event, tested.integration.as_deref(), tested.issue) {
+    let against = match (event, integration.as_deref(), tested.issue.flatten()) {
         (Some(_), _, Some(_)) => {
             return Err(malformed(
                 Some("issue"),
@@ -2885,10 +3126,10 @@ async fn test_trigger(
         (None, None, None) => trigger::Against::NextElapsing,
     };
     let asked = trigger::Asked {
-        instruction: tested.instruction.as_deref(),
-        agent: tested.agent.as_deref(),
+        instruction: instruction.as_deref(),
+        agent: agent.as_deref(),
     };
-    let tested = match tested.declared {
+    let tested = match declared {
         Some(file) => {
             let declarations = triggers::declarations(file)
                 .map_err(|error| {
@@ -2932,21 +3173,26 @@ async fn test_trigger(
         .would
         .ok_or_else(|| anyhow::anyhow!("a trigger that rendered says what its firing would do"))?;
 
-    Ok(Json(TriggerTestRecord {
+    Ok(Json(wire::TriggerTestResult {
         matches: tested.matches,
         brief: rendered.brief,
         branch: rendered.branch,
         correlation: rendered.correlation,
         agent,
-        would: would.as_str(),
-        elapsing: tested.elapsing,
+        would: match would {
+            trigger::Would::Open => wire::TriggerTestResultWould::OpenWorkspace,
+            trigger::Would::Continue => wire::TriggerTestResultWould::ContinueSession,
+            trigger::Would::NewSession => wire::TriggerTestResultWould::NewSession,
+            trigger::Would::Ignore => wire::TriggerTestResultWould::Ignore,
+        },
+        elapsing: tested.elapsing.map(|elapsing| elapsing.to_string()),
     }))
 }
 
 async fn disable_trigger(
     State(control_plane): State<ControlPlane>,
     Path((organization, name)): Path<(String, String)>,
-) -> Result<Json<TriggerRecord>, Refused> {
+) -> Result<Json<wire::Trigger>, Refused> {
     let trigger = trigger::disable(&control_plane.store, &organization, &name)
         .await
         .map_err(named_refusal)?;
@@ -2957,7 +3203,7 @@ async fn disable_trigger(
 async fn enable_trigger(
     State(control_plane): State<ControlPlane>,
     Path((organization, name)): Path<(String, String)>,
-) -> Result<Json<TriggerRecord>, Refused> {
+) -> Result<Json<wire::Trigger>, Refused> {
     let trigger = trigger::enable(&control_plane.store, &organization, &name)
         .await
         .map_err(named_refusal)?;
@@ -2965,31 +3211,14 @@ async fn enable_trigger(
     Ok(Json(trigger.into()))
 }
 
-#[derive(Serialize)]
-#[serde(tag = "outcome", rename_all = "snake_case")]
-enum FiredRecord {
-    Opened {
-        event: String,
-        workspace: String,
-        session: String,
-    },
-    Fed {
-        event: String,
-        workspace: String,
-        session: Option<String>,
-    },
-    Ignored {
-        event: String,
-        correlation: String,
-    },
-}
-
 async fn dispatch_trigger(
     State(control_plane): State<ControlPlane>,
     Path((organization, name)): Path<(String, String)>,
-    dispatch: Result<Json<TriggerDispatch>, JsonRejection>,
-) -> Result<Json<FiredRecord>, Refused> {
+    dispatch: Result<Json<wire::TriggerDispatch>, JsonRejection>,
+) -> Result<Json<wire::Fired>, Refused> {
     let Json(dispatch) = dispatch?;
+    let instruction = dispatch.instruction.flatten();
+    let agent = dispatch.agent.flatten();
     let fired = trigger::dispatch(
         &control_plane.store,
         &Github::dialling_out(&control_plane.store)?,
@@ -2999,8 +3228,8 @@ async fn dispatch_trigger(
             integration: &dispatch.integration,
             issue: dispatch.issue,
             asked: trigger::Asked {
-                instruction: dispatch.instruction.as_deref(),
-                agent: dispatch.agent.as_deref(),
+                instruction: instruction.as_deref(),
+                agent: agent.as_deref(),
             },
         },
     )
@@ -3012,26 +3241,29 @@ async fn dispatch_trigger(
             event,
             workspace,
             session,
-        } => FiredRecord::Opened {
-            event: event.to_string(),
-            workspace: workspace.to_string(),
-            session: session.to_string(),
-        },
+        } => wire::Fired::FiredOpened(wire::FiredOpened {
+            outcome: serde_json::json!("opened"),
+            event: wire_id(&event),
+            workspace: wire_id(&workspace),
+            session: wire_id(&session),
+        }),
         trigger::Fired::Fed {
             event,
             workspace,
             session,
-        } => FiredRecord::Fed {
-            event: event.to_string(),
-            workspace: workspace.to_string(),
-            session: session.map(|session| session.to_string()),
-        },
+        } => wire::Fired::FiredFed(wire::FiredFed {
+            outcome: serde_json::json!("fed"),
+            event: wire_id(&event),
+            workspace: wire_id(&workspace),
+            session: session.map(|session| wire_id(&session)),
+        }),
         trigger::Fired::Ignored {
             event, correlation, ..
-        } => FiredRecord::Ignored {
-            event: event.to_string(),
+        } => wire::Fired::FiredIgnored(wire::FiredIgnored {
+            outcome: serde_json::json!("ignored"),
+            event: wire_id(&event),
             correlation,
-        },
+        }),
         trigger::Fired::Failed { because, .. }
         | trigger::Fired::Held { because, .. }
         | trigger::Fired::Canceled { because, .. } => {
@@ -3043,26 +3275,27 @@ async fn dispatch_trigger(
 async fn apply_triggers(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    file: Result<Json<triggers::File>, JsonRejection>,
-) -> Result<Json<triggers::Applied>, Refused> {
+    file: Result<Json<serde_json::Value>, JsonRejection>,
+) -> Result<Json<wire::AppliedTriggers>, Refused> {
     applied_triggers(control_plane, organization, file, false).await
 }
 
 async fn preview_applied_triggers(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    file: Result<Json<triggers::File>, JsonRejection>,
-) -> Result<Json<triggers::Applied>, Refused> {
+    file: Result<Json<serde_json::Value>, JsonRejection>,
+) -> Result<Json<wire::AppliedTriggers>, Refused> {
     applied_triggers(control_plane, organization, file, true).await
 }
 
 async fn applied_triggers(
     control_plane: ControlPlane,
     organization: String,
-    file: Result<Json<triggers::File>, JsonRejection>,
+    file: Result<Json<serde_json::Value>, JsonRejection>,
     dry_run: bool,
-) -> Result<Json<triggers::Applied>, Refused> {
-    let Json(file) = file?;
+) -> Result<Json<wire::AppliedTriggers>, Refused> {
+    let Json(sent) = file?;
+    let file = trigger_file(&sent)?;
     let operation = if dry_run {
         "preview_applied_triggers"
     } else {
@@ -3075,7 +3308,23 @@ async fn applied_triggers(
         .await
         .map_err(named_refusal)?;
 
-    Ok(Json(applied))
+    Ok(Json(wire::AppliedTriggers {
+        changes: applied
+            .changes
+            .into_iter()
+            .map(|change| wire::DeclarationChange {
+                kind: wire::DeclarationChangeKind::Trigger,
+                name: change.name,
+                action: match change.action {
+                    triggers::Action::Add => wire::DeclarationChangeAction::Add,
+                    triggers::Action::Change => wire::DeclarationChangeAction::Change,
+                    triggers::Action::Remove => wire::DeclarationChangeAction::Remove,
+                },
+                differences: differences(change.differences),
+            })
+            .collect(),
+        admitting_outsiders: applied.admitting_outsiders,
+    }))
 }
 
 /// An untyped refusal here is about what the request named, never a control plane that could
@@ -3087,23 +3336,16 @@ fn named_refusal(error: anyhow::Error) -> Refused {
     Refused::Unprocessable(error.to_string())
 }
 
-#[derive(Serialize)]
-struct HeldRecord {
-    workspace: String,
-    instance: String,
-    because: String,
-}
-
 async fn instances(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<HeldRecord>>, Refused> {
+) -> Result<Json<Vec<wire::HeldInstance>>, Refused> {
     let held = instance::held(&control_plane.store, &organization).await?;
 
     Ok(Json(
         held.into_iter()
-            .map(|held| HeldRecord {
-                workspace: held.workspace.to_string(),
+            .map(|held| wire::HeldInstance {
+                workspace: wire_id(&held.workspace),
                 instance: held.instance,
                 because: held.because,
             })
@@ -3111,268 +3353,184 @@ async fn instances(
     ))
 }
 
-#[derive(Serialize)]
-struct ReleasedRecord {
-    instance: String,
-}
-
-#[derive(Serialize)]
-struct WorkRoleRecord {
-    active_work_slots: usize,
-    serialized_harnesses: Vec<String>,
-    driver: String,
-}
-
-#[derive(Serialize)]
-struct ActiveWorkRecord {
-    limit: Option<usize>,
-    occupied: usize,
-    occupants: Vec<OccupantRecord>,
-    elsewhere: usize,
-}
-
-#[derive(Serialize)]
-struct OccupantRecord {
-    name: String,
-    workspace: String,
-    agent: String,
-    phase: OccupantPhase,
-    enqueued_at: Timestamp,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-enum OccupantPhase {
-    Working,
-    Trailing,
-}
-
-#[derive(Serialize)]
-struct InstancesRecord {
-    limit: Option<usize>,
-    count: usize,
-    counted: Vec<String>,
-}
-
-#[derive(Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum ReasonRecord {
-    Dependencies {
-        sessions: Vec<String>,
-    },
-    SubscriptionProfile {
-        profile: String,
-        session: Option<String>,
-        diagnostic: Box<wire::Diagnostic>,
-    },
-    InstanceArchiving {
-        instance: String,
-    },
-    LiveInstanceLimit {
-        limit: usize,
-    },
-    ActiveWorkSlots {
-        limit: usize,
-    },
-    Ahead {
-        sessions: Vec<String>,
-        #[serde(skip_serializing_if = "is_zero")]
-        elsewhere: usize,
-    },
-}
-
-fn is_zero(value: &usize) -> bool {
-    *value == 0
-}
-
-impl From<scheduling::Reason> for ReasonRecord {
-    fn from(reason: scheduling::Reason) -> Self {
-        match reason {
-            scheduling::Reason::Dependencies(sessions) => Self::Dependencies { sessions },
-            scheduling::Reason::SubscriptionProfile(busy) => {
-                let profile = busy.profile.clone();
-                let session = busy.holder.session().map(str::to_owned);
-                let (_, diagnostic) = diagnosis(Reason::SignInBusy(busy), None);
-                Self::SubscriptionProfile {
+fn queue_reason(reason: scheduling::Reason) -> wire::QueueReason {
+    match reason {
+        scheduling::Reason::Dependencies(sessions) => {
+            wire::QueueReason::QueueReasonDependencies(wire::QueueReasonDependencies {
+                kind: serde_json::json!("dependencies"),
+                sessions,
+            })
+        }
+        scheduling::Reason::SubscriptionProfile(busy) => {
+            let profile = busy.profile.clone();
+            let session = busy.holder.session().map(str::to_owned);
+            let (_, diagnostic) = diagnosis(Reason::SignInBusy(busy), None);
+            wire::QueueReason::QueueReasonSubscriptionProfile(
+                wire::QueueReasonSubscriptionProfile {
                     profile,
                     session,
-                    diagnostic: Box::new(diagnostic),
-                }
-            }
-            scheduling::Reason::InstanceArchiving(instance) => Self::InstanceArchiving { instance },
-            scheduling::Reason::LiveInstanceLimit(limit) => Self::LiveInstanceLimit { limit },
-            scheduling::Reason::ActiveWorkSlots(limit) => Self::ActiveWorkSlots { limit },
-            scheduling::Reason::Ahead {
-                sessions,
-                elsewhere,
-            } => Self::Ahead {
-                sessions,
-                elsewhere,
-            },
+                    diagnostic,
+                    kind: serde_json::json!("subscription_profile"),
+                },
+            )
         }
+        scheduling::Reason::InstanceArchiving(instance) => {
+            wire::QueueReason::QueueReasonInstanceArchiving(wire::QueueReasonInstanceArchiving {
+                kind: serde_json::json!("instance_archiving"),
+                instance,
+            })
+        }
+        scheduling::Reason::LiveInstanceLimit(limit) => {
+            wire::QueueReason::QueueReasonLiveInstanceLimit(wire::QueueReasonLiveInstanceLimit {
+                kind: serde_json::json!("live_instance_limit"),
+                limit: limit as i64,
+            })
+        }
+        scheduling::Reason::ActiveWorkSlots(limit) => {
+            wire::QueueReason::QueueReasonActiveWorkSlots(wire::QueueReasonActiveWorkSlots {
+                kind: serde_json::json!("active_work_slots"),
+                limit: limit as i64,
+            })
+        }
+        scheduling::Reason::Ahead {
+            sessions,
+            elsewhere,
+        } => wire::QueueReason::QueueReasonAhead(wire::QueueReasonAhead {
+            sessions,
+            elsewhere: (elsewhere != 0).then_some(elsewhere as i64),
+            kind: serde_json::json!("ahead"),
+        }),
     }
 }
 
-fn reasons(reasons: Vec<scheduling::Reason>) -> Vec<ReasonRecord> {
-    reasons.into_iter().map(ReasonRecord::from).collect()
+fn reasons(reasons: Vec<scheduling::Reason>) -> Vec<wire::QueueReason> {
+    reasons.into_iter().map(queue_reason).collect()
 }
 
-#[derive(Serialize)]
-struct QueuedSessionRecord {
-    position: Option<usize>,
-    name: String,
-    workspace: String,
-    agent: String,
-    reasons: Vec<ReasonRecord>,
-    enqueued_at: Timestamp,
-}
+fn queue_record(snapshot: scheduling::Snapshot) -> wire::Queue {
+    let recorded = snapshot.recorded.map(|recorded| wire::QueueWorkRole {
+        active_work_slots: recorded.active_work_slots as i64,
+        serialized_harnesses: recorded.serialized_harnesses,
+        driver: recorded.driver,
+    });
 
-#[derive(Serialize)]
-struct WaitingSessionRecord {
-    position: Option<usize>,
-    name: String,
-    workspace: String,
-    agent: String,
-    pending_since: Option<Timestamp>,
-    reasons: Vec<ReasonRecord>,
-    enqueued_at: Timestamp,
-}
-
-#[derive(Serialize)]
-struct UnbriefedSessionRecord {
-    position: Option<usize>,
-    brief_since: Option<Timestamp>,
-    reasons: Vec<ReasonRecord>,
-    name: String,
-    workspace: String,
-    agent: String,
-    preparing: Option<String>,
-    pending_since: Option<Timestamp>,
-    enqueued_at: Timestamp,
-}
-
-#[derive(Serialize)]
-struct QueueRecord {
-    work_role: Option<WorkRoleRecord>,
-    active_work: ActiveWorkRecord,
-    instances: InstancesRecord,
-    queued: Vec<QueuedSessionRecord>,
-    waiting: Vec<WaitingSessionRecord>,
-    unbriefed: Vec<UnbriefedSessionRecord>,
-}
-
-impl QueueRecord {
-    fn of(snapshot: scheduling::Snapshot) -> Self {
-        let recorded = snapshot.recorded.map(|recorded| WorkRoleRecord {
-            active_work_slots: recorded.active_work_slots,
-            serialized_harnesses: recorded.serialized_harnesses,
-            driver: recorded.driver,
-        });
-
-        Self {
-            work_role: recorded,
-            active_work: ActiveWorkRecord {
-                limit: snapshot.active_work.limit,
-                occupied: snapshot.active_work.occupied,
-                occupants: snapshot
-                    .active_work
-                    .occupants
-                    .into_iter()
-                    .map(|session| OccupantRecord {
-                        name: session.name,
-                        workspace: session.workspace.to_string(),
-                        agent: session.agent.name,
-                        phase: match session.state {
-                            domain::SessionState::Trailing => OccupantPhase::Trailing,
-                            _ => OccupantPhase::Working,
-                        },
-                        enqueued_at: session.enqueued_at,
-                    })
-                    .collect(),
-                elsewhere: snapshot.active_work.elsewhere,
-            },
-            instances: InstancesRecord {
-                limit: snapshot.instances.limit,
-                count: snapshot.instances.count,
-                counted: snapshot.instances.counted,
-            },
-            queued: snapshot
-                .queued
+    wire::Queue {
+        work_role: recorded,
+        active_work: wire::ActiveWork {
+            limit: snapshot.active_work.limit.map(|limit| limit as i64),
+            occupied: snapshot.active_work.occupied as i64,
+            occupants: snapshot
+                .active_work
+                .occupants
                 .into_iter()
-                .map(|queued| QueuedSessionRecord {
-                    position: queued.position,
-                    name: queued.session.name,
-                    workspace: queued.session.workspace.to_string(),
-                    agent: queued.session.agent.name,
-                    reasons: reasons(queued.reasons),
-                    enqueued_at: queued.session.enqueued_at,
+                .map(|session| wire::Occupant {
+                    name: session.name,
+                    workspace: wire_id(&session.workspace),
+                    agent: session.agent.name,
+                    phase: match session.state {
+                        domain::SessionState::Trailing => wire::OccupantPhase::Trailing,
+                        _ => wire::OccupantPhase::Working,
+                    },
+                    enqueued_at: session.enqueued_at.to_string(),
                 })
                 .collect(),
-            waiting: snapshot
-                .waiting
-                .into_iter()
-                .map(|waiting| WaitingSessionRecord {
-                    position: waiting.position,
-                    name: waiting.session.name,
-                    workspace: waiting.session.workspace.to_string(),
-                    agent: waiting.session.agent.name,
-                    pending_since: waiting.pending_since,
-                    reasons: reasons(waiting.reasons),
-                    enqueued_at: waiting.session.enqueued_at,
-                })
-                .collect(),
-            unbriefed: snapshot
-                .unbriefed
-                .into_iter()
-                .map(|unbriefed| UnbriefedSessionRecord {
-                    position: unbriefed.position,
-                    brief_since: unbriefed.brief_since,
-                    reasons: reasons(unbriefed.reasons),
-                    name: unbriefed.session.name,
-                    workspace: unbriefed.session.workspace.to_string(),
-                    agent: unbriefed.session.agent.name,
-                    preparing: unbriefed
-                        .session
-                        .preparing
-                        .map(|preparing| preparing.as_str().to_owned()),
-                    pending_since: unbriefed.pending_since,
-                    enqueued_at: unbriefed.session.enqueued_at,
-                })
-                .collect(),
-        }
+            elsewhere: snapshot.active_work.elsewhere as i64,
+        },
+        instances: wire::QueueInstances {
+            limit: snapshot.instances.limit.map(|limit| limit as i64),
+            count: snapshot.instances.count as i64,
+            counted: snapshot.instances.counted,
+        },
+        queued: snapshot
+            .queued
+            .into_iter()
+            .map(|queued| wire::QueuedSession {
+                position: queued.position.map(|position| position as i64),
+                name: queued.session.name,
+                workspace: wire_id(&queued.session.workspace),
+                agent: queued.session.agent.name,
+                reasons: reasons(queued.reasons),
+                enqueued_at: queued.session.enqueued_at.to_string(),
+            })
+            .collect(),
+        waiting: snapshot
+            .waiting
+            .into_iter()
+            .map(|waiting| wire::WaitingSession {
+                position: waiting.position.map(|position| position as i64),
+                name: waiting.session.name,
+                workspace: wire_id(&waiting.session.workspace),
+                agent: waiting.session.agent.name,
+                pending_since: waiting.pending_since.map(|since| since.to_string()),
+                reasons: reasons(waiting.reasons),
+                enqueued_at: waiting.session.enqueued_at.to_string(),
+            })
+            .collect(),
+        unbriefed: snapshot
+            .unbriefed
+            .into_iter()
+            .map(|unbriefed| wire::UnbriefedSession {
+                position: unbriefed.position.map(|position| position as i64),
+                brief_since: unbriefed.brief_since.map(|since| since.to_string()),
+                reasons: reasons(unbriefed.reasons),
+                name: unbriefed.session.name,
+                workspace: wire_id(&unbriefed.session.workspace),
+                agent: unbriefed.session.agent.name,
+                preparing: unbriefed
+                    .session
+                    .preparing
+                    .map(|preparing| match preparing {
+                        domain::Preparing::Provisioning => {
+                            wire::UnbriefedSessionPreparing::Provisioning
+                        }
+                        domain::Preparing::Cloning => wire::UnbriefedSessionPreparing::Cloning,
+                        domain::Preparing::StartingHarness => {
+                            wire::UnbriefedSessionPreparing::StartingHarness
+                        }
+                        domain::Preparing::HarnessReady => {
+                            wire::UnbriefedSessionPreparing::HarnessReady
+                        }
+                    }),
+                pending_since: unbriefed.pending_since.map(|since| since.to_string()),
+                enqueued_at: unbriefed.session.enqueued_at.to_string(),
+            })
+            .collect(),
     }
 }
 
 async fn show_queue(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<QueueRecord>, Refused> {
+) -> Result<Json<wire::Queue>, Refused> {
     let snapshot = scheduling::snapshot(&control_plane.store, &organization).await?;
 
-    Ok(Json(QueueRecord::of(snapshot)))
+    Ok(Json(queue_record(snapshot)))
 }
 
 async fn release_instance(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
-    release: Result<Json<Release>, JsonRejection>,
-) -> Result<Json<ReleasedRecord>, Refused> {
+    release: Result<Json<wire::InstanceRelease>, JsonRejection>,
+) -> Result<Json<wire::ReleasedInstance>, Refused> {
     let Json(release) = release?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     let instance = instance::release(
         &control_plane.store,
         workspace.id,
-        release.participant.as_deref(),
+        release
+            .participant
+            .as_ref()
+            .and_then(|participant| participant.as_deref()),
     )
     .await?;
 
-    Ok(Json(ReleasedRecord { instance }))
+    Ok(Json(wire::ReleasedInstance { instance }))
 }
 
 async fn workspaces(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-) -> Result<Json<Vec<WorkspaceListedRecord>>, Refused> {
+) -> Result<Json<wire::ListWorkspacesResponse>, Refused> {
     let workspaces = workspace::workspaces(&control_plane.store, &organization).await?;
     let snapshot = scheduling::snapshot(&control_plane.store, &organization).await?;
     let mut records = Vec::with_capacity(workspaces.len());
@@ -3381,13 +3539,32 @@ async fn workspaces(
         let session = work::sessions(&control_plane.store, id)
             .await?
             .pop()
-            .map(|session| {
-                SessionRecord::read(session, &organization, &control_plane.live.summaries)
-            });
-        records.push(WorkspaceListedRecord {
-            workspace: WorkspaceRecord::read(&control_plane.store, workspace).await?,
+            .map(|session| session_record(session, &organization, &control_plane.live.summaries));
+        let workspace = workspace_record(&control_plane.store, workspace).await?;
+        records.push(wire::WorkspaceListed {
+            checkout: workspace.checkout,
+            continued_by: workspace.continued_by,
+            continues: workspace.continues,
+            correlation: workspace.correlation,
+            held: workspace.held,
+            held_messages: workspace.held_messages,
+            id: workspace.id,
+            instance: workspace.instance,
+            integrations: workspace.integrations,
+            last_active_at: workspace.last_active_at,
+            name: workspace.name,
+            opened_at: workspace.opened_at,
+            opened_with: workspace.opened_with,
+            organization: workspace.organization,
+            profile: workspace.profile,
+            project: workspace.project,
+            pull_requests: workspace.pull_requests,
+            sealed_at: workspace.sealed_at,
+            started_by: workspace.started_by,
+            state: workspace.state,
+            unfinished_session: workspace.unfinished_session,
             session,
-            queue: QueueStandingRecord::of(&snapshot, id),
+            queue: queue_standing(&snapshot, id),
         });
     }
 
@@ -3397,8 +3574,8 @@ async fn workspaces(
 async fn open_workspace(
     State(control_plane): State<ControlPlane>,
     Path(organization): Path<String>,
-    declaration: Result<Json<WorkspaceDeclaration>, JsonRejection>,
-) -> Result<(StatusCode, Json<OpenedRecord>), Refused> {
+    declaration: Result<Json<wire::WorkspaceDeclaration>, JsonRejection>,
+) -> Result<(StatusCode, Json<wire::Opened>), Refused> {
     let Json(declaration) = declaration?;
     let (workspace, session) = workspace::open(
         &control_plane.store,
@@ -3406,23 +3583,49 @@ async fn open_workspace(
         workspace::Open {
             project: &declaration.project,
             agent: &declaration.agent,
-            profile: declaration.profile.as_deref(),
-            sign_in_method: declaration.sign_in_method.as_deref(),
-            branch: declaration.branch.as_deref(),
-            continues: declaration.continues.as_deref(),
-            declared: declaration.declared(),
-            brief: declaration.brief.as_deref(),
-            participant: declaration.participant.as_deref(),
-            depends_on: declaration.depends_on.as_deref().unwrap_or_default(),
+            profile: declaration
+                .profile
+                .as_ref()
+                .and_then(|value| value.as_deref()),
+            sign_in_method: declaration
+                .sign_in_method
+                .as_ref()
+                .and_then(|value| value.as_deref()),
+            branch: declaration
+                .branch
+                .as_ref()
+                .and_then(|value| value.as_deref()),
+            continues: declaration
+                .continues
+                .as_ref()
+                .and_then(|value| value.as_deref()),
+            declared: Declared {
+                model: declaration.model.clone().flatten(),
+                mode: declaration.mode.clone().flatten(),
+                thought_level: declaration.thought_level.clone().flatten(),
+            },
+            brief: declaration
+                .brief
+                .as_ref()
+                .and_then(|value| value.as_deref()),
+            participant: declaration
+                .participant
+                .as_ref()
+                .and_then(|value| value.as_deref()),
+            depends_on: declaration
+                .depends_on
+                .as_ref()
+                .and_then(|value| value.as_deref())
+                .unwrap_or_default(),
         },
     )
     .await?;
 
     Ok((
         StatusCode::CREATED,
-        Json(OpenedRecord {
-            workspace: WorkspaceRecord::read(&control_plane.store, workspace).await?,
-            session: SessionRecord::read(session, &organization, &control_plane.live.summaries),
+        Json(wire::Opened {
+            workspace: workspace_record(&control_plane.store, workspace).await?,
+            session: session_record(session, &organization, &control_plane.live.summaries),
         }),
     ))
 }
@@ -3430,16 +3633,16 @@ async fn open_workspace(
 async fn work_summary(
     State(control_plane): State<ControlPlane>,
     Path((organization, reference)): Path<(String, String)>,
-) -> Result<Json<crate::live_work::Work>, Refused> {
-    Ok(Json(
-        crate::live_work::read(
-            &control_plane.store,
-            &control_plane.live.summaries,
-            &organization,
-            &reference,
-        )
-        .await?,
-    ))
+) -> Result<Json<wire::WorkspaceWork>, Refused> {
+    let work = crate::live_work::read(
+        &control_plane.store,
+        &control_plane.live.summaries,
+        &organization,
+        &reference,
+    )
+    .await?;
+
+    Ok(Json(workspace_work(work)))
 }
 
 #[derive(Deserialize)]
@@ -3547,19 +3750,19 @@ async fn workspace_file(
 async fn show_workspace(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
-) -> Result<Json<WorkspaceRecord>, Refused> {
+) -> Result<Json<wire::Workspace>, Refused> {
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
 
     Ok(Json(
-        WorkspaceRecord::read(&control_plane.store, workspace).await?,
+        workspace_record(&control_plane.store, workspace).await?,
     ))
 }
 
 async fn post_to_workspace(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
-    message: Result<Json<WorkspaceMessage>, JsonRejection>,
-) -> Result<Json<PostedRecord>, Refused> {
+    message: Result<Json<wire::WorkspaceMessage>, JsonRejection>,
+) -> Result<Json<wire::Posted>, Refused> {
     let Json(message) = message?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     let posted = workspace::post(
@@ -3570,19 +3773,19 @@ async fn post_to_workspace(
     )
     .await?;
 
-    Ok(Json(PostedRecord {
-        session: posted.session.map(|session| {
-            SessionRecord::read(session, &organization, &control_plane.live.summaries)
-        }),
-        held_message: posted.held_message,
+    Ok(Json(wire::Posted {
+        session: posted
+            .session
+            .map(|session| session_record(session, &organization, &control_plane.live.summaries)),
+        held_message: posted.held_message.map(held_message),
     }))
 }
 
 async fn edit_workspace_message(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace, id)): Path<(String, String, String)>,
-    edit: Result<Json<WorkspaceMessage>, JsonRejection>,
-) -> Result<Json<HeldMessage>, Refused> {
+    edit: Result<Json<wire::WorkspaceMessage>, JsonRejection>,
+) -> Result<Json<wire::HeldMessage>, Refused> {
     let Json(edit) = edit?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     let id = held_id(&organization, &workspace, &id)?;
@@ -3604,13 +3807,13 @@ async fn edit_workspace_message(
         )
     })?;
 
-    Ok(Json(edited))
+    Ok(Json(held_message(edited)))
 }
 
 async fn withdraw_workspace_message(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace, id)): Path<(String, String, String)>,
-    withdrawal: Result<Json<WorkspaceMessageWithdrawal>, JsonRejection>,
+    withdrawal: Result<Json<wire::WorkspaceMessageWithdrawal>, JsonRejection>,
 ) -> Result<StatusCode, Refused> {
     let Json(withdrawal) = withdrawal?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
@@ -3720,28 +3923,26 @@ fn no_event(record: &str, organization: Option<&str>) -> Refused {
 async fn seal_workspace(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
-) -> Result<Json<WorkspaceRecord>, Refused> {
+) -> Result<Json<wire::Workspace>, Refused> {
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     let workspace = workspace::seal(&control_plane.store, workspace.id).await?;
 
     Ok(Json(
-        WorkspaceRecord::read(&control_plane.store, workspace).await?,
+        workspace_record(&control_plane.store, workspace).await?,
     ))
 }
 
 async fn sessions(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
-) -> Result<Json<Vec<SessionRecord>>, Refused> {
+) -> Result<Json<Vec<wire::Session>>, Refused> {
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     let sessions = work::sessions(&control_plane.store, workspace.id).await?;
 
     Ok(Json(
         sessions
             .into_iter()
-            .map(|session| {
-                SessionRecord::read(session, &organization, &control_plane.live.summaries)
-            })
+            .map(|session| session_record(session, &organization, &control_plane.live.summaries))
             .collect(),
     ))
 }
@@ -3749,8 +3950,8 @@ async fn sessions(
 async fn enqueue_session(
     State(control_plane): State<ControlPlane>,
     Path((organization, workspace)): Path<(String, String)>,
-    declaration: Result<Json<SessionDeclaration>, JsonRejection>,
-) -> Result<(StatusCode, Json<SessionRecord>), Refused> {
+    declaration: Result<Json<wire::SessionDeclaration>, JsonRejection>,
+) -> Result<(StatusCode, Json<wire::Session>), Refused> {
     let Json(declaration) = declaration?;
     let workspace = resolved(&control_plane, &organization, &workspace).await?;
     if !work::has_had_session(&control_plane.store, workspace.id).await? {
@@ -3776,16 +3977,30 @@ async fn enqueue_session(
     let session = work::enqueue_selecting(
         &control_plane.store,
         workspace.id,
-        declaration.agent.as_deref(),
-        declaration.declared(),
-        declaration.sign_in_method.as_deref(),
-        declaration.depends_on.as_deref().unwrap_or_default(),
+        declaration
+            .agent
+            .as_ref()
+            .and_then(|value| value.as_deref()),
+        Declared {
+            model: declaration.model.clone().flatten(),
+            mode: declaration.mode.clone().flatten(),
+            thought_level: declaration.thought_level.clone().flatten(),
+        },
+        declaration
+            .sign_in_method
+            .as_ref()
+            .and_then(|value| value.as_deref()),
+        declaration
+            .depends_on
+            .as_ref()
+            .and_then(|value| value.as_deref())
+            .unwrap_or_default(),
     )
     .await?;
 
     Ok((
         StatusCode::CREATED,
-        Json(SessionRecord::read(
+        Json(session_record(
             session,
             &organization,
             &control_plane.live.summaries,
@@ -3799,7 +4014,7 @@ async fn show_session(
     headers: HeaderMap,
 ) -> Result<Response, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
-    let record = SessionRecord::read(session, &organization, &control_plane.live.summaries);
+    let record = session_record(session, &organization, &control_plane.live.summaries);
     let body = serde_json::to_string(&record).map_err(anyhow::Error::from)?;
     let tag = strong_etag(&body);
 
@@ -3836,8 +4051,8 @@ fn matches_etag(asked: &str, tag: &str) -> bool {
 async fn interrupt_session(
     State(control_plane): State<ControlPlane>,
     Path((organization, session)): Path<(String, String)>,
-    interrupt: Result<Json<SessionInterrupt>, JsonRejection>,
-) -> Result<(StatusCode, Json<SessionRecord>), Refused> {
+    interrupt: Result<Json<wire::SessionInterrupt>, JsonRejection>,
+) -> Result<(StatusCode, Json<wire::Session>), Refused> {
     let Json(interrupt) = interrupt?;
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
     let interrupting = work::interrupt(
@@ -3849,7 +4064,7 @@ async fn interrupt_session(
 
     Ok((
         StatusCode::ACCEPTED,
-        Json(SessionRecord::read(
+        Json(session_record(
             interrupting,
             &organization,
             &control_plane.live.summaries,
@@ -3860,14 +4075,14 @@ async fn interrupt_session(
 async fn stop_session(
     State(control_plane): State<ControlPlane>,
     Path((organization, session)): Path<(String, String)>,
-) -> Result<Json<SessionRecord>, Refused> {
+) -> Result<Json<wire::Session>, Refused> {
     let session = work::resolve_session(&control_plane.store, &organization, &session).await?;
     let running = control_plane.live.summaries.last_held(&session).tools;
     work::stop(&control_plane.store, session.id, &running).await?;
     control_plane.live.summaries.clear_session(&session);
     let session = work::session(&control_plane.store, session.id).await?;
 
-    Ok(Json(SessionRecord::read(
+    Ok(Json(session_record(
         session,
         &organization,
         &control_plane.live.summaries,
@@ -3877,10 +4092,13 @@ async fn stop_session(
 async fn set_session_option(
     State(control_plane): State<ControlPlane>,
     Path((organization, session)): Path<(String, String)>,
-    change: Result<Json<OptionChange>, JsonRejection>,
-) -> Result<(StatusCode, Json<SessionRecord>), Refused> {
+    change: Result<Json<wire::OptionChange>, JsonRejection>,
+) -> Result<(StatusCode, Json<wire::Session>), Refused> {
     let Json(change) = change?;
-    let named = match (change.option.as_deref(), change.category.as_deref()) {
+    let named = match (
+        change.option.as_ref().and_then(|value| value.as_deref()),
+        change.category.as_ref().and_then(|value| value.as_deref()),
+    ) {
         (Some(option), None) => work::Named::Option(option),
         (None, Some(category)) => work::Named::Category(category),
         (Some(_), Some(_)) => {
@@ -3900,7 +4118,10 @@ async fn set_session_option(
         &control_plane.store,
         &organization,
         &session,
-        change.participant.as_deref(),
+        change
+            .participant
+            .as_ref()
+            .and_then(|value| value.as_deref()),
         named,
         &change.value,
     )
@@ -3912,7 +4133,7 @@ async fn set_session_option(
         } else {
             StatusCode::OK
         },
-        Json(SessionRecord::read(
+        Json(session_record(
             written.session,
             &organization,
             &control_plane.live.summaries,
@@ -4091,56 +4312,58 @@ fn transcribed(
         let mut delivered = from;
         let mut session_state = read.session_state.clone();
         if follow {
-            yield Emitted::new("session_state", None, &session_state)?;
+            yield transcript_event(None, wire::Event::TranscriptSessionState(
+                transcript_session_state(session_state.clone()),
+            ))?;
         }
         loop {
             if follow && read.session_state != session_state {
                 session_state = read.session_state.clone();
-                yield Emitted::new("session_state", None, &session_state)?;
+                yield transcript_event(None, wire::Event::TranscriptSessionState(
+                    transcript_session_state(session_state.clone()),
+                ))?;
             }
             let mut activities = read.page.activities.into_iter().peekable();
             for entry in read.page.entries {
                 while activities.peek().is_some_and(|activity| activity.last_seq < entry.seq) {
-                    let activity = activities.next().unwrap();
-                    delivered = Some(Cursor::at(workspace, activity.last_seq));
-                    yield Emitted::new("activity", delivered, &activity)?;
+                    let summary = activities.next().unwrap();
+                    delivered = Some(Cursor::at(workspace, summary.last_seq));
+                    yield transcript_event(delivered, wire::Event::Activity(activity(summary)))?;
                 }
                 delivered = Some(Cursor::at(workspace, entry.seq));
-                yield Emitted::new("entry", delivered, &Recorded {
-                    kind: entry.kind,
-                    session_id: entry.session_id,
-                    seq: entry.seq,
-                    appended_at: entry.appended_at.to_string(),
-                    entry: entry.entry,
-                })?;
+                yield transcript_event(delivered, wire::Event::Recorded(recorded(entry)?))?;
             }
-            for activity in activities {
-                delivered = Some(Cursor::at(workspace, activity.last_seq));
-                yield Emitted::new("activity", delivered, &activity)?;
+            for summary in activities {
+                delivered = Some(Cursor::at(workspace, summary.last_seq));
+                yield transcript_event(delivered, wire::Event::Activity(activity(summary)))?;
             }
             if let Some(cursor) = read.page.cursor && delivered != Some(cursor) {
                 delivered = Some(cursor);
-                yield Emitted::new("cursor", delivered, &cursor.to_string())?;
+                yield transcript_event(delivered, wire::Event::CursorEvent(cursor.to_string()))?;
             }
             if !read.page.more {
                 let because = match (read.sealed, follow) {
-                    (true, _) => Some(Because::Sealed),
-                    (false, false) => Some(Because::CaughtUp),
-                    (false, true) if range.last_seq.is_some() => Some(Because::CaughtUp),
+                    (true, _) => Some(wire::EndBecause::Sealed),
+                    (false, false) => Some(wire::EndBecause::CaughtUp),
+                    (false, true) if range.last_seq.is_some() => Some(wire::EndBecause::CaughtUp),
                     (false, true) => None,
                 };
                 if let Some(because) = because {
-                    yield Emitted::new(stream::END, None, &End { because })?;
+                    yield transcript_event(None, wire::Event::End(wire::End { because }))?;
                     break;
                 }
 
                 if joined.is_none() {
                     let mut follower = control_plane.followers.join(workspace, name.clone());
-                    yield Emitted::new("follower", None, &FollowerEvent {
-                        id: follower.id,
-                        lease_seconds: follower.lease.as_secs(),
-                    })?;
-                    yield Emitted::new("presence", None, &follower.snapshot())?;
+                    yield transcript_event(None, wire::Event::FollowerEvent(wire::FollowerEvent {
+                        id: wire_id(&follower.id),
+                        lease_seconds: follower
+                            .lease
+                            .as_secs()
+                            .try_into()
+                            .expect("a lease fits a wire integer"),
+                    }))?;
+                    yield transcript_event(None, wire::Event::Presence(presence(follower.snapshot())))?;
                     joined = Some(follower);
                 }
 
@@ -4149,7 +4372,7 @@ fn transcribed(
                     break;
                 }
                 if follower.presence.has_changed().unwrap_or(false) {
-                    yield Emitted::new("presence", None, &follower.snapshot())?;
+                    yield transcript_event(None, wire::Event::Presence(presence(follower.snapshot())))?;
                 }
 
                 tokio::select! {
@@ -4206,7 +4429,7 @@ async fn noticed(
     let control_plane = control_plane.clone();
 
     Ok(Box::pin(async_stream::try_stream! {
-        yield Emitted::new("open", None, &Refetch {})?;
+        yield changes_event(wire::ChangesEvent::ChangesOpen(refetch()))?;
         loop {
             let watch = tokio::select! {
                 () = control_plane.shutdown.cancelled() => break,
@@ -4214,13 +4437,13 @@ async fn noticed(
             };
             match watch {
                 Some(fanout::Watch::Change(resource)) => {
-                    match Changed::named(&control_plane.store, resource).await {
-                        Ok(changed) => yield Emitted::new("change", None, &changed)?,
-                        Err(_) => yield Emitted::new("resync", None, &Refetch {})?,
+                    match changed(&control_plane.store, resource).await {
+                        Ok(changed) => yield changes_event(wire::ChangesEvent::Change(changed))?,
+                        Err(_) => yield changes_event(wire::ChangesEvent::ChangesResync(refetch()))?,
                     }
                 }
                 Some(fanout::Watch::Resync) => {
-                    yield Emitted::new("resync", None, &Refetch {})?;
+                    yield changes_event(wire::ChangesEvent::ChangesResync(refetch()))?;
                 }
                 None => break,
             }
@@ -4450,7 +4673,7 @@ async fn reading(
         .await?
         .map(|holding| holding.session);
     let (observation, state) = control_plane.live.summaries.observed(session.as_ref());
-    let session_state = TranscriptSessionState {
+    let session_state = ObservedSession {
         session_id: session.as_ref().map(|session| session.id),
         state,
         observation,
@@ -4720,7 +4943,7 @@ fn diagnostic_message(diagnostic: &wire::Diagnostic) -> &str {
 impl From<domain::Operator> for wire::Operator {
     fn from(operator: domain::Operator) -> Self {
         Self {
-            id: operator.id.to_string().parse().expect("an Operator UUID"),
+            id: wire_id(&operator.id),
             name: operator.name,
         }
     }
@@ -5481,7 +5704,14 @@ impl IntoResponse for Refused {
             Refused::Unprocessable(why) => (StatusCode::UNPROCESSABLE_ENTITY, why),
         };
 
-        (status, Json(Refusal { message })).into_response()
+        (
+            status,
+            Json(wire::Refusal {
+                field: None,
+                message,
+            }),
+        )
+            .into_response()
     }
 }
 
@@ -5660,11 +5890,6 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("DELETE", STREAM_SUBSCRIPTION) => "unsubscribe_stream",
         _ => return None,
     })
-}
-
-#[derive(Serialize)]
-struct Refusal {
-    message: String,
 }
 
 #[cfg(test)]

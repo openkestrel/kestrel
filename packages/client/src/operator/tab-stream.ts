@@ -1,4 +1,5 @@
 import type { StreamEvent as Envelope, StreamReservation, StreamSubscription } from "./generated";
+import { EventNames } from "./sse.gen";
 import { operatorPath, Refused, type StreamEvent, type Transport } from "./transport";
 
 const RETRY = 250;
@@ -142,7 +143,7 @@ export class TabStream {
 		}
 		const subscriber = this.subscribers.get(envelope.subscription);
 		if (!subscriber) return;
-		if (event.event === "end") this.subscribers.delete(envelope.subscription);
+		if (event.event === EventNames.End) this.subscribers.delete(envelope.subscription);
 		subscriber.deliver({
 			event: event.event,
 			id: envelope.cursor,

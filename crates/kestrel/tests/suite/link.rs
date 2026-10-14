@@ -1230,13 +1230,28 @@ async fn the_cli_prints_one_closed_activity_across_reconnects_and_can_disable_su
             .status(),
         StatusCode::ACCEPTED
     );
-    let summary = tokio::task::block_in_place(|| cli.line());
+    // A reconnect opens the stream with a fresh transient snapshot, so the closed Activity is
+    // the next record this read carries rather than the next line it writes.
+    let summary = loop {
+        let line = tokio::task::block_in_place(|| cli.line());
+        if line.starts_with("activity") {
+            break line;
+        }
+    };
     assert_eq!(
         summary,
         "activity  3..4  0 tools, 0 failed, 2 thoughts, 0 plans, 0 tombstones"
     );
-    let said = tokio::task::block_in_place(|| cli.line());
-    assert!(said.contains("done"));
+    loop {
+        let line = tokio::task::block_in_place(|| cli.line());
+        if line.contains("done") {
+            break;
+        }
+        assert!(
+            !line.starts_with("activity"),
+            "the closed Activity reached the reconnect twice: {line}"
+        );
+    }
     kestrel.complete_session(&session).await;
     kestrel.release_instance(session.workspace).await;
     kestrel.seal_workspace(session.workspace).await;
@@ -1486,11 +1501,11 @@ async fn a_cli_cut_after_the_final_activity_id_does_not_print_its_replacement_tw
         axum::routing::get(move |headers: axum::http::HeaderMap| {
             let request = requests.fetch_add(1, Ordering::SeqCst);
             async move {
-                let snapshot = "event: session_state\ndata: {\"session_id\":null,\"tools\":[],\"units\":[],\"message_buffering\":false,\"thought_buffering\":false}\n\n";
+                let snapshot = "event: session_state\ndata: {\"session_id\":null,\"tools\":[],\"units\":[],\"message_buffering\":false,\"thought_buffering\":false,\"observation\":{\"availability\":\"unavailable\",\"last\":null}}\n\n";
                 let summary = "id: example:4\nevent: activity\ndata: {\"first_seq\":3,\"last_seq\":4,\"counts\":{\"tool_calls\":0,\"failed_calls\":0,\"thoughts\":2,\"plans\":0,\"tombstones\":0},\"closed\":true,\"anomaly\":false}\n\n";
                 let tail = if request == 0 { "" } else {
                     assert_eq!(headers["last-event-id"], "example:4");
-                    "id: example:5\nevent: entry\ndata: {\"seq\":5,\"appended_at\":\"2026-09-29T12:00:00Z\",\"entry\":{\"type\":\"said\",\"message\":\"done\"}}\n\nevent: end\ndata: {\"because\":\"sealed\"}\n\n"
+                    "id: example:5\nevent: entry\ndata: {\"seq\":5,\"kind\":\"shared_state\",\"appended_at\":\"2026-09-29T12:00:00Z\",\"entry\":{\"type\":\"said\",\"participant\":\"builder\",\"message\":\"done\"}}\n\nevent: end\ndata: {\"because\":\"sealed\"}\n\n"
                 };
                 ([("content-type", "text/event-stream")], format!("{snapshot}{summary}{tail}"))
             }

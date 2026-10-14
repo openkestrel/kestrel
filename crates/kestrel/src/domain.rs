@@ -596,7 +596,7 @@ impl Trigger {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Firing {
     pub trigger: String,
     pub outcome: String,

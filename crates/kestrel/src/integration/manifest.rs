@@ -606,6 +606,14 @@ pub async fn discovery_page(
     }
     Ok(html)
 }
+
+pub fn installed_page(state: &str) -> String {
+    format!(
+        "<!doctype html><title>Choose a repository</title><h1>The App is installed</h1><p><a href=\"{PAGE}?state={}\">Choose one repository here</a> or return to the Client.</p>",
+        escape(state)
+    )
+}
+
 fn base(value: &str, loopback: bool) -> Result<String> {
     let url = reqwest::Url::parse(value).map_err(|_| {
         invalid(

@@ -232,7 +232,11 @@ async fn shown(kestrel: &Kestrel, organization: &str, workspace: &Workspace) -> 
         .expect("the operator boundary answers");
     assert_eq!(answered.status(), StatusCode::OK);
 
-    answered.json().await.expect("a workspace")
+    let body: Value = answered.json().await.expect("a workspace");
+    let typed: kestrel_operator_types::Workspace =
+        serde_json::from_value(body.clone()).expect("a typed Workspace");
+    assert_eq!(serde_json::to_value(typed).unwrap(), body);
+    body
 }
 
 async fn watching(

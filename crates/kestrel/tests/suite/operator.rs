@@ -384,6 +384,86 @@ async fn a_client_declares_and_lists_organizations_without_opening_a_database() 
 }
 
 #[tokio::test]
+async fn an_organizations_cap_is_a_positive_count_and_null_or_absent_is_unbounded() {
+    let kestrel = Kestrel::boot().await;
+
+    for cap in [json!(0), json!(-1)] {
+        let (status, refusal) = declared(
+            &kestrel,
+            operator::ORGANIZATIONS,
+            &json!({"name": "acme", "max_live_instances": cap}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refusal}");
+        assert_eq!(refusal["kind"], "malformed_request", "{refusal}");
+    }
+    assert!(listed_nothing(&kestrel, operator::ORGANIZATIONS).await);
+
+    let (created, capped) = declared(
+        &kestrel,
+        operator::ORGANIZATIONS,
+        &json!({"name": "acme", "max_live_instances": 2}),
+    )
+    .await;
+    assert_eq!(created, StatusCode::CREATED, "{capped}");
+    assert_eq!(capped["max_live_instances"], 2);
+    let (changed, absent) =
+        declared(&kestrel, operator::ORGANIZATIONS, &json!({"name": "acme"})).await;
+    assert_eq!(changed, StatusCode::OK, "{absent}");
+    assert_eq!(absent["id"], capped["id"]);
+    assert_eq!(absent["max_live_instances"], Value::Null);
+    let (_, null) = declared(
+        &kestrel,
+        operator::ORGANIZATIONS,
+        &json!({"name": "globex", "max_live_instances": null}),
+    )
+    .await;
+    assert_eq!(null["max_live_instances"], Value::Null);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_agents_defaults_are_null_whether_a_declaration_omits_them_or_names_none() {
+    let kestrel = Kestrel::boot().await;
+    declared(&kestrel, operator::ORGANIZATIONS, &json!({"name": "acme"})).await;
+
+    let (_, omitted) = declared(
+        &kestrel,
+        &agents_of("acme"),
+        &json!({"name": "builder", "harness": "opencode"}),
+    )
+    .await;
+    let (_, null) = declared(
+        &kestrel,
+        &agents_of("acme"),
+        &json!({
+            "name": "reviewer", "harness": "opencode",
+            "model": null, "mode": null, "thought_level": null,
+        }),
+    )
+    .await;
+    for agent in [&omitted, &null] {
+        for default in ["model", "mode", "thought_level"] {
+            assert_eq!(agent[default], Value::Null, "{agent}");
+        }
+    }
+
+    let model = agent_model_of("acme", "builder");
+    let put =
+        async |body: Value| requested(&kestrel, reqwest::Method::PUT, &model, Some(&body)).await;
+    let (status, set) = put(json!({"model": "claude-opus-5"})).await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    assert_eq!(set["model"], "claude-opus-5");
+    assert_eq!(set["id"], omitted["id"]);
+    assert_eq!(put(json!({"model": null})).await.1["model"], Value::Null);
+    put(json!({"model": "claude-opus-5"})).await;
+    assert_eq!(put(json!({})).await.1["model"], Value::Null);
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_client_declares_and_lists_projects_and_agents() {
     let kestrel = Kestrel::boot().await;
     succeeded(&client(&kestrel, &["organization", "declare", "acme"]).await);
@@ -2623,6 +2703,8 @@ async fn held_messages_are_listed_edited_and_withdrawn_over_the_boundary() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    let typed: kestrel_operator_types::Posted = serde_json::from_value(posted.clone()).unwrap();
+    assert_eq!(serde_json::to_value(typed).unwrap(), posted);
     assert!(posted["session"].is_null(), "{posted}");
     let id = posted["held_message"]["id"]
         .as_i64()
@@ -2649,6 +2731,9 @@ async fn held_messages_are_listed_edited_and_withdrawn_over_the_boundary() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{edited}");
+    let typed: kestrel_operator_types::HeldMessage =
+        serde_json::from_value(edited.clone()).unwrap();
+    assert_eq!(serde_json::to_value(typed).unwrap(), edited);
     assert_eq!(edited["id"], id);
     assert_eq!(edited["message"], "the edited change");
     assert!(!edited["edited_at"].is_null(), "an edit is stamped");
@@ -4152,6 +4237,75 @@ async fn an_integration_is_registered_with_what_it_is_declared_to_carry() {
     assert_eq!(signed["webhook_path"], Value::Null, "{signed}");
     assert!(!signed.to_string().contains("a-signing-secret"));
     assert!(!signed.to_string().contains(PRIVATE_KEY));
+
+    kestrel.teardown().await;
+}
+
+/// What a registration leaves out and what it nulls read alike, and a named value still stands:
+/// the union's optional connection fields carry absent and null the same way.
+#[tokio::test]
+async fn a_registration_reads_an_omitted_connection_field_as_one_it_nulls() {
+    let kestrel = Kestrel::boot().await;
+    let stub = GithubStub::start();
+    kestrel.declare_organization("acme").await;
+
+    let github = async |name: &str, fields: Value| {
+        let mut registration = json!({
+            "kind": "github",
+            "name": name,
+            "repository": "jtmthf/kestrel",
+            "app_id": 1,
+            "installation": 2,
+            "private_key": PRIVATE_KEY,
+            "api": stub.base_url(),
+        });
+        registration
+            .as_object_mut()
+            .expect("an object")
+            .extend(fields.as_object().expect("an object").clone());
+        declared(&kestrel, &integrations_of("acme"), &registration).await
+    };
+    let webhook = async |name: &str, fields: Value| {
+        let mut registration = json!({
+            "kind": "webhook",
+            "name": name,
+            "secret": "a-shared-secret",
+        });
+        registration
+            .as_object_mut()
+            .expect("an object")
+            .extend(fields.as_object().expect("an object").clone());
+        declared(&kestrel, &integrations_of("acme"), &registration).await
+    };
+
+    let (omitted, absent) = github("hub", json!({})).await;
+    let (nulled, null) = github(
+        "hub-null",
+        json!({ "carries": null, "interval": null, "webhook_secret": null }),
+    )
+    .await;
+    let (named, given) = github("hub-polled", json!({ "interval": "5m" })).await;
+
+    assert_eq!(omitted, StatusCode::CREATED, "{absent}");
+    assert_eq!(nulled, StatusCode::CREATED, "{null}");
+    assert_eq!(named, StatusCode::CREATED, "{given}");
+    for answered in [&absent, &null] {
+        assert_eq!(
+            answered["carries"],
+            json!(["inbound", "outbound"]),
+            "{answered}"
+        );
+        assert_eq!(answered["polled_every"], "1m", "{answered}");
+    }
+    assert_eq!(given["carries"], json!(["inbound", "outbound"]), "{given}");
+    assert_eq!(given["polled_every"], "5m", "{given}");
+
+    let (omitted, absent) = webhook("ci", json!({})).await;
+    let (nulled, null) = webhook("cd", json!({ "carries": null })).await;
+    assert_eq!(omitted, StatusCode::CREATED, "{absent}");
+    assert_eq!(nulled, StatusCode::CREATED, "{null}");
+    assert_eq!(absent["carries"], json!(["inbound"]), "{absent}");
+    assert_eq!(null["carries"], json!(["inbound"]), "{null}");
 
     kestrel.teardown().await;
 }
@@ -6751,6 +6905,68 @@ async fn kestrel_queue_json_agrees_with_the_operator_read() {
 
     assert_eq!(shown, queue);
 
+    let decoded: kestrel_operator_types::Queue = serde_json::from_value(shown.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), queue);
+    let listed = client(
+        &kestrel,
+        &["workspace", "list", "--organization", "acme", "--json"],
+    )
+    .await
+    .json();
+    let workspaces: kestrel_operator_types::ListWorkspacesResponse =
+        serde_json::from_value(listed).unwrap();
+    for workspace in workspaces {
+        let standing = workspace.queue.as_ref();
+        let expected = decoded
+            .queued
+            .iter()
+            .find(|session| session.workspace == workspace.id)
+            .map(|session| (session.position, &session.reasons, None))
+            .or_else(|| {
+                decoded
+                    .waiting
+                    .iter()
+                    .find(|session| session.workspace == workspace.id)
+                    .map(|session| {
+                        (
+                            session.position,
+                            &session.reasons,
+                            session.pending_since.as_ref(),
+                        )
+                    })
+            })
+            .or_else(|| {
+                decoded
+                    .unbriefed
+                    .iter()
+                    .find(|session| session.workspace == workspace.id)
+                    .map(|session| {
+                        (
+                            session.position,
+                            &session.reasons,
+                            session
+                                .brief_since
+                                .as_ref()
+                                .or(session.pending_since.as_ref()),
+                        )
+                    })
+            });
+        match expected {
+            Some((position, reasons, pending_since)) => {
+                let standing =
+                    standing.expect("a queued, waiting or unbriefed Workspace has a standing");
+                assert_eq!(standing.position, position);
+                assert_eq!(
+                    serde_json::to_value(&standing.reasons).unwrap(),
+                    serde_json::to_value(reasons).unwrap()
+                );
+                assert_eq!(standing.pending_since.as_ref(), pending_since);
+                assert!(workspace.session.is_some());
+            }
+            None => assert!(standing.is_none()),
+        }
+    }
+
     kestrel.teardown().await;
 }
 
@@ -6934,7 +7150,11 @@ fn the_published_operator_document_describes_every_transcript_entry() {
         },
         Entry::Plan {
             session_id: SessionId::generate(),
-            entries: Vec::new(),
+            entries: vec![kestrel::log::PlanEntry {
+                content: "read the backlog".to_owned(),
+                priority: "medium".to_owned(),
+                status: "pending".to_owned(),
+            }],
             completion: kestrel::log::Completion::at("2026-09-29T12:00:00Z".parse().unwrap()),
         },
         Entry::PullRequest {
@@ -6972,22 +7192,17 @@ fn the_published_operator_document_describes_every_transcript_entry() {
     for entry in served {
         let entry = serde_json::to_value(&entry).expect("an entry");
         let kind = entry["type"].as_str().expect("a kind").to_owned();
-        let schema = mapping
-            .get(&kind)
-            .unwrap_or_else(|| panic!("the document describes no {kind} entry"))
-            .as_str()
-            .expect("a reference");
-
-        for field in resolve(&document, schema)["required"]
-            .as_array()
-            .expect("an array of required fields")
-        {
-            let field = field.as_str().expect("a named field");
-            assert!(
-                entry.get(field).is_some(),
-                "the document requires {field} on a {kind} entry, and the boundary does not serve it"
-            );
-        }
+        assert!(
+            mapping.contains_key(&kind),
+            "the document describes no {kind} entry"
+        );
+        let typed: kestrel_operator_types::Entry = serde_json::from_value(entry.clone())
+            .unwrap_or_else(|error| panic!("a {kind} entry is not the documented one: {error}"));
+        assert_eq!(
+            serde_json::to_value(&typed).expect("an entry"),
+            entry,
+            "the generated {kind} entry drops what the boundary serves"
+        );
         kinds.push(kind);
     }
 
@@ -7001,7 +7216,8 @@ fn published() -> Value {
         .expect("valid json")
 }
 
-/// The documented answer for this status must exist, and every field it requires must be served.
+/// The documented answer for this status must exist, and it must agree with the boundary on
+/// whether there is a JSON body at all.
 fn conforms(path: &str, method: &str, status: StatusCode, body: &Value) {
     let document = published();
     let (_, operations) = document["paths"]
@@ -7026,45 +7242,10 @@ fn conforms(path: &str, method: &str, status: StatusCode, body: &Value) {
             body.is_null(),
             "the document says {method} {path} answers {status} with nothing, and it served {body}"
         );
-        return;
-    }
-    requires(&document, schema, body);
-}
-
-fn requires(document: &Value, schema: &Value, body: &Value) {
-    let schema = match schema["$ref"].as_str() {
-        Some(reference) => resolve(document, reference),
-        None => schema,
-    };
-    if let Some(options) = schema["anyOf"].as_array() {
-        let option = options
-            .iter()
-            .find(|option| (option["type"] == "null") == body.is_null())
-            .expect("the documented alternatives include the answer");
-        requires(document, option, body);
-        return;
-    }
-    if let Some(parts) = schema["allOf"].as_array() {
-        for part in parts {
-            requires(document, part, body);
-        }
-        return;
-    }
-    if schema["type"] == "array" {
-        for item in body.as_array().expect("an array, as documented") {
-            requires(document, &schema["items"], item);
-        }
-        return;
-    }
-
-    let Some(required) = schema["required"].as_array() else {
-        return;
-    };
-    for field in required {
-        let field = field.as_str().expect("a named field");
+    } else {
         assert!(
-            body.get(field).is_some(),
-            "the document requires {field}, and the boundary served {body}"
+            !body.is_null(),
+            "the document says {method} {path} answers {status} with a body, and it served nothing"
         );
     }
 }
@@ -7304,6 +7485,62 @@ async fn transcript_payloads_are_hydrated_for_the_supervisor_context() {
             .await
             .iter()
             .any(|record| record["entry"]["message"]["payload_id"].is_string())
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_transcript_read_decodes_as_the_generated_events_under_their_documented_names() {
+    use kestrel_operator_types as wire;
+
+    let kestrel = Kestrel::boot().await;
+    let (workspace, session) = an_open_workspace(&kestrel, 1).await;
+    kestrel.said(&session, &"x".repeat(65537)).await;
+
+    let read = retention_stream(&kestrel, &workspace, "kinds=shared_state,narration,detail").await;
+    let mut names = Vec::new();
+    let mut references = 0;
+    for frame in read.split("\n\n").filter(|frame| frame.contains("data:")) {
+        let field = |field: &str| {
+            frame
+                .lines()
+                .find_map(|line| line.strip_prefix(field))
+                .map(str::trim)
+        };
+        let (name, data) = (
+            field("event:").expect("a name"),
+            field("data:").expect("data"),
+        );
+        let event = wire::Event::from_sse(name, data)
+            .unwrap_or_else(|| panic!("the document names no {name} event"))
+            .unwrap_or_else(|error| panic!("{data} is no {name} event: {error}"));
+        assert_eq!(event.event_name(), name);
+        assert_eq!(
+            serde_json::to_value(&event).expect("an event"),
+            serde_json::from_str::<Value>(data).expect("json"),
+            "the generated {name} event drops what the boundary serves"
+        );
+        if let wire::Event::Recorded(recorded) = &event {
+            assert_eq!(
+                field("id:"),
+                Some(format!("{workspace}:{}", recorded.seq).as_str())
+            );
+            if let wire::Entry::Message(said) = &recorded.entry
+                && let wire::MessageContent::PayloadReference(reference) = &said.message
+            {
+                assert_eq!(reference.bytes, 65537);
+                assert_eq!(said.payload_fields, Some(vec!["message".to_owned()]));
+                references += 1;
+            }
+        }
+        names.push(name);
+    }
+
+    assert!(names.contains(&"entry"), "{names:?}");
+    assert_eq!(names.last(), Some(&"end"), "{names:?}");
+    assert_eq!(
+        references, 1,
+        "the oversized message was not read as a reference"
     );
     kestrel.teardown().await;
 }

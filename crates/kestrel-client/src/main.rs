@@ -5,6 +5,7 @@ mod exit;
 mod files;
 mod filter;
 mod output;
+mod queue;
 mod readiness;
 mod scope;
 mod shell;
@@ -12,6 +13,7 @@ mod sse;
 mod start;
 mod terminal;
 mod transcript;
+mod typed;
 mod view;
 mod work;
 
@@ -25,13 +27,13 @@ use clap::parser::ValueSource;
 use clap::{Args, CommandFactory as _, FromArgMatches as _, Parser, Subcommand};
 use kestrel_operator_types as wire;
 use reqwest::Url;
-use serde::Deserialize;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::api::ControlPlane;
 use crate::diagnostic::Invocation;
 use crate::exit::{Exit, Failed};
-use crate::output::{Presentation, collection, show};
+use crate::output::Presentation;
 use crate::scope::{Derived, Scope, Scoping, Source};
 
 const BINARY: &str = "kestrel";
@@ -397,9 +399,10 @@ enum GithubCommand {
         #[arg(
             long = "carries",
             value_name = "DIRECTION",
+            value_parser = direction,
             default_values = ["inbound", "outbound"]
         )]
-        carries: Vec<String>,
+        carries: Vec<wire::Direction>,
         /// How often the poll reads the App's Delivery log
         #[arg(long, value_name = "DURATION", default_value = "1m")]
         interval: String,
@@ -1062,11 +1065,7 @@ async fn run(
     }
     if let Some(Command::ExitCodes) = client.command {
         let catalog = Exit::ALL.map(Exit::record);
-        return show(
-            &presentation,
-            &view::EXIT_CODES,
-            &Value::from(catalog.to_vec()),
-        );
+        return typed::collection(&presentation, &view::EXIT_CODES, &catalog, "");
     }
 
     let control_plane: Url = client.control_plane.parse().with_context(|| {
@@ -1094,22 +1093,22 @@ async fn run(
             let declaration = declaration(&file)?;
             let organization = scoping.resolve().await?.organization;
             if json {
-                let applied = api
-                    .post(
+                let applied: wire::AppliedDeclaration = api
+                    .post_as(
                         &["organizations", &organization, "declaration"],
                         &declaration,
                     )
                     .await?;
-                show_applied_whole(&presentation, &applied)?;
+                show_applied_whole(&presentation, &applied, &applied.admitting_outsiders)?;
             } else {
                 let preview = api
-                    .post(
+                    .post_as(
                         &["organizations", &organization, "declaration", "preview"],
                         &declaration,
                     )
                     .await?;
-                show_declaration(&preview)?;
-                api.post(
+                show_declaration(preview);
+                api.post_as::<wire::AppliedDeclaration>(
                     &["organizations", &organization, "declaration"],
                     &declaration,
                 )
@@ -1117,38 +1116,36 @@ async fn run(
             }
         }
         Command::Operator(OperatorCommand::Name { name }) => {
-            show(
-                &presentation,
-                &view::OPERATOR,
-                &api.put(&["operator"], &json!({ "name": name })).await?,
-            )?;
+            let operator: wire::Operator = api
+                .put_as(&["operator"], &wire::OperatorDeclaration { name })
+                .await?;
+            typed::show(&presentation, &view::OPERATOR, &operator)?;
         }
         Command::Operator(OperatorCommand::Show) => {
-            show(
-                &presentation,
-                &view::OPERATOR,
-                &api.get(&["operator"]).await?,
-            )?;
+            let operator: wire::Operator = api.get_as(&["operator"]).await?;
+            typed::show(&presentation, &view::OPERATOR, &operator)?;
         }
         Command::Organization(OrganizationCommand::Declare {
             name,
             max_live_instances,
         }) => {
-            show(
-                &presentation,
-                &view::DECLARED,
-                &api.post(
-                    &["organizations"],
-                    &json!({ "name": name, "max_live_instances": max_live_instances }),
-                )
-                .await?,
-            )?;
+            let declaration = wire::OrganizationDeclaration {
+                name,
+                max_live_instances: Some(
+                    max_live_instances.map(|most| i64::try_from(most.get()).unwrap_or(i64::MAX)),
+                ),
+            };
+            let organization: wire::Organization =
+                api.post_as(&["organizations"], &declaration).await?;
+            typed::show(&presentation, &view::ORGANIZATION_DECLARED, &organization)?;
         }
         Command::Organization(OrganizationCommand::List) => {
-            collection(
+            let organizations: wire::ListOrganizationsResponse =
+                api.get_as(&["organizations"]).await?;
+            typed::collection(
                 &presentation,
                 &view::ORGANIZATIONS,
-                &api.get(&["organizations"]).await?,
+                &organizations,
                 &empty_list(
                     &client.control_plane,
                     "Organizations",
@@ -1168,20 +1165,20 @@ async fn run(
             let declaration = wire::ProjectDeclaration::builder(branch, name, repositories)
                 .integrations(integrations)
                 .build();
-            show(
-                &presentation,
-                &view::DECLARED,
-                &api.post(&["organizations", &organization, "projects"], &declaration)
-                    .await?,
-            )?;
+            let project: wire::Project = api
+                .post_as(&["organizations", &organization, "projects"], &declaration)
+                .await?;
+            typed::show(&presentation, &view::PROJECT_DECLARED, &project)?;
         }
         Command::Project(ProjectCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            let projects: wire::ListProjectsResponse = api
+                .get_as(&["organizations", &organization, "projects"])
+                .await?;
+            typed::collection(
                 &presentation,
                 &view::PROJECTS,
-                &api.get(&["organizations", &organization, "projects"])
-                    .await?,
+                &projects,
                 &empty_list(
                     &client.control_plane,
                     "Projects",
@@ -1196,36 +1193,32 @@ async fn run(
             model,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            let declaration = json!({
-                "name": name,
-                "harness": harness,
-                "model": model,
-            });
-            show(
-                &presentation,
-                &view::DECLARED,
-                &api.post(&["organizations", &organization, "agents"], &declaration)
-                    .await?,
-            )?;
+            let mut declaration = wire::AgentDeclaration::new(harness, name);
+            declaration.model = Some(model);
+            let agent: wire::Agent = api
+                .post_as(&["organizations", &organization, "agents"], &declaration)
+                .await?;
+            typed::show(&presentation, &view::AGENT_DECLARED, &agent)?;
         }
         Command::Agent(AgentCommand::Model { name, model }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
-                &presentation,
-                &view::AGENT_MODEL,
-                &api.put(
+            let agent: wire::Agent = api
+                .put_as(
                     &["organizations", &organization, "agents", &name, "model"],
-                    &json!({ "model": model }),
+                    &wire::AgentModel { model: Some(model) },
                 )
-                .await?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::AGENT_MODEL, &agent)?;
         }
         Command::Agent(AgentCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            let agents: wire::ListAgentsResponse = api
+                .get_as(&["organizations", &organization, "agents"])
+                .await?;
+            typed::collection(
                 &presentation,
                 &view::AGENTS,
-                &api.get(&["organizations", &organization, "agents"]).await?,
+                &agents,
                 &empty_list(
                     &client.control_plane,
                     "Agents",
@@ -1236,24 +1229,25 @@ async fn run(
         }
         Command::Credential(CredentialCommand::Set { variable }) => {
             let organization = scoping.resolve().await?.organization;
-            let secret = json!({ "secret": read_the_secret()? });
-            show(
-                &presentation,
-                &view::CREDENTIAL,
-                &api.put(
+            let held: wire::ProviderCredential = api
+                .put_as(
                     &["organizations", &organization, "credentials", &variable],
-                    &secret,
+                    &wire::ProviderCredentialSecret {
+                        secret: read_the_secret()?,
+                    },
                 )
-                .await?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::CREDENTIAL, &held)?;
         }
         Command::Credential(CredentialCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            let credentials: wire::ListProviderCredentialsResponse = api
+                .get_as(&["organizations", &organization, "credentials"])
+                .await?;
+            typed::collection(
                 &presentation,
                 &view::CREDENTIALS,
-                &api.get(&["organizations", &organization, "credentials"])
-                    .await?,
+                &credentials,
                 &empty_list(
                     &client.control_plane,
                     "Provider Credentials",
@@ -1272,41 +1266,38 @@ async fn run(
         }
         Command::Profile(ProfileCommand::Declare { name, owner }) => {
             let organization = scoping.resolve().await?.organization;
-            let profile: wire::SubscriptionProfile = serde_json::from_value(
-                api.post(
+            let profile: wire::SubscriptionProfile = api
+                .post_as(
                     &["organizations", &organization, "profiles"],
                     &wire::SubscriptionProfileDeclaration {
                         name,
                         owner: Some(owner),
                     },
                 )
-                .await?,
-            )?;
-            show(
-                &presentation,
-                &view::DECLARED,
-                &serde_json::to_value(profile)?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::PROFILE_DECLARED, &profile)?;
         }
         Command::Profile(ProfileCommand::Set { name, entry }) => {
             let organization = scoping.resolve().await?.organization;
-            let login = json!({ "secret": read_the_login(entry.file.is_some())? });
-            show(
-                &presentation,
-                &view::LOGIN,
-                &api.put(&entry.path(&organization, &name), &login).await?,
-            )?;
+            let login: wire::SubscriptionProfileLogin = api
+                .put_as(
+                    &entry.path(&organization, &name),
+                    &wire::ProviderCredentialSecret {
+                        secret: read_the_login(entry.file.is_some())?,
+                    },
+                )
+                .await?;
+            typed::show(&presentation, &view::LOGIN, &login)?;
         }
         Command::Profile(ProfileCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            let profiles: wire::ListSubscriptionProfilesResponse = serde_json::from_value(
-                api.get(&["organizations", &organization, "profiles"])
-                    .await?,
-            )?;
-            collection(
+            let profiles: wire::ListSubscriptionProfilesResponse = api
+                .get_as(&["organizations", &organization, "profiles"])
+                .await?;
+            typed::collection(
                 &presentation,
                 &view::PROFILES,
-                &serde_json::to_value(profiles)?,
+                &profiles,
                 &empty_list(
                     &client.control_plane,
                     "Subscription Profiles",
@@ -1328,8 +1319,8 @@ async fn run(
             api: github_api,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            let result = api
-                .post(
+            let started: wire::GithubAppStarted = api
+                .post_as(
                     &["organizations", &organization, "github-app"],
                     &wire::GithubAppStart {
                         name,
@@ -1342,12 +1333,7 @@ async fn run(
                     },
                 )
                 .await?;
-            let started: wire::GithubAppStarted = serde_json::from_value(result)?;
-            show(
-                &presentation,
-                &view::View::Value("url"),
-                &serde_json::to_value(started)?,
-            )?;
+            typed::show(&presentation, &view::GITHUB_APP_STARTED, &started)?;
         }
         Command::Integration(IntegrationCommand::Github(GithubCommand::Register {
             name,
@@ -1361,27 +1347,26 @@ async fn run(
             api: github_api,
         })) => {
             let organization = scoping.resolve().await?.organization;
-            let registration = json!({
-                "kind": "github",
-                "name": name,
-                "repository": repository,
-                "app_id": app_id,
-                "installation": installation,
-                "private_key": given(&private_key)?,
-                "carries": carries,
-                "interval": interval,
-                "webhook_secret": webhook_secret,
-                "api": github_api,
-            });
-            show(
-                &presentation,
-                &view::DECLARED,
-                &api.post(
+            let registration =
+                wire::IntegrationRegistration::GithubRegistration(wire::GithubRegistration {
+                    kind: json!("github"),
+                    name,
+                    repository,
+                    app_id,
+                    installation,
+                    private_key: given(&private_key)?,
+                    carries: Some(carries),
+                    interval: Some(Some(interval)),
+                    webhook_secret: webhook_secret.map(Some),
+                    api: github_api.map(Some),
+                });
+            let registered: wire::Integration = api
+                .post_as(
                     &["organizations", &organization, "integrations"],
                     &registration,
                 )
-                .await?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::INTEGRATION_DECLARED, &registered)?;
         }
         Command::Integration(IntegrationCommand::Github(GithubCommand::ReplaceKey {
             name,
@@ -1395,10 +1380,8 @@ async fn run(
                 })?,
                 None => read_standard_input("the App's private key")?,
             };
-            shown_integration(
-                &presentation,
-                invocation,
-                api.put(
+            let replaced: wire::Integration = api
+                .put_as(
                     &[
                         "organizations",
                         &organization,
@@ -1411,32 +1394,35 @@ async fn run(
                         revision,
                     },
                 )
-                .await?,
-            )?;
+                .await?;
+            shown_integration(&presentation, invocation, replaced)?;
         }
         Command::Integration(IntegrationCommand::Register(RegisterCommand::Webhook {
             name,
             secret,
         })) => {
             let organization = scoping.resolve().await?.organization;
-            show(
-                &presentation,
-                &view::DECLARED,
-                &api.post(
+            let registration =
+                wire::IntegrationRegistration::WebhookRegistration(wire::WebhookRegistration {
+                    kind: json!("webhook"),
+                    name,
+                    secret,
+                    carries: None,
+                });
+            let registered: wire::Integration = api
+                .post_as(
                     &["organizations", &organization, "integrations"],
-                    &json!({ "kind": "webhook", "name": name, "secret": secret }),
+                    &registration,
                 )
-                .await?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::INTEGRATION_DECLARED, &registered)?;
         }
         Command::Integration(IntegrationCommand::Show { name }) => {
             let organization = scoping.resolve().await?.organization;
-            shown_integration(
-                &presentation,
-                invocation,
-                api.get(&["organizations", &organization, "integrations", &name])
-                    .await?,
-            )?;
+            let integration: wire::Integration = api
+                .get_as(&["organizations", &organization, "integrations", &name])
+                .await?;
+            shown_integration(&presentation, invocation, integration)?;
         }
         Command::Integration(IntegrationCommand::Repositories {
             name,
@@ -1446,8 +1432,8 @@ async fn run(
             let organization = scoping.resolve().await?.organization;
             let page = page.to_string();
             let per_page = per_page.to_string();
-            let repositories: wire::IntegrationRepositories = serde_json::from_value(
-                api.get_where(
+            let repositories: wire::IntegrationRepositories = api
+                .get_where_as(
                     &[
                         "organizations",
                         &organization,
@@ -1457,15 +1443,10 @@ async fn run(
                     ],
                     &[("page", &page), ("per_page", &per_page)],
                 )
-                .await?,
-            )?;
+                .await?;
             let mut out = std::io::stdout().lock();
             if presentation.json() {
-                crate::output::document(
-                    &mut out,
-                    &presentation,
-                    &serde_json::to_value(repositories)?,
-                )?;
+                typed::document(&mut out, &presentation, &repositories)?;
             } else {
                 for repository in repositories.repositories {
                     writeln!(
@@ -1505,22 +1486,18 @@ async fn run(
                 interval,
                 revision,
             };
-            shown_integration(
-                &presentation,
-                invocation,
-                api.patch(
+            let changed: wire::Integration = api
+                .patch_as(
                     &["organizations", &organization, "integrations", &name],
                     &change,
                 )
-                .await?,
-            )?;
+                .await?;
+            shown_integration(&presentation, invocation, changed)?;
         }
         Command::Integration(IntegrationCommand::Disable { name }) => {
             let organization = scoping.resolve().await?.organization;
-            shown_integration(
-                &presentation,
-                invocation,
-                api.post(
+            let disabled: wire::Integration = api
+                .post_as(
                     &[
                         "organizations",
                         &organization,
@@ -1530,15 +1507,13 @@ async fn run(
                     ],
                     &json!({}),
                 )
-                .await?,
-            )?;
+                .await?;
+            shown_integration(&presentation, invocation, disabled)?;
         }
         Command::Integration(IntegrationCommand::Enable { name }) => {
             let organization = scoping.resolve().await?.organization;
-            shown_integration(
-                &presentation,
-                invocation,
-                api.post(
+            let enabled: wire::Integration = api
+                .post_as(
                     &[
                         "organizations",
                         &organization,
@@ -1548,13 +1523,13 @@ async fn run(
                     ],
                     &json!({}),
                 )
-                .await?,
-            )?;
+                .await?;
+            shown_integration(&presentation, invocation, enabled)?;
         }
         Command::Integration(IntegrationCommand::Retire { name, yes }) => {
             let organization = scoping.resolve().await?.organization;
             let path = ["organizations", &organization, "integrations", &name];
-            let reviewed: wire::Integration = serde_json::from_value(api.get(&path).await?)?;
+            let reviewed: wire::Integration = api.get_as(&path).await?;
             if !yes && !matches!(reviewed.state, wire::IntegrationState::Retired) {
                 if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
                     bail!(
@@ -1573,8 +1548,8 @@ async fn run(
                     return Ok(());
                 }
             }
-            let retired = api
-                .post(
+            let retired: wire::Integration = api
+                .post_as(
                     &[path.as_slice(), &["retire"]].concat(),
                     &wire::IntegrationRetirement {
                         revision: Some(reviewed.revision),
@@ -1588,11 +1563,13 @@ async fn run(
         }
         Command::Integration(IntegrationCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            let integrations: wire::ListIntegrationsResponse = api
+                .get_as(&["organizations", &organization, "integrations"])
+                .await?;
+            typed::collection(
                 &presentation,
                 &view::INTEGRATIONS,
-                &api.get(&["organizations", &organization, "integrations"])
-                    .await?,
+                &integrations,
                 &empty_list(
                     &client.control_plane,
                     "Integrations",
@@ -1617,14 +1594,16 @@ async fn run(
         }
         Command::Event(EventCommand::List { limit }) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
-                &presentation,
-                &view::EVENTS,
-                &api.get_where(
+            let events: wire::ListEventsResponse = api
+                .get_where_as(
                     &["organizations", &organization, "events"],
                     &[("limit", &limit.to_string())],
                 )
-                .await?,
+                .await?;
+            typed::collection(
+                &presentation,
+                &view::EVENTS,
+                &events,
                 &empty_list(
                     &client.control_plane,
                     "Events",
@@ -1634,11 +1613,8 @@ async fn run(
             )?;
         }
         Command::Event(EventCommand::Show { record }) => {
-            show(
-                &presentation,
-                &view::EVENT,
-                &api.get(&["events", &record]).await?,
-            )?;
+            let event: wire::EventRecord = api.get_as(&["events", &record]).await?;
+            typed::show(&presentation, &view::EVENT, &event)?;
         }
         Command::Trigger(TriggerCommand::Declare {
             name,
@@ -1670,40 +1646,33 @@ async fn run(
                 })
                 .transpose()?;
             let brief = given(&brief)?;
-            let mut declaration = json!({
-                "name": name,
-                "brief": brief,
-                "branch": branch,
-                "correlation": correlation,
-                "on_miss": on_miss,
-                "on_open_workspace": on_open_workspace,
-                "project": project,
-                "agent": agent,
-                "allows": allows,
-                "profile": profile,
-            });
-            let declaration = declaration
-                .as_object_mut()
-                .expect("a trigger declaration is an object");
-            if let Some(filter) = filter {
-                declaration.insert("filter".to_owned(), filter);
-            }
-            if let Some(every) = every {
-                declaration.insert("every".to_owned(), Value::String(every));
-            }
-            if let Some(cron) = cron {
-                declaration.insert("cron".to_owned(), Value::String(cron));
-            }
-            if let Some(zone) = zone {
-                declaration.insert("zone".to_owned(), Value::String(zone));
-            }
-            let declared = api
-                .post(&["organizations", &organization, "triggers"], &declaration)
+            let declaration = wire::TriggerDeclaration {
+                name,
+                brief,
+                branch: branch.map(Some),
+                correlation: correlation.map(Some),
+                on_miss: on_miss.map(Some),
+                on_open_workspace: on_open_workspace.map(Some),
+                project,
+                agent,
+                allows: Some(allows),
+                profile: profile.map(Some),
+                filter: None,
+                every: None,
+                cron: None,
+                zone: None,
+                model: None,
+                mode: None,
+                thought_level: None,
+                variant: trigger_condition(filter, every, cron, zone),
+            };
+            let declared: wire::Trigger = api
+                .post_as(&["organizations", &organization, "triggers"], &declaration)
                 .await?;
-            if declared["admits_outsiders"] == true {
-                warn_of_outsiders(&name);
+            if declared.admits_outsiders {
+                warn_of_outsiders(&declared.name);
             }
-            show(&presentation, &view::DECLARED, &declared)?;
+            typed::show(&presentation, &view::TRIGGER_DECLARED, &declared)?;
         }
         Command::Trigger(TriggerCommand::Apply { file, dry_run }) => {
             let organization = scoping.resolve().await?.organization;
@@ -1712,11 +1681,11 @@ async fn run(
             if dry_run {
                 path.push("preview");
             }
-            let applied = api.post(&path, &declarations).await?;
+            let applied: wire::AppliedTriggers = api.post_as(&path, &declarations).await?;
             if json {
-                show_applied_whole(&presentation, &applied)?;
+                show_applied_whole(&presentation, &applied, &applied.admitting_outsiders)?;
             } else {
-                show_applied_triggers(&applied)?;
+                show_applied_triggers(applied);
             }
         }
         Command::Trigger(TriggerCommand::Dispatch {
@@ -1727,11 +1696,11 @@ async fn run(
             agent,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            let instruction = instruction.as_deref().map(given).transpose()?;
-            show(
-                &presentation,
-                &view::FIRED,
-                &api.post(
+            let mut dispatch = wire::TriggerDispatch::new(integration, issue);
+            dispatch.instruction = instruction.as_deref().map(given).transpose()?.map(Some);
+            dispatch.agent = agent.map(Some);
+            let fired: wire::Fired = api
+                .post_as(
                     &[
                         "organizations",
                         &organization,
@@ -1739,23 +1708,25 @@ async fn run(
                         &name,
                         "dispatch",
                     ],
-                    &json!({
-                        "integration": integration,
-                        "issue": issue,
-                        "instruction": instruction,
-                        "agent": agent,
-                    }),
+                    &dispatch,
                 )
-                .await?,
+                .await?;
+            typed::show_as(
+                &presentation,
+                &view::FIRED,
+                &fired,
+                &view::FiredShown::of(&fired),
             )?;
         }
         Command::Trigger(TriggerCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            let triggers: wire::ListTriggersResponse = api
+                .get_as(&["organizations", &organization, "triggers"])
+                .await?;
+            typed::collection(
                 &presentation,
                 &view::TRIGGERS,
-                &api.get(&["organizations", &organization, "triggers"])
-                    .await?,
+                &triggers,
                 &empty_list(
                     &client.control_plane,
                     "Triggers",
@@ -1766,12 +1737,10 @@ async fn run(
         }
         Command::Trigger(TriggerCommand::Show { name }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
-                &presentation,
-                &view::TRIGGER,
-                &api.get(&["organizations", &organization, "triggers", &name])
-                    .await?,
-            )?;
+            let trigger: wire::Trigger = api
+                .get_as(&["organizations", &organization, "triggers", &name])
+                .await?;
+            typed::show(&presentation, &view::TRIGGER, &trigger)?;
         }
         Command::Trigger(TriggerCommand::Test {
             name,
@@ -1789,48 +1758,49 @@ async fn run(
                     "the declaration file and the instruction cannot both be read from standard input"
                 ));
             }
-            let declared = file.as_deref().map(trigger_file).transpose()?;
+            let declared = file.as_deref().map(trigger_document).transpose()?;
             let instruction = instruction.as_deref().map(given).transpose()?;
-            show(
-                &presentation,
-                &view::TRIGGER_TEST,
-                &api.post(
+            let event = event
+                .map(|event| {
+                    event.parse::<uuid::Uuid>().map_err(|_| {
+                        Failed::new(Exit::Usage, format!("{event} is not an Event's record"))
+                    })
+                })
+                .transpose()?;
+            let tested: wire::TriggerTestResult = api
+                .post_as(
                     &["organizations", &organization, "triggers", &name, "test"],
-                    &json!({
-                        "event": event,
-                        "integration": integration,
-                        "issue": issue,
-                        "instruction": instruction,
-                        "agent": agent,
-                        "declared": declared,
-                    }),
+                    &wire::TriggerTest {
+                        event: Some(event),
+                        integration: Some(integration),
+                        issue: Some(issue),
+                        instruction: Some(instruction),
+                        agent: Some(agent),
+                        declared: Some(declared),
+                    },
                 )
-                .await?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::TRIGGER_TEST, &tested)?;
         }
         Command::Trigger(TriggerCommand::Disable { name }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
-                &presentation,
-                &view::TRIGGER_STATE,
-                &api.post(
+            let trigger: wire::Trigger = api
+                .post_as(
                     &["organizations", &organization, "triggers", &name, "disable"],
                     &json!({}),
                 )
-                .await?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::TRIGGER_STATE, &trigger)?;
         }
         Command::Trigger(TriggerCommand::Enable { name }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
-                &presentation,
-                &view::TRIGGER_STATE,
-                &api.post(
+            let trigger: wire::Trigger = api
+                .post_as(
                     &["organizations", &organization, "triggers", &name, "enable"],
                     &json!({}),
                 )
-                .await?,
-            )?;
+                .await?;
+            typed::show(&presentation, &view::TRIGGER_STATE, &trigger)?;
         }
         Command::Workspace(WorkspaceCommand::Open {
             project,
@@ -1848,44 +1818,38 @@ async fn run(
         }) => {
             let organization = scoping.resolve().await?.organization;
             let brief = brief.as_deref().map(given).transpose()?;
-            let opened = api
-                .post(
+            let opened: wire::Opened = api
+                .post_as(
                     &["organizations", &organization, "workspaces"],
-                    &json!({
-                        "project": project,
-                        "agent": agent,
-                        "profile": profile,
-                        "sign_in_method": sign_in,
-                        "branch": branch,
-                        "continues": continues,
-                        "model": model,
-                        "mode": mode,
-                        "thought_level": thought_level,
-                        "brief": brief,
-                        "participant": as_participant,
-                        "depends_on": depends_on,
-                    }),
+                    &wire::WorkspaceDeclaration {
+                        project,
+                        agent,
+                        profile: Some(profile),
+                        sign_in_method: Some(sign_in),
+                        branch: Some(branch),
+                        continues: Some(continues),
+                        model: Some(model),
+                        mode: Some(mode),
+                        thought_level: Some(thought_level),
+                        brief: Some(brief),
+                        participant: Some(as_participant),
+                        depends_on: Some(Some(depends_on)),
+                    },
                 )
                 .await?;
-            let shown = if json {
-                opened
-            } else {
-                json!({
-                    "workspace": opened["workspace"]["name"],
-                    "workspace_id": opened["workspace"]["id"],
-                    "session": opened["session"]["name"],
-                    "session_id": opened["session"]["id"],
-                })
-            };
-            show(&presentation, &view::OPENED, &shown)?;
+            typed::show(&presentation, &view::OPENED, &opened)?;
         }
         Command::Workspace(WorkspaceCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            typed::collection(
                 &presentation,
                 &view::WORKSPACES,
-                &api.get(&["organizations", &organization, "workspaces"])
-                    .await?,
+                &api.get_as::<wire::ListWorkspacesResponse>(&[
+                    "organizations",
+                    &organization,
+                    "workspaces",
+                ])
+                .await?,
                 &empty_list(
                     &client.control_plane,
                     "Workspaces",
@@ -1897,7 +1861,7 @@ async fn run(
         Command::Workspace(WorkspaceCommand::Work { workspace }) => {
             let organization = scoping.resolve().await?.organization;
             let answer = api
-                .get(&[
+                .get_as::<wire::WorkspaceWork>(&[
                     "organizations",
                     &organization,
                     "workspaces",
@@ -1905,7 +1869,7 @@ async fn run(
                     "work",
                 ])
                 .await?;
-            work::show(answer, &presentation)?;
+            work::show(&presentation, &answer)?;
         }
         Command::Workspace(WorkspaceCommand::Changes {
             workspace,
@@ -1927,7 +1891,7 @@ async fn run(
             let mut query = vec![("scope", scope.as_str())];
             query.extend(paths.iter().map(|path| ("path", path.as_str())));
             let answer = api
-                .get_where(
+                .get_where_as::<wire::WorkspaceChanges>(
                     &[
                         "organizations",
                         &organization,
@@ -1939,8 +1903,8 @@ async fn run(
                 )
                 .await?;
             changes::show(
-                answer,
                 &presentation,
+                &changes::Read::Changes(answer),
                 &empty_list(
                     &client.control_plane,
                     "changes in this comparison",
@@ -1952,24 +1916,30 @@ async fn run(
         Command::Workspace(
             command @ (WorkspaceCommand::Commits { .. } | WorkspaceCommand::Stashes { .. }),
         ) => {
-            let (workspace, read) = match command {
-                WorkspaceCommand::Commits { workspace } => (workspace, "commits"),
-                WorkspaceCommand::Stashes { workspace } => (workspace, "stashes"),
+            let organization = scoping.resolve().await?.organization;
+            let path = |workspace, read| {
+                [
+                    "organizations",
+                    organization.as_str(),
+                    "workspaces",
+                    workspace,
+                    read,
+                ]
+            };
+            let (workspace, read, answer) = match command {
+                WorkspaceCommand::Commits { workspace } => {
+                    let commits = api.get_as(&path(&workspace, "commits")).await?;
+                    (workspace, "commits", changes::Read::Commits(commits))
+                }
+                WorkspaceCommand::Stashes { workspace } => {
+                    let stashes = api.get_as(&path(&workspace, "stashes")).await?;
+                    (workspace, "stashes", changes::Read::Stashes(stashes))
+                }
                 _ => unreachable!(),
             };
-            let organization = scoping.resolve().await?.organization;
-            let answer = api
-                .get(&[
-                    "organizations",
-                    &organization,
-                    "workspaces",
-                    &workspace,
-                    read,
-                ])
-                .await?;
             changes::show(
-                answer,
                 &presentation,
+                &answer,
                 &empty_list(
                     &client.control_plane,
                     read,
@@ -1982,7 +1952,7 @@ async fn run(
             let organization = scoping.resolve().await?.organization;
             let path = path.unwrap_or_default();
             let answer = api
-                .get_where(
+                .get_where_as::<wire::FileListing>(
                     &[
                         "organizations",
                         &organization,
@@ -1994,8 +1964,8 @@ async fn run(
                 )
                 .await?;
             files::list(
-                answer,
                 &presentation,
+                &answer,
                 &empty_list(
                     &client.control_plane,
                     "directory entries",
@@ -2022,11 +1992,16 @@ async fn run(
         }
         Command::Workspace(WorkspaceCommand::Show { workspace }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            typed::show(
                 &presentation,
                 &view::WORKSPACE,
-                &api.get(&["organizations", &organization, "workspaces", &workspace])
-                    .await?,
+                &api.get_as::<wire::Workspace>(&[
+                    "organizations",
+                    &organization,
+                    "workspaces",
+                    &workspace,
+                ])
+                .await?,
             )?;
         }
         Command::Workspace(WorkspaceCommand::Post {
@@ -2035,8 +2010,8 @@ async fn run(
             message,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            let answer = api
-                .post(
+            let answer: wire::Posted = api
+                .post_as(
                     &[
                         "organizations",
                         &organization,
@@ -2044,17 +2019,18 @@ async fn run(
                         &workspace,
                         "messages",
                     ],
-                    &json!({ "participant": as_participant, "message": message }),
+                    &wire::WorkspaceMessage {
+                        participant: as_participant,
+                        message,
+                    },
                 )
                 .await?;
-            let session = &answer["session"];
-            let held = &answer["held_message"];
             if json {
-                show(&presentation, &view::DECLARED, &answer)?;
-            } else if !session.is_null() {
-                show(&presentation, &view::DECLARED, session)?;
-            } else if !held.is_null() {
-                show(&presentation, &view::DECLARED, held)?;
+                typed::show(&presentation, &view::POSTED, &answer)?;
+            } else if let Some(session) = &answer.session {
+                typed::show(&presentation, &view::SESSION_DECLARED, session)?;
+            } else if let Some(held) = &answer.held_message {
+                typed::show(&presentation, &view::HELD_DECLARED, held)?;
             } else {
                 eprintln!("queued as the next turn of the session already in flight");
             }
@@ -2066,8 +2042,8 @@ async fn run(
             message,
         })) => {
             let organization = scoping.resolve().await?.organization;
-            let answer = api
-                .put(
+            let answer: wire::HeldMessage = api
+                .put_as(
                     &[
                         "organizations",
                         &organization,
@@ -2076,10 +2052,13 @@ async fn run(
                         "messages",
                         &id.to_string(),
                     ],
-                    &json!({ "participant": as_participant, "message": message }),
+                    &wire::WorkspaceMessage {
+                        participant: as_participant,
+                        message,
+                    },
                 )
                 .await?;
-            show(&presentation, &view::HELD_MESSAGE, &answer)?;
+            typed::show(&presentation, &view::HELD_MESSAGE, &answer)?;
         }
         Command::Workspace(WorkspaceCommand::Message(MessageCommand::Withdraw {
             workspace,
@@ -2096,16 +2075,18 @@ async fn run(
                     "messages",
                     &id.to_string(),
                 ],
-                &json!({ "participant": as_participant }),
+                &wire::WorkspaceMessageWithdrawal {
+                    participant: as_participant,
+                },
             )
             .await?;
         }
         Command::Workspace(WorkspaceCommand::Seal { workspace }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            typed::show(
                 &presentation,
-                &view::DECLARED,
-                &api.post(
+                &view::WORKSPACE_DECLARED,
+                &api.post_as::<wire::Workspace>(
                     &[
                         "organizations",
                         &organization,
@@ -2156,10 +2137,10 @@ async fn run(
             depends_on,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            typed::show(
                 &presentation,
-                &view::DECLARED,
-                &api.post(
+                &view::SESSION_DECLARED,
+                &api.post_as::<wire::Session>(
                     &[
                         "organizations",
                         &organization,
@@ -2167,24 +2148,24 @@ async fn run(
                         &workspace,
                         "sessions",
                     ],
-                    &json!({
-                        "agent": agent,
-                        "sign_in_method": sign_in,
-                        "model": model,
-                        "mode": mode,
-                        "thought_level": thought_level,
-                        "depends_on": depends_on,
-                    }),
+                    &wire::SessionDeclaration {
+                        agent: Some(agent),
+                        sign_in_method: Some(sign_in),
+                        model: Some(model),
+                        mode: Some(mode),
+                        thought_level: Some(thought_level),
+                        depends_on: Some(Some(depends_on)),
+                    },
                 )
                 .await?,
             )?;
         }
         Command::Session(SessionCommand::List { workspace }) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            typed::collection(
                 &presentation,
                 &view::SESSIONS,
-                &api.get(&[
+                &api.get_as::<wire::ListSessionsResponse>(&[
                     "organizations",
                     &organization,
                     "workspaces",
@@ -2205,8 +2186,13 @@ async fn run(
             shown_session(
                 &presentation,
                 invocation,
-                &api.get(&["organizations", &organization, "sessions", &session])
-                    .await?,
+                &api.get_as::<wire::Session>(&[
+                    "organizations",
+                    &organization,
+                    "sessions",
+                    &session,
+                ])
+                .await?,
             )?;
         }
         Command::Session(SessionCommand::Interrupt {
@@ -2214,10 +2200,10 @@ async fn run(
             as_participant,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            typed::show(
                 &presentation,
                 &view::INTERRUPTED,
-                &api.post(
+                &api.post_as::<wire::Session>(
                     &[
                         "organizations",
                         &organization,
@@ -2225,17 +2211,19 @@ async fn run(
                         &session,
                         "interrupt",
                     ],
-                    &json!({ "participant": as_participant }),
+                    &wire::SessionInterrupt {
+                        participant: as_participant,
+                    },
                 )
                 .await?,
             )?;
         }
         Command::Session(SessionCommand::Stop { session }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            typed::show(
                 &presentation,
                 &view::STOPPED,
-                &api.post(
+                &api.post_as::<wire::Session>(
                     &["organizations", &organization, "sessions", &session, "stop"],
                     &json!({}),
                 )
@@ -2250,13 +2238,14 @@ async fn run(
                 as_participant,
             } = command;
             let organization = scoping.resolve().await?.organization;
-            let body = if declares(&option) {
-                json!({ "participant": as_participant, "category": option, "value": value })
-            } else {
-                json!({ "participant": as_participant, "option": option, "value": value })
+            let body = wire::OptionChange {
+                participant: Some(as_participant),
+                category: declares(&option).then(|| Some(option.clone())),
+                option: (!declares(&option)).then(|| Some(option.clone())),
+                value,
             };
-            let changed = api
-                .post(
+            let changed: wire::Session = api
+                .post_as(
                     &[
                         "organizations",
                         &organization,
@@ -2272,11 +2261,15 @@ async fn run(
         }
         Command::Instance(InstanceCommand::List) => {
             let organization = scoping.resolve().await?.organization;
-            collection(
+            typed::collection(
                 &presentation,
                 &view::INSTANCES,
-                &api.get(&["organizations", &organization, "instances"])
-                    .await?,
+                &api.get_as::<wire::ListHeldInstancesResponse>(&[
+                    "organizations",
+                    &organization,
+                    "instances",
+                ])
+                .await?,
                 &empty_list(
                     &client.control_plane,
                     "Instances",
@@ -2290,10 +2283,10 @@ async fn run(
             as_participant,
         }) => {
             let organization = scoping.resolve().await?.organization;
-            show(
+            typed::show(
                 &presentation,
                 &view::RELEASED,
-                &api.post(
+                &api.post_as::<wire::ReleasedInstance>(
                     &[
                         "organizations",
                         &organization,
@@ -2302,22 +2295,26 @@ async fn run(
                         "instance",
                         "release",
                     ],
-                    &json!({ "participant": as_participant }),
+                    &wire::InstanceRelease {
+                        participant: as_participant.map(Some),
+                    },
                 )
                 .await?,
             )?;
         }
         Command::Status => {
-            let location = json!({
-                "control_plane": client.control_plane,
-                "control_plane_source": control_plane_source,
-            });
+            let location = StatusLocation {
+                control_plane: client.control_plane.clone(),
+                control_plane_source: control_plane_source.to_string(),
+            };
             status(&api, &presentation, location, scoping.derive().await?).await?;
         }
         Command::Queue => {
             let organization = scoping.resolve().await?.organization;
-            let snapshot = api.get(&["organizations", &organization, "queue"]).await?;
-            shown_queue(&presentation, &snapshot, invocation)?;
+            let snapshot: wire::Queue = api
+                .get_as(&["organizations", &organization, "queue"])
+                .await?;
+            queue::show(&presentation, &snapshot, invocation)?;
         }
         Command::ExitCodes => unreachable!("the catalog is shown before the control plane is"),
     }
@@ -2346,17 +2343,20 @@ async fn started(
     let organization =
         start::organization(named, &existing).map_err(|missing| incomplete(&[missing]))?;
 
-    let declared = names(&api.get(&["organizations"]).await?).contains(&organization.value);
+    let declared = scope::organizations(api)
+        .await?
+        .contains(&organization.value);
     let (projects, agents, credentials) = if declared {
-        let within = async |records| {
-            api.get(&["organizations", &organization.value, records])
-                .await
-        };
-        tokio::try_join!(within("projects"), within("agents"), within("credentials"))?
+        let within = |records| ["organizations", &organization.value, records];
+        tokio::try_join!(
+            async { api.get_as(&within("projects")).await },
+            async { api.get_as(&within("agents")).await },
+            async { api.get_as(&within("credentials")).await },
+        )?
     } else {
-        (json!([]), json!([]), json!([]))
+        (Vec::new(), Vec::new(), Vec::new())
     };
-    let existing = start::Existing::read(declared, &projects, &agents, &credentials)?;
+    let existing = start::Existing::read(declared, projects, agents, credentials);
     let names_a_project = start.project.as_ref().is_some_and(|name| {
         existing
             .projects
@@ -2421,32 +2421,19 @@ async fn started(
         }
     }
 
-    let started = api.post(&["starts"], &plan.body(&brief, &secrets)).await?;
+    let started: wire::Started = api
+        .post_as(&["starts"], &plan.body(&brief, &secrets))
+        .await?;
     for (kind, settled) in [
-        ("organization", &started["organization"]),
-        ("project", &started["project"]),
-        ("agent", &started["agent"]),
+        ("organization", &started.organization),
+        ("project", &started.project),
+        ("agent", &started.agent),
     ] {
-        if settled["created"] == true {
-            eprintln!("declared the {kind} {}", rendered(&settled["name"]));
+        if settled.created {
+            eprintln!("declared the {kind} {}", settled.name);
         }
     }
-    if presentation.json() {
-        return show(presentation, &view::STARTED, &started);
-    }
-    show(
-        presentation,
-        &view::STARTED,
-        &json!({
-            "organization": started["organization"]["name"],
-            "project": started["project"]["name"],
-            "agent": started["agent"]["name"],
-            "workspace": started["workspace"]["name"],
-            "workspace_id": started["workspace"]["id"],
-            "session": started["session"]["name"],
-            "session_id": started["session"]["id"],
-        }),
-    )
+    typed::show(presentation, &view::STARTED, &started)
 }
 
 fn selections(
@@ -2476,13 +2463,12 @@ fn selections(
 }
 
 async fn resolved(api: &ControlPlane, repositories: Vec<String>) -> Result<Vec<String>> {
-    let resolution: wire::RepositoryResolution = serde_json::from_value(
-        api.post(
+    let resolution: wire::RepositoryResolution = api
+        .post_as(
             &["repository-resolutions"],
             &wire::RepositoryResolutionRequest::new(repositories),
         )
-        .await?,
-    )?;
+        .await?;
 
     Ok(resolution
         .repositories
@@ -2546,15 +2532,10 @@ fn github_cleanup(integration: &wire::Integration) -> String {
     )
 }
 
-fn shown_integration(
-    presentation: &Presentation,
-    invocation: &Invocation,
-    answered: Value,
-) -> Result<()> {
-    let integration: wire::Integration = serde_json::from_value(answered)?;
-    let mut record = serde_json::to_value(&integration)?;
-    if !presentation.json() {
-        record["canceled_posts"] = integration
+/// What retiring an Integration with unsent posts left unsaid, each as one line.
+fn canceled_posts(integration: &wire::Integration) -> String {
+    typed::joined(
+        &integration
             .canceled_posts
             .iter()
             .map(|post| {
@@ -2566,80 +2547,63 @@ fn shown_integration(
                 });
                 format!("{} {said}: {}{attempted}", post.session, post.reason)
             })
-            .collect();
-        record["diagnostic"] = integration
-            .diagnostic
-            .as_ref()
-            .map_or(Value::Null, |diagnostic| {
-                Value::from(diagnostic::inline(diagnostic, invocation))
-            });
-    }
+            .collect::<Vec<_>>(),
+    )
+}
 
-    show(presentation, &view::INTEGRATION, &record)
+fn shown_integration(
+    presentation: &Presentation,
+    invocation: &Invocation,
+    integration: wire::Integration,
+) -> Result<()> {
+    let canceled_posts = canceled_posts(&integration);
+    let diagnostic = integration.diagnostic.as_ref().map_or_else(
+        || crate::output::ABSENT.to_owned(),
+        |diagnostic| diagnostic::inline(diagnostic, invocation),
+    );
+    let shown = view::IntegrationShown {
+        integration,
+        canceled_posts,
+        diagnostic,
+    };
+
+    typed::show_as(presentation, &view::INTEGRATION, &shown.integration, &shown)
 }
 
 fn direction(given: &str) -> Result<wire::Direction, String> {
-    serde_json::from_value(Value::from(given))
-        .map_err(|_| format!("{given} is not a direction: inbound or outbound"))
+    [wire::Direction::Inbound, wire::Direction::Outbound]
+        .into_iter()
+        .find(|direction| direction.as_str() == given)
+        .ok_or_else(|| format!("{given} is not a direction: inbound or outbound"))
 }
 
 /// A failed Session is still a successful read: its diagnostic is shown, never raised.
 fn shown_session(
     presentation: &Presentation,
     invocation: &Invocation,
-    session: &Value,
+    session: &wire::Session,
 ) -> Result<()> {
-    let mut record = session.clone();
-    if !presentation.json() {
-        record["diagnostic"] =
-            serde_json::from_value::<wire::Diagnostic>(record["diagnostic"].clone())
-                .map_or(Value::Null, |diagnostic| {
-                    Value::from(diagnostic::inline(&diagnostic, invocation))
-                });
-        record["options"] = Value::from(session_options(&record["options"]));
-        record["changing_options"] = Value::from(changing_options(&record["changing_options"]));
-        record["commands"] = Value::from(session_commands(&record["commands"]));
-    }
+    let shown = view::SessionShown {
+        session: session.clone(),
+        diagnostic: session.diagnostic.as_ref().map_or_else(
+            || crate::output::ABSENT.to_owned(),
+            |diagnostic| diagnostic::inline(diagnostic, invocation),
+        ),
+        prose: matches!(presentation, Presentation::Human(_)),
+    };
 
-    show(presentation, &view::SESSION, &record)
+    typed::show_as(presentation, &view::SESSION, session, &shown)
 }
 
-fn changing_options(changing: &Value) -> String {
-    changing
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|change| {
-            format!(
-                "{}: {} ({})",
-                change["option"].as_str().unwrap_or("option"),
-                change["value"].as_str().unwrap_or(""),
-                change["participant"].as_str().unwrap_or("")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// ADR-0041: a change that makes the next Turn re-read the context without the prompt cache says
-/// so, with the size of the context it last reported.
-fn warn_about_cache(changed: &Value, named: &str) {
-    let warns = changed["options"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|option| {
-            option["id"].as_str() == Some(named) || option["category"].as_str() == Some(named)
-        })
-        .is_some_and(|option| option["warns_cache"] == true);
-    if !warns {
+fn warn_about_cache(changed: &wire::Session, named: &str) {
+    if !changed.options.iter().any(|option| {
+        (option.id == named || option.category.as_deref() == Some(named)) && option.warns_cache
+    }) {
         return;
     }
-
-    match changed["usage"]["context_used"].as_u64() {
+    match changed.usage.as_ref().map(|usage| usage.context_used) {
         Some(tokens) => eprintln!(
-            "changing this makes the next turn re-read the context without the prompt cache: \
-             {tokens} tokens"
+            "changing this makes the next turn re-read the context without the prompt cache: {tokens} tokens"
         ),
         None => eprintln!(
             "changing this makes the next turn re-read the context without the prompt cache"
@@ -2649,282 +2613,6 @@ fn warn_about_cache(changed: &Value, named: &str) {
 
 fn declares(category: &str) -> bool {
     matches!(category, "model" | "mode" | "thought_level")
-}
-
-fn session_options(options: &Value) -> String {
-    options
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|option| {
-            let category = option["category"]
-                .as_str()
-                .or_else(|| option["id"].as_str())
-                .unwrap_or("option");
-            let current = match &option["current"] {
-                Value::String(value) => value.clone(),
-                other => other.to_string(),
-            };
-
-            format!("{category}: {current}")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn session_commands(commands: &Value) -> String {
-    commands
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|command| command["name"].as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn shown_queue(
-    presentation: &Presentation,
-    snapshot: &Value,
-    invocation: &Invocation,
-) -> Result<()> {
-    if presentation.json() {
-        return show(presentation, &view::QUEUE, snapshot);
-    }
-    let slots = &snapshot["active_work"];
-    let instances = &snapshot["instances"];
-
-    {
-        let mut out = std::io::stdout().lock();
-        let said = [
-            (
-                "active-work slots",
-                occupancy(slots, "no dispatch configuration recorded", "occupied"),
-            ),
-            (
-                "live instances",
-                occupancy(instances, "unbounded", "counted"),
-            ),
-            ("environment", environment(snapshot)),
-        ];
-        let width = said
-            .iter()
-            .map(|(label, _)| label.chars().count())
-            .max()
-            .unwrap_or_default();
-        for (label, line) in said {
-            writeln!(out, "{label:width$}  {line}").context("writing the queue's limits")?;
-        }
-        out.flush().context("writing to standard output")?;
-    }
-
-    let mut rows = Vec::new();
-    let mut diagnoses = Vec::new();
-    for occupant in slots["occupants"].as_array().into_iter().flatten() {
-        let mut record = occupant.as_object().cloned().with_context(|| {
-            Failed::new(
-                Exit::Unavailable,
-                "reading one of the snapshot's Active-Work Slot occupants",
-            )
-        })?;
-        let phase = record.remove("phase").unwrap_or(Value::Null);
-        record.insert("state".to_owned(), phase);
-        record.insert("position".to_owned(), Value::Null);
-        record.insert("pending_since".to_owned(), Value::Null);
-        record.insert("preparing".to_owned(), Value::Null);
-        record.insert("brief_since".to_owned(), Value::Null);
-        record.insert("reasons".to_owned(), Value::Array(Vec::new()));
-        record.insert(
-            "why".to_owned(),
-            Value::from(why(&record, invocation, presentation)?),
-        );
-        record.insert("active_work".to_owned(), slots.clone());
-        record.insert("instances".to_owned(), instances.clone());
-        rows.push(Value::Object(record));
-    }
-    for state in ["queued", "waiting", "unbriefed"] {
-        let section = snapshot[state].as_array().with_context(|| {
-            Failed::new(
-                Exit::Unavailable,
-                format!("reading the snapshot's {state} Sessions"),
-            )
-        })?;
-        for row in section {
-            let mut record = row.as_object().cloned().with_context(|| {
-                Failed::new(
-                    Exit::Unavailable,
-                    format!("reading one of the snapshot's {state} Sessions"),
-                )
-            })?;
-            record.insert("state".to_owned(), Value::from(state));
-            record.entry("position").or_insert(Value::Null);
-            record.entry("pending_since").or_insert(Value::Null);
-            record.entry("brief_since").or_insert(Value::Null);
-            record.entry("preparing").or_insert(Value::Null);
-            record.entry("reasons").or_insert(Value::Array(Vec::new()));
-            if matches!(presentation, Presentation::Human(_)) {
-                for reason in record["reasons"].as_array().into_iter().flatten() {
-                    if reason["kind"] == "subscription_profile" {
-                        diagnoses.push((record["name"].clone(), queue_diagnosis(reason)?));
-                    }
-                }
-            }
-            record.insert(
-                "why".to_owned(),
-                Value::from(why(&record, invocation, presentation)?),
-            );
-            record.insert("active_work".to_owned(), slots.clone());
-            record.insert("instances".to_owned(), instances.clone());
-            rows.push(Value::Object(record));
-        }
-    }
-
-    show(presentation, &view::QUEUE, &Value::from(rows))?;
-    let mut out = std::io::stdout().lock();
-    for (session, diagnostic) in diagnoses {
-        writeln!(
-            out,
-            "\n{}:\n{}",
-            session.as_str().unwrap_or_default(),
-            diagnostic::inline(&diagnostic, invocation)
-        )
-        .context("writing the queue's sign-in repairs")?;
-    }
-    out.flush().context("writing to standard output")
-}
-
-fn why(
-    row: &serde_json::Map<String, Value>,
-    invocation: &Invocation,
-    presentation: &Presentation,
-) -> Result<String> {
-    let mut said: Vec<String> = Vec::new();
-    if let Some(preparing) = row["preparing"].as_str() {
-        said.push(match preparing {
-            "starting_harness" => "starting harness".to_owned(),
-            "harness_ready" => "harness ready".to_owned(),
-            step => step.to_owned(),
-        });
-    }
-    if let Some(since) = row["brief_since"].as_str() {
-        said.push(format!("Brief since {since}"));
-    }
-    if let Some(since) = row["pending_since"].as_str() {
-        said.push(format!("input since {since}"));
-    }
-    said.extend(
-        row["reasons"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|reason| reason_in_words(reason, invocation, presentation))
-            .collect::<Result<Vec<_>>>()?,
-    );
-    if said.is_empty() {
-        said.push(
-            match row["state"].as_str() {
-                Some("working") => "in a turn",
-                Some("trailing") => "answered; its agent is still working",
-                Some("waiting") => "waiting for a turn",
-                Some("unbriefed") => "getting ready for its first message",
-                _ => "ready",
-            }
-            .to_owned(),
-        );
-    }
-
-    Ok(said.join("; "))
-}
-
-fn environment(snapshot: &Value) -> String {
-    snapshot["work_role"]["driver"].as_str().map_or_else(
-        || "no dispatch configuration recorded".to_owned(),
-        str::to_owned,
-    )
-}
-
-fn queue_diagnosis(reason: &Value) -> Result<wire::Diagnostic> {
-    serde_json::from_value(reason["diagnostic"].clone())
-        .context("reading the queue's sign-in diagnosis")
-}
-
-fn reason_in_words(
-    reason: &Value,
-    invocation: &Invocation,
-    presentation: &Presentation,
-) -> Result<String> {
-    let names = |field: &str| {
-        reason[field]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let text = |field: &str| reason[field].as_str().unwrap_or("?").to_owned();
-    let limit = reason["limit"].as_u64().unwrap_or_default();
-    let plural = if limit == 1 { "" } else { "s" };
-
-    Ok(match reason["kind"].as_str().unwrap_or_default() {
-        "dependencies" => format!("waits on {}", names("sessions")),
-        "subscription_profile" => {
-            let diagnostic = queue_diagnosis(reason)?;
-            if matches!(presentation, Presentation::Human(_)) {
-                diagnostic::message(&diagnostic).to_owned()
-            } else {
-                diagnostic::inline(&diagnostic, invocation)
-            }
-        }
-        "instance_archiving" => {
-            format!("waits for the Instance {} to be archived", text("instance"))
-        }
-        "live_instance_limit" => format!("at the limit of {limit} live Instance{plural}"),
-        "active_work_slots" => format!("all {limit} Active-Work Slot{plural} occupied"),
-        "ahead" => {
-            let mut ahead = names("sessions");
-            if let Some(elsewhere) = reason["elsewhere"].as_u64() {
-                if !ahead.is_empty() {
-                    ahead.push_str(", ");
-                }
-                ahead.push_str(&format!(
-                    "{elsewhere} Session{} in other Organizations",
-                    if elsewhere == 1 { "" } else { "s" }
-                ));
-            }
-            format!("behind {ahead}")
-        }
-        kind => kind.to_owned(),
-    })
-}
-
-/// A limit and what counts against it as one line, naming what the Organization can name.
-fn occupancy(section: &Value, without_limit: &str, unit: &str) -> String {
-    let limit = match section["limit"].as_u64() {
-        Some(limit) => format!("limit {limit};"),
-        None => format!("{without_limit};"),
-    };
-    let counted = section["count"]
-        .as_u64()
-        .or_else(|| section["occupied"].as_u64())
-        .unwrap_or(0);
-    let mut line = format!("{limit} {counted} {unit}");
-    let named = named_in(section);
-    if !named.is_empty() {
-        line.push_str(&format!(" ({})", named.join(", ")));
-    }
-
-    line
-}
-
-fn named_in(section: &Value) -> Vec<&str> {
-    let of = section["counted"]
-        .as_array()
-        .or_else(|| section["occupants"].as_array());
-    of.map_or_else(Vec::new, |of| {
-        of.iter()
-            .filter_map(|named| named.as_str().or_else(|| named["name"].as_str()))
-            .collect()
-    })
 }
 
 fn confirmed() -> Result<bool> {
@@ -2947,13 +2635,6 @@ fn confirmed() -> Result<bool> {
     }
 }
 
-fn rendered(value: &Value) -> String {
-    value
-        .as_str()
-        .map_or_else(|| value.to_string(), str::to_owned)
-}
-
-/// Nothing is asked for: whatever drives the Client may have no terminal to answer on.
 fn incomplete(missing: &[start::Missing]) -> anyhow::Error {
     let flags: Vec<&str> = missing.iter().map(|missing| missing.flag).collect();
     let reasons: Vec<String> = missing
@@ -3055,6 +2736,385 @@ fn explain_invalid_subcommand(error: &clap::Error, args: &[String]) -> Option<St
     Some(format!("{try_command}Accepted {noun} verbs: {verbs}\n"))
 }
 
+fn declaration(file: &str) -> Result<Value> {
+    parsed(&read_file(file)?)
+}
+
+/// An empty file is sent as an empty mapping, so the control plane refuses it for the
+/// `triggers` it lacks rather than for being no mapping at all.
+fn trigger_file(file: &str) -> Result<Value> {
+    let text = read_file(file)?;
+    if text.trim().is_empty() {
+        return Ok(json!({}));
+    }
+
+    parsed(&text)
+}
+
+/// The schedule form as the generated union carries it: exactly one of a filter, an interval,
+/// or a cron expression with its zone.
+fn trigger_condition(
+    filter: Option<Value>,
+    every: Option<String>,
+    cron: Option<String>,
+    zone: Option<String>,
+) -> wire::TriggerDeclarationVariant {
+    match (filter, every, cron) {
+        (Some(filter), _, _) => {
+            wire::TriggerDeclarationVariant::EventTriggerCondition(json!({ "filter": filter }))
+        }
+        (None, Some(every), _) => {
+            wire::TriggerDeclarationVariant::IntervalTriggerCondition(json!({ "every": every }))
+        }
+        (None, None, Some(cron)) => wire::TriggerDeclarationVariant::CronTriggerCondition(
+            json!({ "cron": cron, "zone": zone }),
+        ),
+        (None, None, None) => {
+            unreachable!("clap requires a filter, an interval or a cron expression")
+        }
+    }
+}
+
+/// The declaration file as the generated request carries it, so a document the control plane
+/// could not read is refused before it is sent.
+fn trigger_document(file: &str) -> Result<wire::TriggerFile> {
+    declaration_document(trigger_file(file)?)
+}
+
+fn declaration_document(document: Value) -> Result<wire::TriggerFile> {
+    let typed: wire::TriggerFile = serde_json::from_value(document.clone())
+        .context(Failed::new(Exit::Usage, "reading the declaration file"))?;
+    match unread_field(&document, &serde_json::to_value(&typed)?) {
+        Some(field) => bail!(Failed::new(
+            Exit::Usage,
+            format!("the declaration file: {field}")
+        )),
+        None => Ok(typed),
+    }
+}
+
+/// The generated file reads past a field it does not know, so a document with one is refused
+/// rather than sent with the field silently dropped.
+fn unread_field(sent: &Value, read: &Value) -> Option<String> {
+    fn within(sent: &Value, read: &Value, path: &mut Vec<String>) -> Option<String> {
+        for (name, value) in sent.as_object()? {
+            let Some(kept) = read.get(name) else {
+                return Some(name.clone());
+            };
+            path.push(name.clone());
+            if let Some(field) = within(value, kept, path) {
+                return Some(field);
+            }
+            path.pop();
+        }
+
+        None
+    }
+
+    let mut path = Vec::new();
+    let field = within(sent, read, &mut path)?;
+    Some(if path.is_empty() {
+        format!("unknown field `{field}`")
+    } else {
+        format!("{}: unknown field `{field}`", path.join("."))
+    })
+}
+
+fn parsed(text: &str) -> Result<Value> {
+    yaml_serde::from_str(text).context(Failed::new(Exit::Usage, "reading the declaration file"))
+}
+
+fn read_file(file: &str) -> Result<String> {
+    if file == "-" {
+        return standard_input();
+    }
+
+    std::fs::read_to_string(file)
+        .with_context(|| Failed::new(Exit::Usage, format!("reading the declaration file {file}")))
+}
+
+fn given(value: &str) -> Result<String> {
+    if value == "-" {
+        return standard_input();
+    }
+    match value.strip_prefix('@') {
+        Some(path) => std::fs::read_to_string(path)
+            .with_context(|| Failed::new(Exit::Usage, format!("reading {path}"))),
+        None => Ok(value.to_owned()),
+    }
+}
+
+fn standard_input() -> Result<String> {
+    let mut text = String::new();
+    std::io::stdin()
+        .read_to_string(&mut text)
+        .context("reading standard input")?;
+
+    Ok(text)
+}
+
+fn sign(action: &wire::DeclarationChangeAction) -> char {
+    match action {
+        wire::DeclarationChangeAction::Add => '+',
+        wire::DeclarationChangeAction::Change => '~',
+        wire::DeclarationChangeAction::Unchanged => '=',
+        wire::DeclarationChangeAction::Remove => '-',
+    }
+}
+
+fn show_applied_triggers(applied: wire::AppliedTriggers) {
+    if applied.changes.is_empty() {
+        println!("no changes");
+    }
+    for change in applied.changes {
+        println!("{} {}", sign(&change.action), change.name);
+        show_differences(change.differences);
+    }
+    for name in applied.admitting_outsiders {
+        warn_of_outsiders(&name);
+    }
+}
+
+fn show_differences(differences: Vec<wire::DeclarationDifference>) {
+    for difference in differences {
+        println!("    {}", difference.field);
+        for (sign, value) in [('-', difference.was), ('+', difference.becomes)] {
+            for line in value.iter().flat_map(|value| value.lines()) {
+                println!("      {sign} {line}");
+            }
+        }
+    }
+}
+
+fn show_declaration(applied: wire::AppliedDeclaration) {
+    for declared in applied.declarations {
+        println!(
+            "{} {} {}",
+            sign(&declared.action),
+            declared.kind,
+            declared.name
+        );
+        show_differences(declared.differences);
+    }
+    for name in applied.admitting_outsiders {
+        warn_of_outsiders(&name);
+    }
+}
+
+fn show_applied_whole(
+    presentation: &Presentation,
+    applied: &impl serde::Serialize,
+    admitting_outsiders: &[String],
+) -> Result<()> {
+    for name in admitting_outsiders {
+        warn_of_outsiders(name);
+    }
+    typed::whole(presentation, applied)
+}
+
+fn warn_of_outsiders(name: &str) {
+    eprintln!(
+        "warning: the trigger {name} fires for events from people outside the organization. \
+         Until 0.4, it is an unsupervised agent with your credentials on your repository, \
+         briefed by whatever a stranger writes. Filter on the author_association GitHub \
+         reports as OWNER, MEMBER or COLLABORATOR to decline strangers, or keep it as a \
+         decision you made on purpose."
+    );
+}
+
+#[derive(Serialize)]
+struct StatusLocation {
+    control_plane: String,
+    control_plane_source: String,
+}
+
+#[derive(Serialize)]
+struct Status {
+    #[serde(flatten)]
+    location: StatusLocation,
+    organization: String,
+    organization_source: String,
+    projects: usize,
+    agents: usize,
+    triggers: usize,
+    workspaces: usize,
+    integrations: usize,
+    credentials: usize,
+    profiles: usize,
+    next: String,
+}
+
+#[derive(Serialize)]
+struct UnresolvedStatus {
+    #[serde(flatten)]
+    location: StatusLocation,
+    organization: Option<String>,
+    organization_source: Option<String>,
+    organizations: Vec<String>,
+    next: String,
+}
+
+async fn status(
+    api: &ControlPlane,
+    presentation: &Presentation,
+    location: StatusLocation,
+    derived: Derived,
+) -> Result<()> {
+    let scope = match derived {
+        Derived::Scope(scope) => scope,
+        Derived::Unnamed { existing } => {
+            let next = if existing.is_empty() {
+                format!("{BINARY} organization declare <name>")
+            } else {
+                format!("{BINARY} status --organization <name>")
+            };
+            typed::show(
+                presentation,
+                &view::UNRESOLVED,
+                &UnresolvedStatus {
+                    location,
+                    organization: None,
+                    organization_source: None,
+                    organizations: existing,
+                    next,
+                },
+            )?;
+            return Ok(());
+        }
+    };
+
+    let organization = scope.organization.as_str();
+    let (projects, agents, triggers, workspaces, integrations, credentials, profiles) = tokio::try_join!(
+        async {
+            api.get_as::<wire::ListProjectsResponse>(&["organizations", organization, "projects"])
+                .await
+        },
+        async {
+            api.get_as::<wire::ListAgentsResponse>(&["organizations", organization, "agents"])
+                .await
+        },
+        async {
+            api.get_as::<wire::ListTriggersResponse>(&["organizations", organization, "triggers"])
+                .await
+        },
+        async {
+            api.get_as::<wire::ListWorkspacesResponse>(&[
+                "organizations",
+                organization,
+                "workspaces",
+            ])
+            .await
+        },
+        async {
+            api.get_as::<wire::ListIntegrationsResponse>(&[
+                "organizations",
+                organization,
+                "integrations",
+            ])
+            .await
+        },
+        async {
+            api.get_as::<wire::ListProviderCredentialsResponse>(&[
+                "organizations",
+                organization,
+                "credentials",
+            ])
+            .await
+        },
+        async {
+            api.get_as::<wire::ListSubscriptionProfilesResponse>(&[
+                "organizations",
+                organization,
+                "profiles",
+            ])
+            .await
+        },
+    )?;
+    typed::show(
+        presentation,
+        &view::STATUS,
+        &Status {
+            location,
+            organization: organization.to_owned(),
+            organization_source: scope.source.to_string(),
+            projects: projects.len(),
+            agents: agents.len(),
+            triggers: triggers.len(),
+            workspaces: workspaces.len(),
+            integrations: integrations.len(),
+            credentials: credentials.len(),
+            profiles: profiles.len(),
+            next: next_command(projects.first(), agents.first()),
+        },
+    )?;
+
+    Ok(())
+}
+
+fn next_command(project: Option<&wire::Project>, agent: Option<&wire::Agent>) -> String {
+    match (project, agent) {
+        (Some(project), Some(agent)) => {
+            format!(
+                "{BINARY} workspace open --project {} --agent {}",
+                project.name, agent.name
+            )
+        }
+        (Some(_), None) => format!("{BINARY} agent declare <name>"),
+        (None, _) => {
+            format!("{BINARY} project declare <name> --repository <url> --branch <branch>")
+        }
+    }
+}
+
+/// A file is held exactly as it was read, because it is written back exactly as it was held.
+fn read_the_login(file: bool) -> Result<String> {
+    let read = read_standard_input("a login")?;
+
+    if read.trim().is_empty() {
+        bail!(Failed::new(
+            Exit::Usage,
+            "a login is read from standard input, and nothing was on it"
+        ));
+    }
+
+    Ok(if file { read } else { read.trim().to_owned() })
+}
+
+/// Off standard input rather than out of an argument, so a provider's key is never in a shell
+/// history or in what `ps` shows of this process.
+fn read_the_secret() -> Result<String> {
+    let secret = read_standard_input("a provider credential")?
+        .trim()
+        .to_owned();
+
+    if secret.is_empty() {
+        bail!(Failed::new(
+            Exit::Usage,
+            "a provider credential is read from standard input, and nothing was on it"
+        ));
+    }
+
+    Ok(secret)
+}
+
+/// The asking happens only where someone is there to read it: a pipe is read in silence, so
+/// nothing driving the Client can block on a prompt it cannot see.
+fn read_standard_input(what: &str) -> Result<String> {
+    let mut stdin = std::io::stdin();
+    let unechoed = stdin.is_terminal().then(|| {
+        eprintln!("reading {what} from standard input, unechoed; end it with ctrl-d");
+        terminal::Unechoed::on(&stdin)
+    });
+
+    let mut read = String::new();
+    stdin.read_to_string(&mut read)?;
+    if unechoed.is_some() {
+        eprintln!();
+    }
+
+    Ok(read)
+}
+
 #[cfg(test)]
 mod parser_tests {
     use super::*;
@@ -3070,19 +3130,15 @@ mod parser_tests {
                 "next_steps": [{ "action": "inspect_resource", "resource": "session", "reference": "holding", "organization": "acme" }]
             }
         });
-        let rendered = reason_in_words(
+        let reason: wire::QueueReason = serde_json::from_value(reason).unwrap();
+        let rendered = queue::reason_in_words(
             &reason,
             &diagnostic::tests::invocation(),
             &Presentation::Delimited,
-        )
-        .unwrap();
+        );
         assert!(
-            reason_in_words(
-                &json!({ "kind": "subscription_profile" }),
-                &diagnostic::tests::invocation(),
-                &Presentation::Delimited
-            )
-            .is_err()
+            serde_json::from_value::<wire::QueueReason>(json!({ "kind": "subscription_profile" }))
+                .is_err()
         );
         assert!(rendered.contains("the sign-in is in use"), "{rendered}");
         assert!(
@@ -3139,6 +3195,70 @@ mod parser_tests {
     }
 
     #[test]
+    fn a_trigger_declaration_is_the_generated_request_the_flags_describe() {
+        let declaration = wire::TriggerDeclaration {
+            name: "ready".to_owned(),
+            brief: "Work on {{ event.type }}".to_owned(),
+            branch: Some(None),
+            correlation: Some(None),
+            on_miss: Some(None),
+            on_open_workspace: Some(None),
+            project: "kestrel".to_owned(),
+            agent: "builder".to_owned(),
+            allows: Some(vec!["reviewer".to_owned()]),
+            profile: Some(None),
+            filter: None,
+            every: None,
+            cron: None,
+            zone: None,
+            model: None,
+            mode: None,
+            thought_level: None,
+            variant: trigger_condition(Some(json!({ "exact": { "type": "x" } })), None, None, None),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&declaration).unwrap(),
+            json!({
+                "name": "ready", "brief": "Work on {{ event.type }}", "project": "kestrel",
+                "agent": "builder", "allows": ["reviewer"], "branch": null, "correlation": null,
+                "on_miss": null, "on_open_workspace": null, "profile": null,
+                "filter": { "exact": { "type": "x" } },
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(trigger_condition(
+                None,
+                None,
+                Some("0 9 * * 1-5".to_owned()),
+                Some("UTC".to_owned()),
+            ))
+            .unwrap(),
+            json!({ "cron": "0 9 * * 1-5", "zone": "UTC" })
+        );
+    }
+
+    #[test]
+    fn a_test_request_carries_the_declaration_file_the_control_plane_reads() {
+        let document = json!({ "triggers": { "ready": {
+            "filter": { "exact": { "type": "x" } }, "brief": "Work", "project": "kestrel",
+            "agent": "builder",
+        } } });
+
+        let typed = declaration_document(document.clone()).expect("the file the document holds");
+        assert_eq!(serde_json::to_value(&typed).unwrap(), document);
+
+        let stray = declaration_document(json!({ "triggers": { "ready": {
+            "filter": { "exact": { "type": "x" } }, "brief": "Work", "project": "kestrel",
+            "agent": "builder", "agnet": "builder",
+        } } }));
+        assert_eq!(
+            stray.unwrap_err().to_string(),
+            "the declaration file: triggers.ready: unknown field `agnet`"
+        );
+    }
+
+    #[test]
     fn a_misspelling_uses_the_parsers_suggested_verb() {
         let error = Client::command()
             .try_get_matches_from(["kestrel", "workspace", "sael"])
@@ -3151,328 +3271,4 @@ mod parser_tests {
             "{explanation}"
         );
     }
-}
-
-#[derive(Deserialize)]
-struct AppliedDeclaration {
-    declarations: Vec<Declared>,
-    admitting_outsiders: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct Declared {
-    kind: String,
-    name: String,
-    action: Action,
-    differences: Vec<Difference>,
-}
-
-#[derive(Deserialize)]
-struct Difference {
-    field: String,
-    was: Option<String>,
-    becomes: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum Action {
-    Add,
-    Change,
-    Unchanged,
-}
-
-fn declaration(file: &str) -> Result<Value> {
-    parsed(&read_file(file)?)
-}
-
-/// An empty file is sent as an empty mapping, so the control plane refuses it for the
-/// `triggers` it lacks rather than for being no mapping at all.
-fn trigger_file(file: &str) -> Result<Value> {
-    let text = read_file(file)?;
-    if text.trim().is_empty() {
-        return Ok(json!({}));
-    }
-
-    parsed(&text)
-}
-
-fn parsed(text: &str) -> Result<Value> {
-    yaml_serde::from_str(text).context(Failed::new(Exit::Usage, "reading the declaration file"))
-}
-
-fn read_file(file: &str) -> Result<String> {
-    if file == "-" {
-        return standard_input();
-    }
-
-    std::fs::read_to_string(file)
-        .with_context(|| Failed::new(Exit::Usage, format!("reading the declaration file {file}")))
-}
-
-fn given(value: &str) -> Result<String> {
-    if value == "-" {
-        return standard_input();
-    }
-    match value.strip_prefix('@') {
-        Some(path) => std::fs::read_to_string(path)
-            .with_context(|| Failed::new(Exit::Usage, format!("reading {path}"))),
-        None => Ok(value.to_owned()),
-    }
-}
-
-fn standard_input() -> Result<String> {
-    let mut text = String::new();
-    std::io::stdin()
-        .read_to_string(&mut text)
-        .context("reading standard input")?;
-
-    Ok(text)
-}
-
-#[derive(Deserialize)]
-struct AppliedTriggers {
-    changes: Vec<TriggerChange>,
-    admitting_outsiders: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct TriggerChange {
-    name: String,
-    action: TriggerAction,
-    differences: Vec<Difference>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum TriggerAction {
-    Add,
-    Change,
-    Remove,
-}
-
-fn show_applied_triggers(value: &Value) -> Result<()> {
-    let applied: AppliedTriggers = serde_json::from_value(value.clone()).context(Failed::new(
-        Exit::Unavailable,
-        "reading the applied triggers",
-    ))?;
-    if applied.changes.is_empty() {
-        println!("no changes");
-    }
-    for change in applied.changes {
-        let sign = match change.action {
-            TriggerAction::Add => '+',
-            TriggerAction::Change => '~',
-            TriggerAction::Remove => '-',
-        };
-        println!("{sign} {}", change.name);
-        show_differences(change.differences);
-    }
-    for name in applied.admitting_outsiders {
-        warn_of_outsiders(&name);
-    }
-
-    Ok(())
-}
-
-fn show_differences(differences: Vec<Difference>) {
-    for difference in differences {
-        println!("    {}", difference.field);
-        for (sign, value) in [('-', difference.was), ('+', difference.becomes)] {
-            for line in value.iter().flat_map(|value| value.lines()) {
-                println!("      {sign} {line}");
-            }
-        }
-    }
-}
-
-fn show_declaration(value: &Value) -> Result<()> {
-    let applied: AppliedDeclaration = serde_json::from_value(value.clone()).context(
-        Failed::new(Exit::Unavailable, "reading the declaration preview"),
-    )?;
-    for declared in applied.declarations {
-        let sign = match declared.action {
-            Action::Add => '+',
-            Action::Change => '~',
-            Action::Unchanged => '=',
-        };
-        println!("{sign} {} {}", declared.kind, declared.name);
-        show_differences(declared.differences);
-    }
-    for name in applied.admitting_outsiders {
-        warn_of_outsiders(&name);
-    }
-
-    Ok(())
-}
-
-fn show_applied_whole(presentation: &Presentation, applied: &Value) -> Result<()> {
-    for name in applied["admitting_outsiders"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-    {
-        warn_of_outsiders(name);
-    }
-    show(presentation, &view::DECLARED, applied)
-}
-
-fn warn_of_outsiders(name: &str) {
-    eprintln!(
-        "warning: the trigger {name} fires for events from people outside the organization. \
-         Until 0.4, it is an unsupervised agent with your credentials on your repository, \
-         briefed by whatever a stranger writes. Filter on the author_association GitHub \
-         reports as OWNER, MEMBER or COLLABORATOR to decline strangers, or keep it as a \
-         decision you made on purpose."
-    );
-}
-
-async fn status(
-    api: &ControlPlane,
-    presentation: &Presentation,
-    location: Value,
-    derived: Derived,
-) -> Result<()> {
-    let scope = match derived {
-        Derived::Scope(scope) => scope,
-        Derived::Unnamed { existing } => {
-            let next = if existing.is_empty() {
-                format!("{BINARY} organization declare <name>")
-            } else {
-                format!("{BINARY} status --organization <name>")
-            };
-            show(
-                presentation,
-                &view::UNRESOLVED,
-                &merged(
-                    location,
-                    json!({
-                        "organization": null,
-                        "organization_source": null,
-                        "organizations": existing,
-                        "next": next,
-                    }),
-                ),
-            )?;
-            return Ok(());
-        }
-    };
-
-    let organization = scope.organization.as_str();
-    let within = async |records| api.get(&["organizations", organization, records]).await;
-    let (projects, agents, triggers, workspaces, integrations, credentials, profiles) = tokio::try_join!(
-        within("projects"),
-        within("agents"),
-        within("triggers"),
-        within("workspaces"),
-        within("integrations"),
-        within("credentials"),
-        within("profiles"),
-    )?;
-    let project_names = names(&projects);
-    let agent_names = names(&agents);
-
-    show(
-        presentation,
-        &view::STATUS,
-        &merged(
-            location,
-            json!({
-                "organization": organization,
-                "organization_source": scope.source.to_string(),
-                "projects": count(&projects),
-                "agents": count(&agents),
-                "triggers": count(&triggers),
-                "workspaces": count(&workspaces),
-                "integrations": count(&integrations),
-                "credentials": count(&credentials),
-                "profiles": count(&profiles),
-                "next": next_command(&project_names, &agent_names),
-            }),
-        ),
-    )?;
-
-    Ok(())
-}
-
-fn merged(mut record: Value, more: Value) -> Value {
-    if let (Some(record), Value::Object(more)) = (record.as_object_mut(), more) {
-        record.extend(more);
-    }
-    record
-}
-
-fn count(records: &Value) -> usize {
-    records.as_array().map_or(0, Vec::len)
-}
-
-fn names(records: &Value) -> Vec<String> {
-    records
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|record| record["name"].as_str().map(str::to_owned))
-        .collect()
-}
-
-fn next_command(projects: &[String], agents: &[String]) -> String {
-    match (projects.first(), agents.first()) {
-        (Some(project), Some(agent)) => {
-            format!("{BINARY} workspace open --project {project} --agent {agent}")
-        }
-        (Some(_), None) => format!("{BINARY} agent declare <name>"),
-        (None, _) => {
-            format!("{BINARY} project declare <name> --repository <url> --branch <branch>")
-        }
-    }
-}
-
-/// A file is held exactly as it was read, because it is written back exactly as it was held.
-fn read_the_login(file: bool) -> Result<String> {
-    let read = read_standard_input("a login")?;
-
-    if read.trim().is_empty() {
-        bail!(Failed::new(
-            Exit::Usage,
-            "a login is read from standard input, and nothing was on it"
-        ));
-    }
-
-    Ok(if file { read } else { read.trim().to_owned() })
-}
-
-/// Off standard input rather than out of an argument, so a provider's key is never in a shell
-/// history or in what `ps` shows of this process.
-fn read_the_secret() -> Result<String> {
-    let secret = read_standard_input("a provider credential")?
-        .trim()
-        .to_owned();
-
-    if secret.is_empty() {
-        bail!(Failed::new(
-            Exit::Usage,
-            "a provider credential is read from standard input, and nothing was on it"
-        ));
-    }
-
-    Ok(secret)
-}
-
-/// The asking happens only where someone is there to read it: a pipe is read in silence, so
-/// nothing driving the Client can block on a prompt it cannot see.
-fn read_standard_input(what: &str) -> Result<String> {
-    let mut stdin = std::io::stdin();
-    let unechoed = stdin.is_terminal().then(|| {
-        eprintln!("reading {what} from standard input, unechoed; end it with ctrl-d");
-        terminal::Unechoed::on(&stdin)
-    });
-
-    let mut read = String::new();
-    stdin.read_to_string(&mut read)?;
-    if unechoed.is_some() {
-        eprintln!();
-    }
-
-    Ok(read)
 }

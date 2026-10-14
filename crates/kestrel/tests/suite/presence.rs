@@ -166,12 +166,17 @@ impl Stream {
                 continue;
             }
 
-            let data = if data.is_empty() {
-                Value::Null
-            } else {
-                serde_json::from_str(&data)
-                    .unwrap_or_else(|error| panic!("{data} is not JSON: {error}"))
-            };
+            let typed = kestrel_operator_types::Event::from_sse(&name, &data)
+                .unwrap_or_else(|| panic!("the document names no {name} event"))
+                .unwrap_or_else(|error| panic!("{data} is no {name} event: {error}"));
+            assert_eq!(typed.event_name(), name);
+            let data: Value = serde_json::from_str(&data)
+                .unwrap_or_else(|error| panic!("{data} is not JSON: {error}"));
+            assert_eq!(
+                serde_json::to_value(&typed).expect("an event"),
+                data,
+                "the generated {name} event drops what the boundary serves"
+            );
             return Some(Frame { name, data, id });
         }
     }
@@ -565,5 +570,46 @@ async fn the_cli_follow_is_counted_renews_and_prints_no_presence() {
         "the CLI's follower stayed after its stream closed"
     );
 
+    kestrel.teardown().await;
+}
+
+/// The CLI's human rendering carries the transient events its JSON stream leaves out, in the
+/// order the boundary sends them.
+#[tokio::test]
+async fn the_cli_follow_renders_the_session_state_and_presence_a_person_reads() {
+    let kestrel = Kestrel::boot_with_follow_lease(LEASE).await;
+    let workspace = an_open_workspace(&kestrel).await;
+    kestrel.post(workspace.id, "operator", "go").await;
+
+    let mut cli = support::client::Client::spawn(
+        &kestrel.operator(),
+        &[
+            "workspace",
+            "transcript",
+            &workspace.id.to_string(),
+            "--follow",
+            "--as-participant",
+            "Ada",
+            "--no-summaries",
+        ],
+    );
+
+    let mut state_seen = false;
+    loop {
+        let (returned, line) = printed(cli).await;
+        cli = returned;
+        if line.starts_with("session state") {
+            state_seen = true;
+        } else if line.starts_with("presence") {
+            assert!(
+                state_seen,
+                "the follow's session state was never shown: {line}"
+            );
+            assert!(line.contains("Ada"), "{line}");
+            break;
+        }
+    }
+
+    drop(cli);
     kestrel.teardown().await;
 }

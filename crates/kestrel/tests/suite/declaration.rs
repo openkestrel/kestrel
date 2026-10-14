@@ -550,6 +550,79 @@ async fn an_applied_trigger_refusal_names_the_entry_in_its_field_path() {
     kestrel.teardown().await;
 }
 
+/// The document and the file take a filter alone and close their schemas, which the boundary
+/// refuses for the generated types that read past both; an applied Trigger answers its kind.
+#[tokio::test]
+async fn a_document_and_a_file_refuse_a_schedule_and_a_field_they_do_not_have() {
+    let kestrel = Kestrel::boot().await;
+    Fixture::acme().declare(&kestrel).await;
+    let document = json!({
+        "project": { "name": "kestrel", "repositories": ["acme/api"], "branch": "main" },
+        "agent": { "name": "builder", "harness": "opencode" },
+        "trigger": {
+            "name": "sweep",
+            "filter": { "exact": { "type": "example" } },
+            "brief": "Sweep the backlog",
+            "project": "kestrel",
+            "agent": "builder",
+        },
+    });
+    let file = json!({ "triggers": { "sweep": {
+        "filter": { "exact": { "type": "example" } },
+        "brief": "Sweep the backlog",
+        "project": "kestrel",
+        "agent": "builder",
+    } } });
+
+    for (path, body, field, said) in [
+        (
+            declaration_preview_of("acme"),
+            spliced(&document, &["trigger"], json!({ "every": "1h" })),
+            json!("trigger.every"),
+            "a declaration document's trigger fires on a filter, not a schedule",
+        ),
+        (
+            declaration_of("acme"),
+            spliced(&document, &[], json!({ "workspace": {} })),
+            Value::Null,
+            "unknown field `workspace`",
+        ),
+        (
+            declaration_of("acme"),
+            spliced(&document, &["agent"], json!({ "modle": "claude-opus-5" })),
+            Value::Null,
+            "unknown field `agent.modle`",
+        ),
+        (
+            applied_triggers_of("acme"),
+            spliced(&file, &["triggers", "sweep"], json!({ "every": "1h" })),
+            Value::Null,
+            "triggers.sweep: unknown field `every`",
+        ),
+        (
+            trigger_test_at("acme", "sweep"),
+            json!({ "declared": spliced(&file, &["triggers", "sweep"], json!({ "every": "1h" })) }),
+            Value::Null,
+            "triggers.sweep: unknown field `every`",
+        ),
+    ] {
+        let (status, refusal) = posted(&kestrel, &path, &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refusal}");
+        assert_eq!(refusal["kind"], "malformed_request", "{refusal}");
+        assert_eq!(refusal["field"], field, "{refusal}");
+        assert_eq!(refusal["message"], said, "{refusal}");
+    }
+    assert!(list(&kestrel, &triggers_of("acme")).await.is_empty());
+
+    let (status, applied) = posted(&kestrel, &applied_triggers_of("acme"), &file).await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["changes"][0]["kind"], "trigger", "{applied}");
+    assert_eq!(applied["changes"][0]["name"], "sweep", "{applied}");
+    assert_eq!(applied["changes"][0]["action"], "add", "{applied}");
+
+    kestrel.teardown().await;
+}
+
 /// The same broken rule answers the same constraint and sentence whichever path carried it;
 /// only the record its field is under differs.
 #[tokio::test]

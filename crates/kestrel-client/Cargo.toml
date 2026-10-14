@@ -26,6 +26,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 terminal_size = "0.4.4"
 tokio = { version = "1", features = ["macros", "rt", "time"] }
+uuid = { version = "1", features = ["serde"] }
 yaml_serde = "0.10"
 
 [[bin]]

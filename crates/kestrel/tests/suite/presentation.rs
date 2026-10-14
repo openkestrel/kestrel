@@ -197,6 +197,414 @@ async fn json_answers_an_empty_collection_with_an_empty_array() {
 }
 
 #[tokio::test]
+async fn a_catalogue_is_one_read_shown_three_ways() {
+    let kestrel = Kestrel::boot().await;
+    let unbounded = piped(&kestrel, &["organization", "declare", "acme"]).await;
+    let capped = piped(
+        &kestrel,
+        &[
+            "organization",
+            "declare",
+            "globex",
+            "--max-live-instances",
+            "3",
+        ],
+    )
+    .await;
+    let acme = kestrel.organizations().await.remove(0);
+    kestrel
+        .declare_project(
+            &acme,
+            "kestrel",
+            &[REPOSITORY.to_owned(), format!("{REPOSITORY}-docs")],
+            "main",
+        )
+        .await;
+    let scoped = ["--organization", "acme"];
+
+    let organizations = piped(&kestrel, &["organization", "list"]).await;
+    let watched = on_a_terminal(&kestrel, &["organization", "list"], 120).await;
+    let projects = piped(&kestrel, &[&scoped[..], &["project", "list"]].concat()).await;
+    let whole = piped(&kestrel, &["organization", "list", "--json"]).await;
+
+    assert_eq!(
+        organizations.out,
+        [
+            format!("{}\tacme\t-", unbounded.out[0]),
+            format!("{}\tglobex\t3", capped.out[0]),
+        ]
+    );
+    let header: Vec<&str> = watched.lines()[0]
+        .split("  ")
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .collect();
+    assert_eq!(
+        header,
+        ["id", "name", "max live instances"],
+        "{}",
+        watched.said
+    );
+    let project: Vec<&str> = projects.out[0].split('\t').collect();
+    assert_eq!(
+        project[1..],
+        [
+            "kestrel",
+            "main",
+            &format!("{REPOSITORY},{REPOSITORY}-docs")
+        ]
+    );
+    assert_eq!(whole.json(), answered(&kestrel, "organizations").await);
+    assert_eq!(
+        whole.jq("map(.max_live_instances)"),
+        "[null,3]",
+        "an unbounded Organization lost its null"
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_empty_catalogue_is_an_empty_array_nothing_on_a_pipe_and_guidance_at_a_terminal() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+
+    for records in ["project", "agent"] {
+        let whole = piped(&kestrel, &[records, "list", "--json"]).await;
+        let scripted = piped(&kestrel, &[records, "list"]).await;
+        let watched = on_a_terminal(&kestrel, &[records, "list"], 120).await;
+
+        assert_eq!(whole.out, ["[]"], "{records}");
+        assert!(scripted.status.success(), "{}", scripted.err);
+        assert!(scripted.out.is_empty(), "{:?}", scripted.out);
+        assert!(
+            watched.said.contains(&format!("{records} declare --help")),
+            "{}",
+            watched.said
+        );
+    }
+    kestrel.teardown().await;
+}
+
+/// A field of a record as a pipe reads it: absent or null is a dash, anything else its own text.
+fn or_dash(value: &Value) -> String {
+    value.as_str().map_or_else(|| "-".to_owned(), str::to_owned)
+}
+
+/// The Provider Credential and the Subscription Profile family is one read per command: a
+/// secret's record, a login's, and what a terminal reads beside what a pipe gets.
+#[tokio::test]
+async fn a_credential_and_a_profiles_login_are_shown_three_ways() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+
+    let held = client::ran_by(
+        &kestrel,
+        &["credential", "set", "ANTHROPIC_API_KEY", "--json"],
+        Invocation::default().given("sk-a-secret-key\n"),
+    )
+    .await;
+    let credentials = piped(&kestrel, &["credential", "list"]).await;
+    let credential_whole = piped(&kestrel, &["credential", "list", "--json"]).await;
+    let watched = on_a_terminal(&kestrel, &["credential", "list"], 120).await;
+    let declared = piped(&kestrel, &["profile", "declare", "work", "--owner", "jack"]).await;
+    let login = client::ran_by(
+        &kestrel,
+        &[
+            "profile",
+            "set",
+            "work",
+            "--variable",
+            "ANTHROPIC_API_KEY",
+            "--json",
+        ],
+        Invocation::default().given("a-login\n"),
+    )
+    .await;
+    let profiles = piped(&kestrel, &["profile", "list"]).await;
+    let whole = piped(&kestrel, &["profile", "list", "--json"]).await;
+
+    let holding = answered(&kestrel, "organizations/acme/credentials").await;
+    let credential = &holding[0];
+    assert_eq!(held.json(), *credential);
+    assert_eq!(
+        credentials.out,
+        [format!(
+            "ANTHROPIC_API_KEY\t{}",
+            credential["set_at"].as_str().expect("a time it was set")
+        )]
+    );
+    assert_eq!(credential_whole.json(), holding);
+    let header: Vec<&str> = watched.lines()[0]
+        .split("  ")
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .collect();
+    assert_eq!(header, ["variable", "set at"], "{}", watched.said);
+
+    let held_logins = answered(&kestrel, "organizations/acme/profiles").await;
+    let profile = &held_logins[0];
+    assert_eq!(declared.out, [profile["id"].as_str().expect("an id")]);
+    assert_eq!(login.json(), profile["holds"][0]);
+    assert_eq!(
+        profiles.out,
+        [format!(
+            "{}\twork\tjack\t{}",
+            profile["id"].as_str().expect("an id"),
+            profile["holds"][0]
+        )]
+    );
+    assert_eq!(whole.json(), held_logins);
+    for shown in [&held, &login] {
+        let said = shown.out.join("\n");
+        assert!(
+            !said.contains("sk-a-secret-key") && !said.contains("a-login"),
+            "a held login was written back: {said}"
+        );
+    }
+    kestrel.teardown().await;
+}
+
+/// An Integration is registered, listed and shown from typed fields, a refusal inside one is
+/// readable there, and the GitHub App manifest flow answers the URL and its flow.
+#[tokio::test]
+async fn an_integration_and_the_refusal_inside_it_are_shown_three_ways() {
+    let kestrel = Kestrel::boot().await;
+    let stub = GithubStub::start();
+    kestrel.declare_organization("acme").await;
+    let webhook = kestrel
+        .register_webhook("acme", "ci", "a-shared-secret")
+        .await;
+    reqwest::Client::new()
+        .post(format!("{}{}", kestrel.link(), webhook.webhook_path()))
+        .bearer_auth("a-shared-secret")
+        .header("content-type", "text/plain")
+        .body("x".repeat(1024 * 1024 + 1))
+        .send()
+        .await
+        .expect("the webhook answers");
+
+    let registered = piped(
+        &kestrel,
+        &[
+            "integration",
+            "github",
+            "register",
+            "hub",
+            "--repository",
+            "jtmthf/kestrel",
+            "--app-id",
+            "1",
+            "--installation",
+            "2",
+            "--private-key",
+            PRIVATE_KEY,
+            "--api",
+            &stub.base_url(),
+        ],
+    )
+    .await;
+    let listed = piped(&kestrel, &["integration", "list"]).await;
+    let watched = on_a_terminal(&kestrel, &["integration", "list"], 220).await;
+    let detail = piped(&kestrel, &["integration", "show", "ci"]).await;
+    let shown = on_a_terminal(&kestrel, &["integration", "show", "ci"], 220).await;
+    let whole = piped(&kestrel, &["integration", "list", "--json"]).await;
+
+    let integrations = answered(&kestrel, "organizations/acme/integrations").await;
+    let at = integrations.as_array().expect("integrations");
+    let ci = at
+        .iter()
+        .find(|one| one["name"] == "ci")
+        .expect("the webhook");
+    let hub = at
+        .iter()
+        .find(|one| one["name"] == "hub")
+        .expect("the github integration");
+    assert_eq!(registered.out, [hub["id"].as_str().expect("an id")]);
+    assert_eq!(whole.json(), integrations);
+
+    let row = |one: &Value| -> String {
+        [
+            one["id"].as_str().expect("an id").to_owned(),
+            one["name"].as_str().expect("a name").to_owned(),
+            one["kind"].as_str().expect("a kind").to_owned(),
+            or_dash(&one["repository"]),
+            one["carries"]
+                .as_array()
+                .expect("directions")
+                .iter()
+                .map(|direction| direction.as_str().expect("a direction").to_owned())
+                .collect::<Vec<_>>()
+                .join(","),
+            one["state"].as_str().expect("a state").to_owned(),
+            one["revision"].to_string(),
+            or_dash(&one["polled_every"]),
+            or_dash(&one["webhook_path"]),
+            or_dash(&one["last_event_refusal"]["reason"]),
+        ]
+        .join("\t")
+    };
+    assert_eq!(listed.out, at.iter().map(row).collect::<Vec<_>>());
+    let refusal = &ci["last_event_refusal"];
+    assert!(refusal["reason"].is_string(), "{refusal}");
+    let header: Vec<&str> = watched.lines()[0]
+        .split("  ")
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .collect();
+    assert_eq!(
+        header,
+        [
+            "id",
+            "name",
+            "kind",
+            "repository",
+            "carries",
+            "state",
+            "revision",
+            "polled every",
+            "webhook path",
+            "reason"
+        ],
+        "{}",
+        watched.said
+    );
+
+    assert!(
+        ci["canceled_posts"].as_array().expect("posts").is_empty(),
+        "{ci}"
+    );
+    let detail_cells = [
+        ci["id"].as_str().expect("an id").to_owned(),
+        ci["name"].as_str().expect("a name").to_owned(),
+        ci["kind"].as_str().expect("a kind").to_owned(),
+        "-".to_owned(),
+        "-".to_owned(),
+        "inbound".to_owned(),
+        ci["state"].as_str().expect("a state").to_owned(),
+        ci["revision"].to_string(),
+        "-".to_owned(),
+        "-".to_owned(),
+        "-".to_owned(),
+        "-".to_owned(),
+        "-".to_owned(),
+        or_dash(&ci["webhook_path"]),
+        refusal.to_string(),
+    ]
+    .join("\t");
+    assert_eq!(detail.out, [detail_cells]);
+    for label in [
+        "bot login",
+        "carries",
+        "canceled posts",
+        "diagnostic",
+        "polled every",
+        "webhook path",
+        "last event refusal",
+    ] {
+        assert!(
+            shown.said.contains(label),
+            "{label} is missing from:\n{}",
+            shown.said
+        );
+    }
+
+    let disabled = piped(&kestrel, &["integration", "disable", "ci"]).await;
+    assert!(
+        disabled.out[0].contains("kestrel integration enable ci --organization acme"),
+        "an Integration out of use named no way back:\n{}",
+        disabled.out[0]
+    );
+
+    let started = piped(
+        &kestrel,
+        &["integration", "create-github-app", "my-app", "--json"],
+    )
+    .await
+    .json();
+    let url = started["url"].as_str().expect("a url");
+    let flow = started["flow"].as_str().expect("a flow");
+    assert!(url.contains("/operator/github-app/setup?"), "{url}");
+    assert!(url.ends_with(&format!("state={flow}")), "{url}");
+    let piped_url = piped(&kestrel, &["integration", "create-github-app", "my-app"]).await;
+    assert_eq!(piped_url.out.len(), 1, "{:?}", piped_url.out);
+    assert!(
+        piped_url.out[0].contains("/operator/github-app/setup?state="),
+        "{:?}",
+        piped_url.out
+    );
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn a_declaration_answers_its_identifier_and_json_answers_the_record() {
+    let kestrel = Kestrel::boot().await;
+    kestrel.declare_organization("acme").await;
+
+    let project = piped(
+        &kestrel,
+        &[
+            "project",
+            "declare",
+            "kestrel",
+            "--repository",
+            REPOSITORY,
+            "--branch",
+            "main",
+        ],
+    )
+    .await;
+    let agent = piped(&kestrel, &["agent", "declare", "builder"]).await;
+    let again = piped(&kestrel, &["agent", "declare", "builder", "--json"]).await;
+
+    let projects = answered(&kestrel, "organizations/acme/projects").await;
+    let agents = answered(&kestrel, "organizations/acme/agents").await;
+    assert_eq!(project.out, [projects[0]["id"].as_str().expect("an id")]);
+    assert_eq!(agent.out, [agents[0]["id"].as_str().expect("an id")]);
+    assert_eq!(again.json(), agents[0]);
+    assert_eq!(
+        again.jq("[.model, .mode, .thought_level]"),
+        "[null,null,null]",
+        "a default the Agent leaves to its Harness lost its null"
+    );
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
+async fn an_agents_model_is_the_value_a_pipe_captures_and_a_dash_when_it_names_none() {
+    let kestrel = an_organization_holding_two_agents().await;
+
+    let set = piped(
+        &kestrel,
+        &["agent", "model", "reviewer", "--model", "claude-sonnet-5"],
+    )
+    .await;
+    let whole = piped(
+        &kestrel,
+        &[
+            "agent",
+            "model",
+            "reviewer",
+            "--model",
+            "claude-sonnet-5",
+            "--json",
+        ],
+    )
+    .await;
+    let cleared = piped(&kestrel, &["agent", "model", "reviewer"]).await;
+
+    assert_eq!(set.out, ["claude-sonnet-5"]);
+    assert_eq!(
+        whole.jq("[.name, .harness, .model]"),
+        r#"["reviewer","opencode","claude-sonnet-5"]"#
+    );
+    assert_eq!(cleared.out, ["-"]);
+    let agents = answered(&kestrel, "organizations/acme/agents").await;
+    assert_eq!(agents[1]["model"], Value::Null);
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn json_is_the_whole_record_however_little_a_terminal_is_shown() {
     let kestrel = an_organization_holding_two_agents().await;
     let workspace = kestrel.open_workspace("acme", "kestrel", "builder").await;
@@ -234,6 +642,9 @@ async fn json_answers_a_compound_write_whole() {
         r#"[true,"open"]"#
     );
     let opened = opened.json();
+    let typed: kestrel_operator_types::Opened = serde_json::from_value(opened.clone()).unwrap();
+    assert_eq!(typed.workspace.id, typed.session.workspace);
+    assert_eq!(serde_json::to_value(&typed).unwrap(), opened);
     let workspace = opened["workspace"]["id"].as_str().expect("the Workspace");
     assert_eq!(opened["session"]["workspace"], workspace, "{opened}");
     assert_eq!(opened["workspace"]["state"], "open", "{opened}");
@@ -260,6 +671,28 @@ async fn json_answers_a_compound_write_whole() {
             .is_some_and(|posted| posted.contains_key("held_message")),
         "{posted}"
     );
+    let typed: kestrel_operator_types::Posted = serde_json::from_value(posted.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&typed).unwrap(), posted);
+    let listed = piped(&kestrel, &["workspace", "list", "--json"])
+        .await
+        .json();
+    let typed: kestrel_operator_types::ListWorkspacesResponse =
+        serde_json::from_value(listed.clone()).unwrap();
+    assert_eq!(typed[0].id.to_string(), workspace);
+    assert_eq!(serde_json::to_value(&typed).unwrap(), listed);
+    let sessions = piped(
+        &kestrel,
+        &["session", "list", "--workspace", workspace, "--json"],
+    )
+    .await
+    .json();
+    let typed: kestrel_operator_types::ListSessionsResponse =
+        serde_json::from_value(sessions.clone()).unwrap();
+    assert_eq!(
+        typed[0].id.to_string(),
+        opened["session"]["id"].as_str().unwrap()
+    );
+    assert_eq!(serde_json::to_value(&typed).unwrap(), sessions);
     kestrel.teardown().await;
 }
 

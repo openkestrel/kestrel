@@ -1,7 +1,7 @@
 use std::fmt;
 
 use kestrel_operator_types as wire;
-use serde_json::{Value, json};
+use serde::Serialize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Exit {
@@ -74,13 +74,14 @@ impl Exit {
         }
     }
 
-    pub fn record(self) -> Value {
-        json!({
-            "code": self.code(),
-            "name": self.name(),
-            "meaning": self.meaning(),
-            "branch": self.branch(),
-        })
+    /// The catalog row `kestrel exit-codes` publishes and scripts branch on.
+    pub fn record(self) -> Record {
+        Record {
+            code: self.code(),
+            name: self.name(),
+            meaning: self.meaning(),
+            branch: self.branch(),
+        }
     }
 
     /// Wrapping a failure in more context keeps its exit code; only another `Failed` changes it.
@@ -89,6 +90,15 @@ impl Exit {
             .downcast_ref::<Failed>()
             .map_or(Exit::Failure, Failed::exit)
     }
+}
+
+/// One published exit code: the catalog's own record, not a wire schema.
+#[derive(Serialize)]
+pub struct Record {
+    pub code: u8,
+    pub name: &'static str,
+    pub meaning: &'static str,
+    pub branch: &'static str,
 }
 
 #[derive(Debug)]

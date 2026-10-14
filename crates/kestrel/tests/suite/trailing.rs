@@ -903,12 +903,6 @@ fn the_published_documents_describe_trailing() {
             .unwrap()
             .contains(&serde_json::json!("trailing"))
     );
-    assert!(
-        session["required"]
-            .as_array()
-            .unwrap()
-            .contains(&serde_json::json!("last_activity_at"))
-    );
 
     let link = document("link.json");
     let schemas = &link["components"]["schemas"];
@@ -926,12 +920,6 @@ fn the_published_documents_describe_trailing() {
             serde_json::json!(["background_task", "subagent"])
         );
     }
-    assert!(
-        session["required"]
-            .as_array()
-            .unwrap()
-            .contains(&serde_json::json!("units"))
-    );
 }
 
 #[tokio::test]

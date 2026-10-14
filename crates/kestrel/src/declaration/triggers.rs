@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context as _, Result};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use super::{
     CheckedTrigger, Difference, Provenance, ScheduleForms, TemplateFields, TriggerFields,
@@ -13,22 +13,21 @@ use super::{
 use crate::domain::Declared;
 use crate::store::Store;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
     pub name: String,
     pub action: Action,
     pub differences: Vec<Difference>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Add,
     Change,
     Remove,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct Applied {
     pub changes: Vec<Change>,
     pub admitting_outsiders: Vec<String>,
@@ -39,26 +38,26 @@ pub struct Applied {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct File {
-    triggers: BTreeMap<String, Entry>,
+    pub triggers: BTreeMap<String, Entry>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Entry {
-    filter: serde_json::Value,
-    brief: String,
-    branch: Option<String>,
-    correlation: Option<String>,
-    on_miss: Option<String>,
-    on_open_workspace: Option<String>,
-    project: String,
-    agent: String,
+pub struct Entry {
+    pub filter: serde_json::Value,
+    pub brief: String,
+    pub branch: Option<String>,
+    pub correlation: Option<String>,
+    pub on_miss: Option<String>,
+    pub on_open_workspace: Option<String>,
+    pub project: String,
+    pub agent: String,
     #[serde(default)]
-    allows: Vec<String>,
-    profile: Option<String>,
-    model: Option<String>,
-    mode: Option<String>,
-    thought_level: Option<String>,
+    pub allows: Vec<String>,
+    pub profile: Option<String>,
+    pub model: Option<String>,
+    pub mode: Option<String>,
+    pub thought_level: Option<String>,
 }
 
 pub fn parse(text: &str) -> Result<Vec<CheckedTrigger>> {

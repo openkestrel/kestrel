@@ -108,6 +108,40 @@ fn an_invalid_invocation_is_usage() {
     }
 }
 
+/// A direction the invocation cannot mean is refused by the parser, before anything reaches a
+/// control plane that would answer with a refusal of its own.
+#[test]
+fn an_invalid_direction_is_a_usage_error_not_a_control_plane_refusal() {
+    let finished = ran(
+        &nowhere(),
+        &[
+            "integration",
+            "github",
+            "register",
+            "hub",
+            "--repository",
+            "jtmthf/kestrel",
+            "--app-id",
+            "1",
+            "--installation",
+            "2",
+            "--private-key",
+            "a-key",
+            "--carries",
+            "sideways",
+        ],
+    );
+
+    exited(&finished, USAGE);
+    assert!(
+        finished
+            .err
+            .contains("sideways is not a direction: inbound or outbound"),
+        "{}",
+        finished.err
+    );
+}
+
 #[test]
 fn guessed_workspace_and_session_verbs_explain_the_domain_verbs_without_running_them() {
     for (args, suggested, verbs) in [

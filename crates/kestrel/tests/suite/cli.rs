@@ -1695,7 +1695,10 @@ fn a_declaration_file_that_is_not_one_is_refused_saying_where() {
 
     for (declarations, because) in [
         ("", "triggers"),
-        ("triggers:\n  ready:\n    brief: x\n", "filter"),
+        (
+            "triggers:\n  ready:\n    brief: x\n    project: kestrel\n    agent: builder\n",
+            "triggers.ready: missing field `filter`",
+        ),
         (
             "triggers:\n  ready:\n    filter: {sql: x}\n    brief: x\n    project: kestrel\n    agent: builder\n",
             "triggers.ready.filter",
@@ -1706,7 +1709,7 @@ fn a_declaration_file_that_is_not_one_is_refused_saying_where() {
         ),
         (
             "triggers:\n  ready:\n    filter: {exact: {type: x}}\n    brief: x\n    agnet: builder\n    project: kestrel\n",
-            "agnet",
+            "triggers.ready: unknown field `agnet`",
         ),
     ] {
         let said = refusal(&["trigger", "apply"], &applying(&booted, declarations, &[]));
@@ -2044,7 +2047,7 @@ fn empty_cli_inspection_lists_leave_pipes_empty_and_json_unmodified() {
             } else if request.url().contains("/files") {
                 json!({"path":"repo/empty", "entries":[], "total":0, "truncated":false})
             } else if request.url().contains("/changes") {
-                json!({"repositories":[{"repository":"repo", "diff":"", "stats":[], "truncated":false}]})
+                json!({"repositories":[{"repository":"repo", "diff":"", "files":[], "truncated":false}]})
             } else {
                 json!({"repositories":[{"repository":"repo", "text":""}]})
             };

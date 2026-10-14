@@ -278,6 +278,23 @@ async fn link_loss_leaves_the_last_observation_historical_and_a_fresh_snapshot_r
         json!({ "tools": [], "units": [] }),
         "a historical observation is never listed as current work"
     );
+    let shown = support::client::ran_by(
+        &kestrel,
+        &[
+            "session",
+            "show",
+            &session.id.to_string(),
+            "--organization",
+            "acme",
+            "--json",
+        ],
+        support::client::Invocation::default(),
+    )
+    .await
+    .json();
+    assert_eq!(shown, lost);
+    let typed: kestrel_operator_types::Session = serde_json::from_value(shown).unwrap();
+    assert_eq!(serde_json::to_value(typed).unwrap(), lost);
     assert_eq!(lost["state"], current["state"]);
     assert_eq!(lost["lease_expires_at"], current["lease_expires_at"]);
     let state = next_state(&mut transcript, |state| {
@@ -406,7 +423,7 @@ async fn a_stopped_session_holds_no_observation() {
 }
 
 #[test]
-fn the_published_operator_document_requires_the_observation_on_session_reads_and_state() {
+fn the_published_operator_document_describes_the_observation_on_session_reads_and_state() {
     let document: Value = serde_json::from_str(
         &std::fs::read_to_string(support::crate_root().join("../../openapi/operator.json"))
             .unwrap(),
@@ -414,13 +431,6 @@ fn the_published_operator_document_requires_the_observation_on_session_reads_and
     .unwrap();
     for schema in ["Session", "TranscriptSessionState"] {
         let schema = &document["components"]["schemas"][schema];
-        assert!(
-            schema["required"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("observation")),
-            "{schema}"
-        );
         assert_eq!(
             schema["properties"]["observation"]["$ref"],
             "#/components/schemas/SessionObservation"

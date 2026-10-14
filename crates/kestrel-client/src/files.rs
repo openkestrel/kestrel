@@ -1,41 +1,20 @@
 use std::io::{IsTerminal as _, Write};
 
 use anyhow::{Context as _, Result, bail};
+use kestrel_operator_types::{FileEntryKind, FileListing, FileText};
 use reqwest::Response;
-use serde::Deserialize;
-use serde_json::Value;
 
 use crate::exit::{Exit, Failed};
 use crate::output::Presentation;
+use crate::typed;
 
-#[derive(Deserialize)]
-struct Listing {
-    path: String,
-    entries: Vec<Entry>,
-    total: u64,
-    truncated: bool,
-}
-
-#[derive(Deserialize)]
-struct Entry {
-    name: String,
-    kind: String,
-    git: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct Text {
-    text: String,
-}
-
-/// One line an entry, marked the way `ls -F` marks directories and symlinks.
-pub fn list(answer: Value, presentation: &Presentation, empty: &str) -> Result<()> {
-    let mut out = std::io::stdout().lock();
+/// One line an entry, marked the way `ls -F` marks directories and symlinks, and prefixed with the
+/// mark git gives it when the listing has one.
+pub fn list(presentation: &Presentation, listing: &FileListing, empty: &str) -> Result<()> {
     if presentation.json() {
-        crate::output::document(&mut out, presentation, &answer)?;
-        return Ok(out.flush()?);
+        return typed::whole(presentation, listing);
     }
-    let listing: Listing = serde_json::from_value(answer)?;
+    let mut out = std::io::stdout().lock();
     let terminal = std::io::stdout().is_terminal();
     if terminal && listing.entries.is_empty() {
         writeln!(out, "{empty}")?;
@@ -44,13 +23,13 @@ pub fn list(answer: Value, presentation: &Presentation, empty: &str) -> Result<(
         writeln!(out, "{}", listing.path)?;
     }
     for entry in &listing.entries {
-        let marked = match entry.kind.as_str() {
-            "directory" => "/",
-            "symlink" => "@",
-            _ => "",
+        let marked = match &entry.kind {
+            FileEntryKind::Directory => "/",
+            FileEntryKind::Symlink => "@",
+            FileEntryKind::File | FileEntryKind::Other => "",
         };
         match &entry.git {
-            Some(git) => writeln!(out, "{git:<10} {}{marked}", entry.name)?,
+            Some(git) => writeln!(out, "{:<10} {}{marked}", git.as_str(), entry.name)?,
             None => writeln!(out, "{}{marked}", entry.name)?,
         }
     }
@@ -71,15 +50,13 @@ pub async fn read(mut response: Response, presentation: &Presentation) -> Result
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|kind| kind.to_str().ok())
         .is_some_and(|kind| kind.starts_with("application/json"));
-    let mut out = std::io::stdout().lock();
     if inline {
-        let answer: Value = response.json().await.context(unreadable())?;
+        let answer: FileText = response.json().await.context(unreadable())?;
         if presentation.json() {
-            crate::output::document(&mut out, presentation, &answer)?;
-        } else {
-            let text: Text = serde_json::from_value(answer)?;
-            out.write_all(text.text.as_bytes())?;
+            return typed::whole(presentation, &answer);
         }
+        let mut out = std::io::stdout().lock();
+        out.write_all(answer.text.as_bytes())?;
         return Ok(out.flush()?);
     }
     // A file the control plane hands back as its own bytes has no response to filter, so this is
@@ -91,6 +68,7 @@ pub async fn read(mut response: Response, presentation: &Presentation) -> Result
              without --jq"
         ));
     }
+    let mut out = std::io::stdout().lock();
     while let Some(chunk) = response.chunk().await.context(unreadable())? {
         out.write_all(&chunk)?;
     }

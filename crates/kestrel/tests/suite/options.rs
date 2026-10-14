@@ -783,6 +783,9 @@ async fn changing_options_shows_while_a_change_is_pending_and_clears_when_it_set
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{changed}");
+    let typed: kestrel_operator_types::Session = serde_json::from_value(changed.clone()).unwrap();
+    assert_eq!(serde_json::to_value(typed).unwrap(), changed);
+
     assert_eq!(
         changed["changing_options"],
         json!([{

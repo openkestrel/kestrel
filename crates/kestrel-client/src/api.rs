@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use reqwest::{Client, RequestBuilder, Response, Url};
 use serde::Serialize;
-use serde_json::Value;
+use serde::de::DeserializeOwned;
 
 use crate::diagnostic::{self, Request};
 use crate::exit::{Exit, Failed};
@@ -21,11 +21,15 @@ impl ControlPlane {
         }
     }
 
-    pub async fn get(&self, path: &[&str]) -> Result<Value> {
-        self.get_where(path, &[]).await
+    pub async fn get_as<T: DeserializeOwned>(&self, path: &[&str]) -> Result<T> {
+        self.get_where_as(path, &[]).await
     }
 
-    pub async fn get_where(&self, path: &[&str], query: &[(&str, &str)]) -> Result<Value> {
+    pub async fn get_where_as<T: DeserializeOwned>(
+        &self,
+        path: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<T> {
         let mut url = self.url(path)?;
         if !query.is_empty() {
             url.query_pairs_mut().extend_pairs(query);
@@ -43,17 +47,29 @@ impl ControlPlane {
         self.sent(self.client.get(url), false).await
     }
 
-    pub async fn post(&self, path: &[&str], body: &impl Serialize) -> Result<Value> {
+    pub async fn post_as<T: DeserializeOwned>(
+        &self,
+        path: &[&str],
+        body: &impl Serialize,
+    ) -> Result<T> {
         self.answered(self.client.post(self.url(path)?).json(body), true)
             .await
     }
 
-    pub async fn put(&self, path: &[&str], body: &impl Serialize) -> Result<Value> {
+    pub async fn put_as<T: DeserializeOwned>(
+        &self,
+        path: &[&str],
+        body: &impl Serialize,
+    ) -> Result<T> {
         self.answered(self.client.put(self.url(path)?).json(body), true)
             .await
     }
 
-    pub async fn patch(&self, path: &[&str], body: &impl Serialize) -> Result<Value> {
+    pub async fn patch_as<T: DeserializeOwned>(
+        &self,
+        path: &[&str],
+        body: &impl Serialize,
+    ) -> Result<T> {
         self.answered(self.client.patch(self.url(path)?).json(body), true)
             .await
     }
@@ -64,7 +80,11 @@ impl ControlPlane {
         Ok(())
     }
 
-    async fn answered(&self, request: RequestBuilder, write: bool) -> Result<Value> {
+    async fn answered<T: DeserializeOwned>(
+        &self,
+        request: RequestBuilder,
+        write: bool,
+    ) -> Result<T> {
         let response = self.sent(request, write).await?;
         let status = response.status();
         response

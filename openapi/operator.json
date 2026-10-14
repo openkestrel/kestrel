@@ -5421,7 +5421,7 @@
         "properties": {
           "declarations": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/DeclarationDiff" }
+            "items": { "$ref": "#/components/schemas/DeclarationChange" }
           },
           "admitting_outsiders": {
             "type": "array",
@@ -5430,26 +5430,28 @@
         },
         "required": ["declarations", "admitting_outsiders"]
       },
-      "DeclarationDiff": {
+      "DeclarationChange": {
         "type": "object",
+        "description": "What applying a Declaration does to one record. Whether a route lists a record it leaves unchanged is that route's choice.",
         "properties": {
           "kind": { "type": "string", "enum": ["project", "agent", "trigger"] },
           "name": { "type": "string" },
-          "action": { "type": "string", "enum": ["add", "change", "unchanged"] },
+          "action": { "type": "string", "enum": ["add", "change", "unchanged", "remove"] },
           "differences": {
             "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "field": { "type": "string" },
-                "was": { "type": ["string", "null"] },
-                "becomes": { "type": ["string", "null"] }
-              },
-              "required": ["field", "was", "becomes"]
-            }
+            "items": { "$ref": "#/components/schemas/DeclarationDifference" }
           }
         },
         "required": ["kind", "name", "action", "differences"]
+      },
+      "DeclarationDifference": {
+        "type": "object",
+        "properties": {
+          "field": { "type": "string" },
+          "was": { "type": ["string", "null"] },
+          "becomes": { "type": ["string", "null"] }
+        },
+        "required": ["field", "was", "becomes"]
       },
       "TriggerDeclaration": {
         "type": "object",
@@ -5462,8 +5464,8 @@
           "brief": { "type": "string", "minLength": 1 },
           "branch": { "type": ["string", "null"] },
           "correlation": { "type": ["string", "null"] },
-          "on_miss": { "type": ["string", "null"], "enum": ["open", "ignore", null] },
-          "on_open_workspace": { "type": ["string", "null"], "enum": ["continue", "new-session", null], "description": "What a firing that correlates to an open Workspace does: continues its waiting Session, or starts a new Session with this Trigger's Agent. Absent continues." },
+          "on_miss": { "type": ["string", "null"], "description": "What a correlation miss does: `open` or `ignore`." },
+          "on_open_workspace": { "type": ["string", "null"], "description": "What a firing that correlates to an open Workspace does: `continue` its waiting Session, or `new-session` with this Trigger's Agent. Absent continues." },
           "project": { "type": "string", "minLength": 1 },
           "agent": { "type": "string", "minLength": 1 },
           "allows": { "type": "array", "items": { "type": "string" }, "default": [] },
@@ -5556,29 +5558,30 @@
           "triggers": {
             "type": "object",
             "description": "Each Trigger the file applies, keyed by its name; `{}` removes every Trigger a file applied.",
-            "additionalProperties": {
-              "type": "object",
-              "properties": {
-                "filter": { "type": "object" },
-                "brief": { "type": "string" },
-                "branch": { "type": ["string", "null"] },
-                "correlation": { "type": ["string", "null"] },
-                "on_miss": { "type": ["string", "null"], "enum": ["open", "ignore", null] },
-                "on_open_workspace": { "type": ["string", "null"], "enum": ["continue", "new-session", null] },
-                "project": { "type": "string" },
-                "agent": { "type": "string" },
-                "allows": { "type": "array", "items": { "type": "string" } },
-                "profile": { "type": ["string", "null"] },
-                "model": { "type": ["string", "null"], "description": "The model its Sessions run with. Omitted, the Agent's, then the Harness's default." },
-                "mode": { "type": ["string", "null"], "description": "The mode its Sessions run in. Omitted, the Agent's, then the Harness's default." },
-                "thought_level": { "type": ["string", "null"], "description": "The thought level its Sessions run at. Omitted, the Agent's, then the Harness's default." }
-              },
-              "required": ["filter", "brief", "project", "agent"],
-              "additionalProperties": false
-            }
+            "additionalProperties": { "$ref": "#/components/schemas/TriggerFileEntry" }
           }
         },
         "required": ["triggers"],
+        "additionalProperties": false
+      },
+      "TriggerFileEntry": {
+        "type": "object",
+        "properties": {
+          "filter": { "type": "object" },
+          "brief": { "type": "string" },
+          "branch": { "type": ["string", "null"] },
+          "correlation": { "type": ["string", "null"] },
+          "on_miss": { "type": ["string", "null"], "description": "What a correlation miss does: `open` or `ignore`." },
+          "on_open_workspace": { "type": ["string", "null"], "description": "What a firing that correlates to an open Workspace does: `continue` or `new-session`. Absent continues." },
+          "project": { "type": "string" },
+          "agent": { "type": "string" },
+          "allows": { "type": "array", "items": { "type": "string" } },
+          "profile": { "type": ["string", "null"] },
+          "model": { "type": ["string", "null"], "description": "The model its Sessions run with. Omitted, the Agent's, then the Harness's default." },
+          "mode": { "type": ["string", "null"], "description": "The mode its Sessions run in. Omitted, the Agent's, then the Harness's default." },
+          "thought_level": { "type": ["string", "null"], "description": "The thought level its Sessions run at. Omitted, the Agent's, then the Harness's default." }
+        },
+        "required": ["filter", "brief", "project", "agent"],
         "additionalProperties": false
       },
       "AppliedTriggers": {
@@ -5586,26 +5589,7 @@
         "properties": {
           "changes": {
             "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "name": { "type": "string" },
-                "action": { "type": "string", "enum": ["add", "change", "remove"] },
-                "differences": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "field": { "type": "string" },
-                      "was": { "type": ["string", "null"] },
-                      "becomes": { "type": ["string", "null"] }
-                    },
-                    "required": ["field", "was", "becomes"]
-                  }
-                }
-              },
-              "required": ["name", "action", "differences"]
-            }
+            "items": { "$ref": "#/components/schemas/DeclarationChange" }
           },
           "admitting_outsiders": { "type": "array", "items": { "type": "string" } }
         },
@@ -7275,8 +7259,11 @@
               "opened",
               "fed",
               "ignored",
-              "failed"
-            ]
+              "failed",
+              "held",
+              "canceled"
+            ],
+            "description": "A held firing waits on the issue's readiness and is looked at again; a canceled one never started."
           },
           "workspace": {
             "type": [
@@ -7291,14 +7278,22 @@
               "string",
               "null"
             ],
-            "description": "Why a failed firing started nothing, such as labels choosing two Agents."
+            "description": "Why a failed, held or canceled firing started nothing, such as labels choosing two Agents."
+          },
+          "worked_ahead": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who started it ahead of the issue's blockers, when a command or a dispatch did."
           }
         },
         "required": [
           "trigger",
           "outcome",
           "workspace",
-          "failure"
+          "failure",
+          "worked_ahead"
         ]
       },
       "CloudEvent": {
@@ -7651,10 +7646,17 @@
             "type": "string"
           },
           "message": {
-            "type": "string"
+            "$ref": "#/components/schemas/MessageContent"
           },
           "type": {
             "const": "said"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
           },
           "session_id": {
             "type": "string",
@@ -9461,8 +9463,28 @@
       "InlinePlanEntries": {
         "type": "array",
         "items": {
-          "$ref": "#/components/schemas/PlanEntry"
+          "$ref": "#/components/schemas/PlanStep"
         }
+      },
+      "PlanStep": {
+        "description": "One step of a plan, as the Harness reported it.",
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content",
+          "priority",
+          "status"
+        ]
       },
       "PlanEntries": {
         "oneOf": [
