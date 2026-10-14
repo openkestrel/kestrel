@@ -6,7 +6,7 @@
 		"#/*": "./src/*"
 	},
 	"scripts": {
-		"generate": "openapi-ts && tsr generate",
+		"generate": "bun operator-sse.ts && openapi-ts && tsr generate",
 		"dev": "bun run generate && vite dev --port 3000",
 		"build": "bun run generate && vite build",
 		"typecheck": "bun run generate && tsc --noEmit",

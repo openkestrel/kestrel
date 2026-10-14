@@ -6,6 +6,7 @@ FROM rust@sha256:c37af730be4fd8104cbf9aedbd6ab259e51ca2d5437817a0f8680edf66ac6c2
 WORKDIR /src
 COPY rust-toolchain.toml Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY openapi/operator ./openapi/operator
 RUN cargo build --locked --release --package kestrel --package kestrel-client
 
 # debian:trixie-slim

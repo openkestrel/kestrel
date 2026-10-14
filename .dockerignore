@@ -15,5 +15,6 @@
 packages/client/node_modules
 packages/client/dist
 packages/client/src/operator/generated
+packages/client/src/operator/sse.gen.ts
 packages/client/src/routeTree.gen.ts
 packages/client/test-results

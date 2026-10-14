@@ -1,27 +1,28 @@
-use std::{
-    collections::BTreeSet,
-    fmt::Write as _,
-    fs,
-    io::Write as _,
-    path::Path,
-    process::{Command, Stdio},
-};
+//! Generates the operator wire types from `openapi/operator/` into `OUT_DIR` (ADR-0059).
 
-use anyhow::{Result, anyhow};
+use std::collections::BTreeSet;
+use std::fmt::Write as _;
+use std::path::Path;
+use std::{env, fs};
+
+use anyhow::{Context as _, Result, anyhow};
+use openapi_to_rust::type_mapping::{DateStrategy, UuidStrategy};
 use openapi_to_rust::{
     CodeGenerator, GeneratorConfig, SchemaAnalyzer, TypeMapper, TypeMappingConfig,
-    type_mapping::{DateStrategy, UuidStrategy},
 };
 use serde_json::Value;
 
+#[path = "src/document.rs"]
+mod document;
+
 fn main() -> Result<()> {
-    let check = match std::env::args().skip(1).collect::<Vec<_>>().as_slice() {
-        [] => false,
-        [flag] if flag == "--check" => true,
-        _ => return Err(anyhow!("usage: generate [--check]")),
-    };
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let document = kestrel_operator_types::document::read(&root.join("../../openapi/operator"))?;
+    let fragments = Path::new(&env::var("CARGO_MANIFEST_DIR")?).join("../../openapi/operator");
+    println!("cargo::rerun-if-changed={}", fragments.display());
+    println!("cargo::rerun-if-changed=src/document.rs");
+    println!("cargo::rerun-if-changed=build.rs");
+
+    let document = document::read(&fragments)
+        .with_context(|| format!("reading the operator document in {}", fragments.display()))?;
     let types = TypeMappingConfig {
         date_time: DateStrategy::String,
         uuid: UuidStrategy::Uuid,
@@ -36,21 +37,26 @@ fn main() -> Result<()> {
         types,
         ..Default::default()
     });
-    let source = generator.generate(&mut analysis)?;
-    let source = allow_omitted_nullable_fields(&source)?;
-    let (sse, browser_sse) = sse_mappings(&document)?;
-    write_output(
-        &root.join("src/generated.rs"),
-        &format_rust(&source)?,
-        check,
-    )?;
-    write_output(&root.join("src/sse.rs"), &format_rust(&sse)?, check)?;
-    write_output(
-        &root.join("../../packages/client/src/operator/sse.gen.ts"),
-        browser_sse.as_bytes(),
-        check,
-    )?;
+    let source = allow_omitted_nullable_fields(&generator.generate(&mut analysis)?)?;
+
+    let out = env::var("OUT_DIR")?;
+    let out = Path::new(&out);
+    fs::write(out.join("generated.rs"), includable(&source))?;
+    fs::write(out.join("sse.rs"), sse_mappings(&document)?)?;
     Ok(())
+}
+
+// `include!` puts the file inside a module, where the inner attributes and docs the generator
+// opens with are not allowed; `lib.rs` carries the lints they allowed.
+fn includable(source: &str) -> String {
+    source
+        .lines()
+        .skip_while(|line| line.starts_with("//!") || line.starts_with("#![") || line.is_empty())
+        .fold(String::new(), |mut kept, line| {
+            kept.push_str(line);
+            kept.push('\n');
+            kept
+        })
 }
 
 fn allow_omitted_nullable_fields(source: &str) -> Result<String> {
@@ -65,43 +71,8 @@ fn allow_omitted_nullable_fields(source: &str) -> Result<String> {
     Ok(source.replace(generated, compatible))
 }
 
-fn format_rust(source: &str) -> Result<Vec<u8>> {
-    let mut formatter = Command::new("rustfmt")
-        .args(["--edition", "2024"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()?;
-    formatter
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(source.as_bytes())?;
-    let output = formatter.wait_with_output()?;
-    if !output.status.success() {
-        return Err(anyhow!("rustfmt failed"));
-    }
-    Ok(output.stdout)
-}
-
-fn write_output(path: &Path, content: &[u8], check: bool) -> Result<()> {
-    if check {
-        if fs::read(path).ok().as_deref() != Some(content) {
-            return Err(anyhow!(
-                "{} is stale; run cargo run -p kestrel-operator-types --bin generate --features generate",
-                path.display()
-            ));
-        }
-    } else {
-        fs::write(path, content)?;
-    }
-    Ok(())
-}
-
-fn sse_mappings(document: &Value) -> Result<(String, String)> {
-    let mut browser = String::from("// Generated from openapi/operator/ by the generate binary.\n");
-    let mut source = String::from(
-        "// Generated from openapi/operator/ by the generate binary.\nuse crate::*;\n",
-    );
+fn sse_mappings(document: &Value) -> Result<String> {
+    let mut source = String::from("use crate::*;\n");
     let schemas = document["components"]["schemas"]
         .as_object()
         .ok_or_else(|| anyhow!("missing schemas"))?;
@@ -148,16 +119,6 @@ fn sse_mappings(document: &Value) -> Result<(String, String)> {
             )?;
         }
         source.push_str("_ => return None,\n}) } }\n");
-        writeln!(browser, "export const {name}Names = {{")?;
-        for (event, target) in &mappings {
-            writeln!(browser, "\t{target}: {event:?},")?;
-        }
-        browser.push_str("} as const;\n");
-        writeln!(browser, "export type {name}Data = {{")?;
-        for (event, target) in &mappings {
-            writeln!(browser, "\t{event}: import(\"./generated\").{target};")?;
-        }
-        browser.push_str("};\n");
     }
-    Ok((source, browser))
+    Ok(source)
 }
