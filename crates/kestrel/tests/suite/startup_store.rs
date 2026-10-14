@@ -51,7 +51,7 @@ fn assert_incompatible(message: &str) {
     for expected in [
         RESET,
         "deletes all saved kestrel data",
-        "pre-release",
+        "continue from",
         "migration",
     ] {
         assert!(

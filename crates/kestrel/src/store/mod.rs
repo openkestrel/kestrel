@@ -65,9 +65,8 @@ impl Store {
             .with_context(|| format!("opening kestrel's database in {}", data_dir.display()))?;
 
         let migrator = sqlx::migrate!("src/store/migrations");
-        // A pre-release build never migrates another build's store: read the migration
-        // history before running anything, so an incompatible store is refused without
-        // writing to it.
+        // Read the migration history before running anything, so an incompatible store is
+        // refused without writing to it.
         let fresh = compatible(&pool, &migrator, data_dir).await?;
         migrator
             .run(&pool)
@@ -121,9 +120,8 @@ impl Store {
     }
 }
 
-/// A store from another build is refused, never migrated: schema changes edit the
-/// migrations in place until release, so a checksum or version mismatch means the volume
-/// holds another pre-release build's database.
+/// Migrations are append-only, so a store whose history is a prefix of this build's migrates
+/// forward; a checksum mismatch or an unknown version means its history is not this build's.
 async fn compatible(pool: &SqlitePool, migrator: &Migrator, data_dir: &Path) -> Result<bool> {
     let tracking: Option<String> = sqlx::query_scalar(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
@@ -269,7 +267,7 @@ fn schema_conflict(cause: &str) -> bool {
 fn incompatible_store(detail: String, data_dir: &Path) -> anyhow::Error {
     anyhow::anyhow!(
         "kestrel cannot start with the store in {}: {}.\n\
-         kestrel is pre-release and does not migrate stores between builds.\n\
+         This store's migration history is not one this build can continue from.\n\
          To start over, remove the volume (this deletes all saved kestrel data):\n\n\
          docker compose down --volumes",
         data_dir.join(DATABASE).display(),

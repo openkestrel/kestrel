@@ -107,8 +107,8 @@ erDiagram
   `session.state` and the like are updated in place; nothing replays the Transcript to rebuild them.
 - **Secrets are sealed or digested.** Sealed values need `kestrel.key` beside the database;
   digested ones cannot be recovered.
-- **Schema changes edit the migrations in place** until release (see Compatibility in `AGENTS.md`),
-  even though several existing migrations are `ALTER TABLE`s.
+- **Schema changes are new migrations**, named by UTC timestamp; one on `main` is never edited
+  (see Compatibility in `AGENTS.md`). A store whose history this build does not carry is refused.
 
 Narration and detail expire 30 days after append. The work role sweeps hourly in batches of at most
 1,000 entries, including sealed Workspaces; later sweeps continue the due set. Each replacement
