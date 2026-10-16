@@ -27,6 +27,7 @@ pub trait Provisioned: Send {
     fn terminal(&mut self, command: &[&str]) -> anyhow::Result<Terminal>;
     fn exec(&mut self, command: &[&str]) -> io::Result<Streaming>;
     fn read_file(&mut self, path: &str) -> io::Result<Vec<u8>>;
+    fn read_home_file(&mut self, path: &str) -> io::Result<Vec<u8>>;
     fn write_file(&mut self, path: &str, contents: &[u8]) -> io::Result<()>;
     fn supervise(&mut self, variables: &[(&str, &str)]) -> io::Result<Supervisor>;
     fn destroy(&mut self) -> io::Result<()>;
@@ -146,6 +147,11 @@ impl Instance {
 
     pub fn read_file(&mut self, path: &str) -> io::Result<Vec<u8>> {
         self.provisioned.read_file(path)
+    }
+
+    /// Reads a path relative to the home the Instance's terminals and supervisor run with.
+    pub fn read_home_file(&mut self, path: &str) -> io::Result<Vec<u8>> {
+        self.provisioned.read_home_file(path)
     }
 
     pub fn write_file(&mut self, path: &str, contents: &[u8]) -> io::Result<()> {

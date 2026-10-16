@@ -168,6 +168,18 @@ impl Provisioned for Container {
         docker(&["exec", "--workdir", ROOT, &self.container, "cat", path])
     }
 
+    fn read_home_file(&mut self, path: &str) -> io::Result<Vec<u8>> {
+        docker(&[
+            "exec",
+            &self.container,
+            "sh",
+            "-c",
+            r#"cat -- "$HOME/$1""#,
+            "sh",
+            path,
+        ])
+    }
+
     fn write_file(&mut self, path: &str, contents: &[u8]) -> io::Result<()> {
         let mut writing = Command::new("docker")
             .args([

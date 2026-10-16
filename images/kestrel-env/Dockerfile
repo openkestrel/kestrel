@@ -41,7 +41,7 @@ RUN ./node_modules/.bin/claude-agent-acp --version \
     && ./node_modules/.bin/codex-acp --version \
     && ./node_modules/.bin/codex --version \
     && ./node_modules/.bin/claude --version \
-    && ./node_modules/.bin/codex login --help \
+    && ./node_modules/.bin/codex login --help | grep --quiet -- --device-auth \
     && ./node_modules/.bin/claude setup-token --help
 
 # debian:trixie-slim

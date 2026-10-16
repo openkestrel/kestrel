@@ -74,6 +74,73 @@ async fn codex_answers_on_a_chatgpt_login_before_and_after_a_restart() {
 }
 
 #[tokio::test]
+#[ignore = "waits for a person to approve a real Codex device code"]
+async fn codex_device_authorization_saves_the_login_a_person_approves() {
+    required(
+        "KESTREL_SMOKE_CODEX_DEVICE_AUTH",
+        "1, then open the printed page and enter its code",
+    );
+    let kestrel =
+        Kestrel::dispatching_harnesses_in(image::development(), &[("codex", "codex-acp")]).await;
+    let client = reqwest::Client::new();
+    let operator = kestrel.operator();
+    client
+        .put(format!("{operator}/operator/operator"))
+        .json(&serde_json::json!({"name": "smoke"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let relay: serde_json::Value = client
+        .post(format!(
+            "{operator}/operator/organizations/smoke/sign-ins/codex/codex-device-auth/relay"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let address = format!(
+        "{operator}/operator/organizations/smoke/sign-ins/codex/codex-device-auth/relay/{}",
+        relay["id"].as_str().unwrap()
+    );
+    let mut shown = false;
+    let finished = loop {
+        let current: serde_json::Value = client
+            .get(&address)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let progress = &current["progress"];
+        if progress["state"] == "awaiting_browser" && !shown {
+            eprintln!("open {} and enter {}", progress["url"], progress["code"]);
+            shown = true;
+        }
+        if matches!(
+            progress["state"].as_str(),
+            Some("completed" | "failed" | "expired" | "cancelled")
+        ) {
+            break current;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    };
+    kestrel.teardown().await;
+    let saved = &finished["progress"]["sign_in"];
+    assert_eq!(
+        saved["authentication"]["state"], "login_completed",
+        "{finished}"
+    );
+    assert_eq!(saved["model_use"], serde_json::json!([]));
+}
+
+#[tokio::test]
 #[ignore = "calls a real model on a person's OpenCode Go subscription"]
 async fn opencode_answers_on_an_opencode_go_key_before_and_after_a_restart() {
     let key = required("KESTREL_SMOKE_OPENCODE_API_KEY", "an OpenCode Go key");

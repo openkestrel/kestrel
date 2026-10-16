@@ -637,3 +637,225 @@ esac
     process.kill().await.unwrap();
     process.wait().await.unwrap();
 }
+
+const CODEX: &str = "/operator/organizations/ada/sign-ins/codex/codex-device-auth";
+const DEVICE_URL: &str = "https://auth.openai.com/codex/device";
+const DEVICE_CODE: &str = "0K88-JZ4OG";
+const ACCESS: &str = "scripted-chatgpt-access-secret";
+const LOGIN: &str = r#"{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"id_token":"scripted-id","access_token":"scripted-chatgpt-access-secret","refresh_token":"scripted-refresh","account_id":"account"},"last_refresh":"2026-10-16T00:00:00Z"}"#;
+const VENDOR_NOISE: &str = "raw-vendor-diagnostic-output";
+
+/// A pinned-format `codex login --device-auth` that waits for `approved` in its directory, then
+/// writes `login` as the vendor file and exits with `status`.
+fn device_vendor(login: Option<&str>, status: u8) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt as _;
+    let scripts = tempfile::tempdir().unwrap();
+    let directory = scripts.path().display();
+    let write = login.map_or(String::new(), |login| {
+        format!("mkdir -p \"$HOME/.codex\" && printf '%s' '{login}' > \"$HOME/.codex/auth.json\"")
+    });
+    let script = scripts.path().join("codex");
+    std::fs::write(&script, format!(r#"#!/bin/sh
+[ "$*" = 'login -c cli_auth_credentials_store=file --device-auth' ] || exit 2
+printf '\r\nWelcome to Codex [v\033[90m0.156.1\033[0m]\r\n\033[90mOpenAI'"'"'s command-line coding agent\033[0m\r\n\r\n'
+printf 'Follow these steps to sign in with ChatGPT using device code authorization:\r\n\r\n'
+printf '1. Open this link in your browser and sign in to your account\r\n   \033[94m{DEVICE_URL}\033[0m\r\n\r\n'
+sleep 0.02
+printf '2. Enter this one-time code \033[90m(expires in 15 minutes)\033[0m\r\n   \033[94m{DEVICE_CODE}\033[0m\r\n\r\n'
+while [ ! -f '{directory}/approved' ]; do sleep 0.02; done
+{write}
+printf '{VENDOR_NOISE}\r\n'
+exit {status}
+"#)).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    scripts
+}
+
+fn approve(scripts: &tempfile::TempDir) {
+    std::fs::write(scripts.path().join("approved"), "").unwrap();
+}
+
+async fn private(request: reqwest::RequestBuilder) -> (StatusCode, Value) {
+    let (status, body) = sent(request).await;
+    let text = body.to_string();
+    for secret in [ACCESS, "scripted-refresh", "scripted-id", VENDOR_NOISE] {
+        assert!(!text.contains(secret), "vendor material leaked: {text}");
+    }
+    (status, body)
+}
+
+async fn device_started(kestrel: &Kestrel) -> Value {
+    let (status, body) =
+        private(reqwest::Client::new().post(format!("{}{CODEX}/relay", kestrel.operator()))).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    body
+}
+
+fn device_address(kestrel: &Kestrel, relay: &Value) -> String {
+    format!(
+        "{}{CODEX}/relay/{}",
+        kestrel.operator(),
+        relay["id"].as_str().unwrap()
+    )
+}
+
+async fn device_until(kestrel: &Kestrel, relay: &Value, expected: &str) -> Value {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let (status, body) =
+                private(reqwest::Client::new().get(device_address(kestrel, relay))).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            if body["progress"]["state"] == expected {
+                return body;
+            }
+            assert!(
+                !matches!(
+                    body["progress"]["state"].as_str(),
+                    Some("failed" | "expired" | "cancelled" | "completed")
+                ),
+                "{body}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .expect("the relay reaches its state")
+}
+
+async fn saved_sign_ins(kestrel: &Kestrel) -> Value {
+    let (status, saved) = private(reqwest::Client::new().get(format!(
+        "{}/operator/organizations/ada/sign-ins",
+        kestrel.operator()
+    )))
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    saved
+}
+
+#[tokio::test]
+async fn device_authorization_shows_its_url_and_code_and_saves_the_approved_vendor_file() {
+    let scripts = device_vendor(Some(LOGIN), 0);
+    let kestrel = Kestrel::dispatching_with_programs(scripts.path()).await;
+    named(&kestrel).await;
+    let relay = device_started(&kestrel).await;
+    assert_eq!(relay["destination"]["fills"]["path"], ".codex/auth.json");
+    let waiting = device_until(&kestrel, &relay, "awaiting_browser").await;
+    assert_eq!(waiting["progress"]["url"], DEVICE_URL);
+    assert_eq!(waiting["progress"]["code"], DEVICE_CODE);
+    let (status, refused) = private(
+        reqwest::Client::new()
+            .post(format!("{}/code", device_address(&kestrel, &relay)))
+            .json(&json!({"code": DEVICE_CODE})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["context"]["state"], "awaiting_browser");
+    approve(&scripts);
+    let completed = device_until(&kestrel, &relay, "completed").await;
+    let saved = &completed["progress"]["sign_in"];
+    assert_eq!(saved["authentication"]["state"], "login_completed");
+    assert_eq!(saved["authentication"]["source"], "relay");
+    assert_eq!(saved["model_use"], json!([]));
+    assert_eq!(saved_sign_ins(&kestrel).await[0], *saved);
+    cleaned(&kestrel, &relay).await;
+    let metadata = kestrel
+        .database()
+        .relay_metadata(relay["id"].as_str().unwrap())
+        .await;
+    assert!(!metadata.contains(ACCESS));
+}
+
+#[tokio::test]
+async fn a_missing_or_incompatible_vendor_file_fails_with_a_sanitized_import_path() {
+    for login in [
+        None,
+        Some(r#"{"auth_mode":"apikey","OPENAI_API_KEY":"scripted-chatgpt-access-secret"}"#),
+    ] {
+        let scripts = device_vendor(login, 0);
+        let kestrel = Kestrel::dispatching_with_programs(scripts.path()).await;
+        named(&kestrel).await;
+        let relay = device_started(&kestrel).await;
+        device_until(&kestrel, &relay, "awaiting_browser").await;
+        approve(&scripts);
+        let failed = device_until(&kestrel, &relay, "failed").await;
+        let diagnostic = &failed["progress"]["diagnostic"];
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .unwrap()
+                .contains("auth.json"),
+            "{diagnostic}"
+        );
+        assert!(
+            diagnostic["next_steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|step| step["action"] == "sign_in" && step["method"] == "codex-device-auth"),
+            "{diagnostic}"
+        );
+        cleaned(&kestrel, &relay).await;
+        assert_eq!(saved_sign_ins(&kestrel).await, json!([]));
+    }
+}
+
+#[tokio::test]
+async fn a_failed_vendor_process_fails_without_its_output_and_a_retry_starts_fresh() {
+    let scripts = device_vendor(Some(LOGIN), 1);
+    let kestrel = Kestrel::dispatching_with_programs(scripts.path()).await;
+    named(&kestrel).await;
+    let relay = device_started(&kestrel).await;
+    device_until(&kestrel, &relay, "awaiting_browser").await;
+    approve(&scripts);
+    let failed = device_until(&kestrel, &relay, "failed").await;
+    assert!(failed["progress"]["diagnostic"].is_object());
+    cleaned(&kestrel, &relay).await;
+    assert_eq!(saved_sign_ins(&kestrel).await, json!([]));
+    let next = device_started(&kestrel).await;
+    assert_ne!(next["id"], relay["id"]);
+}
+
+#[tokio::test]
+async fn device_authorization_shares_the_slot_cancellation_import_and_restart_lifecycle() {
+    let scripts = device_vendor(Some(LOGIN), 0);
+    let kestrel = Kestrel::dispatching_with_programs(scripts.path()).await;
+    named(&kestrel).await;
+    let relay = device_started(&kestrel).await;
+    let (status, conflict) =
+        private(reqwest::Client::new().post(format!("{}{CODEX}/relay", kestrel.operator()))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
+    assert_eq!(conflict["context"]["reference"], relay["id"]);
+    device_until(&kestrel, &relay, "awaiting_browser").await;
+    let (status, cancelled) =
+        private(reqwest::Client::new().delete(device_address(&kestrel, &relay))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(cancelled["progress"]["state"], "cancelled");
+    cleaned(&kestrel, &relay).await;
+
+    let imported = device_started(&kestrel).await;
+    device_until(&kestrel, &imported, "awaiting_browser").await;
+    let (status, replacement) = private(
+        reqwest::Client::new()
+            .put(format!("{}{CODEX}", kestrel.operator()))
+            .json(&json!({"value": LOGIN})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{replacement}");
+    device_until(&kestrel, &imported, "cancelled").await;
+    cleaned(&kestrel, &imported).await;
+    approve(&scripts);
+    let saved = saved_sign_ins(&kestrel).await;
+    assert_eq!(saved[0]["revision"], replacement["revision"]);
+    assert_eq!(saved[0]["authentication"]["state"], "unchecked");
+
+    std::fs::remove_file(scripts.path().join("approved")).unwrap();
+    let interrupted = device_started(&kestrel).await;
+    device_until(&kestrel, &interrupted, "awaiting_browser").await;
+    let kestrel = kestrel.kill_and_restart().await;
+    device_until(&kestrel, &interrupted, "failed").await;
+    cleaned(&kestrel, &interrupted).await;
+    assert_eq!(
+        saved_sign_ins(&kestrel).await[0]["revision"],
+        replacement["revision"]
+    );
+}
