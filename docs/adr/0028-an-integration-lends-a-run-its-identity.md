@@ -1,5 +1,10 @@
 # An Integration lends a Run its identity
 
+> Amended by [ADR-0056](0056-an-integration-keeps-its-identity-through-maintenance.md) and
+> [ADR-0057](0057-a-repository-declaration-is-not-a-successful-checkout.md): the Integration is the
+> one the Workspace fixed for the repository when it opened, never one found by repository, and
+> narrowing a token's permissions is Policy at `0.5`.
+
 A Run that works on a GitHub repository reaches GitHub as the **Integration** that watches that
 repository, never as a person. The GitHub Integration is a GitHub App each installation of kestrel
 creates for itself; the control plane holds its private key and mints short-lived installation

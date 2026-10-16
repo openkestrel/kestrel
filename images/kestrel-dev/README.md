@@ -9,7 +9,7 @@ work on this repository without setting anything up in its checkout:
 | Rust 1.96.0 with `cargo`, `rustfmt`, and `clippy` | the `rust` base image digest, matching `rust-toolchain.toml` |
 | `gcc` and `libc6-dev`, which link the workspace and compile its C dependencies | Debian's release on the day of the build |
 | `git` | inherited from `kestrel-env` |
-| `gh` | `GH_VERSION` and a SHA-256 per architecture |
+| `gh`, behind the shim that lends it a token at each use | inherited from `kestrel-env` |
 | OpenCode 2 (`opencode acp`) | inherited from `kestrel-env` |
 | Claude Code (`claude-agent-acp`, `claude setup-token`) and Codex (`codex-acp`, `codex login`) | inherited from `kestrel-env` |
 
@@ -34,7 +34,7 @@ checkout so two checkouts on one daemon never build over each other's.
 To bump an adapter or a vendor executable, change its exact version in
 `../kestrel-env/package.json`, then regenerate the lockfile the way that image's README says.
 
-To bump `gh`, change `GH_VERSION` along with both digests:
+To bump `gh`, change `GH_VERSION` in `../kestrel-env/Dockerfile` along with both digests:
 
 ```sh
 curl --location --silent "https://github.com/cli/cli/releases/download/v<version>/gh_<version>_linux_amd64.tar.gz" | sha256sum
@@ -69,10 +69,10 @@ for the length of one Session and removed when it ends
 subscription is a Subscription Profile variable (`OPENCODE_API_KEY`) rather than a file; an opencode
 `auth.json` is not a usable sign-in
 ([ADR-0026](../../docs/adr/0026-kestrel-carries-named-credentials-never-a-runtimes-store.md), #369). `gh`
-reads `GH_TOKEN` from its own environment. The token's scope is the operator's and kestrel does not
-narrow it: a `repo`-scoped token merges pull requests as well as opening them, so a human merge gate
-needs a reviewer identity other than the token's ([GitHub automation](../../docs/usage/github-automation.md#give-the-agent-github-tools) covers it where the
-credential is set).
+and `git` reach GitHub as the Workspace's GitHub App Integration, asking for a token at each use
+([`kestrel-env`](../kestrel-env/README.md#reaching-github)); there is no `GH_TOKEN` to set. The
+App's permissions can include merging, so a human merge gate needs a branch rule or a reviewer
+identity other than the App's.
 
 ## How it is checked
 

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 pub const ANSWERS: &str = "/link/instances/{instance}/answers/{request}";
 pub const CREDENTIALS: &str = "/link/instances/{instance}/credentials";
+pub const GITHUB_TOKEN: &str = "/link/instances/{instance}/github/token";
 pub const INSTRUCTIONS: &str = "/link/instances/{instance}/instructions";
 pub const REPORTS: &str = "/link/instances/{instance}/reports";
 
@@ -717,6 +718,41 @@ impl Link {
         Ok(response.json().await?)
     }
 
+    /// Asked for each use and never kept, so a token that lapses is replaced by asking again.
+    pub async fn token(&self, session: &str, repository: Option<&str>) -> Result<Lent, Error> {
+        let mut url = self.about(GITHUB_TOKEN, session);
+        if let Some(repository) = repository {
+            url = format!(
+                "{url}&repository={}",
+                utf8_percent_encode(repository, NON_ALPHANUMERIC)
+            );
+        }
+        let response = self
+            .client
+            .get(url)
+            .bearer_auth(&self.credential)
+            .send()
+            .await?;
+
+        let response = refuse_if_declined(response).await?;
+        self.reached.touched();
+        match response.status() {
+            StatusCode::NO_CONTENT => Ok(Lent::Unbound),
+            status if status.is_success() => {
+                let Token { token, expires_at } = response.json().await?;
+                Ok(Lent::Token { token, expires_at })
+            }
+            status => {
+                let message = response
+                    .json::<Refusal>()
+                    .await
+                    .map(|refusal| refusal.message)
+                    .unwrap_or_else(|_| format!("the link answered {}", status.as_u16()));
+                Ok(Lent::Refused { message })
+            }
+        }
+    }
+
     pub async fn refresh(
         &self,
         session: &str,
@@ -869,6 +905,44 @@ impl Instructions {
             if id.is_some() || event.as_deref() == Some("read") {
                 return Some((id, data));
             }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct Token {
+    token: String,
+    expires_at: jiff::Timestamp,
+}
+
+#[derive(Deserialize)]
+struct Refusal {
+    message: String,
+}
+
+/// What a process about to reach GitHub is handed: a token for one use, nothing for a repository
+/// the link lends nothing for, or why it was refused.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "lent", rename_all = "snake_case")]
+pub enum Lent {
+    Token {
+        token: String,
+        expires_at: jiff::Timestamp,
+    },
+    Unbound,
+    Refused {
+        message: String,
+    },
+}
+
+impl std::fmt::Debug for Lent {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Lent::Token { expires_at, .. } => {
+                write!(out, "Token {{ token: redacted, expires_at: {expires_at} }}")
+            }
+            Lent::Unbound => out.write_str("Unbound"),
+            Lent::Refused { message } => write!(out, "Refused {{ message: {message:?} }}"),
         }
     }
 }

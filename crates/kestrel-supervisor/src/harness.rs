@@ -54,6 +54,8 @@ pub struct Harness {
     pub quiet_period: Duration,
     /// False where a prompt must never be sent twice, so a lost agent ends the conversation.
     pub recover: bool,
+    /// What the harness's `gh` and `git` reach the broker by; it holds no token.
+    pub environment: BTreeMap<String, String>,
     pub stderr: mpsc::UnboundedSender<String>,
 }
 
@@ -450,6 +452,7 @@ async fn living(
         .arg(config.command().to_string_lossy().into_owned())
         .args(config.arguments().iter().cloned())
         .envs(config.environment().clone())
+        .envs(harness.environment.clone())
         .envs(provider.clone());
     let spawn = AcpAgent::new(clean).with_debug(move |line, direction| {
         if direction == LineDirection::Stderr {

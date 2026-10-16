@@ -476,7 +476,7 @@ jobs:
       - name: Build gh for arm64
         run: |
           docker buildx build --platform linux/arm64 --target gh \
-            --output type=cacheonly --file images/kestrel-dev/Dockerfile .
+            --output type=cacheonly --file images/kestrel-env/Dockerfile .
 
   # The one status the ruleset and the merge queue require. It runs whether an area ran,
   # failed or was skipped: a job skipped by its condition reports success, and only a check

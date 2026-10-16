@@ -20,6 +20,7 @@ segment:
 | `POST` | `/reports` | One report. `202` when taken, including a replay. `connected` returns the Workspace checkout declaration. |
 | `GET` | `/credentials?session=` | Provider Credentials and Subscription Profile contents for a Session the Instance carries, decrypted for this request, and recorded by revision as what the Session was handed. |
 | `PATCH` | `/credentials?session=` | Hands back profile files the harness refreshed; each is kept only while the Profile still holds the revision the Session was handed. |
+| `GET` | `/github/token?session=&repository=` | A token for one use of `gh` or `git`, scoped to the repository, from the Integration the Session's Workspace fixed for it: `200`, `204` when it fixed none, `409` when that Integration lends nothing now. |
 | `GET` | `/entries` | Pages the Workspace's Transcript with payload content hydrated for supervisor context. The supervisor does not currently call it. |
 | `POST` | `/answers/{request}` | The streamed answer to a read. `204` once the operator has taken it; `410` when nobody waits on it. |
 
@@ -235,6 +236,34 @@ The supervisor fetches credentials only when it opens the conversation, never at
   every Turn so a rotated login is saved while the Session is still carried, and removed when the
   Session is let go ([ADR-0025](../adr/0025-subscription-profiles-are-personal.md)).
 - Decryption uses `kestrel.key` beside the database (`keyring.rs`).
+
+## GitHub at each use
+
+A Session reaches GitHub as the Integration its Workspace fixed for the repository
+([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md),
+[ADR-0056](../adr/0056-an-integration-keeps-its-identity-through-maintenance.md)), asked for at each
+use rather than at the spawn, so a token that lapses mid-Session is replaced.
+
+- The supervisor opens a broker on a Unix socket in a directory only its user can enter
+  (`broker.rs`) and hands its path, `GIT_CREDENTIAL_BROKER`, to the clone and the harness with
+  `GIT_CONFIG_*` variables that clear every credential helper and add `kestrel-supervisor
+  credential`. The image's `gh` is a shim, `kestrel-supervisor gh <real gh>`, that names the
+  repository from `-R`/`--repo`, `GH_REPO` or the checkout's configured `origin`, and execs the real
+  `gh` with `GH_TOKEN` in its environment alone. Nothing holding a token is written to a file, an
+  environment anything else inherits, a log or a report.
+- The broker asks the link for the Session it carries; one carrying none is refused. The helper
+  asks only for `https` and answers a refusal with `quit=1`, so git asks no other helper.
+- `integration::lend` finds the repository in the Workspace's fixed selection, reads that
+  Integration by id as it is now, and refuses it under `integration::lending` when it is disabled,
+  retired, carries nothing outbound or is a generic webhook. It never reads the Project's current
+  binding, an Event's Integration or another Integration naming the repository. A request naming
+  no repository is lent the Workspace's one selection, and refused among several.
+- Tokens are minted with `repository_ids` naming the Integration's one repository, cached by
+  Integration and revision and checked against the stored revision either side of a mint. A mint
+  that maintenance overtook is retried under the new revision, so a replaced key or a disabled
+  Integration never lends what the last revision minted. A refusal leaves the Session running.
+- The control plane checks no checkout: lending a token says nothing about whether a clone or push
+  succeeds, and an unbound repository is reached with no credential at all.
 
 ## Harness side
 

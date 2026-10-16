@@ -96,28 +96,11 @@ Review filters that allow outside contributors to delegate work. Until policy en
 
 ## Give the agent GitHub tools
 
-The base `kestrel-env` image contains OpenCode and git, but no `gh` command. To let the agent read issues or open a pull request, build the supplied [`kestrel-dev` image](../../images/kestrel-dev/README.md) and point the control plane at it:
+Every image Kestrel ships, `kestrel-env` included, carries `git` and `gh`. A session reaches GitHub as the GitHub App Integration its workspace selected for each repository, never as you: `gh` and `git` ask Kestrel for a token scoped to that one repository each time they reach GitHub, so pull requests, pushes and comments appear as the App's bot. A private repository's first clone uses the same token. There is no `GH_TOKEN` to set, and nothing in the session's files or environment holds one.
 
-```sh
-docker compose build kestrel-env
-docker build --file images/kestrel-dev/Dockerfile --tag kestrel-dev .
-```
+The workspace keeps the Integration it opened with: rebinding the project changes only workspaces opened afterwards. Disabling or retiring that Integration, or changing it to carry nothing outbound, stops `gh` and `git` getting tokens with a message saying why, while the session's other work goes on; no other Integration is used instead. A repository the project selected no Integration for is reached with no credential, which is enough for a public clone and nothing more.
 
-In a gitignored `compose.override.yaml`:
-
-```yaml
-services:
-  kestrel:
-    environment:
-      KESTREL_IMAGE: kestrel-dev
-```
-
-```sh
-docker compose up -d
-gh auth token | kestrel credential set GH_TOKEN
-```
-
-`KESTREL_IMAGE` selects the image used for workspace instances. `GH_TOKEN` is the variable `gh` reads inside a session; Kestrel stores the token from standard input. The token's repository access can also permit a merge. If you require human approval before merging, enforce it with a distinct reviewer identity or a repository rule; Kestrel does not narrow the token's permissions.
+The token carries every permission the App was granted, and the App Kestrel creates can merge pull requests: a token that can push the session's branch can merge it. If you require human approval before merging, enforce it with a branch rule or a distinct reviewer identity; narrower per-session permissions are policy, which is `0.5` work.
 
 ## Dispatch and continue an issue
 

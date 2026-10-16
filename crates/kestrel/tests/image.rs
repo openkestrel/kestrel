@@ -64,6 +64,12 @@ fn the_supervisor_the_harness_and_git_are_each_invocable_in_the_image() {
         git.out
     );
 
+    let gh = image::running(&["gh", "--version"]);
+    assert!(
+        gh.out.starts_with("gh version"),
+        "gh in the image said {gh:?}"
+    );
+
     let opencode = image::running(&["opencode", "--version"]);
     assert_eq!(opencode.code, 0, "opencode in the image said {opencode:?}");
     // The output format is undocumented; the version is the last whitespace-separated token,

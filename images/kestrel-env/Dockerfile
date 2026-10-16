@@ -44,6 +44,31 @@ RUN ./node_modules/.bin/claude-agent-acp --version \
     && ./node_modules/.bin/codex login --help \
     && ./node_modules/.bin/claude setup-token --help
 
+# debian:trixie-slim
+FROM debian@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS gh
+
+ARG TARGETARCH
+ARG GH_VERSION=2.100.0
+ARG GH_SHA256_AMD64=e4d4bb4498e8d007abe545b6568926793ace1b6447da598294a610018cb164be
+ARG GH_SHA256_ARM64=ea4e7a581a32ccad6cc7923cb1576ac5859ba4b9a16ab22eb8f8a96e78e2e961
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates curl \
+    && rm --recursive --force /var/lib/apt/lists/*
+
+RUN set -eu; \
+    case "${TARGETARCH}" in \
+    amd64) release=amd64; digest="${GH_SHA256_AMD64}" ;; \
+    arm64) release=arm64; digest="${GH_SHA256_ARM64}" ;; \
+    *) echo "kestrel-env is not built for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    url="https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${release}.tar.gz"; \
+    curl --fail --silent --show-error --location --output /tmp/gh.tar.gz "${url}"; \
+    echo "${digest}  /tmp/gh.tar.gz" | sha256sum --check --strict -; \
+    tar --extract --gzip --file /tmp/gh.tar.gz --strip-components=2 \
+        --directory /usr/local/bin "gh_${GH_VERSION}_linux_${release}/bin/gh"; \
+    rm /tmp/gh.tar.gz
+
 # rust:1.96.0-slim-trixie
 FROM rust@sha256:c37af730be4fd8104cbf9aedbd6ab259e51ca2d5437817a0f8680edf66ac6c28 AS supervisor
 
@@ -63,6 +88,12 @@ RUN apt-get update \
 
 COPY --from=opencode /usr/local/bin/opencode /usr/local/bin/opencode
 COPY --from=supervisor /src/target/release/kestrel-supervisor /usr/local/bin/kestrel-supervisor
+COPY --from=gh /usr/local/bin/gh /usr/local/libexec/kestrel/gh
+# The `gh` on PATH asks the supervisor for a token at each use and hands it to the real one alone
+# (ADR-0028); outside a Session it runs the real one as it is.
+RUN printf '#!/bin/sh\nexec /usr/local/bin/kestrel-supervisor gh /usr/local/libexec/kestrel/gh "$@"\n' \
+        > /usr/local/bin/gh \
+    && chmod 0755 /usr/local/bin/gh
 COPY --from=adapters /usr/local/bin/node /usr/local/bin/node
 COPY --from=adapters /opt/acp /opt/acp
 RUN ln --symbolic /opt/acp/node_modules/.bin/claude-agent-acp /usr/local/bin/claude-agent-acp \

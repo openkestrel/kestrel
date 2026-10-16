@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -8,7 +9,10 @@ use crate::link::{Checkout, Git, Observed};
 /// Into the working directory the agent is then spawned in. A branch the remote does not have
 /// yet is cut from the base, and a checkout an earlier Session on this Instance left is left as it
 /// is, with whatever it holds that the remote does not.
-pub async fn check_out(checkout: &Checkout) -> Result<(), String> {
+pub async fn check_out(
+    checkout: &Checkout,
+    reaching: &BTreeMap<String, String>,
+) -> Result<(), String> {
     let Checkout {
         repositories,
         base,
@@ -24,9 +28,12 @@ pub async fn check_out(checkout: &Checkout) -> Result<(), String> {
             format!("{repository} could not be checked out on the branch {branch}: {why}")
         };
 
-        git(&["clone", "--branch", base, repository, directory])
-            .await
-            .map_err(failed)?;
+        git_reaching(
+            reaching,
+            &["clone", "--branch", base, repository, directory],
+        )
+        .await
+        .map_err(failed)?;
         if branch != base
             && git(&["-C", directory, "checkout", branch, "--"])
                 .await
@@ -305,10 +312,22 @@ async fn git(arguments: &[&str]) -> Result<String, String> {
     Ok(untrimmed(arguments).await?.trim().to_owned())
 }
 
+async fn git_reaching(
+    reaching: &BTreeMap<String, String>,
+    arguments: &[&str],
+) -> Result<String, String> {
+    Ok(run(reaching, arguments).await?.trim().to_owned())
+}
+
 /// For `-z` output, where a name may start or end with whitespace.
 pub(crate) async fn untrimmed(arguments: &[&str]) -> Result<String, String> {
+    run(&BTreeMap::new(), arguments).await
+}
+
+async fn run(environment: &BTreeMap<String, String>, arguments: &[&str]) -> Result<String, String> {
     let running = Command::new("git")
         .args(arguments)
+        .envs(environment)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .kill_on_drop(true)

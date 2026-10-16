@@ -177,9 +177,10 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   name, directions and interval change, disable/enable pause and resume use, a validated App
   private key replaces the last, a webhook-secret rotation survives failure and restart until
   GitHub acknowledges it, and retirement ends it for good, all under revision fences. The browser
-  can take a rotation's resume step but has no settings screen to start one. A Project selects an Integration per repository and a
-  Workspace fixes that selection at open, but nothing hands a Session a token from it yet, so no
-  queued Session waits on an Integration that retirement could block.
+  can take a rotation's resume step but has no settings screen to start one. A Project selects an
+  Integration per repository, a Workspace fixes that selection at open, and a running Session's
+  `gh` and `git` are lent tokens from it at each use ([Link](link.md#github-at-each-use)); no
+  queued Session waits on an Integration yet, so nothing is held paused by a disabled one.
 
 - **Release preparation and acceptance** ([ADR-0053](../adr/0053-a-tag-prepares-a-release-acceptance-publishes-it.md)):
   tag publishing still races Conformance, covers only two images on amd64, and has no draft-release
@@ -197,9 +198,9 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   Session's failure diagnostic attributes no sign-in.
 
 - **Integration identity** ([ADR-0028](../adr/0028-an-integration-lends-a-run-its-identity.md)): the
-  GitHub Integration authenticates as a GitHub App and mints its own installation tokens. The
-  agent's `gh` still uses a token an operator supplies, and an Integration does not yet refuse to
-  hear its own bot login.
+  GitHub Integration authenticates as a GitHub App, mints its own installation tokens, and lends
+  them to the agent's `gh` and `git` at each use. An Integration does not yet refuse to hear its
+  own bot login, and unbound SSH sources get no provisioned credentials.
 - **Pull request state** ([ADR-0032](../adr/0032-a-pull-request-event-updates-workspace-state-without-a-firing.md)):
   opened, reopened, closed (including merges) and head-moved Events are learned. The Audit Record
   that explains unattended attachment verdicts remains `0.5` work.
