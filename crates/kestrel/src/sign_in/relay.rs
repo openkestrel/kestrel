@@ -537,19 +537,17 @@ async fn drive(
     answers: &mut mpsc::Receiver<String>,
     shutdown: &CancellationToken,
 ) -> Result<Option<String>> {
-    let relay = catalogue::sign_in_method(START, &attempt.view.harness, &attempt.view.method)?
-        .relay
-        .clone();
+    let method = catalogue::sign_in_method(START, &attempt.view.harness, &attempt.view.method)?;
     let mut instance = provision(store, driver, attempt, shutdown).await?;
     let remaining = remaining(attempt)?;
     let relayed = async {
-        match relay {
+        match method.relay {
             Some(wire::SignInMethodRelay::ClaudeSetupToken) => {
                 let mut terminal = instance.terminal(&["claude", "setup-token"])?;
                 drive_terminal(store, attempt, answers, &mut terminal).await
             }
             Some(wire::SignInMethodRelay::CodexDeviceAuth) => {
-                authorize_device(store, attempt, &mut instance).await
+                authorize_device(store, attempt, method, &mut instance).await
             }
             None => bail!("this Sign-in Method has no relay"),
         }
@@ -573,6 +571,7 @@ impl std::fmt::Display for Unusable {
 impl std::error::Error for Unusable {}
 
 const OUTPUT_LIMIT: usize = 1024 * 1024;
+const PROMPT_WAIT: Duration = Duration::from_secs(60);
 
 async fn running(store: &Store, id: &str) -> Result<Option<Attempt>> {
     let mut tx = store.begin().await?;
@@ -588,6 +587,7 @@ async fn running(store: &Store, id: &str) -> Result<Option<Attempt>> {
 async fn authorize_device(
     store: &Store,
     attempt: &Attempt,
+    method: &wire::SignInMethod,
     instance: &mut crate::compute::Instance,
 ) -> Result<Option<String>> {
     let id = &attempt.view.id;
@@ -596,6 +596,8 @@ async fn authorize_device(
     };
     let mut terminal = instance.terminal(codex::LOGIN)?;
     let mut decoder = codex::Decoder::new();
+    let prompt_by = tokio::time::Instant::now() + PROMPT_WAIT;
+    let mut prompted = false;
     let mut bytes = 0;
     let mut output_closed = false;
     loop {
@@ -607,9 +609,12 @@ async fn authorize_device(
                 None => output_closed = true,
                 Some(output) => {
                     bytes += output.len();
-                    if bytes > OUTPUT_LIMIT { bail!("vendor output exceeded its limit"); }
+                    if bytes > OUTPUT_LIMIT {
+                        bail!(Unusable("the vendor's output exceeded its limit; retry, or import the auth.json a Codex sign-in writes instead"));
+                    }
                     if let Some(prompt) = decoder.feed(&output)
                         && current.state() == "starting" {
+                        prompted = true;
                         transition(store, id, wire::SignInRelayProgress::RelayAwaitingBrowser(wire::RelayAwaitingBrowser {
                             state: Default::default(),
                             url: prompt.url,
@@ -619,6 +624,11 @@ async fn authorize_device(
                 }
             },
             () = tokio::time::sleep(POLL) => {}
+        }
+        if !prompted && current.state() == "starting" && tokio::time::Instant::now() >= prompt_by {
+            bail!(Unusable(
+                "the vendor showed no device code Kestrel could read; retry, or import the auth.json a Codex sign-in writes instead"
+            ));
         }
         if output_closed && let Some(success) = terminal.exited()? {
             if !success {
@@ -647,7 +657,6 @@ async fn authorize_device(
         .filter(|material| material.len() <= OUTPUT_LIMIT)
         .and_then(|material| String::from_utf8(material).ok())
         .ok_or(unusable)?;
-    let method = catalogue::sign_in_method(START, &attempt.view.harness, &attempt.view.method)?;
     super::structural(method, &material).map_err(|_| unusable)?;
     Ok(Some(material))
 }
