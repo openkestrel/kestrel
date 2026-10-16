@@ -2,6 +2,7 @@ pub mod serve;
 pub mod work;
 
 use anyhow::Result;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::capability::Images;
@@ -58,6 +59,25 @@ impl AllInOne {
         dispatch: Option<work::Dispatch>,
         shutdown: CancellationToken,
     ) -> Result<()> {
+        let (serve, work) = self.stepped(dispatch, shutdown.clone()).await?;
+        let work = tokio::spawn(stopping_the_others(shutdown, |_| async {
+            work.run().await;
+            Ok(())
+        }));
+
+        let (serve, work) = tokio::join!(serve, work);
+        serve??;
+        work??;
+        Ok(())
+    }
+
+    /// Serving, with the work role handed back unstarted so a test can run it a pass at a time
+    /// (ADR-0059).
+    pub async fn stepped(
+        self,
+        dispatch: Option<work::Dispatch>,
+        shutdown: CancellationToken,
+    ) -> Result<(JoinHandle<Result<()>>, work::Work)> {
         credential_use::release_all(&self.store).await?;
         model_test::interrupt_unfinished(
             &self.store,
@@ -74,17 +94,13 @@ impl AllInOne {
             Some(dispatch) => self.listening.inspecting(Images::of(&dispatch.driver)),
             None => self.listening,
         };
-        let serve = tokio::spawn(stopping_the_others(shutdown.clone(), |shutdown| {
+        let work =
+            work::Work::start(self.store, dispatch, self.wake, summaries, shutdown.clone()).await?;
+        let serve = tokio::spawn(stopping_the_others(shutdown, |shutdown| {
             serve::run(listening, shutdown)
         }));
-        let work = tokio::spawn(stopping_the_others(shutdown.clone(), |shutdown| {
-            work::run(self.store, dispatch, self.wake, summaries, shutdown)
-        }));
 
-        let (serve, work) = tokio::join!(serve, work);
-        serve??;
-        work??;
-        Ok(())
+        Ok((serve, work))
     }
 }
 

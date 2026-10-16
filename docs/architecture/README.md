@@ -116,7 +116,8 @@ so a separate `serve` cannot wake `work`'s sweeps.
 - **`serve`** (`role/serve.rs`) binds two listeners so exposing one never exposes the other: the
   link plus webhooks (`KESTREL_LISTEN`, 7717) and the operator boundary (`KESTREL_OPERATOR_LISTEN`,
   7718).
-- **`work`** (`role/work.rs`) runs the timer's sweeps and the dispatch loop.
+- **`work`** (`role/work.rs`) runs the timer's sweeps and the dispatch loop, each a round repeated
+  on its own cadence; `Work::pass` runs one round of each for a stepped test.
 
 ### Ports
 
@@ -206,8 +207,9 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   opened, reopened, closed (including merges) and head-moved Events are learned. The Audit Record
   that explains unattended attachment verdicts remains `0.5` work.
 - **Test-driven work role and clock** ([ADR-0059](../adr/0059-a-test-drives-the-work-role-and-the-timers-clock.md)):
-  no stepped fixture or manual clock exists yet. The control plane still reads the wall clock
-  directly, and tests still backdate rows and poll against real-time deadlines.
+  a stepped fixture runs the work role a pass at a time, but few tests have moved to it, and no
+  manual clock exists yet. The control plane still reads the wall clock directly, and tests still
+  backdate rows and poll against real-time deadlines.
 - **Split roles**: `serve` and `work` parse separately but run correctly only in one process.
 - **Policy, Approvals, Questions, Workflows, Campaigns** exist in `GLOSSARY.md` and
   [`ROADMAP.md`](../../ROADMAP.md), not in code. `session_dependency` and the Unreachable state are

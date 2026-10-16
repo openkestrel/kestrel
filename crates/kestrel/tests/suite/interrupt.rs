@@ -223,13 +223,14 @@ async fn an_interrupt_of_a_trailing_session_says_its_turn_answered_and_points_to
 
 #[tokio::test]
 async fn an_interrupt_is_refused_for_unbriefed_and_unreachable_sessions() {
-    let kestrel = Kestrel::dispatching_to(
+    let kestrel = Kestrel::stepped_dispatching_to(
         supervisor::binary(),
         &scripted_agent::playing(Script::ReportsThenWaits),
     )
     .await;
     let workspace = a_workspace(&kestrel).await;
     let blocker = kestrel.enqueue_session(workspace.id).await;
+    kestrel.work_pass().await;
     let blocker = until_session(&kestrel, blocker.id, "working", |session| {
         session.state == SessionState::Working
     })
@@ -238,6 +239,7 @@ async fn an_interrupt_is_refused_for_unbriefed_and_unreachable_sessions() {
     let unbriefed = kestrel
         .enqueue_session_with_nothing_posted(unbriefed_workspace.id)
         .await;
+    kestrel.work_pass().await;
     let unbriefed = until_session(&kestrel, unbriefed.id, "unbriefed", |session| {
         session.state == SessionState::Unbriefed
     })
@@ -248,10 +250,8 @@ async fn an_interrupt_is_refused_for_unbriefed_and_unreachable_sessions() {
         .enqueue_blocked(dependent_workspace.id, &blocker)
         .await;
     kestrel.fail_session(&blocker, "the blocker failed").await;
-    let unreachable = until_session(&kestrel, dependent.id, "unreachable", |session| {
-        session.state == SessionState::Unreachable
-    })
-    .await;
+    let unreachable = kestrel.session(dependent.id).await;
+    assert_eq!(unreachable.state, SessionState::Unreachable);
 
     for (session, phase) in [(unbriefed, "unbriefed"), (unreachable, "unreachable")] {
         let refusal = kestrel

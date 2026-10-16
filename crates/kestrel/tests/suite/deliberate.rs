@@ -910,16 +910,8 @@ fn unblocked(stub: &GithubStub, issue: i64) {
 async fn firing_of(kestrel: &Kestrel, r#type: &str, outcome: &str) -> kestrel::domain::Firing {
     let deadline = tokio::time::Instant::now() + PATIENCE;
     loop {
-        for event in kestrel.events("acme").await {
-            if event.occurrence.r#type == r#type
-                && let Some(firing) = kestrel
-                    .firings(event.record_id)
-                    .await
-                    .into_iter()
-                    .find(|firing| firing.outcome == outcome)
-            {
-                return firing;
-            }
+        if let Some(firing) = fired(kestrel, r#type, outcome).await {
+            return firing;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
@@ -927,6 +919,45 @@ async fn firing_of(kestrel: &Kestrel, r#type: &str, outcome: &str) -> kestrel::d
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+async fn fired(kestrel: &Kestrel, r#type: &str, outcome: &str) -> Option<kestrel::domain::Firing> {
+    for event in kestrel.events("acme").await {
+        if event.occurrence.r#type == r#type
+            && let Some(firing) = kestrel
+                .firings(event.record_id)
+                .await
+                .into_iter()
+                .find(|firing| firing.outcome == outcome)
+        {
+            return Some(firing);
+        }
+    }
+    None
+}
+
+/// More than a stub's scripted events take to be polled and fired, a pass at a time.
+const PASSES: usize = 20;
+
+async fn passed_until_fired(kestrel: &Kestrel, r#type: &str, outcome: &str) {
+    for _ in 0..PASSES {
+        kestrel.work_pass().await;
+        if fired(kestrel, r#type, outcome).await.is_some() {
+            return;
+        }
+    }
+    panic!("no {type} event was {outcome} in {PASSES} passes");
+}
+
+async fn passed_until_opened(kestrel: &Kestrel, count: usize) -> Vec<Workspace> {
+    for _ in 0..PASSES {
+        kestrel.work_pass().await;
+        let workspaces = kestrel.workspaces("acme").await;
+        if workspaces.len() >= count {
+            return workspaces;
+        }
+    }
+    panic!("{count} workspaces never opened in {PASSES} passes");
 }
 
 const ASSIGNED: &str = "com.github.issues.assigned";
@@ -1082,14 +1113,16 @@ async fn two_held_delegations_of_one_issue_start_it_once() {
     stub.deliver(github_stub::assigned(43, KESTREL, MAINTAINER));
     blocked_by(&stub, 43, 42);
     blocked_by(&stub, 43, 42);
-    let kestrel = Kestrel::boot().await;
+    let kestrel = Kestrel::stepped().await;
     delegating(&kestrel, &stub).await;
-    firing_of(&kestrel, ASSIGNED, "canceled").await;
+    passed_until_fired(&kestrel, ASSIGNED, "canceled").await;
 
     stub.deliver(github_stub::issue_event(42, "closed", ""));
 
-    let opened = workspaces(&kestrel, 1).await;
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    let opened = passed_until_opened(&kestrel, 1).await;
+    for _ in 0..PASSES {
+        kestrel.work_pass().await;
+    }
     assert_eq!(kestrel.workspaces("acme").await.len(), 1);
     let mut outcomes = Vec::new();
     for event in kestrel.events("acme").await {

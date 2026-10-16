@@ -66,9 +66,15 @@ Patterns the code relies on that no single file states. Comment style is in `COD
   fault the store has no path to, or an observation of what it keeps at rest, is a named method on
   `support::Database`, the one place a test writes SQL.
 - **A test may drive the work role and the clock** ([ADR-0059](../adr/0059-a-test-drives-the-work-role-and-the-timers-clock.md)).
-  A stepped fixture boots only `serve` and runs the work role one pass at a time; advancing the
-  manual clock runs a pass at every sweep interval, and time away is its own call. Reach for these
-  before backdating a row or waiting out a real window, once they are built.
+  `Kestrel::stepped` (or `stepped_dispatching_to`) boots only `serve` and holds the work role:
+  `work_pass` runs one round of every sweep and one of dispatch, the same rounds the live loops
+  repeat, and returns once a Session it claimed is on its supervisor; `go_live` hands the role to
+  its loops. Reach for it when a test would otherwise race the work role for something it means to
+  do itself. `suite/stepped.rs` puts what a step races on each side of a pass, for the claim, the
+  lease sweep and the idle seal so far; a test that moves a race out of another step adds that
+  step's interleaving there. Stepping is opt-in until most of `suite` has moved. The
+  manual clock is not built yet: a stepped test still backdates a row for a due time, and one idle
+  longer than the sweep's 10 s gap between passes reads as time the control plane was away.
 - **Ordinary tests share one binary.** `crates/kestrel/tests/suite/` holds a module per area, so the
   harness compiles once: select with `cargo test -p kestrel --test suite <module>::`.
 - **The real supervisor runs as a local process.** `LocalExec` spawns the `kestrel-supervisor` binary
