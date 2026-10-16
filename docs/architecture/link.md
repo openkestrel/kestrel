@@ -245,7 +245,7 @@ A Session reaches GitHub as the Integration its Workspace fixed for the reposito
 use rather than at the spawn, so a token that lapses mid-Session is replaced.
 
 - The supervisor opens a broker on a Unix socket in a directory only its user can enter
-  (`broker.rs`) and hands its path, `KESTREL_BROKER`, to the clone and the harness with
+  (`broker.rs`) and hands its path, `GIT_CREDENTIAL_BROKER`, to the clone and the harness with
   `GIT_CONFIG_*` variables that clear every credential helper and add `kestrel-supervisor
   credential`. The image's `gh` is a shim, `kestrel-supervisor gh <real gh>`, that names the
   repository from `-R`/`--repo`, `GH_REPO` or the checkout's configured `origin`, and execs the real

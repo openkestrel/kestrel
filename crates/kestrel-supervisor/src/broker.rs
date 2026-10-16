@@ -21,8 +21,8 @@ use tokio::task::JoinHandle;
 use crate::link::{Lent, Link};
 use crate::set;
 
-/// The socket's path, which the helper and the shim are handed; it lends nothing by itself.
-pub const VARIABLE: &str = "KESTREL_BROKER";
+/// The socket's path, which lends nothing by itself; not `KESTREL_`, which the harness never sees.
+pub const VARIABLE: &str = "GIT_CREDENTIAL_BROKER";
 /// What a token is presented as over HTTPS, as GitHub documents for an installation token.
 const USERNAME: &str = "x-access-token";
 const ASKED_AT_MOST: u64 = 64 * 1024;

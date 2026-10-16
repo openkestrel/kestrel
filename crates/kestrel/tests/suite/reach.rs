@@ -409,7 +409,7 @@ async fn an_agents_git_and_gh_are_lent_a_token_at_each_use_that_nothing_it_keeps
     let brief = "printf 'protocol=https\\nhost=github.com\\npath=jtmthf/kestrel.git\\n\\n' \
                  | git credential fill | sed -n 's/^password=.*/a password was handed over/p'; \
                  gh pr list; \
-                 if env | grep -q ghs_; then echo a token is in the environment; \
+                 if env | grep -q kestrel_should_never_say; then echo a token is in the environment; \
                  else echo no token is in the environment; fi";
 
     let (status, opened) = posted(
