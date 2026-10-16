@@ -57,6 +57,7 @@ mod session_info;
 mod sign_in;
 mod start;
 mod startup_store;
+mod stepped;
 mod stream;
 mod trailing;
 mod trigger;

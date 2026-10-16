@@ -127,8 +127,29 @@ impl Supervisors {
     }
 }
 
-/// The wheel keeps time whether or not this role has anywhere to dispatch a Session, because a
-/// lease left unswept wedges a Workspace no matter who was going to execute it.
+pub struct Work {
+    store: Store,
+    wake: timer::Wake,
+    summaries: crate::live_work::Summaries,
+    sweeps: timer::Sweeps,
+    dispatcher: Dispatcher,
+    shutdown: CancellationToken,
+}
+
+struct Dispatcher {
+    dispatch: Option<Dispatch>,
+    supervisors: Supervisors,
+    /// Each ends once its Session is on a supervisor, so a pass waits for it.
+    executing: JoinSet<()>,
+    /// Relays and sign-in tests, which outlast the pass that began them.
+    attending: JoinSet<()>,
+}
+
+enum Round {
+    Again,
+    Idle,
+}
+
 pub async fn run(
     store: Store,
     dispatch: Option<Dispatch>,
@@ -136,63 +157,133 @@ pub async fn run(
     summaries: crate::live_work::Summaries,
     shutdown: CancellationToken,
 ) -> Result<()> {
-    info!(role = %Role::Work, "role started");
-
-    tokio::try_join!(
-        timer::sweeping(&store, &wake, &summaries, &shutdown),
-        // A work role with nowhere to run a Session claims none: claiming one it cannot dispatch
-        // would spend the Session's one dispatch on nothing.
-        async {
-            match &dispatch {
-                Some(dispatch) => {
-                    record(&store, dispatch).await?;
-                    dispatching(&store, dispatch, &summaries, &shutdown).await
-                }
-                None => {
-                    let mut relays = JoinSet::new();
-                    while !shutdown.is_cancelled() {
-                        relay_pass(&store, None, &shutdown, &mut relays).await;
-                        while let Some(finished) = relays.try_join_next() {
-                            warn_if_it_panicked(finished);
-                        }
-                        if let Err(error) = model_test::nowhere_to_run(&store).await {
-                            warn!(%error, "a pass over sign-in tests found nothing it could do");
-                        }
-                        tokio::select! {
-                            () = tokio::time::sleep(POLL) => {}
-                            () = shutdown.cancelled() => {}
-                        }
-                    }
-                    while let Some(finished) = relays.join_next().await {
-                        warn_if_it_panicked(finished);
-                    }
-                    Ok(())
-                }
-            }
-        },
-    )?;
-
-    info!(role = %Role::Work, "role stopped");
+    Work::start(store, dispatch, wake, summaries, shutdown)
+        .await?
+        .run()
+        .await;
     Ok(())
 }
 
-/// A pass that fails is warned of and the next one tries again: nothing here is a reason to stop
-/// the role, because stopping it cuts every in-flight Session's supervisor off its link.
-async fn dispatching(
-    store: &Store,
-    dispatch: &Dispatch,
-    summaries: &crate::live_work::Summaries,
-    shutdown: &CancellationToken,
-) -> Result<()> {
-    let mut active = JoinSet::new();
-    let supervisors = Supervisors::default();
+impl Work {
+    pub async fn start(
+        store: Store,
+        dispatch: Option<Dispatch>,
+        wake: timer::Wake,
+        summaries: crate::live_work::Summaries,
+        shutdown: CancellationToken,
+    ) -> Result<Self> {
+        if let Some(dispatch) = &dispatch {
+            record(&store, dispatch).await?;
+        }
 
-    while !shutdown.is_cancelled() {
-        relay_pass(store, Some(&dispatch.driver), shutdown, &mut active).await;
-        if let Err(error) = watch(store, &supervisors, summaries).await {
+        Ok(Self {
+            sweeps: timer::Sweeps::dialling_out(&store)?,
+            store,
+            wake,
+            summaries,
+            dispatcher: Dispatcher {
+                dispatch,
+                supervisors: Supervisors::default(),
+                executing: JoinSet::new(),
+                attending: JoinSet::new(),
+            },
+            shutdown,
+        })
+    }
+
+    /// One round of every sweep, then one of dispatch, returning once the Session it claimed, if
+    /// any, is on its supervisor.
+    pub async fn pass(&mut self) {
+        self.sweeps
+            .pass(&self.store, &self.wake, &self.summaries)
+            .await;
+        self.dispatcher
+            .round(&self.store, &self.summaries, &self.shutdown)
+            .await;
+        let dispatcher = &mut self.dispatcher;
+        while let Some(finished) = dispatcher.executing.join_next().await {
+            warn_if_it_panicked(finished);
+        }
+        while let Some(finished) = dispatcher.attending.try_join_next() {
+            warn_if_it_panicked(finished);
+        }
+    }
+
+    /// The wheel keeps time whether or not this role has anywhere to dispatch a Session, because a
+    /// lease left unswept wedges a Workspace no matter who was going to execute it.
+    pub async fn run(mut self) {
+        info!(role = %Role::Work, "role started");
+
+        tokio::join!(
+            self.sweeps
+                .run(&self.store, &self.wake, &self.summaries, &self.shutdown),
+            self.dispatcher
+                .dispatching(&self.store, &self.summaries, &self.shutdown),
+        );
+
+        info!(role = %Role::Work, "role stopped");
+    }
+
+    /// Waits out what passes began, once the role is told to stop.
+    pub async fn stop(mut self) {
+        self.shutdown.cancel();
+        self.dispatcher.drain().await;
+    }
+}
+
+impl Dispatcher {
+    async fn dispatching(
+        &mut self,
+        store: &Store,
+        summaries: &crate::live_work::Summaries,
+        shutdown: &CancellationToken,
+    ) {
+        while !shutdown.is_cancelled() {
+            if let Round::Again = self.round(store, summaries, shutdown).await {
+                continue;
+            }
+            tokio::select! {
+                Some(finished) = self.executing.join_next(), if !self.executing.is_empty() => warn_if_it_panicked(finished),
+                Some(finished) = self.attending.join_next(), if !self.attending.is_empty() => warn_if_it_panicked(finished),
+                () = tokio::time::sleep(POLL) => {}
+                () = shutdown.cancelled() => {}
+            }
+        }
+        self.drain().await;
+    }
+
+    async fn drain(&mut self) {
+        while let Some(finished) = self.executing.join_next().await {
+            warn_if_it_panicked(finished);
+        }
+        while let Some(finished) = self.attending.join_next().await {
+            warn_if_it_panicked(finished);
+        }
+    }
+
+    /// A round that fails is warned of and the next one tries again: nothing here is a reason to
+    /// stop the role, because stopping it cuts every in-flight Session's supervisor off its link.
+    async fn round(
+        &mut self,
+        store: &Store,
+        summaries: &crate::live_work::Summaries,
+        shutdown: &CancellationToken,
+    ) -> Round {
+        // A work role with nowhere to run a Session claims none: claiming one it cannot dispatch
+        // would spend the Session's one dispatch on nothing.
+        let Some(dispatch) = &self.dispatch else {
+            relay_pass(store, None, shutdown, &mut self.attending).await;
+            if let Err(error) = model_test::nowhere_to_run(store).await {
+                warn!(%error, "a pass over sign-in tests found nothing it could do");
+            }
+            return Round::Idle;
+        };
+
+        relay_pass(store, Some(&dispatch.driver), shutdown, &mut self.attending).await;
+        if let Err(error) = watch(store, &self.supervisors, summaries).await {
             warn!(%error, "a pass over instances' supervisors found nothing it could do");
         }
-        if let Err(error) = archive(store, &dispatch.driver, &supervisors).await {
+        if let Err(error) = archive(store, &dispatch.driver, &self.supervisors).await {
             warn!(%error, "an archiving pass found nothing it could do");
         }
         if let Err(error) =
@@ -210,16 +301,16 @@ async fn dispatching(
             Ok(Some(Occupied::Claimed(session))) => {
                 let store = store.clone();
                 let dispatch = dispatch.clone();
-                let supervisors = supervisors.clone();
+                let supervisors = self.supervisors.clone();
                 let shutdown = shutdown.clone();
-                active.spawn(async move {
-                    execute_or_fail(&store, &dispatch, &supervisors, session, &shutdown).await
+                self.executing.spawn(async move {
+                    execute_or_fail(&store, &dispatch, &supervisors, session, &shutdown).await;
                 });
-                continue;
+                return Round::Again;
             }
             Ok(Some(Occupied::Resumed(session))) => {
                 info!(session = %session.id, "a session was prompted with the input held for it");
-                continue;
+                return Round::Again;
             }
             Ok(None) => {}
             Err(error) => warn!(%error, "a dispatch found nothing it could do"),
@@ -229,7 +320,7 @@ async fn dispatching(
                 let store = store.clone();
                 let dispatch = dispatch.clone();
                 let shutdown = shutdown.clone();
-                active.spawn(async move {
+                self.attending.spawn(async move {
                     model_test::Running {
                         store: &store,
                         driver: &dispatch.driver,
@@ -241,24 +332,15 @@ async fn dispatching(
                     .run(test)
                     .await;
                 });
-                continue;
+                Round::Again
             }
-            Ok(None) => {}
-            Err(error) => warn!(%error, "a pass over sign-in tests found nothing it could do"),
-        }
-
-        tokio::select! {
-            Some(finished) = active.join_next(), if !active.is_empty() => warn_if_it_panicked(finished),
-            () = tokio::time::sleep(POLL) => {}
-            () = shutdown.cancelled() => {}
+            Ok(None) => Round::Idle,
+            Err(error) => {
+                warn!(%error, "a pass over sign-in tests found nothing it could do");
+                Round::Idle
+            }
         }
     }
-
-    while let Some(finished) = active.join_next().await {
-        warn_if_it_panicked(finished);
-    }
-
-    Ok(())
 }
 
 async fn relay_pass(

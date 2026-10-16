@@ -528,9 +528,14 @@ async fn changing_the_mode_while_trailing_leaves_the_session_trailing() {
 
 #[tokio::test]
 async fn a_change_during_a_working_turn_is_refused_naming_working() {
-    let kestrel = dispatching(Script::ReportsThenWaits).await;
+    let kestrel = Kestrel::stepped_dispatching_to(
+        supervisor::binary(),
+        &scripted_agent::playing(Script::ReportsThenWaits),
+    )
+    .await;
     let workspace = a_workspace(&kestrel, Declared::default()).await;
     let session = kestrel.enqueue_session(workspace.id).await;
+    kestrel.work_pass().await;
 
     until_state(&kestrel, session.id, SessionState::Working).await;
     let (status, refused) = set_option(

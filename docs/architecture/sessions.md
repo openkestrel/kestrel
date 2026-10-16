@@ -156,7 +156,8 @@ Holds on different Profiles are independent, and every hold is released when the
 
 ## Execution
 
-`role/work.rs::dispatching` loops every 100 ms:
+`role/work.rs::Dispatcher::round` runs every 100 ms, and again at once after a claim or prompt; a
+stepped test runs one round per `Work::pass`:
 
 1. Fail the Session of any supervisor this process started that has exited (`watch`), and forget
    that supervisor so the next Session starts another.

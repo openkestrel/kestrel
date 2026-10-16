@@ -213,7 +213,25 @@ pub struct Kestrel {
     environment: Option<Provisions>,
     shutdown: CancellationToken,
     roles: JoinHandle<anyhow::Result<()>>,
+    work: tokio::sync::Mutex<WorkRole>,
+    /// What a restart comes back at, whether or not a test turned the work role live.
+    pace: Pace,
     follow_lease: Duration,
+}
+
+/// How the work role keeps pace: on its own loops, or a pass at a time when a test asks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pace {
+    Live,
+    Stepped,
+}
+
+enum WorkRole {
+    /// Running inside `roles`, beside serve.
+    AllInOne,
+    Stepped(Box<kestrel::role::work::Work>),
+    WentLive(JoinHandle<()>),
+    GoingLive,
 }
 
 struct Cleanup {
@@ -264,6 +282,18 @@ pub struct Provisions {
     max_active_sessions: NonZeroUsize,
     interrupt_deadline: Duration,
     sign_in_test_deadline: Duration,
+}
+
+impl Provisions {
+    fn local(supervisor: &Path, harnesses: &[(&str, &str)], maximum: usize) -> Self {
+        Self {
+            driver: Driver::LocalExec(LocalExec::running(supervisor)),
+            harnesses: spawning(harnesses),
+            max_active_sessions: NonZeroUsize::new(maximum).expect("at least one active session"),
+            interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
+            sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
+        }
+    }
 }
 
 /// The harness an Agent names unless a test says otherwise, spawned as whatever the test plays.
@@ -317,6 +347,7 @@ pub struct Stopped {
     bound: Listen,
     environment: Option<Provisions>,
     follow_lease: Duration,
+    pace: Pace,
 }
 
 impl Kestrel {
@@ -403,14 +434,7 @@ impl Kestrel {
         harnesses: &[(&str, &str)],
         maximum: usize,
     ) -> Self {
-        Self::booted(Some(Provisions {
-            driver: Driver::LocalExec(LocalExec::running(supervisor)),
-            harnesses: spawning(harnesses),
-            max_active_sessions: NonZeroUsize::new(maximum).expect("at least one active session"),
-            interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
-            sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
-        }))
-        .await
+        Self::booted(Some(Provisions::local(supervisor, harnesses, maximum))).await
     }
 
     /// A sign-in test here is given up on after `deadline`, not the two minutes a real one gets.
@@ -474,8 +498,16 @@ impl Kestrel {
     }
 
     async fn booted_with(environment: Option<Provisions>, follow_lease: Duration) -> Self {
+        Self::booted_at_pace(environment, follow_lease, Pace::Live).await
+    }
+
+    async fn booted_at_pace(
+        environment: Option<Provisions>,
+        follow_lease: Duration,
+        pace: Pace,
+    ) -> Self {
         let data_dir = TempDir::new().expect("a temporary data directory");
-        Self::boot_against(
+        Self::boot_paced(
             data_dir,
             Listen {
                 link: LOOPBACK,
@@ -483,6 +515,21 @@ impl Kestrel {
             },
             environment,
             follow_lease,
+            pace,
+        )
+        .await
+    }
+
+    /// Boots `serve` alone, so the work role runs only in a `work_pass` or once `go_live` (ADR-0059).
+    pub async fn stepped() -> Self {
+        Self::booted_at_pace(None, kestrel::presence::LEASE, Pace::Stepped).await
+    }
+
+    pub async fn stepped_dispatching_to(supervisor: &Path, command: &str) -> Self {
+        Self::booted_at_pace(
+            Some(Provisions::local(supervisor, &[(HARNESS, command)], 2)),
+            kestrel::presence::LEASE,
+            Pace::Stepped,
         )
         .await
     }
@@ -500,6 +547,7 @@ impl Kestrel {
             Providers::at(providers, providers, PROVIDER_DEADLINE),
             client_url(),
             Images::default(),
+            Pace::Live,
         )
         .await
     }
@@ -525,6 +573,7 @@ impl Kestrel {
             no_provider(),
             client,
             images,
+            Pace::Live,
         )
         .await
     }
@@ -535,6 +584,16 @@ impl Kestrel {
         environment: Option<Provisions>,
         follow_lease: Duration,
     ) -> Self {
+        Self::boot_paced(data_dir, listen, environment, follow_lease, Pace::Live).await
+    }
+
+    async fn boot_paced(
+        data_dir: TempDir,
+        listen: Listen,
+        environment: Option<Provisions>,
+        follow_lease: Duration,
+        pace: Pace,
+    ) -> Self {
         Self::boot_checking(
             data_dir,
             listen,
@@ -543,10 +602,15 @@ impl Kestrel {
             no_provider(),
             client_url(),
             Images::default(),
+            pace,
         )
         .await
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "every way a test varies the control plane it boots"
+    )]
     async fn boot_checking(
         data_dir: TempDir,
         listen: Listen,
@@ -555,6 +619,7 @@ impl Kestrel {
         providers: Providers,
         client: url::Url,
         images: Images,
+        pace: Pace,
     ) -> Self {
         let store = Store::open(data_dir.path())
             .await
@@ -581,7 +646,19 @@ impl Kestrel {
             quiet_period: Some(QUIET_PERIOD),
             sign_in_test_deadline: provisions.sign_in_test_deadline,
         });
-        let roles = tokio::spawn(all_in_one.run(dispatch, shutdown.clone()));
+        let (roles, work) = match pace {
+            Pace::Live => (
+                tokio::spawn(all_in_one.run(dispatch, shutdown.clone())),
+                WorkRole::AllInOne,
+            ),
+            Pace::Stepped => {
+                let (serve, work) = all_in_one
+                    .stepped(dispatch, shutdown.clone())
+                    .await
+                    .expect("the control plane should start serving");
+                (serve, WorkRole::Stepped(Box::new(work)))
+            }
+        };
 
         Self::running(
             data_dir,
@@ -590,6 +667,7 @@ impl Kestrel {
             environment,
             shutdown,
             roles,
+            work,
             follow_lease,
         )
     }
@@ -630,10 +708,15 @@ impl Kestrel {
             None,
             shutdown,
             roles,
+            WorkRole::AllInOne,
             kestrel::presence::LEASE,
         )
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "everything a running control plane is torn down with"
+    )]
     fn running(
         data_dir: TempDir,
         store: Store,
@@ -641,6 +724,7 @@ impl Kestrel {
         environment: Option<Provisions>,
         shutdown: CancellationToken,
         roles: JoinHandle<anyhow::Result<()>>,
+        work: WorkRole,
         follow_lease: Duration,
     ) -> Self {
         let cleanup = Cleanup {
@@ -659,8 +743,32 @@ impl Kestrel {
             environment,
             shutdown,
             roles,
+            pace: match work {
+                WorkRole::Stepped(_) => Pace::Stepped,
+                WorkRole::AllInOne | WorkRole::WentLive(_) | WorkRole::GoingLive => Pace::Live,
+            },
+            work: tokio::sync::Mutex::new(work),
             follow_lease,
         }
+    }
+
+    pub async fn work_pass(&self) {
+        match &mut *self.work.lock().await {
+            WorkRole::Stepped(work) => work.pass().await,
+            WorkRole::AllInOne | WorkRole::WentLive(_) | WorkRole::GoingLive => {
+                panic!(
+                    "a work pass is for a stepped control plane, and this one's work role is live"
+                )
+            }
+        }
+    }
+
+    pub async fn go_live(&self) {
+        let mut work = self.work.lock().await;
+        let WorkRole::Stepped(stepped) = std::mem::replace(&mut *work, WorkRole::GoingLive) else {
+            panic!("only a stepped work role goes live");
+        };
+        *work = WorkRole::WentLive(tokio::spawn(stepped.run()));
     }
 
     pub fn data_dir(&self) -> &Path {
@@ -2466,6 +2574,10 @@ impl Kestrel {
         self.shutdown.cancel();
         self.roles.abort();
         let _ = self.roles.await;
+        if let WorkRole::WentLive(live) = self.work.into_inner() {
+            live.abort();
+            let _ = live.await;
+        }
         drop(self.store);
 
         Stopped {
@@ -2474,6 +2586,7 @@ impl Kestrel {
             bound: self.bound,
             environment: self.environment,
             follow_lease: self.follow_lease,
+            pace: self.pace,
         }
     }
 
@@ -2486,6 +2599,13 @@ impl Kestrel {
     pub async fn teardown(mut self) -> Stopped {
         self.shutdown.cancel();
         let _ = self.roles.await;
+        match self.work.into_inner() {
+            WorkRole::Stepped(work) => work.stop().await,
+            WorkRole::WentLive(live) => {
+                let _ = live.await;
+            }
+            WorkRole::AllInOne | WorkRole::GoingLive => {}
+        }
         destroy_instances(
             self.data_dir.path(),
             self.environment
@@ -2502,6 +2622,7 @@ impl Kestrel {
             bound: self.bound,
             environment: self.environment,
             follow_lease: self.follow_lease,
+            pace: self.pace,
         }
     }
 }
@@ -2553,11 +2674,12 @@ impl Stopped {
 
     pub async fn restart(mut self) -> Kestrel {
         self.cleanup.armed = false;
-        Kestrel::boot_against(
+        Kestrel::boot_paced(
             self.data_dir,
             self.bound,
             self.environment,
             self.follow_lease,
+            self.pace,
         )
         .await
     }
@@ -2571,7 +2693,7 @@ impl Stopped {
         maximum: usize,
     ) -> Kestrel {
         self.cleanup.armed = false;
-        Kestrel::boot_against(
+        Kestrel::boot_paced(
             self.data_dir,
             self.bound,
             Some(Provisions {
@@ -2586,6 +2708,7 @@ impl Stopped {
                 sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
             }),
             self.follow_lease,
+            self.pace,
         )
         .await
     }
