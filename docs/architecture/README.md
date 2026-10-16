@@ -203,6 +203,9 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
 - **Pull request state** ([ADR-0032](../adr/0032-a-pull-request-event-updates-workspace-state-without-a-firing.md)):
   opened, reopened, closed (including merges) and head-moved Events are learned. The Audit Record
   that explains unattended attachment verdicts remains `0.5` work.
+- **Test-driven work role and clock** ([ADR-0059](../adr/0059-a-test-drives-the-work-role-and-the-timers-clock.md)):
+  no stepped fixture or manual clock exists yet. The control plane still reads the wall clock
+  directly, and tests still backdate rows and poll against real-time deadlines.
 - **Split roles**: `serve` and `work` parse separately but run correctly only in one process.
 - **Policy, Approvals, Questions, Workflows, Campaigns** exist in `GLOSSARY.md` and
   [`ROADMAP.md`](../../ROADMAP.md), not in code. `session_dependency` and the Unreachable state are

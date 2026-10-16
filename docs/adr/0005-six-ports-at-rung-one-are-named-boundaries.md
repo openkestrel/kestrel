@@ -1,5 +1,8 @@
 # The six ports at rung `0.1` are named boundaries, not interfaces
 
+> **Amended by [ADR-0059](0059-a-test-drives-the-work-role-and-the-timers-clock.md).** `Timer` gets
+> real dispatch over its clock, a system and a manual one; the other ports stand as named here.
+
 [#14](https://github.com/jtmthf/kestrel/issues/14) settled six ports — `Store`, `Log`, `Fanout`,
 `Timer`, `Work`, `Compute`. At `0.1`, five of them are **concrete modules whose public API is the
 port's vocabulary**: one implementation, no interface type, no config, no registry. Only `Compute`

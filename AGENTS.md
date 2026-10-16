@@ -63,6 +63,8 @@ other agents, so each local cargo run has a real cost.
   there.
   For completed failed-job logs while the run is still active, or logs rejected for terminal escape
   sequences, see [CI diagnosis](docs/agents/ci-diagnosis.md).
+- **Flaky**, or failing where your change cannot reach? Record it before any re-run:
+  [flakes](docs/agents/flakes.md).
 - Documentation, skill and agent-guidance changes need no local check.
 
 Where a skill asks for a full-suite run ("the full test suite", "the project's automated checks",

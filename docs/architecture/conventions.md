@@ -65,6 +65,10 @@ Patterns the code relies on that no single file states. Comment style is in `COD
   declares the Organization, Project and Agents a test needs, with knobs for what it varies. A
   fault the store has no path to, or an observation of what it keeps at rest, is a named method on
   `support::Database`, the one place a test writes SQL.
+- **A test may drive the work role and the clock** ([ADR-0059](../adr/0059-a-test-drives-the-work-role-and-the-timers-clock.md)).
+  A stepped fixture boots only `serve` and runs the work role one pass at a time; advancing the
+  manual clock runs a pass at every sweep interval, and time away is its own call. Reach for these
+  before backdating a row or waiting out a real window, once they are built.
 - **Ordinary tests share one binary.** `crates/kestrel/tests/suite/` holds a module per area, so the
   harness compiles once: select with `cargo test -p kestrel --test suite <module>::`.
 - **The real supervisor runs as a local process.** `LocalExec` spawns the `kestrel-supervisor` binary
