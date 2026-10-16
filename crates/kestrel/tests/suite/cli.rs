@@ -1367,6 +1367,111 @@ fn the_client_replaces_a_private_key_from_a_file_or_standard_input_and_never_say
     }
 }
 
+#[test]
+fn the_client_starts_reads_and_resumes_a_webhook_secret_rotation_and_never_says_a_secret() {
+    const FIRST: &str = "the-first-webhook-secret";
+    let kestrel = Kestrel::new();
+    let stub = GithubStub::start();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "trace");
+    booted.run(&["organization", "declare", "acme"]);
+    booted.run(&[
+        "integration",
+        "github",
+        "register",
+        "hub",
+        "--repository",
+        "jtmthf/kestrel",
+        "--app-id",
+        "1",
+        "--installation",
+        "2",
+        "--private-key",
+        support::PRIVATE_KEY,
+        "--webhook-secret",
+        FIRST,
+        "--api",
+        &stub.base_url(),
+        "--interval",
+        "1h",
+    ]);
+
+    stub.script_answer(
+        "PATCH",
+        "/app/hook/config",
+        ScriptedResponse::answering(502),
+    );
+    let mut printed = booted.refused_as(
+        &["integration", "github", "rotate-secret", "start", "hub"],
+        Invocation::default(),
+    );
+    assert!(
+        printed.contains("kestrel integration github rotate-secret resume hub --organization acme"),
+        "an unfinished rotation named no way to finish it:\n{printed}"
+    );
+    let status = booted.run(&["integration", "github", "rotate-secret", "status", "hub"]);
+    assert!(status.contains("unfinished since"), "{status}");
+    assert!(
+        status.contains("kestrel integration github rotate-secret resume hub"),
+        "{status}"
+    );
+    printed += &status;
+    let shown = booted.run(&["integration", "show", "hub"]);
+    assert!(shown.contains("unfinished since"), "{shown}");
+    printed += &shown;
+    let unfinished = booted.record(&[
+        "integration",
+        "github",
+        "rotate-secret",
+        "status",
+        "hub",
+        "--json",
+    ]);
+    assert!(
+        unfinished["webhook_secret_rotation"]["started_at"].is_string(),
+        "{unfinished}"
+    );
+    printed += &unfinished.to_string();
+
+    let resumed = booted.record(&[
+        "integration",
+        "github",
+        "rotate-secret",
+        "resume",
+        "hub",
+        "--json",
+    ]);
+    assert_eq!(resumed["webhook_secret_rotation"], Value::Null);
+    let finished = booted.run(&["integration", "github", "rotate-secret", "status", "hub"]);
+    assert!(finished.contains("none under way"), "{finished}");
+    printed += &format!("{resumed}{finished}");
+    let said = booted.said();
+    booted.killed();
+
+    let secrets: Vec<String> = stub
+        .requests()
+        .iter()
+        .filter(|request| request.method == "PATCH")
+        .map(|request| {
+            serde_json::from_str::<Value>(&request.body).expect("JSON")["secret"]
+                .as_str()
+                .expect("a secret")
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(secrets.len(), 2);
+    assert_eq!(secrets[0], secrets[1]);
+    for secret in [FIRST, secrets[0].as_str()] {
+        assert!(
+            !printed.contains(secret),
+            "the client printed a webhook secret"
+        );
+        assert!(
+            !said.contains(secret),
+            "a log line spelled a webhook secret out"
+        );
+    }
+}
+
 /// The one command that has a credential in it, and the whole of what kestrel says while it
 /// uses it: neither the listing an operator reads nor the log they debug from has the token.
 #[test]

@@ -489,6 +489,7 @@ async fn an_integration_and_the_refusal_inside_it_are_shown_three_ways() {
         "-".to_owned(),
         or_dash(&ci["webhook_path"]),
         refusal.to_string(),
+        "-".to_owned(),
     ]
     .join("\t");
     assert_eq!(detail.out, [detail_cells]);
@@ -500,6 +501,7 @@ async fn an_integration_and_the_refusal_inside_it_are_shown_three_ways() {
         "polled every",
         "webhook path",
         "last event refusal",
+        "webhook secret rotation",
     ] {
         assert!(
             shown.said.contains(label),

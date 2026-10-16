@@ -2899,6 +2899,17 @@ pub struct Integration {
     pub state: IntegrationState,
     ///Where on the link GitHub, or a generic producer, can deliver to it. An inbound GitHub Integration is also polled.
     pub webhook_path: Option<String>,
+    ///Its unfinished webhook-secret rotation; null when none is under way.
+    pub webhook_secret_rotation: Option<WebhookSecretRotation>,
+}
+///An unfinished webhook-secret rotation. Until it finishes, a delivery signed with either the previous or the replacement secret is accepted.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WebhookSecretRotation {
+    ///When GitHub was last asked to set it; null before it is asked.
+    pub attempted_at: Option<String>,
+    pub diagnostic: Diagnostic,
+    ///When the replacement was saved.
+    pub started_at: String,
 }
 ///Disabled pauses every use of an Integration and keeps everything it resumes with. Retired ends every use for good and keeps only what its history refers to.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -10768,6 +10779,7 @@ pub enum Action {
     EnableIntegrationAction(EnableIntegrationAction),
     ConnectGithubAction(ConnectGithubAction),
     ReplaceIntegrationPrivateKeyAction(ReplaceIntegrationPrivateKeyAction),
+    ResumeIntegrationWebhookSecretRotationAction(ResumeIntegrationWebhookSecretRotationAction),
     ReleaseInstanceAction(ReleaseInstanceAction),
     CorrectFieldAction(CorrectFieldAction),
     SignInAction(SignInAction),
@@ -10802,6 +10814,9 @@ impl Serialize for Action {
             Self::EnableIntegrationAction(value) => serde::Serialize::serialize(value, serializer),
             Self::ConnectGithubAction(value) => serde::Serialize::serialize(value, serializer),
             Self::ReplaceIntegrationPrivateKeyAction(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::ResumeIntegrationWebhookSecretRotationAction(value) => {
                 serde::Serialize::serialize(value, serializer)
             }
             Self::ReleaseInstanceAction(value) => serde::Serialize::serialize(value, serializer),
@@ -11281,6 +11296,42 @@ impl<'de> Deserialize<'de> for Action {
         }
         if input.as_object().is_some_and(|object| {
             true && object.get("action").is_some_and(|value| {
+                value.is_null()
+                    || matches!(
+                        value.to_string().as_str(),
+                        "\"resume_integration_webhook_secret_rotation\""
+                    )
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<
+                ResumeIntegrationWebhookSecretRotationAction,
+            >(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::ResumeIntegrationWebhookSecretRotationAction(
+                            candidate,
+                        ));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(
+                            Self::ResumeIntegrationWebhookSecretRotationAction(candidate),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
                 value.is_null() || matches!(value.to_string().as_str(), "\"release_instance\"")
             }) && object.get("effect").is_some_and(|value| {
                 value.is_null()
@@ -11546,6 +11597,14 @@ pub struct RetryReadAction {
     pub action: serde_json::Value,
     pub operation: String,
     pub resource: Option<String>,
+    pub retry_after_seconds: Option<i64>,
+}
+///Sets the saved replacement as the App's webhook secret again.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ResumeIntegrationWebhookSecretRotationAction {
+    pub action: serde_json::Value,
+    pub integration: String,
+    pub organization: String,
     pub retry_after_seconds: Option<i64>,
 }
 ///Never carries the key: a Client reads it from a file or standard input when the step is taken.
@@ -11855,6 +11914,13 @@ impl IntegrationPrivateKeyReplacementBuilder {
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct IntegrationRetirement {
     ///The revision the retirement was decided against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+}
+///The choice to rotate a GitHub Integration's webhook secret. kestrel makes the replacement; it is never named here.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct IntegrationWebhookSecretRotation {
+    ///The revision this rotation was decided against.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<i64>,
 }

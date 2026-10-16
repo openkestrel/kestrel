@@ -589,6 +589,7 @@ async fn an_installation_token_nearing_expiry_is_replaced_before_it_is_used_agai
         deliveries_read_from: None,
         last_polled_at: None,
         last_event_refusal: None,
+        rotation: None,
     };
     let github = Github::unfenced().expect("the GitHub client");
 

@@ -76,6 +76,23 @@ Integration takes a replacement and stays disabled; a generic webhook has none t
 token cache is keyed by revision and drops an Integration's older entries when it mints, so no
 token minted with the previous key is handed out afterwards.
 
+`integration::rotation` rotates a GitHub App's webhook secret as an operation that outlives a
+request or a restart, because the secret lives on GitHub too. `rotate_webhook_secret` mints a
+replacement and saves it sealed in `webhook_secret_rotation`, fenced on the revision it read; from
+that commit `verifier` returns both secrets and a delivery signed with either is accepted. It then
+records `attempted_at` and sends `PATCH /app/hook/config` as the App. Only a successful answer
+finishes it: one transaction deletes the row and moves the replacement into `signing_secret`, so the
+previous secret stops verifying. Anything else records a typed `failure` and leaves the row:
+`resume_webhook_secret_rotation` sets the same saved replacement again, since GitHub masks the
+secret it reads back, and an `attempted_at` with no `failure` is an attempt that never said how it
+ended. Neither step bumps `revision`, so polling, its cursor and the webhook carry on; a Delivery
+that reaches both still records one Event. Starting refuses a generic webhook, an Integration with
+no signing secret, one already rotating (offering `resume_integration_webhook_secret_rotation`) and
+any whose App another non-retired Integration signs as. That last guard,
+`integration::hook_maintainable`, is shared with whatever else changes the App's hook, and its
+refusal names nothing of another Organization's. Retirement deletes the row with the other secrets.
+The Integration record carries the unfinished rotation with the diagnostic a refusal would give.
+
 ## Firing
 
 `timer::firing` calls `trigger::fire` on each tick or wake. It takes up to 32 unfired matches and

@@ -87,6 +87,7 @@ pub struct IntegrationShown {
     pub integration: wire::Integration,
     pub canceled_posts: String,
     pub diagnostic: String,
+    pub rotation: String,
 }
 
 pub const INTEGRATION: Columns<IntegrationShown> = Columns::Detail(&[
@@ -118,6 +119,27 @@ pub const INTEGRATION: Columns<IntegrationShown> = Columns::Detail(&[
     }),
     Column("last event refusal", |shown| {
         object(shown.integration.last_event_refusal.as_ref())
+    }),
+    Column("webhook secret rotation", |shown| text(&shown.rotation)),
+]);
+
+pub struct RotationShown {
+    pub integration: wire::Integration,
+    pub rotation: String,
+}
+
+pub const ROTATION: Columns<RotationShown> = Columns::Detail(&[
+    Column("integration", |shown| text(&shown.integration.name)),
+    Column("revision", |shown| text(shown.integration.revision)),
+    Column("webhook secret rotation", |shown| text(&shown.rotation)),
+    Column("attempted at", |shown| {
+        or_absent(
+            shown
+                .integration
+                .webhook_secret_rotation
+                .as_ref()
+                .and_then(|rotation| rotation.attempted_at.as_ref()),
+        )
     }),
 ]);
 pub const EVENTS: Columns<wire::EventRecord> = Columns::Rows(&[

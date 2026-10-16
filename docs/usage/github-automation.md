@@ -20,6 +20,8 @@ Kestrel learns the App's own login (`<slug>[bot]`) when the Integration is regis
 
 To rotate the App's private key, generate a new one in the App's settings on GitHub, then run `kestrel integration github replace-key origin --private-key-file new.pem` (or pipe the key to standard input). Kestrel checks the new key against the same App, installation and repository before it gives the old one up, and keeps the old one when GitHub rejects the new key, limits the rate or does not answer. Delete the old key on GitHub afterwards; kestrel never does.
 
+To rotate the App's webhook secret, run `kestrel integration github rotate-secret start origin`. Kestrel makes the new secret, sets it on the App and, once GitHub acknowledges it, stops accepting the old one; you never see either. If GitHub does not answer or the control plane restarts part way, the rotation stays unfinished and deliveries signed with either secret are still accepted; `kestrel integration github rotate-secret status origin` says where it stands and `kestrel integration github rotate-secret resume origin` finishes it. Polling carries on throughout. Kestrel refuses to rotate the secret of an App that another Integration, even a disabled one or one in another Organization, still uses: the App has one webhook, and changing it would break theirs.
+
 `kestrel event list` shows recorded events, and `kestrel event show <record>` includes an event's payload and trigger firings. Register the integration before applying a trigger so you can inspect the event shape and test the rule against a real example.
 
 ## Declare a trigger

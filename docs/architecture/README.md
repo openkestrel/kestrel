@@ -175,11 +175,12 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
 
 - **Integration maintenance** ([ADR-0056](../adr/0056-an-integration-keeps-its-identity-through-maintenance.md)):
   name, directions and interval change, disable/enable pause and resume use, a validated App
-  private key replaces the last, and retirement ends it for good, all under revision fences.
-  Webhook-secret rotation is not built. A Project selects an Integration per repository, a
-  Workspace fixes that selection at open, and a running Session's `gh` and `git` are lent tokens
-  from it at each use ([Link](link.md#github-at-each-use)); no queued Session waits on an
-  Integration yet, so nothing is held paused by a disabled one.
+  private key replaces the last, a webhook-secret rotation survives failure and restart until
+  GitHub acknowledges it, and retirement ends it for good, all under revision fences. The browser
+  can take a rotation's resume step but has no settings screen to start one. A Project selects an
+  Integration per repository, a Workspace fixes that selection at open, and a running Session's
+  `gh` and `git` are lent tokens from it at each use ([Link](link.md#github-at-each-use)); no
+  queued Session waits on an Integration yet, so nothing is held paused by a disabled one.
 
 - **Release preparation and acceptance** ([ADR-0053](../adr/0053-a-tag-prepares-a-release-acceptance-publishes-it.md)):
   tag publishing still races Conformance, covers only two images on amd64, and has no draft-release

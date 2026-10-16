@@ -70,6 +70,15 @@ pub enum Unproven {
     Unanswered(anyhow::Error),
 }
 
+/// Why GitHub did not acknowledge a new App webhook secret.
+#[derive(Debug)]
+pub enum Unset {
+    Rejected,
+    Refused(StatusCode),
+    RateLimited { until: Timestamp },
+    Unanswered(anyhow::Error),
+}
+
 /// A redelivery is listed again under the same `guid`.
 #[derive(Debug, Deserialize)]
 pub struct Listed {
@@ -521,6 +530,40 @@ impl Github {
                 // GitHub redirects a renamed branch's old name to the new one.
                 Ok(named.name == branch)
             }
+        }
+    }
+
+    /// Acknowledged only by a successful answer: GitHub masks the secret it reads back.
+    pub async fn set_hook_secret(&self, api: &str, app: &App, secret: &str) -> Result<(), Unset> {
+        let response = self
+            .as_app(
+                reqwest::Method::PATCH,
+                app,
+                &format!("{}/app/hook/config", api.trim_end_matches('/')),
+            )
+            .map_err(Unset::Unanswered)?
+            .json(&serde_json::json!({ "secret": secret }))
+            .send()
+            .await
+            .map_err(|error| {
+                Unset::Unanswered(anyhow!(
+                    "github could not be asked to change the App's webhook secret: {error}"
+                ))
+            })?;
+        let status = response.status();
+        if let Some(until) = rate_limited(status, response.headers()) {
+            return Err(Unset::RateLimited { until });
+        }
+
+        match status {
+            status if status.is_success() => Ok(()),
+            StatusCode::UNAUTHORIZED => Err(Unset::Rejected),
+            status if status.is_client_error() && status != StatusCode::TOO_MANY_REQUESTS => {
+                Err(Unset::Refused(status))
+            }
+            status => Err(Unset::Unanswered(anyhow!(
+                "github answered {status} to changing the App's webhook secret"
+            ))),
         }
     }
 
@@ -1595,6 +1638,7 @@ mod tests {
             deliveries_read_from: None,
             last_polled_at: None,
             last_event_refusal: None,
+            rotation: None,
         };
         for shape in [
             serde_json::json!({ "actor": { "login": "Kestrel[Bot]" } }),
