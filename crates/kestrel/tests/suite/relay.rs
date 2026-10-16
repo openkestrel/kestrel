@@ -549,7 +549,7 @@ async fn expiry_interrupts_stalled_docker_provisioning_and_failed_cleanup_remain
         r#"#!/bin/sh
 case "$1" in
   image) printf 'sha256:relay {"dev.kestrel.harnesses":"claude"}\n';;
-  create) touch "$RELAY_SCRIPT_ROOT/provisioning"; sleep 3;;
+  create) touch "$RELAY_SCRIPT_ROOT/provisioning"; sleep 3 & exit 0;;
   rm) [ ! -f "$RELAY_SCRIPT_ROOT/refuse-cleanup" ] || exit 1; touch "$RELAY_SCRIPT_ROOT/cleaned";;
   *) exit 0;;
 esac
