@@ -595,10 +595,22 @@ fn the_commands_usage_documents_are_the_commands_that_work() {
         transcript.err
     );
 
+    // The work role provisions the Instance the release destroys a moment after `workspace open`
+    // returns, so wait for it rather than race the provisioner.
+    let instance = compose::until("the workspace to hold an instance", || {
+        shown(&stack, &workspace)["instance"]
+            .as_str()
+            .map(str::to_owned)
+    });
+
     // An opened Session that never ran reported no checkout, so its instance holds the only
     // copy it might have: docs/usage/manual-workspaces.md releases it before sealing.
     stack.ran(&["operator", "name", "Ada"]);
-    stack.ran(&["instance", "release", "latest"]);
+    let released = stack.ran(&["instance", "release", "latest"]);
+    assert_eq!(
+        released, instance,
+        "docs/usage/manual-workspaces.md releases the Instance the Workspace holds"
+    );
     stack.ran(&["workspace", "seal", "latest"]);
 
     assert_eq!(
