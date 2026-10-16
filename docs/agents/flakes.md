@@ -9,7 +9,9 @@ is still yours to record.
 - A **test flake** is a test whose result varies: nextest reports it `FLAKY` (`TRY 2 PASS`), or it
   failed on a run and passed on a re-run of the same commit. Its fix is in code.
 - An **infra flake** is a failed step that is not a test: a registry push, a login, a package fetch.
-  A bounded retry on that step is a legitimate fix.
+  A bounded retry on that step is a legitimate fix, and `.github/scripts/retry.sh` is what a
+  registry step retries through: it re-runs a transient failure a bounded number of times with a
+  backoff, and raises a refusal — a credential, a permission, a rejected manifest — at once.
 
 ## When your pull request goes red on one
 

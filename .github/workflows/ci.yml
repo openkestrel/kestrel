@@ -138,6 +138,9 @@ jobs:
       - name: Check executable helper preparation
         run: bash .github/scripts/test-helper-preparation.sh
 
+      - name: Check the registry retry helper
+        run: bash .github/scripts/test-retry.sh
+
   # The e2e suite drives the built Client through the Client image's Caddyfile and a control plane
   # it compiles, so it needs Caddy and Rust too.
   client:
@@ -190,7 +193,9 @@ jobs:
   # Each image is built once for the change and pushed tagged by the commit, so every job that
   # needs one pulls rather than builds it (ADR-0027). Layer caching is restored on every run and
   # written only by a trusted push to main, which is what keeps it warm for everyone else. The
-  # image inputs changed with the Rust sources, so these follow the `images` area.
+  # image inputs changed with the Rust sources, so these follow the `images` area. Each push goes
+  # through the retry helper, because a registry that refuses a blob transiently otherwise costs
+  # the batch (docs/agents/flakes.md).
   build-env:
     name: kestrel-env (build)
     needs: changes
@@ -206,11 +211,7 @@ jobs:
         with:
           buildx: true
 
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/registry-login
 
       - name: Build the image once for this change
         env:
@@ -227,7 +228,7 @@ jobs:
             --tag "${IMAGE}" \
             "${cache[@]}" \
             --load .
-          docker push "${IMAGE}"
+          .github/scripts/retry.sh docker push "${IMAGE}"
           size=$(docker image inspect "${IMAGE}" --format '{{.Size}}')
           echo "kestrel-env: $((size / 1024 / 1024)) MiB, built in $(($(date +%s) - started))s" >> "$GITHUB_STEP_SUMMARY"
 
@@ -246,11 +247,7 @@ jobs:
         with:
           buildx: true
 
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/registry-login
 
       - name: Build the image once for this change
         env:
@@ -267,7 +264,7 @@ jobs:
             --tag "${IMAGE}" \
             "${cache[@]}" \
             --load .
-          docker push "${IMAGE}"
+          .github/scripts/retry.sh docker push "${IMAGE}"
           size=$(docker image inspect "${IMAGE}" --format '{{.Size}}')
           echo "kestrel: $((size / 1024 / 1024)) MiB, built in $(($(date +%s) - started))s" >> "$GITHUB_STEP_SUMMARY"
 
@@ -286,11 +283,7 @@ jobs:
         with:
           buildx: true
 
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/registry-login
 
       - name: Build the image once for this change
         env:
@@ -307,7 +300,7 @@ jobs:
             --tag "${IMAGE}" \
             "${cache[@]}" \
             --load .
-          docker push "${IMAGE}"
+          .github/scripts/retry.sh docker push "${IMAGE}"
           size=$(docker image inspect "${IMAGE}" --format '{{.Size}}')
           echo "kestrel-client: $((size / 1024 / 1024)) MiB, built in $(($(date +%s) - started))s" >> "$GITHUB_STEP_SUMMARY"
 
