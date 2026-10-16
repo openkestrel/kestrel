@@ -27,3 +27,11 @@ export type EventData = {
 	follower: import("./generated").FollowerEvent;
 	presence: import("./generated").Presence;
 };
+export const RelayEventNames = {
+	SignInRelay: "relay",
+	RelayEnd: "end",
+} as const;
+export type RelayEventData = {
+	relay: import("./generated").SignInRelay;
+	end: import("./generated").RelayEnd;
+};

@@ -147,6 +147,7 @@ impl<'a> Profiles<'a> {
         secret: &str,
         authentication: &Authentication,
     ) -> Result<Held> {
+        super::relay::cancel_slot(self.connection, profile.id, entry).await?;
         let sealed = self.keyring.seal(&bound_to(profile, entry), secret)?;
         let held = Held {
             entry: entry.clone(),

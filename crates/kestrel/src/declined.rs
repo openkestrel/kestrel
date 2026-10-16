@@ -39,6 +39,7 @@ pub enum Resource {
     HeldMessage,
     TranscriptPayload,
     SignInTest,
+    SignInRelay,
 }
 
 impl Resource {
@@ -58,6 +59,7 @@ impl Resource {
             Resource::HeldMessage => "held message",
             Resource::TranscriptPayload => "transcript payload",
             Resource::SignInTest => "sign-in test",
+            Resource::SignInRelay => "sign-in relay",
         }
     }
 }
@@ -158,6 +160,16 @@ pub enum Consequence {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
+    ContinueSignInRelay {
+        harness: String,
+        method: String,
+        relay: String,
+    },
+    CancelSignInRelay {
+        harness: String,
+        method: String,
+        relay: String,
+    },
     StopSession {
         session: String,
         consequence: Consequence,

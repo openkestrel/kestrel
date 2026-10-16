@@ -2,6 +2,8 @@
 
 mod docker;
 mod local_exec;
+mod terminal;
+pub use terminal::Terminal;
 
 use std::fmt;
 use std::io;
@@ -22,6 +24,7 @@ pub struct IdleHint {
 /// What a driver does once it has provisioned, and the whole of it. An inbound address would
 /// split the eight deployment targets, so no driver offers one.
 pub trait Provisioned: Send {
+    fn terminal(&mut self, command: &[&str]) -> anyhow::Result<Terminal>;
     fn exec(&mut self, command: &[&str]) -> io::Result<Streaming>;
     fn read_file(&mut self, path: &str) -> io::Result<Vec<u8>>;
     fn write_file(&mut self, path: &str, contents: &[u8]) -> io::Result<()>;
@@ -64,6 +67,25 @@ impl Driver {
         match self {
             Driver::Docker(docker) => docker.provision(&holder),
             Driver::LocalExec(local_exec) => local_exec.provision(&holder),
+        }
+    }
+
+    pub fn provision_until(
+        &self,
+        holder: &str,
+        deadline: std::time::Instant,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> io::Result<Instance> {
+        match self {
+            Driver::Docker(docker) => docker.provision_until(holder, deadline, cancel),
+            Driver::LocalExec(local) => local.provision(holder),
+        }
+    }
+
+    pub fn destroy_until(&self, instance: &str, deadline: std::time::Instant) -> io::Result<()> {
+        match self {
+            Driver::Docker(_) => docker::destroy_until(instance, deadline),
+            Driver::LocalExec(local) => local.destroy_named(instance),
         }
     }
 
@@ -116,6 +138,10 @@ impl Instance {
     /// Relative to the Instance's root, as every path either driver takes is.
     pub fn exec(&mut self, command: &[&str]) -> io::Result<Streaming> {
         self.provisioned.exec(command)
+    }
+
+    pub fn terminal(&mut self, command: &[&str]) -> anyhow::Result<Terminal> {
+        self.provisioned.terminal(command)
     }
 
     pub fn read_file(&mut self, path: &str) -> io::Result<Vec<u8>> {

@@ -672,3 +672,22 @@ fn listed(stack: &Stack, session: &str) -> Listed {
         exit: shown["exit"].clone(),
     }
 }
+
+#[test]
+fn the_filter_allows_exec_terminal_resize_without_other_container_mutations() {
+    let compose: yaml_serde::Value =
+        yaml_serde::from_str(include_str!("../../../compose.yaml")).unwrap();
+    let allowed = compose["services"]["socket-proxy"]["command"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .filter_map(yaml_serde::Value::as_str)
+        .find_map(|flag| flag.strip_prefix("-allowPOST="))
+        .unwrap()
+        .replace("$$", "$");
+    let allowed = regex::Regex::new(&allowed).unwrap();
+    assert!(allowed.is_match("/v1.47/exec/login/resize"));
+    assert!(!allowed.is_match("/v1.47/containers/login/resize"));
+    assert!(!allowed.is_match("/v1.47/containers/login/update"));
+    assert!(!allowed.is_match("/v1.47/exec/login/resize/anything"));
+}

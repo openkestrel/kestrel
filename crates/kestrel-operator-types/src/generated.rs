@@ -1328,6 +1328,1603 @@ pub struct FileStat {
     ///Constraint: minimum=0
     pub removed: Option<i64>,
 }
+#[derive(Debug, Clone)]
+pub enum RelayEvent {
+    SignInRelay(SignInRelay),
+    RelayEnd(RelayEnd),
+}
+impl Serialize for RelayEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::SignInRelay(value) => serde::Serialize::serialize(value, serializer),
+            Self::RelayEnd(value) => serde::Serialize::serialize(value, serializer),
+        }
+    }
+}
+impl<'de> Deserialize<'de> for RelayEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        fn exact_json_integer(number: &serde_json::Number) -> Option<i128> {
+            number
+                .as_i64()
+                .map(i128::from)
+                .or_else(|| number.as_u64().map(i128::from))
+        }
+        fn json_numbers_have_same_value(
+            encoded: &serde_json::Number,
+            input: &serde_json::Number,
+        ) -> bool {
+            match (exact_json_integer(encoded), exact_json_integer(input)) {
+                (Some(encoded), Some(input)) => encoded == input,
+                (Some(encoded), None) => input.as_f64().is_some_and(|input| {
+                    input.is_finite() && input.fract() == 0.0 && input as i128 == encoded
+                }),
+                (None, Some(input)) => encoded.as_f64().is_some_and(|encoded| {
+                    encoded.is_finite() && encoded.fract() == 0.0 && encoded as i128 == input
+                }),
+                (None, None) => encoded.as_f64() == input.as_f64(),
+            }
+        }
+        /// `nulls_may_be_absent` also accepts an input `null` that the
+        /// branch omits, as a skipped `None` does. Extra encoded
+        /// keys are allowed only by the pre-existing anyOf match.
+        fn preserves_complete_json_input(
+            encoded: &serde_json::Value,
+            input: &serde_json::Value,
+            nulls_may_be_absent: bool,
+            encoded_keys_may_be_extra: bool,
+        ) -> bool {
+            match (encoded, input) {
+                (serde_json::Value::Object(encoded), serde_json::Value::Object(input)) => {
+                    (encoded_keys_may_be_extra
+                        || encoded.iter().all(|(key, value)| {
+                            input.contains_key(key) || (nulls_may_be_absent && value.is_null())
+                        }))
+                        && input.iter().all(|(key, value)| match encoded.get(key) {
+                            Some(encoded_value) => preserves_complete_json_input(
+                                encoded_value,
+                                value,
+                                nulls_may_be_absent,
+                                encoded_keys_may_be_extra,
+                            ),
+                            None => nulls_may_be_absent && value.is_null(),
+                        })
+                }
+                (serde_json::Value::Array(encoded), serde_json::Value::Array(input)) => {
+                    encoded.len() == input.len()
+                        && encoded.iter().zip(input).all(|(encoded, input)| {
+                            preserves_complete_json_input(
+                                encoded,
+                                input,
+                                nulls_may_be_absent,
+                                encoded_keys_may_be_extra,
+                            )
+                        })
+                }
+                (serde_json::Value::Number(encoded), serde_json::Value::Number(input)) => {
+                    json_numbers_have_same_value(encoded, input)
+                }
+                _ => encoded == input,
+            }
+        }
+        let input = <serde_json::Value as Deserialize>::deserialize(deserializer)?;
+        let mut matched = None;
+        let mut equivalent = None;
+        let mut equivalent_matches = 0usize;
+        if true {
+            if let Ok(candidate) = serde_json::from_value::<SignInRelay>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(RelayEvent),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::SignInRelay(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::SignInRelay(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if true {
+            if let Ok(candidate) = serde_json::from_value::<RelayEnd>(input.clone()) {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(RelayEvent),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::RelayEnd(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::RelayEnd(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(matched) = matched {
+            return Ok(matched);
+        }
+        if equivalent_matches > 1 {
+            return Err(serde::de::Error::custom(concat!(
+                "ambiguous oneOf value for ",
+                stringify!(RelayEvent),
+                ": more than one branch preserved an equivalent input",
+            )));
+        }
+        equivalent.ok_or_else(|| {
+            serde::de::Error::custom(concat!(
+                "no oneOf branch for ",
+                stringify!(RelayEvent),
+                " preserved the complete input",
+            ))
+        })
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignInRelay {
+    pub created_at: String,
+    pub deadline: String,
+    pub destination: SignInHolding,
+    pub finished_at: Option<String>,
+    pub harness: String,
+    pub id: String,
+    pub method: String,
+    pub organization: String,
+    pub progress: SignInRelayProgress,
+    pub version: i64,
+}
+#[derive(Debug, Clone)]
+pub enum SignInRelayProgress {
+    RelayStarting(RelayStarting),
+    RelayAwaitingBrowser(RelayAwaitingBrowser),
+    RelayAwaitingCode(RelayAwaitingCode),
+    RelaySaving(RelaySaving),
+    RelayCompleted(RelayCompleted),
+    RelayFailed(RelayFailed),
+    RelayExpired(RelayExpired),
+    RelayCancelled(RelayCancelled),
+}
+impl serde::Serialize for SignInRelayProgress {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::RelayStarting(payload) => {
+                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::ser::Error::custom(concat!(
+                        "discriminated union variant `",
+                        stringify!(RelayStarting),
+                        "` did not serialize as an object",
+                    ))
+                })?;
+                match object.get("state") {
+                    Some(serde_json::Value::String(tag)) if matches!(tag.as_str(), "starting") => {}
+                    Some(serde_json::Value::String(tag)) => {
+                        return Err(serde::ser::Error::custom(format!(
+                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
+                            "state",
+                            stringify!(RelayStarting),
+                        )));
+                    }
+                    Some(_) => {
+                        return Err(serde::ser::Error::custom(concat!(
+                            "discriminator `",
+                            "state",
+                            "` did not serialize as a string",
+                        )));
+                    }
+                    None => {
+                        object.insert(
+                            "state".to_string(),
+                            serde_json::Value::String("starting".to_string()),
+                        );
+                    }
+                }
+                value.serialize(serializer)
+            }
+            Self::RelayAwaitingBrowser(payload) => {
+                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::ser::Error::custom(concat!(
+                        "discriminated union variant `",
+                        stringify!(RelayAwaitingBrowser),
+                        "` did not serialize as an object",
+                    ))
+                })?;
+                match object.get("state") {
+                    Some(serde_json::Value::String(tag))
+                        if matches!(tag.as_str(), "awaiting_browser") => {}
+                    Some(serde_json::Value::String(tag)) => {
+                        return Err(serde::ser::Error::custom(format!(
+                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
+                            "state",
+                            stringify!(RelayAwaitingBrowser),
+                        )));
+                    }
+                    Some(_) => {
+                        return Err(serde::ser::Error::custom(concat!(
+                            "discriminator `",
+                            "state",
+                            "` did not serialize as a string",
+                        )));
+                    }
+                    None => {
+                        object.insert(
+                            "state".to_string(),
+                            serde_json::Value::String("awaiting_browser".to_string()),
+                        );
+                    }
+                }
+                value.serialize(serializer)
+            }
+            Self::RelayAwaitingCode(payload) => {
+                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::ser::Error::custom(concat!(
+                        "discriminated union variant `",
+                        stringify!(RelayAwaitingCode),
+                        "` did not serialize as an object",
+                    ))
+                })?;
+                match object.get("state") {
+                    Some(serde_json::Value::String(tag))
+                        if matches!(tag.as_str(), "awaiting_code") => {}
+                    Some(serde_json::Value::String(tag)) => {
+                        return Err(serde::ser::Error::custom(format!(
+                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
+                            "state",
+                            stringify!(RelayAwaitingCode),
+                        )));
+                    }
+                    Some(_) => {
+                        return Err(serde::ser::Error::custom(concat!(
+                            "discriminator `",
+                            "state",
+                            "` did not serialize as a string",
+                        )));
+                    }
+                    None => {
+                        object.insert(
+                            "state".to_string(),
+                            serde_json::Value::String("awaiting_code".to_string()),
+                        );
+                    }
+                }
+                value.serialize(serializer)
+            }
+            Self::RelaySaving(payload) => {
+                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::ser::Error::custom(concat!(
+                        "discriminated union variant `",
+                        stringify!(RelaySaving),
+                        "` did not serialize as an object",
+                    ))
+                })?;
+                match object.get("state") {
+                    Some(serde_json::Value::String(tag)) if matches!(tag.as_str(), "saving") => {}
+                    Some(serde_json::Value::String(tag)) => {
+                        return Err(serde::ser::Error::custom(format!(
+                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
+                            "state",
+                            stringify!(RelaySaving),
+                        )));
+                    }
+                    Some(_) => {
+                        return Err(serde::ser::Error::custom(concat!(
+                            "discriminator `",
+                            "state",
+                            "` did not serialize as a string",
+                        )));
+                    }
+                    None => {
+                        object.insert(
+                            "state".to_string(),
+                            serde_json::Value::String("saving".to_string()),
+                        );
+                    }
+                }
+                value.serialize(serializer)
+            }
+            Self::RelayCompleted(payload) => {
+                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::ser::Error::custom(concat!(
+                        "discriminated union variant `",
+                        stringify!(RelayCompleted),
+                        "` did not serialize as an object",
+                    ))
+                })?;
+                match object.get("state") {
+                    Some(serde_json::Value::String(tag)) if matches!(tag.as_str(), "completed") => {
+                    }
+                    Some(serde_json::Value::String(tag)) => {
+                        return Err(serde::ser::Error::custom(format!(
+                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
+                            "state",
+                            stringify!(RelayCompleted),
+                        )));
+                    }
+                    Some(_) => {
+                        return Err(serde::ser::Error::custom(concat!(
+                            "discriminator `",
+                            "state",
+                            "` did not serialize as a string",
+                        )));
+                    }
+                    None => {
+                        object.insert(
+                            "state".to_string(),
+                            serde_json::Value::String("completed".to_string()),
+                        );
+                    }
+                }
+                value.serialize(serializer)
+            }
+            Self::RelayFailed(payload) => {
+                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::ser::Error::custom(concat!(
+                        "discriminated union variant `",
+                        stringify!(RelayFailed),
+                        "` did not serialize as an object",
+                    ))
+                })?;
+                match object.get("state") {
+                    Some(serde_json::Value::String(tag)) if matches!(tag.as_str(), "failed") => {}
+                    Some(serde_json::Value::String(tag)) => {
+                        return Err(serde::ser::Error::custom(format!(
+                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
+                            "state",
+                            stringify!(RelayFailed),
+                        )));
+                    }
+                    Some(_) => {
+                        return Err(serde::ser::Error::custom(concat!(
+                            "discriminator `",
+                            "state",
+                            "` did not serialize as a string",
+                        )));
+                    }
+                    None => {
+                        object.insert(
+                            "state".to_string(),
+                            serde_json::Value::String("failed".to_string()),
+                        );
+                    }
+                }
+                value.serialize(serializer)
+            }
+            Self::RelayExpired(payload) => {
+                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::ser::Error::custom(concat!(
+                        "discriminated union variant `",
+                        stringify!(RelayExpired),
+                        "` did not serialize as an object",
+                    ))
+                })?;
+                match object.get("state") {
+                    Some(serde_json::Value::String(tag)) if matches!(tag.as_str(), "expired") => {}
+                    Some(serde_json::Value::String(tag)) => {
+                        return Err(serde::ser::Error::custom(format!(
+                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
+                            "state",
+                            stringify!(RelayExpired),
+                        )));
+                    }
+                    Some(_) => {
+                        return Err(serde::ser::Error::custom(concat!(
+                            "discriminator `",
+                            "state",
+                            "` did not serialize as a string",
+                        )));
+                    }
+                    None => {
+                        object.insert(
+                            "state".to_string(),
+                            serde_json::Value::String("expired".to_string()),
+                        );
+                    }
+                }
+                value.serialize(serializer)
+            }
+            Self::RelayCancelled(payload) => {
+                let mut value = serde_json::to_value(payload).map_err(serde::ser::Error::custom)?;
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::ser::Error::custom(concat!(
+                        "discriminated union variant `",
+                        stringify!(RelayCancelled),
+                        "` did not serialize as an object",
+                    ))
+                })?;
+                match object.get("state") {
+                    Some(serde_json::Value::String(tag)) if matches!(tag.as_str(), "cancelled") => {
+                    }
+                    Some(serde_json::Value::String(tag)) => {
+                        return Err(serde::ser::Error::custom(format!(
+                            "discriminator `{}` value `{tag}` is not valid for variant `{}`",
+                            "state",
+                            stringify!(RelayCancelled),
+                        )));
+                    }
+                    Some(_) => {
+                        return Err(serde::ser::Error::custom(concat!(
+                            "discriminator `",
+                            "state",
+                            "` did not serialize as a string",
+                        )));
+                    }
+                    None => {
+                        object.insert(
+                            "state".to_string(),
+                            serde_json::Value::String("cancelled".to_string()),
+                        );
+                    }
+                }
+                value.serialize(serializer)
+            }
+        }
+    }
+}
+impl<'de> serde::Deserialize<'de> for SignInRelayProgress {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let discriminator = match value.get("state") {
+            Some(serde_json::Value::String(discriminator)) => Some(discriminator.as_str()),
+            Some(_) => {
+                return Err(serde::de::Error::custom(concat!(
+                    "non-string discriminator `",
+                    "state",
+                    "`",
+                )));
+            }
+            None => None,
+        };
+        match discriminator {
+            Some(discriminator) => match discriminator {
+                "starting" => {
+                    let primary_error = match serde_json::from_value::<RelayStarting>(value.clone())
+                    {
+                        Ok(payload) => return Ok(Self::RelayStarting(payload)),
+                        Err(error) => error,
+                    };
+                    let mut structural_match: Option<(Self, &'static str)> = None;
+                    if let Ok(payload) =
+                        serde_json::from_value::<RelayAwaitingBrowser>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "starting",
+                                first_name,
+                                stringify!(RelayAwaitingBrowser),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::RelayAwaitingBrowser(payload),
+                            stringify!(RelayAwaitingBrowser),
+                        ));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayAwaitingCode>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "starting",
+                                first_name,
+                                stringify!(RelayAwaitingCode),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::RelayAwaitingCode(payload),
+                            stringify!(RelayAwaitingCode),
+                        ));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelaySaving>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "starting",
+                                first_name,
+                                stringify!(RelaySaving),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelaySaving(payload), stringify!(RelaySaving)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayCompleted>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "starting",
+                                first_name,
+                                stringify!(RelayCompleted),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayCompleted(payload), stringify!(RelayCompleted)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayFailed>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "starting",
+                                first_name,
+                                stringify!(RelayFailed),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayFailed(payload), stringify!(RelayFailed)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayExpired>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "starting",
+                                first_name,
+                                stringify!(RelayExpired),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayExpired(payload), stringify!(RelayExpired)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayCancelled>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "starting",
+                                first_name,
+                                stringify!(RelayCancelled),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayCancelled(payload), stringify!(RelayCancelled)));
+                    }
+                    match structural_match {
+                        Some((payload, _)) => Ok(payload),
+                        None => Err(serde::de::Error::custom(primary_error)),
+                    }
+                }
+                "awaiting_browser" => {
+                    let primary_error =
+                        match serde_json::from_value::<RelayAwaitingBrowser>(value.clone()) {
+                            Ok(payload) => return Ok(Self::RelayAwaitingBrowser(payload)),
+                            Err(error) => error,
+                        };
+                    let mut structural_match: Option<(Self, &'static str)> = None;
+                    if let Ok(payload) = serde_json::from_value::<RelayStarting>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "awaiting_browser",
+                                first_name,
+                                stringify!(RelayStarting),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayStarting(payload), stringify!(RelayStarting)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayAwaitingCode>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "awaiting_browser",
+                                first_name,
+                                stringify!(RelayAwaitingCode),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::RelayAwaitingCode(payload),
+                            stringify!(RelayAwaitingCode),
+                        ));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelaySaving>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "awaiting_browser",
+                                first_name,
+                                stringify!(RelaySaving),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelaySaving(payload), stringify!(RelaySaving)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayCompleted>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "awaiting_browser",
+                                first_name,
+                                stringify!(RelayCompleted),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayCompleted(payload), stringify!(RelayCompleted)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayFailed>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "awaiting_browser",
+                                first_name,
+                                stringify!(RelayFailed),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayFailed(payload), stringify!(RelayFailed)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayExpired>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "awaiting_browser",
+                                first_name,
+                                stringify!(RelayExpired),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayExpired(payload), stringify!(RelayExpired)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayCancelled>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "awaiting_browser",
+                                first_name,
+                                stringify!(RelayCancelled),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayCancelled(payload), stringify!(RelayCancelled)));
+                    }
+                    match structural_match {
+                        Some((payload, _)) => Ok(payload),
+                        None => Err(serde::de::Error::custom(primary_error)),
+                    }
+                }
+                "awaiting_code" => {
+                    let primary_error =
+                        match serde_json::from_value::<RelayAwaitingCode>(value.clone()) {
+                            Ok(payload) => return Ok(Self::RelayAwaitingCode(payload)),
+                            Err(error) => error,
+                        };
+                    let mut structural_match: Option<(Self, &'static str)> = None;
+                    if let Ok(payload) = serde_json::from_value::<RelayStarting>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "awaiting_code",
+                                first_name,
+                                stringify!(RelayStarting),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayStarting(payload), stringify!(RelayStarting)));
+                    }
+                    if let Ok(payload) =
+                        serde_json::from_value::<RelayAwaitingBrowser>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "awaiting_code",
+                                first_name,
+                                stringify!(RelayAwaitingBrowser),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::RelayAwaitingBrowser(payload),
+                            stringify!(RelayAwaitingBrowser),
+                        ));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelaySaving>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "awaiting_code",
+                                first_name,
+                                stringify!(RelaySaving),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelaySaving(payload), stringify!(RelaySaving)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayCompleted>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "awaiting_code",
+                                first_name,
+                                stringify!(RelayCompleted),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayCompleted(payload), stringify!(RelayCompleted)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayFailed>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "awaiting_code",
+                                first_name,
+                                stringify!(RelayFailed),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayFailed(payload), stringify!(RelayFailed)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayExpired>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "awaiting_code",
+                                first_name,
+                                stringify!(RelayExpired),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayExpired(payload), stringify!(RelayExpired)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayCancelled>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "awaiting_code",
+                                first_name,
+                                stringify!(RelayCancelled),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayCancelled(payload), stringify!(RelayCancelled)));
+                    }
+                    match structural_match {
+                        Some((payload, _)) => Ok(payload),
+                        None => Err(serde::de::Error::custom(primary_error)),
+                    }
+                }
+                "saving" => {
+                    let primary_error = match serde_json::from_value::<RelaySaving>(value.clone()) {
+                        Ok(payload) => return Ok(Self::RelaySaving(payload)),
+                        Err(error) => error,
+                    };
+                    let mut structural_match: Option<(Self, &'static str)> = None;
+                    if let Ok(payload) = serde_json::from_value::<RelayStarting>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "saving",
+                                first_name,
+                                stringify!(RelayStarting),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayStarting(payload), stringify!(RelayStarting)));
+                    }
+                    if let Ok(payload) =
+                        serde_json::from_value::<RelayAwaitingBrowser>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "saving",
+                                first_name,
+                                stringify!(RelayAwaitingBrowser),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::RelayAwaitingBrowser(payload),
+                            stringify!(RelayAwaitingBrowser),
+                        ));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayAwaitingCode>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "saving",
+                                first_name,
+                                stringify!(RelayAwaitingCode),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::RelayAwaitingCode(payload),
+                            stringify!(RelayAwaitingCode),
+                        ));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayCompleted>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "saving",
+                                first_name,
+                                stringify!(RelayCompleted),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayCompleted(payload), stringify!(RelayCompleted)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayFailed>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "saving",
+                                first_name,
+                                stringify!(RelayFailed),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayFailed(payload), stringify!(RelayFailed)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayExpired>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "saving",
+                                first_name,
+                                stringify!(RelayExpired),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayExpired(payload), stringify!(RelayExpired)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayCancelled>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "saving",
+                                first_name,
+                                stringify!(RelayCancelled),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayCancelled(payload), stringify!(RelayCancelled)));
+                    }
+                    match structural_match {
+                        Some((payload, _)) => Ok(payload),
+                        None => Err(serde::de::Error::custom(primary_error)),
+                    }
+                }
+                "completed" => {
+                    let primary_error =
+                        match serde_json::from_value::<RelayCompleted>(value.clone()) {
+                            Ok(payload) => return Ok(Self::RelayCompleted(payload)),
+                            Err(error) => error,
+                        };
+                    let mut structural_match: Option<(Self, &'static str)> = None;
+                    if let Ok(payload) = serde_json::from_value::<RelayStarting>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "completed",
+                                first_name,
+                                stringify!(RelayStarting),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayStarting(payload), stringify!(RelayStarting)));
+                    }
+                    if let Ok(payload) =
+                        serde_json::from_value::<RelayAwaitingBrowser>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "completed",
+                                first_name,
+                                stringify!(RelayAwaitingBrowser),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::RelayAwaitingBrowser(payload),
+                            stringify!(RelayAwaitingBrowser),
+                        ));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayAwaitingCode>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "completed",
+                                first_name,
+                                stringify!(RelayAwaitingCode),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::RelayAwaitingCode(payload),
+                            stringify!(RelayAwaitingCode),
+                        ));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelaySaving>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "completed",
+                                first_name,
+                                stringify!(RelaySaving),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelaySaving(payload), stringify!(RelaySaving)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayFailed>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "completed",
+                                first_name,
+                                stringify!(RelayFailed),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayFailed(payload), stringify!(RelayFailed)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayExpired>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "completed",
+                                first_name,
+                                stringify!(RelayExpired),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayExpired(payload), stringify!(RelayExpired)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayCancelled>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "completed",
+                                first_name,
+                                stringify!(RelayCancelled),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayCancelled(payload), stringify!(RelayCancelled)));
+                    }
+                    match structural_match {
+                        Some((payload, _)) => Ok(payload),
+                        None => Err(serde::de::Error::custom(primary_error)),
+                    }
+                }
+                "failed" => {
+                    let primary_error = match serde_json::from_value::<RelayFailed>(value.clone()) {
+                        Ok(payload) => return Ok(Self::RelayFailed(payload)),
+                        Err(error) => error,
+                    };
+                    let mut structural_match: Option<(Self, &'static str)> = None;
+                    if let Ok(payload) = serde_json::from_value::<RelayStarting>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "failed",
+                                first_name,
+                                stringify!(RelayStarting),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayStarting(payload), stringify!(RelayStarting)));
+                    }
+                    if let Ok(payload) =
+                        serde_json::from_value::<RelayAwaitingBrowser>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "failed",
+                                first_name,
+                                stringify!(RelayAwaitingBrowser),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::RelayAwaitingBrowser(payload),
+                            stringify!(RelayAwaitingBrowser),
+                        ));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayAwaitingCode>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "failed",
+                                first_name,
+                                stringify!(RelayAwaitingCode),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::RelayAwaitingCode(payload),
+                            stringify!(RelayAwaitingCode),
+                        ));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelaySaving>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "failed",
+                                first_name,
+                                stringify!(RelaySaving),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelaySaving(payload), stringify!(RelaySaving)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayCompleted>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "failed",
+                                first_name,
+                                stringify!(RelayCompleted),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayCompleted(payload), stringify!(RelayCompleted)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayExpired>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "failed",
+                                first_name,
+                                stringify!(RelayExpired),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayExpired(payload), stringify!(RelayExpired)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayCancelled>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "failed",
+                                first_name,
+                                stringify!(RelayCancelled),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayCancelled(payload), stringify!(RelayCancelled)));
+                    }
+                    match structural_match {
+                        Some((payload, _)) => Ok(payload),
+                        None => Err(serde::de::Error::custom(primary_error)),
+                    }
+                }
+                "expired" => {
+                    let primary_error = match serde_json::from_value::<RelayExpired>(value.clone())
+                    {
+                        Ok(payload) => return Ok(Self::RelayExpired(payload)),
+                        Err(error) => error,
+                    };
+                    let mut structural_match: Option<(Self, &'static str)> = None;
+                    if let Ok(payload) = serde_json::from_value::<RelayStarting>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "expired",
+                                first_name,
+                                stringify!(RelayStarting),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayStarting(payload), stringify!(RelayStarting)));
+                    }
+                    if let Ok(payload) =
+                        serde_json::from_value::<RelayAwaitingBrowser>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "expired",
+                                first_name,
+                                stringify!(RelayAwaitingBrowser),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::RelayAwaitingBrowser(payload),
+                            stringify!(RelayAwaitingBrowser),
+                        ));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayAwaitingCode>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "expired",
+                                first_name,
+                                stringify!(RelayAwaitingCode),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::RelayAwaitingCode(payload),
+                            stringify!(RelayAwaitingCode),
+                        ));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelaySaving>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "expired",
+                                first_name,
+                                stringify!(RelaySaving),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelaySaving(payload), stringify!(RelaySaving)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayCompleted>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "expired",
+                                first_name,
+                                stringify!(RelayCompleted),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayCompleted(payload), stringify!(RelayCompleted)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayFailed>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "expired",
+                                first_name,
+                                stringify!(RelayFailed),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayFailed(payload), stringify!(RelayFailed)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayCancelled>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "expired",
+                                first_name,
+                                stringify!(RelayCancelled),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayCancelled(payload), stringify!(RelayCancelled)));
+                    }
+                    match structural_match {
+                        Some((payload, _)) => Ok(payload),
+                        None => Err(serde::de::Error::custom(primary_error)),
+                    }
+                }
+                "cancelled" => {
+                    let primary_error =
+                        match serde_json::from_value::<RelayCancelled>(value.clone()) {
+                            Ok(payload) => return Ok(Self::RelayCancelled(payload)),
+                            Err(error) => error,
+                        };
+                    let mut structural_match: Option<(Self, &'static str)> = None;
+                    if let Ok(payload) = serde_json::from_value::<RelayStarting>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "cancelled",
+                                first_name,
+                                stringify!(RelayStarting),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayStarting(payload), stringify!(RelayStarting)));
+                    }
+                    if let Ok(payload) =
+                        serde_json::from_value::<RelayAwaitingBrowser>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "cancelled",
+                                first_name,
+                                stringify!(RelayAwaitingBrowser),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::RelayAwaitingBrowser(payload),
+                            stringify!(RelayAwaitingBrowser),
+                        ));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayAwaitingCode>(value.clone())
+                    {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "cancelled",
+                                first_name,
+                                stringify!(RelayAwaitingCode),
+                            )));
+                        }
+                        structural_match = Some((
+                            Self::RelayAwaitingCode(payload),
+                            stringify!(RelayAwaitingCode),
+                        ));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelaySaving>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "cancelled",
+                                first_name,
+                                stringify!(RelaySaving),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelaySaving(payload), stringify!(RelaySaving)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayCompleted>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "cancelled",
+                                first_name,
+                                stringify!(RelayCompleted),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayCompleted(payload), stringify!(RelayCompleted)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayFailed>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "cancelled",
+                                first_name,
+                                stringify!(RelayFailed),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayFailed(payload), stringify!(RelayFailed)));
+                    }
+                    if let Ok(payload) = serde_json::from_value::<RelayExpired>(value.clone()) {
+                        if let Some((_, first_name)) = &structural_match {
+                            return Err(serde::de::Error::custom(format!(
+                                "discriminator `{}` value `{}` did not fit its mapped branch and structurally matched both `{}` and `{}`",
+                                "state",
+                                "cancelled",
+                                first_name,
+                                stringify!(RelayExpired),
+                            )));
+                        }
+                        structural_match =
+                            Some((Self::RelayExpired(payload), stringify!(RelayExpired)));
+                    }
+                    match structural_match {
+                        Some((payload, _)) => Ok(payload),
+                        None => Err(serde::de::Error::custom(primary_error)),
+                    }
+                }
+                other => Err(serde::de::Error::custom(format!(
+                    "unknown discriminator value `{other}` for `{}`",
+                    "state",
+                ))),
+            },
+            None => Err(serde::de::Error::custom(concat!(
+                "missing string discriminator `",
+                "state",
+                "`",
+            ))),
+        }
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RelayStarting {
+    pub state: RelayStartingState,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum RelayStartingState {
+    #[default]
+    #[serde(rename = "starting")]
+    Starting,
+}
+impl RelayStartingState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+        }
+    }
+}
+impl ::std::fmt::Display for RelayStartingState {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for RelayStartingState {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RelaySaving {
+    pub state: RelaySavingState,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum RelaySavingState {
+    #[default]
+    #[serde(rename = "saving")]
+    Saving,
+}
+impl RelaySavingState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Saving => "saving",
+        }
+    }
+}
+impl ::std::fmt::Display for RelaySavingState {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for RelaySavingState {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RelayFailed {
+    pub diagnostic: Diagnostic,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<RelaySavedMaterial>,
+    pub state: RelayFailedState,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RelaySavedMaterial {
+    pub holding: SignInHolding,
+    pub revision: i64,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum RelayFailedState {
+    #[default]
+    #[serde(rename = "failed")]
+    Failed,
+}
+impl RelayFailedState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Failed => "failed",
+        }
+    }
+}
+impl ::std::fmt::Display for RelayFailedState {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for RelayFailedState {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RelayExpired {
+    pub state: RelayExpiredState,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum RelayExpiredState {
+    #[default]
+    #[serde(rename = "expired")]
+    Expired,
+}
+impl RelayExpiredState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Expired => "expired",
+        }
+    }
+}
+impl ::std::fmt::Display for RelayExpiredState {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for RelayExpiredState {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RelayEnd {
+    pub id: String,
+    pub version: i64,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RelayCompleted {
+    pub sign_in: SavedSignIn,
+    pub state: RelayCompletedState,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum RelayCompletedState {
+    #[default]
+    #[serde(rename = "completed")]
+    Completed,
+}
+impl RelayCompletedState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+        }
+    }
+}
+impl ::std::fmt::Display for RelayCompletedState {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for RelayCompletedState {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RelayCancelled {
+    pub state: RelayCancelledState,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum RelayCancelledState {
+    #[default]
+    #[serde(rename = "cancelled")]
+    Cancelled,
+}
+impl RelayCancelledState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+impl ::std::fmt::Display for RelayCancelledState {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for RelayCancelledState {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RelayAwaitingCode {
+    pub state: RelayAwaitingCodeState,
+    pub url: url::Url,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum RelayAwaitingCodeState {
+    #[default]
+    #[serde(rename = "awaiting_code")]
+    AwaitingCode,
+}
+impl RelayAwaitingCodeState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::AwaitingCode => "awaiting_code",
+        }
+    }
+}
+impl ::std::fmt::Display for RelayAwaitingCodeState {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for RelayAwaitingCodeState {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RelayAwaitingBrowser {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    pub state: RelayAwaitingBrowserState,
+    pub url: url::Url,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum RelayAwaitingBrowserState {
+    #[default]
+    #[serde(rename = "awaiting_browser")]
+    AwaitingBrowser,
+}
+impl RelayAwaitingBrowserState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::AwaitingBrowser => "awaiting_browser",
+        }
+    }
+}
+impl ::std::fmt::Display for RelayAwaitingBrowserState {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for RelayAwaitingBrowserState {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
 ///Whether work can start in an Organization, read at this request. Ready means a usable path exists, not that every saved sign-in works.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Readiness {
@@ -10788,6 +12385,8 @@ pub enum Action {
     RetryReadAction(RetryReadAction),
     RetryRequestAction(RetryRequestAction),
     InspectOperationAction(InspectOperationAction),
+    ContinueSignInRelayAction(ContinueSignInRelayAction),
+    CancelSignInRelayAction(CancelSignInRelayAction),
 }
 impl Serialize for Action {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -10829,6 +12428,10 @@ impl Serialize for Action {
             Self::RetryReadAction(value) => serde::Serialize::serialize(value, serializer),
             Self::RetryRequestAction(value) => serde::Serialize::serialize(value, serializer),
             Self::InspectOperationAction(value) => serde::Serialize::serialize(value, serializer),
+            Self::ContinueSignInRelayAction(value) => {
+                serde::Serialize::serialize(value, serializer)
+            }
+            Self::CancelSignInRelayAction(value) => serde::Serialize::serialize(value, serializer),
         }
     }
 }
@@ -11086,6 +12689,7 @@ impl<'de> Deserialize<'de> for Action {
                             | "\"held_message\""
                             | "\"transcript_payload\""
                             | "\"sign_in_test\""
+                            | "\"sign_in_relay\""
                     )
             })
         }) {
@@ -11130,6 +12734,7 @@ impl<'de> Deserialize<'de> for Action {
                             | "\"held_message\""
                             | "\"transcript_payload\""
                             | "\"sign_in_test\""
+                            | "\"sign_in_relay\""
                     )
             })
         }) {
@@ -11540,6 +13145,60 @@ impl<'de> Deserialize<'de> for Action {
                 }
             }
         }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null()
+                    || matches!(value.to_string().as_str(), "\"continue_sign_in_relay\"")
+            })
+        }) {
+            if let Ok(candidate) =
+                serde_json::from_value::<ContinueSignInRelayAction>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::ContinueSignInRelayAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::ContinueSignInRelayAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if input.as_object().is_some_and(|object| {
+            true && object.get("action").is_some_and(|value| {
+                value.is_null() || matches!(value.to_string().as_str(), "\"cancel_sign_in_relay\"")
+            })
+        }) {
+            if let Ok(candidate) = serde_json::from_value::<CancelSignInRelayAction>(input.clone())
+            {
+                match serde_json::to_value(&candidate) {
+                    Ok(encoded) if encoded == input => {
+                        if matched.is_some() {
+                            return Err(serde::de::Error::custom(concat!(
+                                "ambiguous oneOf value for ",
+                                stringify!(Action),
+                                ": more than one branch preserved the complete input",
+                            )));
+                        }
+                        matched = Some(Self::CancelSignInRelayAction(candidate));
+                    }
+                    Ok(encoded) if preserves_complete_json_input(&encoded, &input, true, false) => {
+                        equivalent_matches += 1;
+                        equivalent.get_or_insert(Self::CancelSignInRelayAction(candidate));
+                    }
+                    _ => {}
+                }
+            }
+        }
         if let Some(matched) = matched {
             return Ok(matched);
         }
@@ -11781,6 +13440,8 @@ pub enum Resource {
     TranscriptPayload,
     #[serde(rename = "sign_in_test")]
     SignInTest,
+    #[serde(rename = "sign_in_relay")]
+    SignInRelay,
 }
 impl Resource {
     pub fn as_str(&self) -> &'static str {
@@ -11799,6 +13460,7 @@ impl Resource {
             Self::HeldMessage => "held_message",
             Self::TranscriptPayload => "transcript_payload",
             Self::SignInTest => "sign_in_test",
+            Self::SignInRelay => "sign_in_relay",
         }
     }
 }
@@ -11808,6 +13470,38 @@ impl ::std::fmt::Display for Resource {
     }
 }
 impl AsRef<str> for Resource {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContinueSignInRelayAction {
+    pub action: ContinueSignInRelayActionAction,
+    pub harness: String,
+    pub method: String,
+    pub organization: String,
+    pub relay: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum ContinueSignInRelayActionAction {
+    #[default]
+    #[serde(rename = "continue_sign_in_relay")]
+    ContinueSignInRelay,
+}
+impl ContinueSignInRelayActionAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ContinueSignInRelay => "continue_sign_in_relay",
+        }
+    }
+}
+impl ::std::fmt::Display for ContinueSignInRelayActionAction {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for ContinueSignInRelayActionAction {
     fn as_ref(&self) -> &str {
         self.as_str()
     }
@@ -11825,6 +13519,38 @@ pub struct CheckConnectionAction {
     ///Whether Compose-specific checks apply, known only from the selected deployment's own evidence.
     pub compose: bool,
     pub service: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancelSignInRelayAction {
+    pub action: CancelSignInRelayActionAction,
+    pub harness: String,
+    pub method: String,
+    pub organization: String,
+    pub relay: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum CancelSignInRelayActionAction {
+    #[default]
+    #[serde(rename = "cancel_sign_in_relay")]
+    CancelSignInRelay,
+}
+impl CancelSignInRelayActionAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::CancelSignInRelay => "cancel_sign_in_relay",
+        }
+    }
+}
+impl ::std::fmt::Display for CancelSignInRelayActionAction {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl AsRef<str> for CancelSignInRelayActionAction {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
 }
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct AgentModel {
@@ -12191,6 +13917,16 @@ pub struct SessionInterrupt {
 pub struct SignInMaterial {
     ///The token or key, or the login file's whole contents, as the method's input says.
     pub value: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SignInRelayCode {
+    ///Constraint: minLength=1, maxLength=4096
+    pub code: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct SignInRelayRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct SignInTestRequest {

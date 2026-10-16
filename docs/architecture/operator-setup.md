@@ -189,6 +189,45 @@ found. Saving never starts one, and nothing else spends model usage on a sign-in
   `interrupted` and destroys the Instance its name gives, beside clearing every
   `credential_use`. Nothing resumes a test, since that would send a second prompt.
 
+## Subscription sign-in relays
+
+`POST …/sign-ins/{harness}/{method}/relay` starts a Claude `setup-token` relay, after the
+same image capability gate as a model test; optional `{profile}` selects one of the Operator's
+own Profiles, otherwise the save path resolves or declares theirs. A relay has a non-secret UUID,
+its exact destination, a monotonically increasing `version`, and an absolute ten-minute `deadline`.
+A partial unique index and a write transaction enforce one active relay per Profile entry, across
+harnesses and methods; another start answers 409 with its current locator and typed continue/cancel
+steps. Distinct Profiles and Organizations proceed independently.
+
+`GET …/relay/{relay}` returns the latest snapshot. `POST …/code {code}` accepts one hidden answer
+only in `awaiting_code`, commits `saving` and hands the answer through a bounded in-memory mailbox;
+it never persists the answer. Inspect a known relay after losing any write response. `DELETE`
+ends an active relay as `cancelled` and returns an existing terminal result unchanged. Every route
+checks the Organization/harness/method scope before exposing state. Terminal snapshots remain
+readable across restart for 24 hours after finishing, then answer 410; old snapshots are cleared,
+leaving scoped tombstones.
+
+The work role claims attempts and runs the pinned image's `claude setup-token` in a fresh Instance,
+through a 240-column, 40-row PTY (`sign_in/relay.rs`, `compute/terminal.rs`). The bounded VT screen
+decoder reconstructs wrapped first-party authorization URLs, recognizes OAuth failure screens,
+intercepts the token privately and supplies continuation Enter when needed. Saving requires both
+the captured token and a natural successful exit. No raw screen, pasted answer or token enters
+relay metadata, responses, events or logs, and no inference is performed. Completion records
+`login_completed` authentication evidence and no model-use evidence.
+
+An accepted Profile entry write cancels its active relay in the same transaction. Relay completion
+claims its terminal outcome and compares the original material revision before holding anything,
+so an import or cancellation wins over a late result. Cleanup belongs to a claimed worker until it
+releases the attempt; the maintenance pass retries unattended cleanup. A restart first marks
+unfinished attempts failed, then cleans up their deterministically named Instances. Local PTY
+processes keep the same inherited cleanup locks as supervisors. Provisioning is cancellable and bounded by the relay deadline; each Docker removal request has
+a ten-second budget. Daemon cleanup failure is retried
+without preventing the control plane from serving retained state.
+
+The browser polls. CLI consumers may reconnect to `GET …/events`: it sends the latest `relay`
+snapshot immediately, then changed versions, and a terminal snapshot followed by `end` before
+closing. Dropping either read or event connections leaves the relay running to its deadline.
+
 ## Image capabilities
 
 `capability.rs` resolves the configured image reference again on every read, through

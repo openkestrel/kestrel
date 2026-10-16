@@ -2,6 +2,8 @@
 
 use std::io::{self, Write as _};
 use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+use tokio_util::sync::CancellationToken;
 
 use super::{Exited, IdleHint, Instance, Provisioned, Streaming, Supervising, Supervisor};
 
@@ -39,6 +41,25 @@ impl Docker {
     }
 
     pub(super) fn provision(&self, holder: &str) -> io::Result<Instance> {
+        self.provisioning(holder, docker)
+    }
+
+    pub(super) fn provision_until(
+        &self,
+        holder: &str,
+        deadline: Instant,
+        cancel: &CancellationToken,
+    ) -> io::Result<Instance> {
+        self.provisioning(holder, |arguments| {
+            docker_until(arguments, deadline, cancel)
+        })
+    }
+
+    fn provisioning(
+        &self,
+        holder: &str,
+        mut request: impl FnMut(&[&str]) -> io::Result<Vec<u8>>,
+    ) -> io::Result<Instance> {
         let container = super::named_after(&holder);
         let mut created = vec![
             "create".to_owned(),
@@ -69,12 +90,12 @@ impl Docker {
             ]
             .map(str::to_owned),
         );
-        docker(&created.iter().map(String::as_str).collect::<Vec<_>>())?;
+        request(&created.iter().map(String::as_str).collect::<Vec<_>>())?;
 
         // Started rather than attached, so that by the time this returns the container is
         // running and an operation on it cannot race the daemon into existence.
-        if let Err(error) = docker(&["start", &container]) {
-            let _ = removed(&container);
+        if let Err(error) = request(&["start", &container]) {
+            let _ = request(&["rm", "--force", "--volumes", &container]);
             return Err(error);
         }
 
@@ -111,6 +132,24 @@ struct Container {
 }
 
 impl Provisioned for Container {
+    fn terminal(&mut self, argv: &[&str]) -> anyhow::Result<super::Terminal> {
+        let mut command = Command::new("docker");
+        command.args([
+            "exec",
+            "--interactive",
+            "--tty",
+            "--workdir",
+            ROOT,
+            "--env",
+            "TERM=xterm-256color",
+            "--env",
+            "BROWSER=/bin/true",
+            &self.container,
+        ]);
+        command.args(argv);
+        super::Terminal::spawn(command, None)
+    }
+
     fn exec(&mut self, command: &[&str]) -> io::Result<Streaming> {
         let mut arguments = vec!["exec", "--workdir", ROOT, &self.container];
         arguments.extend_from_slice(command);
@@ -243,6 +282,124 @@ fn removed(container: &str) -> io::Result<()> {
 
 pub(super) fn destroy_named(instance: &str) -> io::Result<()> {
     removed(named(instance)?)
+}
+
+pub(super) fn destroy_until(instance: &str, deadline: Instant) -> io::Result<()> {
+    let result = docker_until(
+        &["rm", "--force", "--volumes", named(instance)?],
+        deadline,
+        &CancellationToken::new(),
+    );
+    match result {
+        Err(error) if gone(&error) => Ok(()),
+        result => result.map(drop),
+    }
+}
+
+#[cfg(unix)]
+fn docker_until(
+    arguments: &[&str],
+    deadline: Instant,
+    cancel: &CancellationToken,
+) -> io::Result<Vec<u8>> {
+    use std::os::fd::AsRawFd as _;
+    use std::os::unix::process::CommandExt as _;
+    if cancel.is_cancelled() || Instant::now() >= deadline {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "the Docker request has no time remaining",
+        ));
+    }
+    let mut child = Command::new("docker")
+        .args(arguments)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let result = (|| {
+        let mut stdout = child.stdout.take().expect("piped stdout");
+        let mut stderr = child.stderr.take().expect("piped stderr");
+        for fd in [stdout.as_raw_fd(), stderr.as_raw_fd()] {
+            #[allow(unsafe_code)]
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            #[allow(unsafe_code)]
+            if flags == -1
+                || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
+            {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut out_closed = false;
+        let mut err_closed = false;
+        let mut status = None;
+        loop {
+            if cancel.is_cancelled() || Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "the Docker request was cancelled or exceeded its deadline",
+                ));
+            }
+            if !out_closed {
+                out_closed = drain(&mut stdout, &mut out)?;
+            }
+            if !err_closed {
+                err_closed = drain(&mut stderr, &mut err)?;
+            }
+            if status.is_none() {
+                status = child.try_wait()?;
+            }
+            if out_closed
+                && err_closed
+                && let Some(status) = status
+            {
+                if status.success() {
+                    return Ok(out);
+                }
+                return Err(io::Error::other(format!(
+                    "`docker {}` failed: {}",
+                    arguments.join(" "),
+                    String::from_utf8_lossy(&err).trim()
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    })();
+    if result.is_err() {
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::killpg(child.id() as i32, libc::SIGKILL);
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    result
+}
+
+#[cfg(unix)]
+fn drain(stream: &mut impl io::Read, captured: &mut Vec<u8>) -> io::Result<bool> {
+    let mut buffer = [0; 4096];
+    for _ in 0..16 {
+        match stream.read(&mut buffer) {
+            Ok(0) => return Ok(true),
+            Ok(count) => captured.extend_from_slice(
+                &buffer[..count.min((1024 * 1024_usize).saturating_sub(captured.len()))],
+            ),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(not(unix))]
+fn docker_until(_: &[&str], _: Instant, _: &CancellationToken) -> io::Result<Vec<u8>> {
+    Err(io::Error::other(
+        "bounded Docker requests require a Unix control plane",
+    ))
 }
 
 fn named(instance: &str) -> io::Result<&str> {

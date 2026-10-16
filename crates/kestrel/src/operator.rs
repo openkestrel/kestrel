@@ -85,6 +85,14 @@ pub const SIGN_IN_TESTS: &str =
     "/operator/organizations/{organization}/sign-ins/{harness}/{method}/tests";
 pub const SIGN_IN_TEST: &str =
     "/operator/organizations/{organization}/sign-ins/{harness}/{method}/tests/{test}";
+pub const SIGN_IN_RELAYS: &str =
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}/relay";
+pub const SIGN_IN_RELAY: &str =
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}/relay/{relay}";
+pub const SIGN_IN_RELAY_CODE: &str =
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}/relay/{relay}/code";
+pub const SIGN_IN_RELAY_EVENTS: &str =
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}/relay/{relay}/events";
 pub const GITHUB_APP: &str = "/operator/organizations/{organization}/github-app";
 pub const INTEGRATIONS: &str = "/operator/organizations/{organization}/integrations";
 pub const INTEGRATION: &str = "/operator/organizations/{organization}/integrations/{integration}";
@@ -428,6 +436,13 @@ pub fn router(
         .route(SIGN_IN, put(save_sign_in))
         .route(SIGN_IN_TESTS, post(test_sign_in))
         .route(SIGN_IN_TEST, get(sign_in_test))
+        .route(SIGN_IN_RELAYS, post(start_sign_in_relay))
+        .route(
+            SIGN_IN_RELAY,
+            get(read_sign_in_relay).delete(cancel_sign_in_relay),
+        )
+        .route(SIGN_IN_RELAY_CODE, post(submit_sign_in_relay_code))
+        .route(SIGN_IN_RELAY_EVENTS, get(follow_sign_in_relay))
         .route(INTEGRATIONS, get(integrations).post(register_integration))
         .route(INTEGRATION, get(show_integration).patch(change_integration))
         .route(INTEGRATION_DISABLE, post(disable_integration))
@@ -2375,6 +2390,93 @@ async fn sign_in_test(
     .await?;
 
     Ok(Json(test.into()))
+}
+
+async fn start_sign_in_relay(
+    State(cp): State<ControlPlane>,
+    Path((organization, harness, method)): Path<(String, String, String)>,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, Json<wire::SignInRelay>), Refused> {
+    let request: wire::SignInRelayRequest = if body.is_empty() {
+        Default::default()
+    } else {
+        let sent: serde_json::Value =
+            serde_json::from_slice(&body).map_err(|error| malformed(None, error.to_string()))?;
+        closed(&sent).map_err(|why| malformed(None, why))?
+    };
+    let relay = sign_in::relay::start(
+        &cp.store,
+        &cp.images,
+        &organization,
+        &harness,
+        &method,
+        request.profile.as_deref(),
+    )
+    .await?;
+    Ok((StatusCode::ACCEPTED, Json(relay)))
+}
+
+async fn read_sign_in_relay(
+    State(cp): State<ControlPlane>,
+    Path((organization, harness, method, id)): Path<(String, String, String, String)>,
+) -> Result<Json<wire::SignInRelay>, Refused> {
+    Ok(Json(
+        sign_in::relay::read(&cp.store, &organization, &harness, &method, &id).await?,
+    ))
+}
+
+async fn cancel_sign_in_relay(
+    State(cp): State<ControlPlane>,
+    Path((organization, harness, method, id)): Path<(String, String, String, String)>,
+) -> Result<Json<wire::SignInRelay>, Refused> {
+    Ok(Json(
+        sign_in::relay::cancel(&cp.store, &organization, &harness, &method, &id).await?,
+    ))
+}
+
+async fn submit_sign_in_relay_code(
+    State(cp): State<ControlPlane>,
+    Path((organization, harness, method, id)): Path<(String, String, String, String)>,
+    code: Result<Json<serde_json::Value>, JsonRejection>,
+) -> Result<Json<wire::SignInRelay>, Refused> {
+    let code = code
+        .map_err(|_| malformed(Some("code"), "an authorization code is required".to_owned()))?
+        .0;
+    let code: wire::SignInRelayCode = closed(&code).map_err(|_| {
+        malformed(
+            Some("code"),
+            "an authorization code is required without extra fields",
+        )
+    })?;
+    Ok(Json(
+        sign_in::relay::code(&cp.store, &organization, &harness, &method, &id, &code.code).await?,
+    ))
+}
+
+async fn follow_sign_in_relay(
+    State(cp): State<ControlPlane>,
+    Path((organization, harness, method, id)): Path<(String, String, String, String)>,
+) -> Result<Sse<impl Stream<Item = Result<Event, BoxError>>>, Refused> {
+    let first = sign_in::relay::read(&cp.store, &organization, &harness, &method, &id).await?;
+    Ok(Sse::new(async_stream::try_stream! {
+        let mut latest = first;
+        loop {
+            let finished = sign_in::relay::terminal(&latest.progress);
+            let version = latest.version;
+            let event = wire::RelayEvent::SignInRelay(latest);
+            yield Event::default().event(event.event_name()).json_data(event)?;
+            if finished {
+                let event = wire::RelayEvent::RelayEnd(wire::RelayEnd {id: id.clone(), version});
+                yield Event::default().event(event.event_name()).json_data(event)?;
+                break;
+            }
+            loop {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                latest = sign_in::relay::read(&cp.store, &organization, &harness, &method, &id).await?;
+                if latest.version != version { break; }
+            }
+        }
+    }).keep_alive(KeepAlive::default()))
 }
 
 #[derive(Deserialize)]
@@ -4886,6 +4988,28 @@ fn next_steps(next: declined::Next, organization: Option<&str>) -> Vec<wire::Act
         return steps;
     };
     steps.extend(next.then.into_iter().map(|step| match step {
+        Step::ContinueSignInRelay {
+            harness,
+            method,
+            relay,
+        } => wire::Action::ContinueSignInRelayAction(wire::ContinueSignInRelayAction {
+            action: Default::default(),
+            organization: organization.to_owned(),
+            harness,
+            method,
+            relay,
+        }),
+        Step::CancelSignInRelay {
+            harness,
+            method,
+            relay,
+        } => wire::Action::CancelSignInRelayAction(wire::CancelSignInRelayAction {
+            action: Default::default(),
+            organization: organization.to_owned(),
+            harness,
+            method,
+            relay,
+        }),
         Step::StopSession {
             session,
             consequence,
@@ -4996,6 +5120,7 @@ const fn wire_resource(resource: Resource) -> wire::Resource {
         Resource::HeldMessage => wire::Resource::HeldMessage,
         Resource::TranscriptPayload => wire::Resource::TranscriptPayload,
         Resource::SignInTest => wire::Resource::SignInTest,
+        Resource::SignInRelay => wire::Resource::SignInRelay,
     }
 }
 
@@ -5913,6 +6038,11 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("PUT", SIGN_IN) => "save_sign_in",
         ("POST", SIGN_IN_TESTS) => sign_in::model_test::TEST,
         ("GET", SIGN_IN_TEST) => sign_in::model_test::READ,
+        ("POST", SIGN_IN_RELAYS) => sign_in::relay::START,
+        ("GET", SIGN_IN_RELAY) => sign_in::relay::READ,
+        ("DELETE", SIGN_IN_RELAY) => sign_in::relay::CANCEL,
+        ("POST", SIGN_IN_RELAY_CODE) => sign_in::relay::CODE,
+        ("GET", SIGN_IN_RELAY_EVENTS) => "follow_sign_in_relay",
         ("GET", INTEGRATIONS) => "list_integrations",
         ("POST", INTEGRATIONS) => "register_integration",
         ("GET", INTEGRATION) => "show_integration",

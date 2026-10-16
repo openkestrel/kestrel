@@ -45,6 +45,7 @@ mod profile;
 mod pull_request;
 mod reach;
 mod readiness;
+mod relay;
 mod replies;
 mod restart;
 mod roles;

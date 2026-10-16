@@ -18,7 +18,7 @@ use crate::link::{self, credential::Secret};
 use crate::profile;
 use crate::provider;
 use crate::scheduling::{self, Occupied};
-use crate::sign_in::model_test;
+use crate::sign_in::{model_test, relay};
 use crate::store::{self, Store};
 use crate::timer;
 use crate::work;
@@ -149,7 +149,12 @@ pub async fn run(
                     dispatching(&store, dispatch, &summaries, &shutdown).await
                 }
                 None => {
+                    let mut relays = JoinSet::new();
                     while !shutdown.is_cancelled() {
+                        relay_pass(&store, None, &shutdown, &mut relays).await;
+                        while let Some(finished) = relays.try_join_next() {
+                            warn_if_it_panicked(finished);
+                        }
                         if let Err(error) = model_test::nowhere_to_run(&store).await {
                             warn!(%error, "a pass over sign-in tests found nothing it could do");
                         }
@@ -157,6 +162,9 @@ pub async fn run(
                             () = tokio::time::sleep(POLL) => {}
                             () = shutdown.cancelled() => {}
                         }
+                    }
+                    while let Some(finished) = relays.join_next().await {
+                        warn_if_it_panicked(finished);
                     }
                     Ok(())
                 }
@@ -180,6 +188,7 @@ async fn dispatching(
     let supervisors = Supervisors::default();
 
     while !shutdown.is_cancelled() {
+        relay_pass(store, Some(&dispatch.driver), shutdown, &mut active).await;
         if let Err(error) = watch(store, &supervisors, summaries).await {
             warn!(%error, "a pass over instances' supervisors found nothing it could do");
         }
@@ -250,6 +259,29 @@ async fn dispatching(
     }
 
     Ok(())
+}
+
+async fn relay_pass(
+    store: &Store,
+    driver: Option<&Driver>,
+    shutdown: &CancellationToken,
+    active: &mut JoinSet<()>,
+) {
+    if let Err(error) = relay::maintain(store, driver).await {
+        warn!(%error, "a relay cleanup pass failed");
+    }
+    match relay::claim(store).await {
+        Ok(Some(attempt)) => {
+            active.spawn(relay::run(
+                store.clone(),
+                driver.cloned(),
+                attempt,
+                shutdown.clone(),
+            ));
+        }
+        Ok(None) => {}
+        Err(error) => warn!(%error, "a relay claim failed"),
+    }
 }
 
 fn warn_if_it_panicked(finished: Result<(), JoinError>) {

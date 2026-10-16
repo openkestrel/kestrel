@@ -167,7 +167,8 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
   [ADR-0047](../adr/0047-kestrel-relays-a-persons-own-sign-in.md),
   [ADR-0048](../adr/0048-the-environment-image-carries-every-catalogued-harness.md),
   [ADR-0049](../adr/0049-an-install-has-one-operator-and-by-default-one-organization.md)):
-  the sign-in catalogue and image capability labels are implemented, but the sign-in relay is not.
+  the sign-in catalogue, image capability labels and Claude subscription relay are implemented;
+  Codex device authorization is not.
   A saved sign-in can be tested at the operator boundary, and no Client starts a test yet.
   The Operator's defaults apply at the boundary and in the CLI, but nothing marks initial setup
   complete yet. The browser resumes unfinished setup from install and readiness reads; its workbench

@@ -62,6 +62,7 @@ erDiagram
 
 | Table | Holds | Notes |
 | --- | --- | --- |
+| `sign_in_relay` | A bounded vendor login's safe progress | A partial unique index permits one active relay per Profile entry; terminal snapshots expire after 24 hours, leaving scoped tombstones, and `cleaned` tracks retryable Instance cleanup. |
 | `operator` | The install's person | One stable ID and a renameable label; naming authenticates nobody. |
 | `organization` | The boundary | `max_live_instances` caps Instances across its Workspaces. |
 | `project`, `project_repository` | Repositories and default branch | Ordered by `position`; the first is where ACP sessions are rooted. `integration_id` is the Integration the repository selects, or null. |

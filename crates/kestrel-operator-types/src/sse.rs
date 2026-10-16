@@ -42,3 +42,18 @@ impl Event {
         })
     }
 }
+impl RelayEvent {
+    pub fn event_name(&self) -> &'static str {
+        match self {
+            Self::SignInRelay(..) => "relay",
+            Self::RelayEnd(..) => "end",
+        }
+    }
+    pub fn from_sse(event: &str, data: &str) -> Option<Result<Self, serde_json::Error>> {
+        Some(match event {
+            "relay" => serde_json::from_str(data).map(Self::SignInRelay),
+            "end" => serde_json::from_str(data).map(Self::RelayEnd),
+            _ => return None,
+        })
+    }
+}
