@@ -346,6 +346,24 @@ describe("a follow's connection", () => {
 		expect(mirror.snapshot().entries).toEqual([]);
 	});
 
+	it("reconnects by itself while the notice is shown, so the notice leaves unasked", async () => {
+		const { server, stream, mirror, session } = following("operator");
+		// One attempt fails; the next is the follow's own backoff, with nothing asking it to retry.
+		server.unreachable(1);
+
+		session.start();
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("unavailable"));
+		await vi.waitFor(() => expect(server.puts).toHaveLength(1));
+		const id = server.puts[0]?.id ?? "";
+		server.send(id, "entry", JSON.parse(recorded(1)), "w:1");
+		server.send(id, "follower", FOLLOWER);
+		await vi.waitFor(() => expect(mirror.snapshot().connection.state).toBe("live"));
+		session.stop();
+		stream.close();
+
+		expect(mirror.snapshot().entries.map((entry) => entry.seq)).toEqual([1]);
+	});
+
 	it("keeps its entries while reconnecting, and resumes without duplicates", async () => {
 		const { server, stream, mirror, session } = following("operator");
 		const seen = states(mirror);

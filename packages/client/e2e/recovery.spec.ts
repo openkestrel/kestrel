@@ -205,6 +205,7 @@ test.describe("a Transcript follow", () => {
 		await page.goto(`/organizations/acme/workspaces/${workspace}`);
 
 		const transcript = page.getByRole("region", { name: "Transcript" });
+		const pane = page.getByRole("region", { name: "Transcript", exact: true });
 		const unavailable = transcript.getByRole("region", { name: "Transcript unavailable" });
 		await expect(unavailable).toBeVisible({ timeout: 20_000 });
 		await expect(unavailable.getByRole("alert")).toContainText("could not be reached");
@@ -212,17 +213,29 @@ test.describe("a Transcript follow", () => {
 			0,
 		);
 
-		cut.failing = false;
+		// The follow retries on its own, so the notice stands still only while the control plane is
+		// cut: the keyboard path to Reconnect is taken first.
 		const reconnect = unavailable.getByRole("button", { name: "Reconnect" });
 		await reconnect.focus();
 		await expect(reconnect).toBeFocused();
 		await page.keyboard.press("Enter");
+		// The notice leaves with the focus it held, which the Transcript pane takes rather than the document.
+		await expect(pane).toBeFocused();
+		await expect(unavailable).toBeVisible();
+
+		// The failed retry returns the notice, and with it the button a keyboard user is on.
+		await reconnect.focus();
+		await expect(reconnect).toBeFocused();
+
+		// Lifting the cut lets the follow reconnect by itself, which takes the notice and its button.
+		cut.failing = false;
 
 		await expect(
 			page.getByRole("log").getByRole("article", { name: ACTOR }).filter({ hasText: "one" }),
 		).toBeVisible({
 			timeout: 20_000,
 		});
+		await expect(pane).toBeFocused();
 		await expect(unavailable).toHaveCount(0);
 	});
 
