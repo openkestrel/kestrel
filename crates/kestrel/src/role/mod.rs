@@ -37,6 +37,12 @@ pub async fn bind(
 }
 
 impl AllInOne {
+    #[must_use]
+    pub fn with_webhook_base(mut self, base: Option<String>) -> Self {
+        self.listening = self.listening.with_webhook_base(base);
+        self
+    }
+
     pub fn bound(&self) -> serve::Listen {
         self.listening.bound()
     }

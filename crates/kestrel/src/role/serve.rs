@@ -35,11 +35,18 @@ pub struct Listening {
     follow_lease: Duration,
     providers: Providers,
     github_app_api: String,
+    webhook_base: Option<String>,
     images: Images,
     pub(crate) live: crate::live::Live,
 }
 
 impl Listening {
+    #[must_use]
+    pub fn with_webhook_base(mut self, base: Option<String>) -> Self {
+        self.webhook_base = base;
+        self
+    }
+
     pub fn bound(&self) -> Listen {
         self.bound
     }
@@ -93,6 +100,7 @@ pub async fn bind(
         follow_lease,
         providers: Providers::default(),
         github_app_api: crate::integration::github::API.into(),
+        webhook_base: None,
         images: Images::default(),
         live: crate::live::Live::default(),
     })
@@ -109,6 +117,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         follow_lease,
         providers,
         github_app_api,
+        webhook_base,
         images,
         live,
     } = listening;
@@ -148,6 +157,7 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         client,
         providers,
         github_app_api,
+        webhook_base,
     );
 
     let serving_link = axum::serve(link_listener, link_router)

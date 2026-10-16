@@ -71,12 +71,12 @@ pub async fn start(
             "The GitHub organization must be a login."
         ));
     }
-    registration.callback_base = base(&registration.callback_base, true)?;
+    registration.callback_base = base(&registration.callback_base, true, "github_app_setup")?;
     registration.webhook_base = registration
         .webhook_base
         .flatten()
         .as_deref()
-        .map(|url| base(url, false))
+        .map(|url| base(url, false, "github_app_setup"))
         .transpose()?
         .map(Some);
     let mut tx = store.begin().await?;
@@ -614,12 +614,13 @@ pub fn installed_page(state: &str) -> String {
     )
 }
 
-fn base(value: &str, loopback: bool) -> Result<String> {
-    let url = reqwest::Url::parse(value).map_err(|_| {
-        invalid(
-            "callback_base",
-            "A callback or webhook base must be an absolute URL.",
-        )
+pub(super) fn base(value: &str, loopback: bool, operation: &'static str) -> Result<String> {
+    let url = reqwest::Url::parse(value).map_err(|_| Reason::InvalidField {
+        field: if loopback { "callback_base" } else { "base" },
+        operation,
+        constraint: Constraint::WellFormed,
+        allowed: None,
+        message: "A callback or webhook base must be an absolute URL.".into(),
     })?;
     let local = url.host_str().is_some_and(|host| {
         host == "localhost"
@@ -638,10 +639,14 @@ fn base(value: &str, loopback: bool) -> Result<String> {
         || (loopback && !local)
         || (!loopback && (local || url.scheme() != "https"))
     {
-        bail!(invalid(
-            "callback_base",
-            "The callback base must be a loopback HTTP(S) origin; the webhook base must be a public HTTPS origin."
-        ));
+        bail!(Reason::InvalidField {
+            field: if loopback { "callback_base" } else { "base" },
+            operation,
+            constraint: Constraint::WellFormed,
+            allowed: None,
+            message:
+            "The callback base must be a loopback HTTP(S) origin; the webhook base must be a public HTTPS origin.".into(),
+        });
     }
     Ok(url.as_str().trim_end_matches('/').into())
 }

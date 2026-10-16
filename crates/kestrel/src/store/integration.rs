@@ -412,6 +412,7 @@ impl<'a> Integrations<'a> {
             "the integration {} changed while it was being retired",
             read.name
         );
+        self.finish_hook_url(read).await?;
         sqlx::query("DELETE FROM webhook_secret_rotation WHERE integration_id = ?")
             .bind(read.id.to_string())
             .execute(&mut *self.connection)
@@ -499,6 +500,33 @@ impl<'a> Integrations<'a> {
             )
         })?
         .is_some())
+    }
+
+    pub async fn pending_hook_url(&mut self, integration: &Integration) -> Result<Option<String>> {
+        sqlx::query_scalar("SELECT url FROM hook_url_update WHERE integration_id = ?")
+            .bind(integration.id.to_string())
+            .fetch_optional(&mut *self.connection)
+            .await
+            .context("reading an unfinished hook URL update")
+    }
+
+    pub async fn start_hook_url(&mut self, integration: &Integration, url: &str) -> Result<()> {
+        sqlx::query("INSERT INTO hook_url_update (integration_id, url) VALUES (?, ?)")
+            .bind(integration.id.to_string())
+            .bind(url)
+            .execute(&mut *self.connection)
+            .await
+            .context("reserving the App hook for a URL update")?;
+        Ok(())
+    }
+
+    pub async fn finish_hook_url(&mut self, integration: &Integration) -> Result<()> {
+        sqlx::query("DELETE FROM hook_url_update WHERE integration_id = ?")
+            .bind(integration.id.to_string())
+            .execute(&mut *self.connection)
+            .await
+            .context("ending the App hook URL update")?;
+        Ok(())
     }
 
     pub async fn signs_webhooks(&mut self, integration: &Integration) -> Result<bool> {

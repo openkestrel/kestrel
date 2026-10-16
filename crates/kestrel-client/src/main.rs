@@ -309,7 +309,7 @@ enum IntegrationCommand {
         /// Browser-reachable loopback origin (defaults to the control-plane URL)
         #[arg(long)]
         callback_base: Option<String>,
-        /// Public HTTPS origin of the webhook listener; omit to poll GitHub
+        /// Public HTTPS origin of the webhook listener; omit to use the deployment setting
         #[arg(long)]
         webhook_base: Option<String>,
         #[arg(long, env = "KESTREL_GITHUB_API", hide = true)]
@@ -432,6 +432,24 @@ enum GithubCommand {
     /// Rotate the webhook secret of the App an Integration signs as, resuming one interrupted
     #[command(subcommand)]
     RotateSecret(RotateSecretCommand),
+    /// Set the App hook URL or inspect recent Delivery results; polling always continues
+    #[command(subcommand)]
+    Webhook(WebhookCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum WebhookCommand {
+    /// Change only the App hook URL; acknowledgement does not prove reachability
+    SetUrl {
+        name: String,
+        /// Public HTTPS origin; omitted to use the control plane's deployment setting
+        #[arg(long)]
+        base: Option<String>,
+        #[arg(long)]
+        revision: Option<i64>,
+    },
+    /// Read the configured URL and recent HTTP results from GitHub's Delivery log
+    Status { name: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1416,6 +1434,42 @@ async fn run(
                 )
                 .await?;
             shown_integration(&presentation, invocation, replaced)?;
+        }
+        Command::Integration(IntegrationCommand::Github(GithubCommand::Webhook(command))) => {
+            let organization = scoping.resolve().await?.organization;
+            match command {
+                WebhookCommand::SetUrl {
+                    name,
+                    base,
+                    revision,
+                } => {
+                    let integration: wire::Integration = api
+                        .put_as(
+                            &[
+                                "organizations",
+                                &organization,
+                                "integrations",
+                                &name,
+                                "webhook",
+                            ],
+                            &wire::IntegrationWebhookUrl { base, revision },
+                        )
+                        .await?;
+                    shown_integration(&presentation, invocation, integration)?;
+                }
+                WebhookCommand::Status { name } => {
+                    let hook: wire::IntegrationWebhook = api
+                        .get_as(&[
+                            "organizations",
+                            &organization,
+                            "integrations",
+                            &name,
+                            "webhook",
+                        ])
+                        .await?;
+                    typed::show(&presentation, &view::INTEGRATION_WEBHOOK, &hook)?;
+                }
+            }
         }
         Command::Integration(IntegrationCommand::Github(GithubCommand::RotateSecret(rotating))) => {
             let organization = scoping.resolve().await?.organization;

@@ -277,3 +277,10 @@ expired material. Safe completion remains readable and idempotent until the orig
 Failed or uncertain one-time conversion cannot replay its code: status explains restart and manual
 cleanup. No flow action deletes or uninstalls a remote App. Without a public webhook base the active
 hook stays at `https://unreachable.invalid`; registered Integrations always poll Deliveries.
+
+`KESTREL_WEBHOOK_BASE` / `--webhook-base` supplies the public HTTPS origin for new Apps and for
+an existing Integration's URL-only `PUT …/integrations/{integration}/webhook` when its `base` is
+omitted. `GET` on that path reads safe hook configuration and recent Delivery HTTP results from
+GitHub's existing log, never claiming reachability from configuration. The CLI exposes both as
+`integration github webhook set-url` and `status`. See [webhook reachability](../webhook-reachability.md)
+for public-server and explicit SSH-tunnel paths that keep operator/Client ports private.

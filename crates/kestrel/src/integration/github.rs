@@ -79,6 +79,20 @@ pub enum Unset {
     Unanswered(anyhow::Error),
 }
 
+#[derive(Deserialize)]
+pub struct Hook {
+    pub url: String,
+}
+
+#[derive(Deserialize)]
+pub struct DeliveryResult {
+    pub guid: String,
+    pub delivered_at: Timestamp,
+    pub status_code: Option<i64>,
+    pub installation_id: Option<i64>,
+    pub repository_id: Option<i64>,
+}
+
 /// A redelivery is listed again under the same `guid`.
 #[derive(Debug, Deserialize)]
 pub struct Listed {
@@ -533,8 +547,64 @@ impl Github {
         }
     }
 
-    /// Acknowledged only by a successful answer: GitHub masks the secret it reads back.
+    pub async fn hook(&self, connection: &GithubConnection) -> Result<Hook, Unset> {
+        self.hook_read(connection, "config").await
+    }
+
+    pub async fn recent_deliveries(
+        &self,
+        connection: &GithubConnection,
+    ) -> Result<Vec<DeliveryResult>, Unset> {
+        self.hook_read(connection, "deliveries?per_page=100").await
+    }
+
+    async fn hook_read<T: DeserializeOwned>(
+        &self,
+        connection: &GithubConnection,
+        path: &str,
+    ) -> Result<T, Unset> {
+        let response = self
+            .as_app(
+                reqwest::Method::GET,
+                &connection.credential,
+                &format!("{}/app/hook/{path}", connection.api.trim_end_matches('/')),
+            )
+            .map_err(Unset::Unanswered)?
+            .send()
+            .await
+            .map_err(|error| Unset::Unanswered(error.into()))?;
+        if let Some(until) = rate_limited(response.status(), response.headers()) {
+            return Err(Unset::RateLimited { until });
+        }
+        match response.status() {
+            StatusCode::UNAUTHORIZED => Err(Unset::Rejected),
+            status if status.is_client_error() => Err(Unset::Refused(status)),
+            status if !status.is_success() => Err(Unset::Unanswered(anyhow!(
+                "github answered {status} to reading the App hook"
+            ))),
+            _ => response
+                .json()
+                .await
+                .map_err(|error| Unset::Unanswered(error.into())),
+        }
+    }
+
     pub async fn set_hook_secret(&self, api: &str, app: &App, secret: &str) -> Result<(), Unset> {
+        self.set_hook(api, app, &serde_json::json!({ "secret": secret }))
+            .await
+    }
+
+    pub async fn set_hook_url(&self, api: &str, app: &App, url: &str) -> Result<(), Unset> {
+        self.set_hook(api, app, &serde_json::json!({ "url": url }))
+            .await
+    }
+
+    async fn set_hook(
+        &self,
+        api: &str,
+        app: &App,
+        change: &serde_json::Value,
+    ) -> Result<(), Unset> {
         let response = self
             .as_app(
                 reqwest::Method::PATCH,
@@ -542,12 +612,12 @@ impl Github {
                 &format!("{}/app/hook/config", api.trim_end_matches('/')),
             )
             .map_err(Unset::Unanswered)?
-            .json(&serde_json::json!({ "secret": secret }))
+            .json(change)
             .send()
             .await
             .map_err(|error| {
                 Unset::Unanswered(anyhow!(
-                    "github could not be asked to change the App's webhook secret: {error}"
+                    "github could not be asked to change the App's webhook configuration: {error}"
                 ))
             })?;
         let status = response.status();
@@ -562,7 +632,7 @@ impl Github {
                 Err(Unset::Refused(status))
             }
             status => Err(Unset::Unanswered(anyhow!(
-                "github answered {status} to changing the App's webhook secret"
+                "github answered {status} to changing the App's webhook configuration"
             ))),
         }
     }

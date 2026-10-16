@@ -104,6 +104,8 @@ pub const INTEGRATION_RETIRE: &str =
     "/operator/organizations/{organization}/integrations/{integration}/retire";
 pub const INTEGRATION_PRIVATE_KEY: &str =
     "/operator/organizations/{organization}/integrations/{integration}/private-key";
+pub const INTEGRATION_WEBHOOK: &str =
+    "/operator/organizations/{organization}/integrations/{integration}/webhook";
 pub const INTEGRATION_WEBHOOK_SECRET_ROTATION: &str =
     "/operator/organizations/{organization}/integrations/{integration}/webhook-secret-rotation";
 pub const INTEGRATION_WEBHOOK_SECRET_ROTATION_RESUME: &str = "/operator/organizations/{organization}/integrations/{integration}/webhook-secret-rotation/resume";
@@ -184,6 +186,7 @@ struct ControlPlane {
     images: Images,
     client: url::Url,
     github_app_api: String,
+    webhook_base: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -402,6 +405,7 @@ pub fn router(
     client: url::Url,
     providers: sign_in::check::Providers,
     github_app_api: String,
+    webhook_base: Option<String>,
 ) -> Router {
     let root = format!(
         "kestrel operator API\n\nClients reach this API under /operator. Open the browser Client at {client}\n"
@@ -455,6 +459,10 @@ pub fn router(
         .route(
             INTEGRATION_WEBHOOK_SECRET_ROTATION_RESUME,
             post(resume_integration_webhook_secret_rotation),
+        )
+        .route(
+            INTEGRATION_WEBHOOK,
+            get(integration_webhook).put(set_integration_webhook_url),
         )
         .route(INTEGRATION_REPOSITORIES, get(integration_repositories))
         .route(
@@ -532,6 +540,7 @@ pub fn router(
             streams,
             providers,
             github_app_api,
+            webhook_base,
             images,
             client,
         })
@@ -2492,7 +2501,15 @@ async fn start_github_app(
     Path(organization): Path<String>,
     registration: Result<Json<wire::GithubAppStart>, JsonRejection>,
 ) -> Result<(StatusCode, Json<wire::GithubAppStarted>), Refused> {
-    let Json(registration) = registration?;
+    let Json(mut registration) = registration?;
+    if registration
+        .webhook_base
+        .as_ref()
+        .and_then(|base| base.as_ref())
+        .is_none()
+    {
+        registration.webhook_base = control_plane.webhook_base.clone().map(Some);
+    }
     named("start_integration_manifest", &registration.name)?;
     Ok((
         StatusCode::CREATED,
@@ -2939,6 +2956,46 @@ async fn retire_integration(
     .await?;
 
     Ok(Json(integration_record(retired, &organization)))
+}
+
+async fn set_integration_webhook_url(
+    State(cp): State<ControlPlane>,
+    Path((organization, name)): Path<(String, String)>,
+    request: Result<Json<serde_json::Value>, JsonRejection>,
+) -> Result<Json<wire::Integration>, Refused> {
+    let Json(request) = request?;
+    let request: wire::IntegrationWebhookUrl =
+        closed(&request).map_err(|why| malformed(None, why))?;
+    let changed = integration::hook::set_url(
+        &cp.store,
+        &Github::unfenced()?,
+        &organization,
+        &name,
+        request.base.as_deref().or(cp.webhook_base.as_deref()),
+        request.revision,
+    )
+    .await?;
+    Ok(Json(integration_record(changed, &organization)))
+}
+
+async fn integration_webhook(
+    State(cp): State<ControlPlane>,
+    Path((organization, name)): Path<(String, String)>,
+) -> Result<Json<wire::IntegrationWebhook>, Refused> {
+    let (hook, deliveries, pending_url) =
+        integration::hook::status(&cp.store, &Github::unfenced()?, &organization, &name).await?;
+    Ok(Json(wire::IntegrationWebhook {
+        url: hook.url,
+        pending_url,
+        deliveries: deliveries
+            .into_iter()
+            .map(|delivery| wire::WebhookDelivery {
+                guid: delivery.guid,
+                delivered_at: delivery.delivered_at.to_string(),
+                status_code: delivery.status_code,
+            })
+            .collect(),
+    }))
 }
 
 async fn rotate_integration_webhook_secret(
@@ -6050,6 +6107,8 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("POST", INTEGRATION_DISABLE) => "disable_integration",
         ("POST", INTEGRATION_ENABLE) => "enable_integration",
         ("POST", INTEGRATION_RETIRE) => "retire_integration",
+        ("GET", INTEGRATION_WEBHOOK) => "read_integration_webhook",
+        ("PUT", INTEGRATION_WEBHOOK) => "set_integration_webhook_url",
         ("GET", INTEGRATION_REPOSITORIES) => "list_integration_repositories",
         ("PUT", INTEGRATION_PRIVATE_KEY) => "replace_integration_private_key",
         ("POST", INTEGRATION_WEBHOOK_SECRET_ROTATION) => "rotate_integration_webhook_secret",

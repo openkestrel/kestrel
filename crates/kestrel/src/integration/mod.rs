@@ -1,5 +1,6 @@
 pub mod credential;
 pub mod github;
+pub mod hook;
 pub mod manifest;
 pub mod post;
 pub mod rotation;
@@ -551,6 +552,18 @@ pub async fn hook_maintainable<'a>(
                 integration.name
             )
         ));
+    }
+
+    if operation != hook::SET_URL
+        && store
+            .read()
+            .await?
+            .integrations()
+            .pending_hook_url(integration)
+            .await?
+            .is_some()
+    {
+        bail!(hook::unfinished(integration, organization, operation));
     }
 
     Ok(connection)

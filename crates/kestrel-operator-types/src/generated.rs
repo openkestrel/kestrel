@@ -4246,6 +4246,20 @@ pub struct Agent {
     pub name: String,
     pub thought_level: Option<String>,
 }
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IntegrationWebhook {
+    pub deliveries: Vec<WebhookDelivery>,
+    ///An unfinished URL update; retry set-url with the same base to finish it, including after restart.
+    pub pending_url: Option<String>,
+    pub url: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WebhookDelivery {
+    pub delivered_at: String,
+    pub guid: String,
+    ///HTTP result recorded by GitHub; null when unavailable.
+    pub status_code: Option<i64>,
+}
 ///One page of the repositories the Integration's App installation reaches, as GitHub answered this read.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct IntegrationRepositories {
@@ -13647,6 +13661,14 @@ pub struct IntegrationRetirement {
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct IntegrationWebhookSecretRotation {
     ///The revision this rotation was decided against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct IntegrationWebhookUrl {
+    ///Public HTTPS origin; omitted to use the deployment setting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<i64>,
 }
