@@ -112,10 +112,14 @@ async fn attempt(
         drop(tx);
         return ended(store, organization, read, operation).await;
     };
-    tx.integrations()
+    let attempting = tx
+        .integrations()
         .attempting_rotation(read, &replacement, Timestamp::now())
         .await?;
     tx.commit().await?;
+    if !attempting {
+        return ended(store, organization, read, operation).await;
+    }
 
     let unset = github
         .set_hook_secret(&connection.api, &connection.credential, &replacement.secret)
@@ -124,37 +128,19 @@ async fn attempt(
     match unset {
         Ok(()) => {
             tx.integrations().rotated(read, &replacement).await?;
-            tx.commit().await?;
-            ended(store, organization, read, operation).await
         }
         Err(unset) => {
-            let failure = failed(read, unset);
-            let recorded = tx
-                .integrations()
-                .rotation_failed(read, &replacement, failure)
+            tx.integrations()
+                .rotation_failed(read, &replacement, failed(read, unset))
                 .await?;
-            tx.commit().await?;
-            if !recorded {
-                return ended(store, organization, read, operation).await;
-            }
-            bail!(unrotated(
-                read,
-                organization,
-                operation,
-                &Rotation {
-                    started_at: read
-                        .rotation
-                        .as_ref()
-                        .map_or_else(Timestamp::now, |rotation| rotation.started_at),
-                    attempted_at: Some(Timestamp::now()),
-                    failure: Some(failure),
-                },
-            ))
         }
     }
+    tx.commit().await?;
+
+    ended(store, organization, read, operation).await
 }
 
-/// Finished here or elsewhere; retirement ends one by erasing what it would have set.
+/// Answers what is stored, which retirement or a concurrent step may have changed meanwhile.
 async fn ended(
     store: &Store,
     organization: &str,
@@ -164,6 +150,9 @@ async fn ended(
     let current = store.read().await?.integrations().with_id(read.id).await?;
     if current.retired() {
         bail!(out_of_use(&current, organization, operation));
+    }
+    if let Some(rotation) = &current.rotation {
+        bail!(unrotated(&current, organization, operation, rotation));
     }
     Ok(current)
 }

@@ -567,7 +567,8 @@ impl<'a> Integrations<'a> {
         Ok(Some(Replacement { secret, sealed }))
     }
 
-    /// Committed before GitHub is asked: from then on the change may have reached it.
+    /// Committed before GitHub is asked, and false when maintenance landed since `integration`
+    /// was read, so a failure seen with a superseded key is never recorded against the new one.
     pub async fn attempting_rotation(
         &mut self,
         integration: &Integration,
@@ -602,13 +603,16 @@ impl<'a> Integrations<'a> {
         let recorded = sqlx::query(
             "UPDATE webhook_secret_rotation
              SET attempted_at = COALESCE(?, attempted_at), failure = ?, retry_at = ?
-             WHERE integration_id = ? AND replacement_sealed = ?",
+             WHERE integration_id = ? AND replacement_sealed = ?
+               AND EXISTS (SELECT 1 FROM integration WHERE id = ? AND revision = ?)",
         )
         .bind(at.map(|at| at.to_string()))
         .bind(failure.map(RotationFailure::as_str))
         .bind(retry_at)
         .bind(integration.id.to_string())
         .bind(&replacement.sealed)
+        .bind(integration.id.to_string())
+        .bind(integration.revision)
         .execute(&mut *self.connection)
         .await
         .with_context(|| format!("recording the rotation of integration {}", integration.name))?;
@@ -616,8 +620,7 @@ impl<'a> Integrations<'a> {
         Ok(recorded.rows_affected() > 0)
     }
 
-    /// The replacement becomes the only secret. False, having changed nothing, when retirement
-    /// or another resumption already ended this rotation.
+    /// False, having changed nothing, when retirement or another resumption already ended it.
     pub async fn rotated(
         &mut self,
         integration: &Integration,

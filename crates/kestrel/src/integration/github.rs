@@ -512,7 +512,7 @@ impl Github {
                 app,
                 &format!("{}/app/hook/config", api.trim_end_matches('/')),
             )
-            .map_err(|_| Unset::Rejected)?
+            .map_err(Unset::Unanswered)?
             .json(&serde_json::json!({ "secret": secret }))
             .send()
             .await
@@ -529,10 +529,9 @@ impl Github {
         match status {
             status if status.is_success() => Ok(()),
             StatusCode::UNAUTHORIZED => Err(Unset::Rejected),
-            StatusCode::TOO_MANY_REQUESTS => Err(Unset::Unanswered(anyhow!(
-                "github answered {status} to changing the App's webhook secret"
-            ))),
-            status if status.is_client_error() => Err(Unset::Refused(status)),
+            status if status.is_client_error() && status != StatusCode::TOO_MANY_REQUESTS => {
+                Err(Unset::Refused(status))
+            }
             status => Err(Unset::Unanswered(anyhow!(
                 "github answered {status} to changing the App's webhook secret"
             ))),

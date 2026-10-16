@@ -505,9 +505,8 @@ fn unproven_replacement(
     }
 }
 
-/// What an App's hook — its URL and webhook secret — is changed under: a GitHub Integration,
-/// not retired, whose App no other non-retired Integration in any Organization signs as
-/// (ADR-0056). The refusal names none of the others.
+/// Every change to an App's hook passes it, and its refusal names no other Organization's
+/// records (ADR-0056).
 pub async fn hook_maintainable<'a>(
     store: &Store,
     integration: &'a Integration,

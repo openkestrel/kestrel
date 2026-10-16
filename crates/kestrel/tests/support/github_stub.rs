@@ -199,7 +199,7 @@ fn default_app_record() -> ScriptedResponse {
     ScriptedResponse::ok(serde_json::json!({ "slug": "kestrel" }).to_string())
 }
 
-/// What `PATCH /app/hook/config` answers: GitHub never reads a secret back.
+/// What `PATCH /app/hook/config` answers, with the secret masked as GitHub masks it.
 fn masked_hook_config() -> ScriptedResponse {
     ScriptedResponse::ok(
         serde_json::json!({

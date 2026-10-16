@@ -523,3 +523,41 @@ async fn only_a_github_integration_holding_a_webhook_secret_rotates_one() {
 
     kestrel.teardown().await;
 }
+
+#[tokio::test]
+async fn a_failure_github_answers_after_maintenance_landed_is_not_recorded_against_it() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot().await;
+    signed(&kestrel, &stub).await;
+    stub.script_answer(
+        "PATCH",
+        HOOK,
+        ScriptedResponse::answering(401).after(Duration::from_secs(1)),
+    );
+    let rotating = kestrel.rotating_webhook_secret("acme", "github");
+    eventually("github being asked", async || {
+        !set_secrets(&stub).is_empty()
+    })
+    .await;
+
+    // Asks GitHub nothing, so it lands while the stub holds the rotation's answer back.
+    kestrel.disable_integration("acme", "github").await;
+    let refused = rotating
+        .await
+        .expect("the rotation ran")
+        .expect_err("github rejected the change");
+
+    let Reason::StateConflict { state, next, .. } = reason(&refused) else {
+        panic!("{refused:#}");
+    };
+    assert_eq!(*state, "rotating_webhook_secret");
+    assert!(offers_resume(next), "{next:?}");
+    let rotation = kestrel
+        .integration("acme", "github")
+        .await
+        .rotation
+        .expect("unfinished");
+    assert_eq!(rotation.failure, None);
+
+    kestrel.teardown().await;
+}
