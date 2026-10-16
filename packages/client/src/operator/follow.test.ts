@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { followChanges } from "./follow";
 import { queueKey, sessionsKey, workspaceSessionsQuery, workspacesQuery } from "./queries";
@@ -40,5 +40,32 @@ describe("an Organization's change notices", () => {
 			workspaceSessionsQuery("acme", "brave-otter").queryKey,
 			["organizations"],
 		]);
+	});
+
+	it("read again when a notice arrives during a read's first load", async () => {
+		const client = new QueryClient();
+		const reads: PromiseWithResolvers<string[]>[] = [];
+		const observer = new QueryObserver(client, {
+			queryKey: workspacesQuery("acme").queryKey,
+			queryFn: () => {
+				const read = Promise.withResolvers<string[]>();
+				reads.push(read);
+				return read.promise;
+			},
+		});
+		const unobserve = observer.subscribe(() => {});
+		await vi.waitFor(() => expect(reads).toHaveLength(1));
+		const server = reservingControlPlane();
+		const stream = new TabStream(server.operations);
+
+		followChanges(stream, client, "acme");
+		await vi.waitFor(() => expect(server.puts).toHaveLength(1));
+		server.send(server.puts[0]?.id ?? "", "change", { resource: "queue" });
+		await vi.waitFor(() => expect(reads).toHaveLength(2));
+		reads[0]?.resolve(["before"]);
+		reads[1]?.resolve(["after"]);
+		await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["after"]));
+		stream.close();
+		unobserve();
 	});
 });
