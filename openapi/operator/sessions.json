@@ -1,0 +1,459 @@
+{
+  "paths": {
+    "/operator/organizations/{organization}/workspaces/{workspace}/sessions": {
+      "get": {
+        "operationId": "listSessions",
+        "summary": "List a Workspace's Sessions.",
+        "description": "A Workspace is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every Session, ordered by when it was enqueued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Session"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "post": {
+        "operationId": "enqueueSession",
+        "summary": "Enqueue a Session in a Workspace.",
+        "description": "A Workspace is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionDeclaration"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The queued Session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/sessions/{session}": {
+      "get": {
+        "operationId": "showSession",
+        "summary": "Show a Session.",
+        "description": "A Session is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Session.",
+            "headers": {
+              "ETag": {
+                "description": "A strong validator over the body exactly as served. A read that changes nothing answers the same tag.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The Session has not changed since the tag the request carried in `If-None-Match`.",
+            "headers": {
+              "ETag": {
+                "description": "The tag the read would have served.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/sessions/{session}/stop": {
+      "post": {
+        "operationId": "stopSession",
+        "summary": "End a Session.",
+        "description": "A Session is named by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest` for the most recent in the Organization.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ended Session: succeeded between turns, failed mid-turn or before it started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/sessions/{session}/interrupt": {
+      "post": {
+        "operationId": "interruptSession",
+        "summary": "Interrupt a Session's working Turn.",
+        "description": "The Turn is cancelled without ending the Session: its conversation and Instance stay, and a Held Message becomes the next Turn at once. A Session that is not working is refused 409, naming its phase; a trailing one has already answered its Turn, and is ended by stopping the Session. A second interrupt while one is pending answers 202 and sends nothing more.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionInterrupt"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The Session, with the pending interrupt on it while the request is in flight.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/sessions/{session}/options": {
+      "post": {
+        "operationId": "setSessionOption",
+        "summary": "Change one of a Session's options between Turns.",
+        "description": "A queued Session's declared model, mode or thought level is set at once and checked when the Session is set up (200). A live Session's change is durable and answered by the harness (202), and the Session carries `changing_options` until it settles. A change during a working Turn, on an ended or unreachable Session, or on an unbriefed Session with no options yet is refused, naming the phase.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Session whose declared value changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The change waits on the harness, and the Session's `changing_options` carries it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "OptionChange": {
+        "description": "One option a person changes on a Session: exactly one of `option` (the id the harness reported) or `category` (model, mode or thought_level), and the value to set.",
+        "type": "object",
+        "properties": {
+          "participant": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "description": "The person making the change, by the participant name rule. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one."
+          },
+          "option": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The harness option's id. Exactly one of option or category."
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One of model, mode or thought_level. Exactly one of option or category."
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "value"
+        ]
+      },
+      "SessionDeclaration": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Omitted, the Agent of the Workspace's latest Session. A Workspace a person opened with no Subscription Profile takes the Operator's own for this Agent's harness as an open does; one an Event opened never does."
+          },
+          "sign_in_method": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The catalogued Sign-in Method this Session's harness is handed, checked as on opening a Workspace. Omitted, the latest Session's while the harness is the same; only naming one switches credentials."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Omitted, whatever the Agent names."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Omitted, whatever the Agent names."
+          },
+          "thought_level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Omitted, whatever the Agent names."
+          },
+          "depends_on": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Sessions of the Organization the new Session waits on, each named as a Session is anywhere else. It is dispatched only once every one has ended successfully. One the Organization does not have is refused with 404, and one that ended without success or is unreachable with 409; either refusal leaves nothing behind. No request adds a Dependency to a Session that already exists."
+          }
+        }
+      },
+      "SessionInterrupt": {
+        "type": "object",
+        "properties": {
+          "participant": {
+            "type": "string",
+            "description": "The person asking. Trimmed, 1 to 64 characters with no control characters, and never the name of an Agent in the Organization. Omitted, the install's Operator; with none named, a 409 `setup_gap` whose step names one."
+          }
+        }
+      }
+    }
+  }
+}

@@ -3,7 +3,7 @@
 The HTTP API a Client drives the control plane through. Server: `crates/kestrel/src/operator.rs`
 holds the paths, the router and the `operation` mapping; a handler and its wire builders live in
 their area's file under `crates/kestrel/src/operator/`, each with its own imports.
-Contract: `openapi/operator.json`, which `crates/kestrel/tests/suite/operator.rs` checks against the
+Contract: `openapi/operator/`, which `crates/kestrel/tests/suite/operator.rs` checks against the
 served routes. This page holds what every route shares: the listener, errors, references and
 declarations. [Setup and sign-ins](operator-setup.md) and [reads and streams](operator-reads.md)
 have their own pages, as do the [Clients](client.md).
@@ -84,7 +84,7 @@ follower lease's 404 are also plain. Anything else is `Unavailable`.
 A `setup_gap` Diagnostic exits 78 (not ready) whatever its status. The exit numbers are published by
 `kestrel exit-codes` and never move (`kestrel-client/src/exit.rs`).
 The complete Diagnostic/Action contract — every `kind` and `action`, including the setup, failure
-and Client-local variants no producer raises yet — is authored once in `openapi/operator.json`
+and Client-local variants no producer raises yet — is authored once in `openapi/operator/`
 under `Diagnostic` and `Action`; link evidence grows its producers under its own ticket without
 changing this shared shape.
 

@@ -2,7 +2,7 @@
 
 The [Operator boundary](operator-boundary.md) owns routing, errors and domain-to-wire mapping;
 [setup](operator-setup.md), [reads and streams](operator-reads.md), and the [Clients](client.md)
-describe the consumers. `openapi/operator.json` is the contract, including operation IDs,
+describe the consumers. `openapi/operator/` is the contract, including operation IDs,
 required fields and typed refusals.
 
 ## Schema or response changes
@@ -10,9 +10,10 @@ required fields and typed refusals.
 1. Change the document and the handler's mapping together. Changed endpoints and their Rust CLI
    consumers use `kestrel-operator-types`, rather than introducing hand-written wire models
    ([ADR-0051](../adr/0051-the-operator-document-is-the-source-of-the-wire-types.md)).
-2. Follow the OpenAPI bullet in [AGENTS.md's checks](../../AGENTS.md#checks) for generation and
-   consumer checks. Include the committed generated Rust and SSE output in the diff; the browser
-   typecheck alone does not regenerate the Rust crate.
+2. Follow the OpenAPI bullet in [AGENTS.md's checks](../../AGENTS.md#checks) for the consumer
+   checks. The Rust types, the browser types and the SSE mappings are generated at build time and
+   not committed
+   ([ADR-0059](../adr/0059-the-operator-document-is-fragments-and-nothing-generated-is-committed.md)).
 3. Check the affected behavior through its existing boundary test. If a response's meaning or
    presentation changes, check its CLI and browser consumers too: generation checks field shapes,
    but cannot establish that a queue explanation or repair command remains readable.

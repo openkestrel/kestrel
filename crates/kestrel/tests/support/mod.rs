@@ -14,6 +14,7 @@ pub mod control_plane;
 pub mod database;
 pub mod diagnostics;
 pub mod docker;
+pub mod document;
 pub mod environment;
 pub mod fixture;
 pub mod git;

@@ -1,13 +1,22 @@
 // Allow only the lint patterns emitted by the pinned generator.
+pub mod document;
 #[allow(
     unused_variables,
     clippy::double_must_use,
     clippy::redundant_field_names,
     clippy::collapsible_if,
-    clippy::nonminimal_bool
+    clippy::nonminimal_bool,
+    clippy::large_enum_variant,
+    clippy::format_in_format_args,
+    clippy::let_unit_value,
+    unreachable_patterns
 )]
-mod generated;
-mod sse;
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+}
+mod sse {
+    include!(concat!(env!("OUT_DIR"), "/sse.rs"));
+}
 pub use generated::*;
 
 #[cfg(test)]

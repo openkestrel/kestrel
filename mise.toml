@@ -11,13 +11,3 @@ caddy = "2.11.4"
 [env]
 # Must be absolute: the tests' nested `cargo build` runs from another directory.
 CARGO_TARGET_DIR = "{{config_root}}/target"
-
-# CI's `Check generated operator types` step runs this task, so dropping a line here would weaken
-# CI too, not just the local run.
-[tasks.generate-check]
-description = "Regenerate the operator types and fail if the committed copies drift"
-run = """
-set -e
-cargo run --locked -p kestrel-operator-types --bin generate --features generate
-git diff --exit-code -- crates/kestrel-operator-types/src packages/client/src/operator/sse.gen.ts
-"""

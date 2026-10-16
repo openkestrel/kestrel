@@ -1,0 +1,1885 @@
+{
+  "paths": {
+    "/operator/organizations/{organization}/integrations": {
+      "get": {
+        "operationId": "listIntegrations",
+        "summary": "List every Integration in an Organization.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every record, ordered by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Integration"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "post": {
+        "operationId": "registerIntegration",
+        "summary": "Register an Integration.",
+        "description": "The credentials a registration carries are held by the control plane and never answered back. A name the Organization already gives an Integration is refused with 409.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationRegistration"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The Integration is registered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/github-app": {
+      "post": {
+        "operationId": "startGithubApp",
+        "summary": "Start GitHub App creation before choosing a repository",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubAppStart"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Open this URL in a browser within one hour",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubAppStarted"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/operator/github-app/setup": {
+      "get": {
+        "operationId": "githubAppSetup",
+        "summary": "Render the GitHub manifest form",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "installation_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Server setup continuation; verified through the App before repository selection"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Browser setup page; no credentials",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "finishGithubAppSetup",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubAppFinish"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Browser setup page; no credentials",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/operator/github-app/callback": {
+      "get": {
+        "operationId": "githubAppCallback",
+        "summary": "Exchange a code once and seal the App credentials",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Browser setup page; no credentials",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/operator/github-app/installed": {
+      "get": {
+        "operationId": "githubAppInstalled",
+        "summary": "Discover and verify an installation, then return to Client repository selection",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "installation_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Browser setup page; no credentials",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Setup refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "303": {
+            "description": "Known Client setup route with a safe flow reference",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/integrations/{integration}": {
+      "get": {
+        "operationId": "showIntegration",
+        "summary": "Show an Integration.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The named Integration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "changeIntegration",
+        "summary": "Change an Integration's name, directions or poll interval.",
+        "description": "Its Organization, kind, API origin, repository, App and installation identify the connection and cannot change; naming one is refused with 422. An invalid direction or interval is refused before anything is saved. Every change bumps the revision, and a change naming an older `revision` is refused with 409.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The changed Integration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/integrations/{integration}/disable": {
+      "post": {
+        "operationId": "disableIntegration",
+        "summary": "Disable an Integration.",
+        "description": "Pauses its polling, webhook ingestion, outbound posts, dispatch and held Firings, keeping its credentials, cursor and pending posts. Running Sessions continue, and a request already sent to the external system is not recalled. Disabling a disabled Integration changes nothing.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The disabled Integration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/integrations/{integration}/enable": {
+      "post": {
+        "operationId": "enableIntegration",
+        "summary": "Enable a disabled Integration.",
+        "description": "Resumes what disabling paused; its poll reads on from where it stopped, within the external system's retention, and a gap it cannot read is reported on the Integration. Enabling an enabled Integration changes nothing.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The enabled Integration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/integrations/{integration}/retire": {
+      "post": {
+        "operationId": "retireIntegration",
+        "summary": "Retire an Integration, permanently.",
+        "description": "Erases the credentials kestrel holds for it and every token minted from them, cancels its pending posts with a reason, and cancels the Firings held on it in the same step. The Integration and every Project, Trigger, Event and Workspace that refers to it stay readable; it is never used, changed or enabled again, and no other Integration takes its place. Nothing is done on the external system: the GitHub App, its installation and its keys are untouched, and a request already sent or a credential already issued is not recalled. Retiring a retired Integration changes nothing.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationRetirement"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The retired Integration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/integrations/{integration}/private-key": {
+      "put": {
+        "operationId": "replaceIntegrationPrivateKey",
+        "summary": "Replace a GitHub Integration's App private key.",
+        "description": "The replacement is checked against GitHub first: it must sign as the same App, mint for the same installation and reach the same repository. Only then does it replace the stored key, in one write that bumps the revision, so an installation token minted with the previous key is never handed out afterwards. A replacement that is not accepted, an App that no longer reaches its installation or repository, a rate limit or an outage saves nothing and leaves the previous key in use. Maintenance that lands while GitHub is being asked refuses the replacement with 409. The key is never returned.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationPrivateKeyReplacement"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Integration, at its new revision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/integrations/{integration}/repositories": {
+      "get": {
+        "operationId": "listIntegrationRepositories",
+        "summary": "List the repositories a GitHub Integration's App installation reaches.",
+        "description": "Read from GitHub at each call, with each repository's default branch as GitHub names it. An installation that reaches none answers an empty page; a read GitHub refuses, limits or does not answer is a refusal, never an empty list or a guessed branch. The Integration must be an enabled GitHub one.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Counted from 1, the default.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "description": "30 by default, 100 at most.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page, in GitHub's order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationRepositories"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/integrations/{integration}/event-refusal": {
+      "delete": {
+        "operationId": "acknowledgeEventRefusal",
+        "summary": "Acknowledge the latest Event an Integration refused.",
+        "description": "Clears the refusal an Integration keeps visible. Acknowledging when there is none changes nothing.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No refusal is visible on the Integration."
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/github-app/flows/{flow}": {
+      "get": {
+        "operationId": "showGithubAppFlow",
+        "parameters": [
+          {
+            "name": "flow",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Safe setup result; no App credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubAppFlow"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "cancelGithubAppFlow",
+        "parameters": [
+          {
+            "name": "flow",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Safe setup result; no App credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubAppFlow"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/github-app/flows/{flow}/installations": {
+      "get": {
+        "operationId": "listGithubAppInstallations",
+        "parameters": [
+          {
+            "name": "flow",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Safe setup result; no App credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubAppInstallations"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/github-app/flows/{flow}/repositories": {
+      "get": {
+        "operationId": "listGithubAppRepositories",
+        "parameters": [
+          {
+            "name": "flow",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Safe setup result; no App credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubAppRepositories"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/github-app/flows/{flow}/finish": {
+      "post": {
+        "operationId": "finishGithubAppFlow",
+        "parameters": [
+          {
+            "name": "flow",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Safe setup result; no App credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubAppFlow"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubAppFinish"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "IntegrationRepositories": {
+        "type": "object",
+        "description": "One page of the repositories the Integration's App installation reaches, as GitHub answered this read.",
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationRepository"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How many the installation reaches across every page."
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "next_page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The page to ask for next, or null after the last."
+          }
+        },
+        "required": [
+          "repositories",
+          "total",
+          "page",
+          "next_page"
+        ]
+      },
+      "IntegrationRepository": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string",
+            "description": "`owner/name`."
+          },
+          "address": {
+            "type": "string",
+            "description": "The HTTPS address a declaration selecting this Integration holds it by."
+          },
+          "default_branch": {
+            "type": "string",
+            "description": "As GitHub names it now; never a guess."
+          },
+          "private": {
+            "type": "boolean"
+          },
+          "watched": {
+            "type": "boolean",
+            "description": "Whether this is the one repository the Integration watches, and so the only one a Project can select it for."
+          }
+        },
+        "required": [
+          "repository",
+          "address",
+          "default_branch",
+          "private",
+          "watched"
+        ]
+      },
+      "Direction": {
+        "enum": [
+          "inbound",
+          "outbound"
+        ]
+      },
+      "IntegrationRegistration": {
+        "description": "A registration, by the kind of external system it connects to.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/GithubRegistration"
+          },
+          {
+            "$ref": "#/components/schemas/WebhookRegistration"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "github": "#/components/schemas/GithubRegistration",
+            "webhook": "#/components/schemas/WebhookRegistration"
+          }
+        }
+      },
+      "GithubRegistration": {
+        "description": "A connection to GitHub, watching one repository.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "github"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "repository": {
+            "type": "string",
+            "description": "The repository it watches, as owner/name."
+          },
+          "app_id": {
+            "type": "integer",
+            "description": "The GitHub App's ID."
+          },
+          "installation": {
+            "type": "integer",
+            "description": "The ID of the installation the App was installed as."
+          },
+          "private_key": {
+            "type": "string",
+            "writeOnly": true,
+            "description": "The App's private key, PEM-encoded."
+          },
+          "carries": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/Direction"
+            },
+            "description": "The directions it carries. Absent means both."
+          },
+          "interval": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": "1m",
+            "description": "How often the poll reads the App's Delivery log, as a duration such as `1m` or `PT30S`."
+          },
+          "webhook_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "writeOnly": true,
+            "description": "The App's webhook secret. Given one, a Delivery that reaches kestrel's webhook is recorded on arrival; the repository is polled either way."
+          },
+          "api": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": "https://api.github.com",
+            "description": "The GitHub API it reaches."
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "repository",
+          "app_id",
+          "installation",
+          "private_key"
+        ]
+      },
+      "WebhookRegistration": {
+        "description": "A generic endpoint any producer can POST CloudEvents to. It carries inbound only.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "webhook"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "secret": {
+            "type": "string",
+            "minLength": 1,
+            "writeOnly": true,
+            "description": "The secret a sender presents as `Authorization: Bearer <secret>`."
+          },
+          "carries": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/Direction"
+            },
+            "description": "The directions it carries. Absent means inbound."
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "secret"
+        ]
+      },
+      "IntegrationState": {
+        "description": "Disabled pauses every use of an Integration and keeps everything it resumes with. Retired ends every use for good and keeps only what its history refers to.",
+        "enum": [
+          "enabled",
+          "disabled",
+          "retired"
+        ]
+      },
+      "IntegrationRetirement": {
+        "description": "The explicit choice to retire an Integration.",
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "description": "The revision the retirement was decided against."
+          }
+        }
+      },
+      "CanceledPost": {
+        "description": "Something a Session said that will not be posted where its work came from.",
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "turn": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The Turn whose response it was; null for the Session's own Outcome."
+          },
+          "canceled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "attempted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a request for it had already gone out; the comment may be there all the same."
+          }
+        },
+        "required": [
+          "session",
+          "turn",
+          "canceled_at",
+          "reason",
+          "attempted_at"
+        ]
+      },
+      "IntegrationChange": {
+        "description": "What maintenance may change; an omitted field keeps its value.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "carries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Direction"
+            },
+            "description": "Every direction it carries afterwards; a generic webhook carries inbound only."
+          },
+          "interval": {
+            "type": "string",
+            "description": "How often a GitHub Integration's poll reads its App's Delivery log, as a positive duration."
+          },
+          "revision": {
+            "type": "integer",
+            "description": "The revision this change was decided against."
+          }
+        }
+      },
+      "IntegrationPrivateKeyReplacement": {
+        "description": "A replacement for the private key a GitHub Integration signs as its App with. The App, installation and repository it is checked against are the Integration's own and cannot be named.",
+        "type": "object",
+        "properties": {
+          "private_key": {
+            "type": "string",
+            "description": "The App's RSA private key, in PEM."
+          },
+          "revision": {
+            "type": "integer",
+            "description": "The revision this replacement was decided against."
+          }
+        },
+        "required": [
+          "private_key"
+        ]
+      },
+      "Integration": {
+        "description": "A registered Integration. What it presents to the external system is never part of it.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "github",
+              "webhook"
+            ]
+          },
+          "repository": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The repository a GitHub Integration watches."
+          },
+          "bot_login": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The App's own bot account, `<slug>[bot]`, learned from GitHub when a GitHub Integration was registered."
+          },
+          "carries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Direction"
+            }
+          },
+          "state": {
+            "$ref": "#/components/schemas/IntegrationState"
+          },
+          "revision": {
+            "type": "integer",
+            "description": "Bumped by every change, so a Client can say which one it decided against."
+          },
+          "disabled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "retired_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "canceled_posts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CanceledPost"
+            },
+            "description": "What retiring it left unsaid, each with why."
+          },
+          "polled_every": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How often it is polled, when it is."
+          },
+          "webhook_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where on the link GitHub, or a generic producer, can deliver to it. An inbound GitHub Integration is also polled."
+          },
+          "last_event_refusal": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EventRefusal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "diagnostic": {
+            "description": "Why it is out of use now, with the steps that resume it when any do; null while it is in use.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Diagnostic"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "repository",
+          "bot_login",
+          "carries",
+          "state",
+          "revision",
+          "disabled_at",
+          "retired_at",
+          "canceled_posts",
+          "polled_every",
+          "webhook_path",
+          "last_event_refusal",
+          "diagnostic"
+        ]
+      },
+      "EventRefusal": {
+        "description": "The latest Event an Integration refused rather than stored, or the Deliveries it lost to GitHub's retention, visible until acknowledged.",
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The refused Event's id; null when Deliveries were lost rather than one refused."
+          },
+          "bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "reason": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "source",
+          "id",
+          "bytes",
+          "reason",
+          "observed_at"
+        ]
+      },
+      "GithubAppStart": {
+        "type": "object",
+        "required": [
+          "name",
+          "callback_base"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "callback_base": {
+            "type": "string"
+          },
+          "webhook_base": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "api": {
+            "type": "string",
+            "enum": [
+              "https://api.github.com"
+            ],
+            "description": "Manifest setup uses GitHub's public API; arbitrary upstream hosts are refused"
+          },
+          "app_organization": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "GithubAppStarted": {
+        "type": "object",
+        "required": [
+          "url",
+          "flow"
+        ],
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "flow": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GithubAppFlow": {
+        "type": "object",
+        "required": [
+          "flow",
+          "phase",
+          "organization",
+          "name",
+          "expires_at",
+          "installation_id",
+          "integration",
+          "repository",
+          "guidance"
+        ],
+        "properties": {
+          "flow": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "exchanging",
+              "converted",
+              "select_repository",
+              "completed",
+              "cancelled",
+              "expired",
+              "conversion_failed"
+            ]
+          },
+          "organization": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "installation_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "integration": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repository": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "guidance": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GithubAppFinish": {
+        "type": "object",
+        "required": [
+          "repository"
+        ],
+        "properties": {
+          "repository": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GithubAppInstallation": {
+        "type": "object",
+        "required": [
+          "id",
+          "account"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "account": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GithubAppInstallations": {
+        "type": "object",
+        "required": [
+          "installations",
+          "page",
+          "next_page"
+        ],
+        "properties": {
+          "installations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GithubAppInstallation"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "next_page": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "GithubAppRepository": {
+        "type": "object",
+        "required": [
+          "id",
+          "repository",
+          "default_branch",
+          "private"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "default_branch": {
+            "type": "string"
+          },
+          "private": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GithubAppRepositories": {
+        "type": "object",
+        "required": [
+          "repositories",
+          "page",
+          "total",
+          "next_page"
+        ],
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GithubAppRepository"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "next_page": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

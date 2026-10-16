@@ -41,9 +41,10 @@ other agents, so each local cargo run has a real cost.
 
 - Compiles? `cargo clippy -p <crate> --all-targets -- -D warnings`, CI's lint scoped to one
   crate; it type-checks without codegen, as `cargo check` does.
-- Changed `openapi/*.json`? Three consumers are generated from it. Regenerate the Rust types with
-  `mise run generate-check`, the task CI's own step runs; it writes the files and exits 1 until
-  what it wrote is committed. Lint the CLI that matches on them exhaustively with
+- Changed `openapi/operator/*.json`? The operator document is one fragment per area, merged by
+  key: put a path or schema in its area's file, and a schema several areas use in `shared.json`.
+  Three consumers are generated from it at build time and none is committed (ADR-0059). Lint the
+  CLI that matches on the Rust types exhaustively with
   `cargo clippy -p kestrel-client --all-targets -- -D warnings`, and typecheck the browser Client: `cd packages/client && bun install && bun run typecheck`.
   Adding or changing an Operator endpoint? See
   [the contract-change workflow](docs/architecture/operator-change-workflow.md) for its route

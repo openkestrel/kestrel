@@ -1,0 +1,1821 @@
+{
+  "paths": {
+    "/operator/organizations/{organization}/workspaces/{workspace}/changes": {
+      "get": {
+        "operationId": "workspaceChanges",
+        "summary": "Read changes from a Workspace's live Instance.",
+        "description": "Diff grouped by repository, capped at 2 MiB across all repositories with complete per-file line counts (null for binary files). Unpublished includes untracked files and the working tree against origin/<declared>, or the merge base of HEAD and origin/<base> before the first push. Paths are <repo>/<path>. Reads never write Store, Transcript or Events.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "unpublished",
+              "pattern": "^(unpublished|changed|staged|commit:[0-9a-fA-F]+)$"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "description": "Repeated literal <repo>/<path> filters.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The directory's entries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceChanges"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "504": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/transcript": {
+      "get": {
+        "operationId": "transcript",
+        "summary": "Stream a Workspace's Transcript.",
+        "description": "Replays every entry after `Last-Event-ID`, in order, each as an `entry` event whose id is the cursor that resumes after it. A read that follows then stays open and delivers entries as they are appended; the stream ends with an `end` event once the Workspace is sealed, or at once for a read that does not follow. A cursor that names no position in this Transcript is refused rather than silently restarting the walk. A follow that stays open past caught-up registers a follower: it is sent one `follower` event carrying its id and lease, then a `presence` event carrying the whole current set, and a new `presence` event whenever the set changes. Presence events carry no id and never move the cursor, and a read that does not follow registers nobody.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "description": "The Workspace whose Transcript is read, by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "follow",
+            "in": "query",
+            "required": false,
+            "description": "Whether to stay open for entries appended after the ones already recorded.",
+            "schema": {
+              "type": "boolean",
+              "default": true
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "required": false,
+            "description": "The person this follow joins the Workspace's presence as, by the participant name rule; naming an Agent in the Organization is refused. Only a read that stays open past caught-up registers a follower.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "description": "The id of the last entry this reader was delivered. Absent means from the beginning.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kinds",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated Transcript kinds. The cursor advances across every examined seq, including omitted kinds.",
+            "schema": {
+              "type": "string",
+              "default": "shared_state",
+              "examples": [
+                "shared_state",
+                "narration,shared_state",
+                "shared_state,narration,detail"
+              ]
+            }
+          },
+          {
+            "name": "summaries",
+            "in": "query",
+            "required": false,
+            "description": "Summarize omitted narration and detail, across every shared-state boundary even when shared state is not selected. With every kind selected there are no summaries.",
+            "schema": {
+              "type": "boolean",
+              "default": true
+            }
+          },
+          {
+            "name": "first_seq",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive first seq of an Activity expansion. Select every kind to read its entries.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "last_seq",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive last seq of an Activity expansion; must be at least first_seq. The finite range ends when caught up.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stream is open. Each event carries an entry, the end of the stream, a follower registration or the whole presence set as its data, and its name as its event name.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/followers/{id}/lease": {
+      "post": {
+        "operationId": "renewFollower",
+        "summary": "Extend a Workspace follow's presence lease.",
+        "description": "Extends the follower's lease to a full period from now. An unknown follower, or one whose lease has already passed, is refused: a lapsed follow reconnects and registers again rather than being revived.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The follower id a `follower` event carried.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The lease is extended."
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/workspaces/{workspace}/transcript/payloads/{payload}": {
+      "get": {
+        "operationId": "transcriptPayload",
+        "summary": "Fetch a referenced Transcript payload within its owning Workspace",
+        "responses": {
+          "200": {
+            "description": "Original payload bytes",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "No payload in this Workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The entry expired and its payload content was removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosedRefusal"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "description": "The Workspace whose Transcript is read, by its generated name, its identifier, any unambiguous prefix of its identifier, or `latest`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "payload",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "Owning workspace UUID, entry seq and field, separated by colons."
+            }
+          }
+        ]
+      }
+    },
+    "/operator/organizations/{organization}/changes": {
+      "get": {
+        "operationId": "changes",
+        "summary": "Stream the Organization's change notices.",
+        "description": "Opens with an `open` event, then sends a `change` event naming each Workspace, Session or queue that changed, at most once per resource per 250 ms. A notice says what changed, never what it changed to. No event carries an id and `Last-Event-ID` is ignored: a notice is a hint to refetch, never a cursor. A subscriber that falls behind the bounded buffer is sent `resync` instead of a silent gap.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stream is open. `open` and `resync` mean every subscribed view must be refetched; `change` names one resource.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangesEvent"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/streams": {
+      "put": {
+        "operationId": "reserveStream",
+        "summary": "Reserve a browser tab's one event stream.",
+        "description": "Answers a token that opens the stream and addresses its subscriptions. A reservation with no open connection for the follower lease period, 60 seconds unless configured otherwise, is forgotten, and a reservation is forgotten as soon as its connection closes: after any drop the tab reserves again and re-subscribes each subscription from the last cursor it saw. Reservations and subscriptions live only in the serve role's memory, and a control plane holds at most 256 reservations.",
+        "responses": {
+          "201": {
+            "description": "The stream is reserved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamReservation"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/streams/{token}": {
+      "get": {
+        "operationId": "openStream",
+        "summary": "Open a reserved stream.",
+        "description": "Carries the events of every subscription made under the token, before or after it opens, interleaved. Every event names its subscription, and an entry, Activity or cursor event carries its own Transcript's cursor; no event carries an SSE id and `Last-Event-ID` resumes nothing. A subscription whose own stream would end with `end` sends it and is forgotten. One cut off for any other reason, such as a follower lease that passed, closes the whole stream, so the tab resumes every subscription the same way.",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stream is open.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamEvent"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/streams/{token}/subscriptions/{id}": {
+      "put": {
+        "operationId": "subscribeStream",
+        "summary": "Subscribe a reserved stream to an Organization's notices or a Workspace's Transcript.",
+        "description": "Starts the subscription under the id the tab chose, replacing and ending any it already held under that id. A `notices` subscription opens with `open`, as the Organization's change stream does; a `transcript` subscription follows the Workspace's Transcript from `after` exactly as a per-resource follow from that `Last-Event-ID` does, registering a follower, anonymous unless it names a `participant`, once caught up whose lease the tab renews through the Workspace's follower lease. A reservation holds at most 32 subscriptions.",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The tab's name for the subscription, every event of which carries it.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StreamSubscription"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "The subscription is started."
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "unsubscribeStream",
+        "summary": "End one of a reserved stream's subscriptions.",
+        "description": "Ends the subscription and removes its follower at once. An id the reservation does not hold is already ended.",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The subscription is ended."
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "PayloadReference": {
+        "type": "object",
+        "description": "A body field exceeding 65536 bytes, fetched under its owning Workspace; message, thought and brief text use raw UTF-8, while plans, batched messages and tool input/results use compact JSON.",
+        "properties": {
+          "payload_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f-]+:[1-9][0-9]*:[a-z_]+$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 65537
+          },
+          "media_type": {
+            "enum": [
+              "text/plain; charset=utf-8",
+              "application/json"
+            ]
+          }
+        },
+        "required": [
+          "payload_id",
+          "bytes",
+          "media_type"
+        ],
+        "additionalProperties": false
+      },
+      "RepositoryDiff": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "diff": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FileStat"
+            }
+          }
+        },
+        "required": [
+          "repository",
+          "diff",
+          "files",
+          "truncated"
+        ]
+      },
+      "FileStat": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "added": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "removed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          }
+        },
+        "required": [
+          "path",
+          "added",
+          "removed"
+        ]
+      },
+      "WorkspaceChanges": {
+        "type": "object",
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepositoryDiff"
+            }
+          }
+        },
+        "required": [
+          "repositories"
+        ]
+      },
+      "Activity": {
+        "description": "Read-time summary of omitted narration and detail between consecutive shared-state entries. first_seq identifies the whole Activity, including selected kinds, and stays stable across pages and reconnects. last_seq is the highest Activity seq examined; its SSE id advances the global cursor. A closed replacement precedes the closing shared-state entry even when no detail was added. No summary is stored.",
+        "type": "object",
+        "properties": {
+          "first_seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "last_seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "tool_calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failed_calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "thoughts": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "plans": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "tombstones": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "tool_calls",
+              "failed_calls",
+              "thoughts",
+              "plans",
+              "tombstones"
+            ]
+          },
+          "latest": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "kind": {
+                "$ref": "#/components/schemas/TranscriptKind"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "title",
+              "status"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Earliest start among omitted unexpired entries."
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Latest finish among omitted unexpired entries."
+          },
+          "anomaly": {
+            "type": "boolean",
+            "description": "An omitted call was interrupted or unresolved."
+          },
+          "closed": {
+            "type": "boolean",
+            "description": "The next shared-state boundary has been examined. Followers replace open summaries by first_seq and CLI followers print only this final replacement."
+          }
+        },
+        "required": [
+          "first_seq",
+          "last_seq",
+          "counts",
+          "latest",
+          "started_at",
+          "finished_at",
+          "anomaly",
+          "closed"
+        ]
+      },
+      "Recorded": {
+        "description": "One Transcript entry, and where it sits in the order.",
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "appended_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/Entry"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TranscriptKind"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "seq",
+          "appended_at",
+          "entry",
+          "kind",
+          "session_id"
+        ]
+      },
+      "ExpiredEntry": {
+        "description": "Narration or detail expired in place after 30 days from append, including in sealed Workspaces. The enclosing record retains its original kind, seq and appended_at, with session_id null; all content, completion metadata and payload references are removed.",
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "expired"
+          },
+          "expired_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the sweep replaced the entry."
+          }
+        },
+        "required": [
+          "type",
+          "expired_at"
+        ],
+        "additionalProperties": false
+      },
+      "Entry": {
+        "description": "One completed unit of the Workspace Transcript.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ParticipantJoined"
+          },
+          {
+            "$ref": "#/components/schemas/Brief"
+          },
+          {
+            "$ref": "#/components/schemas/SessionStarted"
+          },
+          {
+            "$ref": "#/components/schemas/Message"
+          },
+          {
+            "$ref": "#/components/schemas/Messages"
+          },
+          {
+            "$ref": "#/components/schemas/SessionEnded"
+          },
+          {
+            "$ref": "#/components/schemas/TurnInterrupted"
+          },
+          {
+            "$ref": "#/components/schemas/InstanceReleased"
+          },
+          {
+            "$ref": "#/components/schemas/ThoughtEntry"
+          },
+          {
+            "$ref": "#/components/schemas/PlanEntry"
+          },
+          {
+            "$ref": "#/components/schemas/PullRequestEntry"
+          },
+          {
+            "$ref": "#/components/schemas/OptionChangedEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ToolCallEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ExpiredEntry"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "expired": "#/components/schemas/ExpiredEntry",
+            "participant_joined": "#/components/schemas/ParticipantJoined",
+            "brief": "#/components/schemas/Brief",
+            "session_started": "#/components/schemas/SessionStarted",
+            "said": "#/components/schemas/Message",
+            "messages": "#/components/schemas/Messages",
+            "session_ended": "#/components/schemas/SessionEnded",
+            "turn_interrupted": "#/components/schemas/TurnInterrupted",
+            "instance_released": "#/components/schemas/InstanceReleased",
+            "thought": "#/components/schemas/ThoughtEntry",
+            "plan": "#/components/schemas/PlanEntry",
+            "pull_request": "#/components/schemas/PullRequestEntry",
+            "option_changed": "#/components/schemas/OptionChangedEntry",
+            "tool_call": "#/components/schemas/ToolCallEntry"
+          }
+        }
+      },
+      "ParticipantJoined": {
+        "description": "A Participant joined the Workspace.",
+        "type": "object",
+        "properties": {
+          "participant": {
+            "type": "string"
+          },
+          "type": {
+            "const": "participant_joined"
+          }
+        },
+        "required": [
+          "type",
+          "participant"
+        ]
+      },
+      "Brief": {
+        "description": "The instruction a Workspace started with, rendered by the Trigger that fired or supplied by an operator.",
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/BriefSource"
+          },
+          "brief": {
+            "$ref": "#/components/schemas/BriefContent"
+          },
+          "type": {
+            "const": "brief"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
+          }
+        },
+        "required": [
+          "type",
+          "source",
+          "brief"
+        ]
+      },
+      "BriefSource": {
+        "description": "Who supplied a Brief: the Trigger whose firing rendered it, or an operator, under the participant name they declared if they declared one.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/BriefSourceTrigger"
+          },
+          {
+            "$ref": "#/components/schemas/BriefSourceOperator"
+          }
+        ]
+      },
+      "SessionStarted": {
+        "description": "A Session started on behalf of the Workspace.",
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "agent": {
+            "description": "The Agent the Session runs.",
+            "type": "string"
+          },
+          "type": {
+            "const": "session_started"
+          }
+        },
+        "required": [
+          "type",
+          "session",
+          "agent"
+        ]
+      },
+      "Message": {
+        "description": "What a Participant said.",
+        "type": "object",
+        "properties": {
+          "participant": {
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/components/schemas/MessageContent"
+          },
+          "type": {
+            "const": "said"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          }
+        },
+        "required": [
+          "type",
+          "participant",
+          "message"
+        ]
+      },
+      "Messages": {
+        "description": "Messages that arrived while a Session was active, drained as one Transcript entry.",
+        "type": "object",
+        "properties": {
+          "messages": {
+            "$ref": "#/components/schemas/MessageCollection"
+          },
+          "type": {
+            "const": "messages"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
+          }
+        },
+        "required": [
+          "type",
+          "messages"
+        ]
+      },
+      "SpokenMessage": {
+        "description": "One Participant's message within a drained group.",
+        "type": "object",
+        "properties": {
+          "participant": {
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/components/schemas/MessageContent"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
+          }
+        },
+        "required": [
+          "participant",
+          "message"
+        ]
+      },
+      "SessionEnded": {
+        "description": "A Session ended, and how it went.",
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "exit": {
+            "$ref": "#/components/schemas/Exit"
+          },
+          "type": {
+            "const": "session_ended"
+          }
+        },
+        "required": [
+          "type",
+          "session",
+          "exit"
+        ]
+      },
+      "TurnInterrupted": {
+        "description": "A person interrupted a working Turn without ending the Session.",
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "participant": {
+            "type": "string"
+          },
+          "type": {
+            "const": "turn_interrupted"
+          }
+        },
+        "required": [
+          "type",
+          "session",
+          "participant"
+        ]
+      },
+      "End": {
+        "description": "The control plane closed the stream on purpose. A stream that closes without one was cut off, and is resumed from the last id delivered.",
+        "type": "object",
+        "properties": {
+          "because": {
+            "enum": [
+              "caught_up",
+              "sealed"
+            ],
+            "description": "`caught_up` when a read that does not follow has delivered every entry; `sealed` when the Workspace is sealed and every entry it will ever hold has been delivered."
+          }
+        },
+        "required": [
+          "because"
+        ]
+      },
+      "TranscriptSessionState": {
+        "description": "Transient session_state SSE snapshot on every follow connect, then changes, including a change of observation availability. Never has an event id and never enters the Transcript. session_id is null when no unfinished Session exists, and observation is then unavailable; usage is the latest the Harness reported, live, or null.",
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningTool"
+            }
+          },
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningUnit"
+            }
+          },
+          "message_buffering": {
+            "type": "boolean"
+          },
+          "thought_buffering": {
+            "type": "boolean"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the Harness has spent so far, held in memory beside the running tools while the Session is live and carried to followers; null until it reports one."
+          },
+          "last_activity_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the agent last showed activity, present only while its Session trails its answer."
+          },
+          "observation": {
+            "$ref": "#/components/schemas/SessionObservation"
+          }
+        },
+        "required": [
+          "session_id",
+          "tools",
+          "units",
+          "message_buffering",
+          "thought_buffering",
+          "usage",
+          "observation"
+        ]
+      },
+      "Event": {
+        "description": "SSE names: entry (Recorded), activity (Activity), session_state (TranscriptSessionState), cursor (CursorEvent), end (End), follower (FollowerEvent), or presence (Presence). Entry, Activity and cursor IDs advance the global Transcript cursor; session_state, follower and presence carry no id. Activity replacements retain first_seq, and their final closed replacement precedes the closing shared-state entry.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Activity",
+            "x-sse-event": "activity"
+          },
+          {
+            "$ref": "#/components/schemas/TranscriptSessionState",
+            "x-sse-event": "session_state"
+          },
+          {
+            "$ref": "#/components/schemas/Recorded",
+            "x-sse-event": "entry"
+          },
+          {
+            "$ref": "#/components/schemas/End",
+            "x-sse-event": "end"
+          },
+          {
+            "$ref": "#/components/schemas/CursorEvent",
+            "x-sse-event": "cursor"
+          },
+          {
+            "$ref": "#/components/schemas/FollowerEvent",
+            "x-sse-event": "follower"
+          },
+          {
+            "$ref": "#/components/schemas/Presence",
+            "x-sse-event": "presence"
+          }
+        ]
+      },
+      "FollowerEvent": {
+        "description": "A follow that stayed open past caught-up registered: the id it renews by, and the lease in seconds it must renew before. Sent once per follow.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "lease_seconds": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "lease_seconds"
+        ]
+      },
+      "Presence": {
+        "description": "The whole current set of a Workspace's followers, sent when a follow registers and whenever the set changes. A named follow appears once per name, the follower's own included; unnamed follows are counted; an Agent never appears. Carries no Transcript cursor.",
+        "type": "object",
+        "properties": {
+          "named": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "anonymous": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "named",
+          "anonymous"
+        ]
+      },
+      "OptionChangedEntry": {
+        "description": "A person changed one of a Session's options between Turns (ADR-0041).",
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "option_changed"
+          },
+          "session": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "participant": {
+            "type": "string",
+            "description": "The person who made the change."
+          },
+          "option": {
+            "type": "string",
+            "description": "The harness option's id, or the category when a queued Session's declared value changed."
+          },
+          "category": {
+            "type": "string"
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the option was set to before the change."
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it was set to; null when the harness refused."
+          },
+          "refused": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the harness refused, when it did."
+          }
+        },
+        "required": [
+          "type",
+          "session",
+          "participant",
+          "option",
+          "category"
+        ]
+      },
+      "PullRequestEntry": {
+        "description": "A verified GitHub Event observed a pull request from the Workspace's declared branch in one of its repositories. Learning it starts no work.",
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "pull_request"
+          },
+          "event": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The Organization Event it was learned from."
+          },
+          "repository": {
+            "type": "string",
+            "description": "The head repository fixed on the Workspace."
+          },
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "url": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "description": "GitHub's action, such as opened."
+          },
+          "state": {
+            "$ref": "#/components/schemas/PullRequestState"
+          }
+        },
+        "required": [
+          "type",
+          "event",
+          "repository",
+          "number",
+          "url",
+          "title",
+          "action",
+          "state"
+        ]
+      },
+      "InstanceReleased": {
+        "description": "A person released the Workspace's Instance, destroying it and whatever it held that was never pushed.",
+        "type": "object",
+        "properties": {
+          "participant": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "unpublished": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it held that existed nowhere else, as judged when it was released; null when it held nothing."
+          },
+          "type": {
+            "const": "instance_released"
+          }
+        },
+        "required": [
+          "type",
+          "participant",
+          "instance",
+          "unpublished"
+        ]
+      },
+      "TranscriptKind": {
+        "type": "string",
+        "enum": [
+          "shared_state",
+          "narration",
+          "detail"
+        ]
+      },
+      "TurnOutcome": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/TurnOutcomeAnswered"
+          },
+          {
+            "$ref": "#/components/schemas/TurnOutcomeCancelled"
+          },
+          {
+            "$ref": "#/components/schemas/TurnOutcomeFailed"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "status"
+        }
+      },
+      "Completion": {
+        "type": "object",
+        "properties": {
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "turn_outcome": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TurnOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "started_at",
+          "finished_at",
+          "turn_outcome"
+        ]
+      },
+      "PlanEntry": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "plan"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          },
+          "entries": {
+            "$ref": "#/components/schemas/PlanEntries"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
+          }
+        },
+        "required": [
+          "type",
+          "session_id",
+          "completion",
+          "entries"
+        ]
+      },
+      "ThoughtEntry": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "thought"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          },
+          "text": {
+            "$ref": "#/components/schemas/ThoughtContent"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
+          }
+        },
+        "required": [
+          "type",
+          "session_id",
+          "completion",
+          "text"
+        ]
+      },
+      "CursorEvent": {
+        "type": "string",
+        "description": "A cursor event carries the highest examined workspace:seq as its SSE id and data, so a filtered read resumes beyond omitted entries."
+      },
+      "ToolCallEntry": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "const": "tool_call"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tool_kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "The status the Harness last reported for the call.",
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed",
+              "failed"
+            ]
+          },
+          "input": {
+            "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+          },
+          "result": {
+            "description": "Inline JSON, or a PayloadReference when the serialized value exceeds 65536 bytes."
+          },
+          "closing_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why kestrel closed the call at a Turn boundary; null when the Harness settled it.",
+            "enum": [
+              "interrupted",
+              "failed",
+              "unresolved",
+              null
+            ]
+          },
+          "completion": {
+            "$ref": "#/components/schemas/Completion"
+          },
+          "payload_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields containing payload references; absent means every content field is inline."
+          }
+        },
+        "required": [
+          "type",
+          "session_id",
+          "call_id",
+          "title",
+          "tool_kind",
+          "status",
+          "input",
+          "result",
+          "closing_reason",
+          "completion"
+        ]
+      },
+      "ChangesEvent": {
+        "description": "SSE names: open (ChangesOpen) on connect and on reconnect, change (Change) for one resource that changed, and resync (ChangesResync) for a subscriber that fell behind the bounded buffer. No event carries an id.",
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Change",
+            "x-sse-event": "change"
+          },
+          {
+            "$ref": "#/components/schemas/ChangesOpen",
+            "x-sse-event": "open"
+          },
+          {
+            "$ref": "#/components/schemas/ChangesResync",
+            "x-sse-event": "resync"
+          }
+        ]
+      },
+      "Change": {
+        "description": "One resource that changed: a Workspace or Session by id, with the name of the Workspace it belongs to, or the Organization's queue, which carries neither. Never a copy of its state.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ChangeWorkspace"
+          },
+          {
+            "$ref": "#/components/schemas/ChangeSession"
+          },
+          {
+            "$ref": "#/components/schemas/ChangeQueue"
+          }
+        ]
+      },
+      "Refetch": {
+        "description": "The event that means refetch every view the Client subscribes to. It carries no fields.",
+        "type": "object"
+      },
+      "BriefSourceTrigger": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "trigger"
+          },
+          "trigger": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "trigger"
+        ]
+      },
+      "BriefSourceOperator": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "operator"
+          },
+          "participant": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The participant who joined directly before the Brief, or null when the operator declared no name and no one joined."
+          }
+        },
+        "required": [
+          "kind",
+          "participant"
+        ]
+      },
+      "TurnOutcomeAnswered": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "const": "answered"
+          },
+          "stop_reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "stop_reason"
+        ]
+      },
+      "TurnOutcomeCancelled": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "const": "cancelled"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "TurnOutcomeFailed": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "const": "failed"
+          },
+          "because": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "because"
+        ]
+      },
+      "ChangeWorkspace": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "const": "workspace"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspace": {
+            "type": "string",
+            "description": "The name of the Workspace."
+          }
+        },
+        "required": [
+          "resource",
+          "id",
+          "workspace"
+        ]
+      },
+      "ChangeSession": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "const": "session"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspace": {
+            "type": "string",
+            "description": "The name of the Workspace that holds the Session."
+          }
+        },
+        "required": [
+          "resource",
+          "id",
+          "workspace"
+        ]
+      },
+      "ChangeQueue": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "const": "queue"
+          }
+        },
+        "required": [
+          "resource"
+        ]
+      },
+      "InlineBrief": {
+        "type": "string"
+      },
+      "BriefContent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/InlineBrief"
+          },
+          {
+            "$ref": "#/components/schemas/PayloadReference"
+          }
+        ]
+      },
+      "InlineMessages": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "$ref": "#/components/schemas/SpokenMessage"
+        }
+      },
+      "MessageCollection": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/InlineMessages"
+          },
+          {
+            "$ref": "#/components/schemas/PayloadReference"
+          }
+        ]
+      },
+      "InlineMessage": {
+        "type": "string"
+      },
+      "MessageContent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/InlineMessage"
+          },
+          {
+            "$ref": "#/components/schemas/PayloadReference"
+          }
+        ]
+      },
+      "InlinePlanEntries": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/PlanStep"
+        }
+      },
+      "PlanStep": {
+        "description": "One step of a plan, as the Harness reported it.",
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content",
+          "priority",
+          "status"
+        ]
+      },
+      "PlanEntries": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/InlinePlanEntries"
+          },
+          {
+            "$ref": "#/components/schemas/PayloadReference"
+          }
+        ]
+      },
+      "InlineThought": {
+        "type": "string"
+      },
+      "ThoughtContent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/InlineThought"
+          },
+          {
+            "$ref": "#/components/schemas/PayloadReference"
+          }
+        ]
+      },
+      "ChangesOpen": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Refetch"
+          }
+        ]
+      },
+      "ChangesResync": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Refetch"
+          }
+        ]
+      },
+      "StreamReservation": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "token"
+        ]
+      },
+      "StreamSubscription": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "notices",
+              "transcript"
+            ]
+          },
+          "organization": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string",
+            "description": "The Workspace whose Transcript a `transcript` subscription follows, addressed as the Transcript read addresses it. Required for `transcript`."
+          },
+          "after": {
+            "type": "string",
+            "description": "The last Transcript cursor the tab saw. Absent means from the beginning."
+          },
+          "kinds": {
+            "type": "string",
+            "description": "Comma-separated Transcript kinds, as the Transcript read takes them.",
+            "default": "shared_state"
+          },
+          "participant": {
+            "type": "string",
+            "description": "The name a `transcript` subscription's follower joins presence under, refused as the Transcript read's `as` is. Absent means anonymous."
+          }
+        },
+        "required": [
+          "kind",
+          "organization"
+        ]
+      },
+      "StreamEvent": {
+        "description": "The event's name and `data` are those of the per-resource stream the subscription follows: an `Event` for a Transcript, a `ChangesEvent` for notices.",
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "The subscription's Transcript cursor after this event, on entry, Activity and cursor events only. It resumes the subscription as `after`."
+          },
+          "data": {
+            "description": "The per-resource stream's payload for this event name."
+          }
+        },
+        "required": [
+          "subscription",
+          "data"
+        ]
+      }
+    }
+  }
+}

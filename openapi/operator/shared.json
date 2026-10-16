@@ -1,0 +1,3910 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "kestrel operator",
+    "version": "0.1.0",
+    "summary": "The boundary a Client reaches a control plane over.",
+    "description": "Server-sent events down, JSON up, plain HTTP. It authenticates nobody, so the control plane serves it on a listener of its own, apart from the link, and binds that listener to loopback unless told otherwise. A remote control plane is reached through a tunnel. Every operation refuses with 403, and does nothing, a request whose Host is not loopback, or whose Origin, when it sends one, is not exactly http:// followed by that Host.",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    }
+  },
+  "servers": [
+    {
+      "url": "{controlPlane}",
+      "variables": {
+        "controlPlane": {
+          "default": "http://127.0.0.1:7718"
+        }
+      }
+    }
+  ],
+  "security": [],
+  "components": {
+    "responses": {
+      "Refused": {
+        "description": "The control plane refused the request, with a typed Diagnostic (ADR-0052) where its producer is typed and a plain Refusal where it is not yet; only `kind` tells them apart. 400 is a malformed request; 403 is a forbidden action, such as changing a Held Message its author did not write; 404 is a missing or ambiguous reference; 409 is a state conflict, or a declined operation not yet typed; 410 is an expired resource; 422 is an invalid field value; 503 is a control plane that could not answer; 504 is an Instance that did not answer a read within 10 s. 400, 503 and 504 are always typed.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds to wait before asking again. Present on a 503 only when the database was busy, which asking again can clear; the Diagnostic's `retry_after_seconds` carries the same value.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DiagnosedRefusal"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "SignInFill": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SignInVariableFill"
+          },
+          {
+            "$ref": "#/components/schemas/SignInFileFill"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "variable": "#/components/schemas/SignInVariableFill",
+            "file": "#/components/schemas/SignInFileFill"
+          }
+        }
+      },
+      "SignInVariableFill": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "variable"
+          },
+          "variable": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "variable"
+        ],
+        "additionalProperties": false
+      },
+      "SavedSignIn": {
+        "type": "object",
+        "description": "Material saved for a catalogued Sign-in Method, as everything but the Session it is handed to sees it.",
+        "properties": {
+          "harness": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "subscription",
+              "key"
+            ]
+          },
+          "holding": {
+            "$ref": "#/components/schemas/SignInHolding"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Minted for every accepted write of the material, a generic Profile or Provider Credential write included, and never reused."
+          },
+          "refreshed_from": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The revision a harness's own refresh advanced to make this one, or null when it was saved, imported or written."
+          },
+          "saved_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "authentication": {
+            "$ref": "#/components/schemas/AuthenticationEvidence"
+          },
+          "model_use": {
+            "type": "array",
+            "description": "The latest result per model of this harness using this revision. A result for one model never stands for another.",
+            "items": {
+              "$ref": "#/components/schemas/ModelUseEvidence"
+            }
+          }
+        },
+        "required": [
+          "harness",
+          "method",
+          "kind",
+          "holding",
+          "revision",
+          "refreshed_from",
+          "saved_at",
+          "authentication",
+          "model_use"
+        ],
+        "additionalProperties": false
+      },
+      "SignInHolding": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "enum": [
+              "subscription_profile",
+              "provider_credential"
+            ]
+          },
+          "reference": {
+            "type": "string",
+            "description": "The Profile's name, or the Provider Credential's variable."
+          },
+          "fills": {
+            "$ref": "#/components/schemas/SignInFill"
+          }
+        },
+        "required": [
+          "resource",
+          "reference",
+          "fills"
+        ],
+        "additionalProperties": false
+      },
+      "AuthenticationEvidence": {
+        "type": "object",
+        "description": "Whether this revision authenticates, which says nothing of whether a harness can use a model with it. `login_completed` is a finished vendor sign-in and `credential_accepted` a provider accepting the one request recorded in `provider_check`; neither is a model call. Expiry and lack of coverage are only ever established by evidence.",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "unchecked",
+              "login_completed",
+              "credential_accepted",
+              "authentication_failed",
+              "expired",
+              "not_covered"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "import",
+              "provider_check",
+              "relay",
+              "generic_write",
+              "refresh",
+              "session",
+              "model_test"
+            ]
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "provider_check": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProviderCheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "source",
+          "observed_at",
+          "provider_check"
+        ],
+        "additionalProperties": false
+      },
+      "ProviderCheck": {
+        "type": "object",
+        "description": "One authenticated model-metadata read. Only `rejected` says the provider refused the credential; `inconclusive` is a refusal about permission, credit or another matter; `unavailable` includes a timeout and a rate or quota limit.",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "anthropic",
+              "openai"
+            ]
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "rejected",
+              "inconclusive",
+              "unavailable"
+            ]
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "provider_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The provider's error type or code, never its message."
+          }
+        },
+        "required": [
+          "provider",
+          "outcome",
+          "status",
+          "provider_error"
+        ],
+        "additionalProperties": false
+      },
+      "ModelUseEvidence": {
+        "type": "object",
+        "properties": {
+          "harness": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The image a model test ran in; null for a Session, which records none."
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "worked",
+              "authentication_failed",
+              "not_covered"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "model_test",
+              "session"
+            ]
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "harness",
+          "model",
+          "image",
+          "result",
+          "source",
+          "observed_at"
+        ],
+        "additionalProperties": false
+      },
+      "SignInFileFill": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "file"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "ProjectDeclaration": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "repositories": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            },
+            "description": "The repositories the work happens against, in order: an http(s)://, ssh://, git:// or file:// URL, an scp-style `user@host:path`, a local path on the Instance beginning `/`, `./` or `../`, or `owner/repo` or `github.com/owner/repo`, which is held as its HTTPS `.git` address."
+          },
+          "integrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepositoryIntegrationSelection"
+            },
+            "description": "The Integration each connected repository reaches GitHub as. Absent or empty selects none: neither a GitHub address nor an Event ever selects one. A repository named here is held as its HTTPS address whatever transport it was given by. Before a selection, its repository or the branch is saved new or changed, the selected App is asked for the repository and the branch."
+          },
+          "branch": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "name",
+          "repositories",
+          "branch"
+        ]
+      },
+      "RepositoryIntegrationSelection": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "repository": {
+            "type": "string",
+            "description": "One of the declared repositories, as given there or as it resolves."
+          },
+          "integration": {
+            "type": "string",
+            "description": "The name of an enabled GitHub Integration in the Organization that carries outbound and watches this repository."
+          }
+        },
+        "required": [
+          "repository",
+          "integration"
+        ]
+      },
+      "SelectedIntegration": {
+        "type": "object",
+        "description": "Selected explicitly, and never replaced by another Integration when this one is disabled or retired.",
+        "properties": {
+          "repository": {
+            "type": "string",
+            "description": "The repository's address as the Project or Workspace holds it."
+          },
+          "integration": {
+            "type": "string",
+            "description": "The Integration's name as it reads now."
+          },
+          "integration_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "repository",
+          "integration",
+          "integration_id"
+        ]
+      },
+      "AgentDeclaration": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "harness": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The Harness that drives it."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The model it works with. Absent or null names none, and the Harness's own default is the answer."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The mode it works in. Absent or null names none, and the Harness's own default is the answer."
+          },
+          "thought_level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The thought level it works at. Absent or null names none, and the Harness's own default is the answer."
+          }
+        },
+        "required": [
+          "name",
+          "harness"
+        ]
+      },
+      "DeclarationChange": {
+        "type": "object",
+        "description": "What applying a Declaration does to one record. Whether a route lists a record it leaves unchanged is that route's choice.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "project",
+              "agent",
+              "trigger"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "add",
+              "change",
+              "unchanged",
+              "remove"
+            ]
+          },
+          "differences": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeclarationDifference"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "action",
+          "differences"
+        ]
+      },
+      "DeclarationDifference": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "was": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "becomes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "field",
+          "was",
+          "becomes"
+        ]
+      },
+      "TriggerDeclaration": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "filter": {
+            "type": "object",
+            "description": "A CloudEvents filter of exact, prefix, suffix, all, any, or not."
+          },
+          "every": {
+            "type": "string",
+            "description": "A duration such as `1h`, counted from the declaration, in place of a filter."
+          },
+          "cron": {
+            "type": "string",
+            "description": "Five fields of minute, hour, day of the month, month and day of the week, such as `0 9 * * 1-5`, in place of a filter or an interval."
+          },
+          "zone": {
+            "type": "string",
+            "description": "The IANA time zone a cron expression is read in, such as `America/New_York`."
+          },
+          "brief": {
+            "type": "string",
+            "minLength": 1
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "correlation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "on_miss": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What a correlation miss does: `open` or `ignore`."
+          },
+          "on_open_workspace": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What a firing that correlates to an open Workspace does: `continue` its waiting Session, or `new-session` with this Trigger's Agent. Absent continues."
+          },
+          "project": {
+            "type": "string",
+            "minLength": 1
+          },
+          "agent": {
+            "type": "string",
+            "minLength": 1
+          },
+          "allows": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The model its Sessions run with. Omitted, the Agent's, then the Harness's default."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The mode its Sessions run in. Omitted, the Agent's, then the Harness's default."
+          },
+          "thought_level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The thought level its Sessions run at. Omitted, the Agent's, then the Harness's default."
+          }
+        },
+        "required": [
+          "name",
+          "brief",
+          "project",
+          "agent"
+        ],
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/EventTriggerCondition"
+          },
+          {
+            "$ref": "#/components/schemas/IntervalTriggerCondition"
+          },
+          {
+            "$ref": "#/components/schemas/CronTriggerCondition"
+          }
+        ]
+      },
+      "QueueReason": {
+        "type": "object",
+        "description": "One reason a Session has not started, for a Client to phrase.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/QueueReasonDependencies"
+          },
+          {
+            "$ref": "#/components/schemas/QueueReasonSubscriptionProfile"
+          },
+          {
+            "$ref": "#/components/schemas/QueueReasonInstanceArchiving"
+          },
+          {
+            "$ref": "#/components/schemas/QueueReasonLiveInstanceLimit"
+          },
+          {
+            "$ref": "#/components/schemas/QueueReasonActiveWorkSlots"
+          },
+          {
+            "$ref": "#/components/schemas/QueueReasonAhead"
+          }
+        ]
+      },
+      "HeldMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "The Workspace's own sequence. Stable and never reused: a taken or withdrawn message keeps it."
+          },
+          "participant": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "posted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "edited_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "participant",
+          "message",
+          "posted_at",
+          "edited_at"
+        ]
+      },
+      "Workspace": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "opened_with": {
+            "type": "string",
+            "description": "The Agent its first Session runs unless that Session names another."
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checkout": {
+            "$ref": "#/components/schemas/Checkout"
+          },
+          "integrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SelectedIntegration"
+            },
+            "description": "The Integration each of its repositories selected when it opened. Redeclaring its Project changes none, and one since disabled or retired still reads here."
+          },
+          "instance": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Instance its Sessions execute on, while one is kept."
+          },
+          "held": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why its Instance is held for work that exists nowhere else, if it is."
+          },
+          "held_messages": {
+            "type": "array",
+            "description": "The messages the unfinished Session cannot take yet, in arrival order.",
+            "items": {
+              "$ref": "#/components/schemas/HeldMessage"
+            }
+          },
+          "correlation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "sealed"
+            ]
+          },
+          "opened_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_active_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sealed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "continues": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "started_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Event a firing opened it for, or the Brief's author an operator opened it with. Null when neither names anyone."
+          },
+          "continued_by": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "pull_requests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PullRequestAvailability"
+            },
+            "description": "One per repository fixed on the Workspace, in the checkout's order."
+          },
+          "unfinished_session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UnfinishedSession"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The one Session the Workspace has not let go of, while it has one."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "organization",
+          "project",
+          "opened_with",
+          "profile",
+          "checkout",
+          "instance",
+          "held",
+          "correlation",
+          "state",
+          "opened_at",
+          "last_active_at",
+          "sealed_at",
+          "continues",
+          "started_by",
+          "continued_by",
+          "held_messages",
+          "pull_requests",
+          "unfinished_session"
+        ]
+      },
+      "UnfinishedSession": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "working",
+              "trailing",
+              "waiting",
+              "unbriefed",
+              "ended",
+              "unreachable"
+            ],
+            "description": "A trailing Session has answered its Turn while work its agent started still runs: it holds its Active-Work Slot and its Instance, refuses seal, and is waiting once that work settles and its agent falls quiet."
+          },
+          "preparing": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "provisioning",
+              "cloning",
+              "starting_harness",
+              "harness_ready",
+              null
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "state",
+          "preparing"
+        ]
+      },
+      "PullRequestAvailability": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "available",
+              "unavailable"
+            ],
+            "description": "Unavailable when no inbound GitHub Integration in the Organization watches the repository and none has delivered a pull request from it: kestrel cannot learn its pull requests, which says nothing about whether any exist."
+          },
+          "known": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PullRequest"
+            },
+            "description": "The pull requests learned from the declared branch in this repository; null when unavailable."
+          }
+        },
+        "required": [
+          "repository",
+          "availability",
+          "known"
+        ]
+      },
+      "PullRequest": {
+        "type": "object",
+        "description": "A Workspace's current value for one pull request, learned from a verified GitHub Event.",
+        "properties": {
+          "repository": {
+            "type": "string",
+            "description": "The head repository fixed on the Workspace."
+          },
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "url": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PullRequestState"
+          },
+          "head_branch": {
+            "type": "string"
+          },
+          "head_revision": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When GitHub last changed it, as the Event or a read back of the pull request said."
+          },
+          "event": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The Event the value was learned from."
+          }
+        },
+        "required": [
+          "repository",
+          "number",
+          "url",
+          "title",
+          "state",
+          "head_branch",
+          "head_revision",
+          "updated_at",
+          "event"
+        ]
+      },
+      "PullRequestState": {
+        "type": "string",
+        "enum": [
+          "open",
+          "closed",
+          "merged"
+        ]
+      },
+      "Checkout": {
+        "type": "object",
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "base": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repositories",
+          "base",
+          "branch"
+        ]
+      },
+      "ChangingOption": {
+        "description": "An option change a person asked for while a Session is live, held until the harness answers it (ADR-0041).",
+        "type": "object",
+        "properties": {
+          "option": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "participant": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "option",
+          "category",
+          "value",
+          "participant"
+        ]
+      },
+      "Session": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z]+-[a-z]+-[a-z]{8}$"
+          },
+          "workspace": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "working",
+              "trailing",
+              "waiting",
+              "unbriefed",
+              "ended",
+              "unreachable"
+            ],
+            "description": "A trailing Session has answered its Turn while work its agent started still runs: it holds its Active-Work Slot and its Instance, refuses seal, and is waiting once that work settles and its agent falls quiet."
+          },
+          "preparing": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "provisioning",
+              "cloning",
+              "starting_harness",
+              "harness_ready",
+              null
+            ],
+            "description": "The step an unbriefed Session is preparing on: provisioning from claim until its supervisor connects, cloning until its checkout is reported, starting_harness until the harness is up, and harness_ready once it is. Null in every other state."
+          },
+          "exit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Exit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcome_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "instance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "supervisor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agent": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the Session names for its Harness's model, or null for its Harness's default."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the Session names for its Harness's mode, or null for its Harness's default."
+          },
+          "thought_level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the Session names for its Harness's thought level, or null for its Harness's default."
+          },
+          "worked_model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Model-category option's current value, kept current by the supervisor (ADR-0041)."
+          },
+          "sign_in_method": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The catalogued Sign-in Method selected for this Session, or null when none was."
+          },
+          "supplied": {
+            "type": "array",
+            "description": "What the harness was last spawned with, by revision and never by value; empty until its supervisor takes its credentials.",
+            "items": {
+              "$ref": "#/components/schemas/SuppliedMaterial"
+            }
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The harness's own name for the conversation, or null until it says one."
+          },
+          "options": {
+            "type": "array",
+            "description": "The harness's whole config-option list (ADR-0041).",
+            "items": {
+              "$ref": "#/components/schemas/SessionOption"
+            }
+          },
+          "changing_options": {
+            "type": "array",
+            "description": "Option changes a person asked for while the Session is live, held until the harness answers each (ADR-0041).",
+            "items": {
+              "$ref": "#/components/schemas/ChangingOption"
+            }
+          },
+          "commands": {
+            "type": "array",
+            "description": "The commands the harness offers for this Session.",
+            "items": {
+              "$ref": "#/components/schemas/SessionCommand"
+            }
+          },
+          "interrupting": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Interrupting"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who asked the working Turn to stop, while the request is in flight."
+          },
+          "enqueued_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lease_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "connected_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "supervisor_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the Harness has spent on the Session: the live figure while its agent works, otherwise the latest its Turn answer or the end of its trailing work reported."
+          },
+          "diagnostic": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Diagnostic"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the Session failed, from the evidence its supervisor established. Null when it has not failed, or failed with no evidence; its presence never makes the read fail (ADR-0052)."
+          },
+          "tools": {
+            "type": "array",
+            "description": "Tool calls open in the current observation; empty whenever observation is unavailable.",
+            "items": {
+              "$ref": "#/components/schemas/RunningTool"
+            }
+          },
+          "units": {
+            "type": "array",
+            "description": "Adapter units open in the current observation, such as a Claude background task or subagent; they keep a trailing Session trailing. Empty whenever observation is unavailable.",
+            "items": {
+              "$ref": "#/components/schemas/RunningUnit"
+            }
+          },
+          "message_buffering": {
+            "type": "boolean"
+          },
+          "thought_buffering": {
+            "type": "boolean"
+          },
+          "last_activity_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the trailing Session's agent last showed activity; null in every other state."
+          },
+          "observation": {
+            "$ref": "#/components/schemas/SessionObservation"
+          },
+          "depends_on": {
+            "type": "array",
+            "description": "The Sessions this one was declared to wait on, whether or not they have ended.",
+            "items": {
+              "$ref": "#/components/schemas/SessionReference"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "workspace",
+          "state",
+          "preparing",
+          "exit",
+          "outcome_message",
+          "instance",
+          "supervisor",
+          "agent",
+          "harness",
+          "model",
+          "mode",
+          "thought_level",
+          "worked_model",
+          "sign_in_method",
+          "supplied",
+          "title",
+          "options",
+          "changing_options",
+          "commands",
+          "interrupting",
+          "enqueued_at",
+          "started_at",
+          "ended_at",
+          "lease_expires_at",
+          "connected_at",
+          "supervisor_version",
+          "usage",
+          "diagnostic",
+          "tools",
+          "units",
+          "message_buffering",
+          "thought_buffering",
+          "last_activity_at",
+          "observation",
+          "depends_on"
+        ]
+      },
+      "SessionObservation": {
+        "description": "Whether the Session's open work is currently observed. current: its supervisor sent a snapshot over its open link and is still reaching it; tools and units list that snapshot, empty when nothing is open. unavailable: nothing current is known, whatever the Session's state or lease; tools and units are empty and never mean nothing is open. Neither availability changes the Session's state or scheduling.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SessionObservationCurrent"
+          },
+          {
+            "$ref": "#/components/schemas/SessionObservationUnavailable"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "availability",
+          "mapping": {
+            "current": "#/components/schemas/SessionObservationCurrent",
+            "unavailable": "#/components/schemas/SessionObservationUnavailable"
+          }
+        }
+      },
+      "SessionObservationCurrent": {
+        "type": "object",
+        "properties": {
+          "availability": {
+            "const": "current"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the control plane took the snapshot."
+          }
+        },
+        "required": [
+          "availability",
+          "observed_at"
+        ]
+      },
+      "SessionObservationUnavailable": {
+        "type": "object",
+        "properties": {
+          "availability": {
+            "const": "unavailable"
+          },
+          "last": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LastObservation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The last snapshot this control plane took for the Session, kept until the Session ends; null when it holds none, as after a restart."
+          }
+        },
+        "required": [
+          "availability",
+          "last"
+        ]
+      },
+      "LastObservation": {
+        "description": "A historical snapshot of the Session's open work: what was open at observed_at, not proof that it still runs or that the supervisor is reachable.",
+        "type": "object",
+        "properties": {
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningTool"
+            }
+          },
+          "units": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningUnit"
+            }
+          }
+        },
+        "required": [
+          "observed_at",
+          "tools",
+          "units"
+        ]
+      },
+      "SuppliedMaterial": {
+        "type": "object",
+        "description": "One variable or file handed to a Session's harness. It keeps the revision handed over after that material is replaced or forgotten.",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "enum": [
+              "subscription_profile",
+              "provider_credential"
+            ]
+          },
+          "reference": {
+            "type": "string",
+            "description": "The Profile's name, or the Provider Credential's variable."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "variable",
+              "file"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "The variable, or the file's path beneath the agent's home."
+          },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The catalogued Sign-in Method of the Session's harness this fills, or null for anything else a Profile or Organization holds."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "current": {
+            "type": "boolean",
+            "description": "Whether that revision is still what is held."
+          },
+          "handed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "resource",
+          "reference",
+          "kind",
+          "name",
+          "method",
+          "revision",
+          "current",
+          "handed_at"
+        ],
+        "additionalProperties": false
+      },
+      "SessionReference": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "SessionOption": {
+        "type": "object",
+        "description": "A harness config option, whole: what it is, what it may be and what it is now.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`mode`, `model`, `model_config`, `thought_level`, or the harness's own string, which may begin with `_`."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "select",
+              "boolean"
+            ]
+          },
+          "current": {
+            "$ref": "#/components/schemas/SessionOptionCurrent"
+          },
+          "values": {
+            "type": "array",
+            "description": "The offered values of an ungrouped select; empty for a grouped one and for a boolean.",
+            "items": {
+              "$ref": "#/components/schemas/SessionOptionValue"
+            }
+          },
+          "groups": {
+            "type": "array",
+            "description": "The offered values of a grouped select; empty for an ungrouped one.",
+            "items": {
+              "$ref": "#/components/schemas/SessionOptionGroup"
+            }
+          },
+          "warns_cache": {
+            "type": "boolean",
+            "description": "Whether changing this option makes the next Turn re-read the context without the prompt cache. True for a Model, ThoughtLevel or ModelConfig option, except a category kestrel's per-harness table keeps the cache for; at 0.3 that is Claude's ThoughtLevel (ADR-0041)."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "category",
+          "kind",
+          "current",
+          "values",
+          "groups",
+          "warns_cache"
+        ]
+      },
+      "SessionOptionCurrent": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SelectedOptionValue"
+          },
+          {
+            "$ref": "#/components/schemas/ToggleOptionValue"
+          }
+        ],
+        "description": "The current value: a value id for a select, a boolean for a toggle."
+      },
+      "SessionOptionValue": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "value",
+          "name",
+          "description"
+        ]
+      },
+      "SessionOptionGroup": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionOptionValue"
+            }
+          }
+        },
+        "required": [
+          "group",
+          "name",
+          "values"
+        ]
+      },
+      "SessionCommand": {
+        "type": "object",
+        "description": "A command the harness offers for the Session, as a composer lists it.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "input_hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "input_hint"
+        ]
+      },
+      "Interrupting": {
+        "type": "object",
+        "description": "A person's request that a Session's working Turn stop.",
+        "properties": {
+          "participant": {
+            "type": "string"
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "participant",
+          "requested_at"
+        ]
+      },
+      "Exit": {
+        "description": "How a Session ended.",
+        "type": "object",
+        "properties": {
+          "status": {
+            "enum": [
+              "succeeded",
+              "failed"
+            ]
+          },
+          "because": {
+            "type": "string",
+            "description": "Why it failed. Absent when it succeeded."
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "Usage": {
+        "type": "object",
+        "properties": {
+          "context_used": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "context_size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cost": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Cost"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "context_used",
+          "context_size",
+          "cost"
+        ]
+      },
+      "Cost": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "currency"
+        ]
+      },
+      "NameOperatorAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "const": "name_operator"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "action",
+          "name",
+          "missing"
+        ]
+      },
+      "Refusal": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string",
+            "description": "The request field the message concerns, when the refusal is about one."
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "DiagnosedRefusal": {
+        "description": "A typed Diagnostic, or the plain Refusal a refusal falls back to until its producer is typed. Only `kind` tells them apart.",
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Diagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/Refusal"
+          }
+        ]
+      },
+      "Resource": {
+        "description": "A kind of record a reference, a declaration or an action names (ADR-0052).",
+        "type": "string",
+        "enum": [
+          "organization",
+          "project",
+          "agent",
+          "subscription_profile",
+          "provider_credential",
+          "integration",
+          "trigger",
+          "event",
+          "workspace",
+          "session",
+          "instance",
+          "held_message",
+          "transcript_payload",
+          "sign_in_test"
+        ]
+      },
+      "Candidate": {
+        "description": "One record an ambiguous reference could have meant.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "Consequence": {
+        "description": "What a destructive step does to work, typed so a Client never reads it from the consequence sentence.",
+        "type": "string",
+        "enum": [
+          "fails_session",
+          "ends_session",
+          "discards_unpublished_work"
+        ]
+      },
+      "ExplicitChoice": {
+        "description": "A destructive step is taken only by an explicit choice, whatever its consequence says; a Client never runs it as a default or automatic repair.",
+        "const": true
+      },
+      "Diagnostic": {
+        "type": "object",
+        "description": "Why kestrel would not do what it was asked, and the ordered, typed next steps that repair, inspect or retry it (ADR-0052). `message` is display only; a Client never classifies it.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/MissingReferenceDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/AmbiguousReferenceDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/MalformedRequestDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/ForbiddenActionDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/StateConflictDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/ExpiredResourceDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/InvalidFieldDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/SetupGapDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/UnavailableDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/InstanceTimeoutDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/CredentialRejectedDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/AuthenticationFailedDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/ExecutableMissingDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/UnknownFailureDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/ConnectionFailedDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/ClientFailureDiagnostic"
+          },
+          {
+            "$ref": "#/components/schemas/UnknownResponseDiagnostic"
+          }
+        ]
+      },
+      "MissingReferenceContext": {
+        "properties": {
+          "resource": {
+            "$ref": "#/components/schemas/Resource"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "organization": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null when the resource is not scoped to an Organization."
+          }
+        },
+        "required": [
+          "resource",
+          "reference",
+          "organization"
+        ]
+      },
+      "MissingReferenceDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "missing_reference"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/MissingReferenceContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "AmbiguousReferenceContext": {
+        "properties": {
+          "resource": {
+            "$ref": "#/components/schemas/Resource"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "organization": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Candidate"
+            }
+          }
+        },
+        "required": [
+          "resource",
+          "reference",
+          "organization",
+          "candidates"
+        ]
+      },
+      "AmbiguousReferenceDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "ambiguous_reference"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/AmbiguousReferenceContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "MalformedRequestContext": {
+        "properties": {
+          "operation": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "operation",
+          "field"
+        ]
+      },
+      "MalformedRequestDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "malformed_request"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/MalformedRequestContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "ForbiddenActionContext": {
+        "properties": {
+          "operation": {
+            "type": "string"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/Resource"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "organization": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "constraint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The existing author/name constraint the action violates, when established."
+          }
+        },
+        "required": [
+          "operation",
+          "resource",
+          "reference",
+          "organization",
+          "constraint"
+        ]
+      },
+      "ForbiddenActionDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "forbidden_action"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/ForbiddenActionContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "StateConflictContext": {
+        "properties": {
+          "operation": {
+            "type": "string"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/Resource"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "organization": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "holding_session": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Session holding the conflicting state, when the conflict is one."
+          }
+        },
+        "required": [
+          "operation",
+          "resource",
+          "reference",
+          "organization",
+          "state",
+          "holding_session"
+        ]
+      },
+      "StateConflictDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "state_conflict"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/StateConflictContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "ExpiredResourceContext": {
+        "properties": {
+          "resource": {
+            "$ref": "#/components/schemas/Resource"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "organization": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource",
+          "reference",
+          "organization",
+          "operation"
+        ]
+      },
+      "ExpiredResourceDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "expired_resource"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/ExpiredResourceContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "InvalidFieldContext": {
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "constraint": {
+            "type": "string"
+          },
+          "allowed_values": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "field",
+          "constraint",
+          "allowed_values"
+        ]
+      },
+      "InvalidFieldDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "invalid_field"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/InvalidFieldContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "SetupGapContext": {
+        "properties": {
+          "prerequisite": {
+            "type": "string"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Resource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "organization": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "harness": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sign_in": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "prerequisite",
+          "resource",
+          "reference",
+          "organization",
+          "harness",
+          "method",
+          "sign_in",
+          "image"
+        ]
+      },
+      "SetupGapDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "setup_gap"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/SetupGapContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "UnavailableContext": {
+        "properties": {
+          "service": {
+            "type": "string"
+          },
+          "resource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operation": {
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "saved": {
+            "description": "What a write saved before the service it then asked could not answer.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SavedSignIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "service",
+          "resource",
+          "operation",
+          "retry_after_seconds",
+          "saved"
+        ]
+      },
+      "UnavailableDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "unavailable"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/UnavailableContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "InstanceTimeoutContext": {
+        "properties": {
+          "workspace": {
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace",
+          "instance",
+          "operation"
+        ]
+      },
+      "CredentialRejectedContext": {
+        "properties": {
+          "organization": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "provider_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The provider's error type or code, never its message."
+          }
+        },
+        "required": [
+          "organization",
+          "harness",
+          "method",
+          "provider",
+          "status",
+          "provider_error"
+        ]
+      },
+      "CredentialRejectedDiagnostic": {
+        "description": "A provider refused the credential itself when it was saved, so whatever was saved before is kept.",
+        "properties": {
+          "kind": {
+            "const": "credential_rejected"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/CredentialRejectedContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "InstanceTimeoutDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "instance_timeout"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/InstanceTimeoutContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "AuthenticationFailedContext": {
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/AuthenticationRequiredEvidence"
+          },
+          "sign_in": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The catalogued Sign-in Method the failure is about, when one is established."
+          },
+          "attribution": {
+            "type": "string",
+            "enum": [
+              "established",
+              "uncertain",
+              "unattributed"
+            ],
+            "description": "established: the method selected, or the only catalogued sign-in the harness was handed. uncertain: it was handed several and nothing says which it refused, so none is blamed. unattributed: it was handed none kestrel catalogues."
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The methods an uncertain failure could be about; empty otherwise."
+          },
+          "holding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignInHolding"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where the established sign-in is held."
+          },
+          "revision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The revision of the established sign-in the harness was handed."
+          },
+          "current": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether that revision is still what is held. Only a current revision is marked as needing attention; a replaced one keeps this diagnosis."
+          },
+          "expired": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Established only from evidence; never inferred from arbitrary harness output."
+          },
+          "covered": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "session",
+          "harness",
+          "image",
+          "evidence",
+          "sign_in",
+          "attribution",
+          "candidates",
+          "holding",
+          "revision",
+          "current",
+          "expired",
+          "covered"
+        ]
+      },
+      "AuthenticationFailedDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "authentication_failed"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/AuthenticationFailedContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "ExecutableMissingContext": {
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "executable": {
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/ExecutableMissingEvidence"
+          }
+        },
+        "required": [
+          "session",
+          "harness",
+          "image",
+          "executable",
+          "evidence"
+        ]
+      },
+      "ExecutableMissingDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "executable_missing"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/ExecutableMissingContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "UnknownFailureContext": {
+        "properties": {
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UnknownEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session",
+          "resource",
+          "evidence"
+        ]
+      },
+      "AuthenticationRequiredEvidence": {
+        "description": "The agent answered with ACP's authentication-required error.",
+        "properties": {
+          "kind": {
+            "const": "authentication_required"
+          },
+          "code": {
+            "type": "integer"
+          },
+          "methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The ids of the ACP auth methods the agent offered."
+          },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The ACP auth method the supervisor was configured to log in with."
+          }
+        },
+        "required": [
+          "kind",
+          "code",
+          "methods",
+          "method"
+        ]
+      },
+      "ExecutableMissingEvidence": {
+        "properties": {
+          "kind": {
+            "const": "executable_missing"
+          },
+          "command": {
+            "type": "string"
+          },
+          "error": {
+            "$ref": "#/components/schemas/OsError"
+          }
+        },
+        "required": [
+          "kind",
+          "command",
+          "error"
+        ]
+      },
+      "OsError": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "not_found",
+              "permission_denied",
+              "other"
+            ]
+          },
+          "code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "code"
+        ]
+      },
+      "UnknownEvidence": {
+        "description": "What the agent said, bounded and redacted. It never establishes that a sign-in expired or is not covered.",
+        "properties": {
+          "kind": {
+            "const": "unknown"
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "kind",
+          "summary"
+        ]
+      },
+      "UnknownFailureDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "unknown_failure"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/UnknownFailureContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "ConnectionFailedContext": {
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "operation"
+        ]
+      },
+      "ConnectionFailedDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "connection_failed"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/ConnectionFailedContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "ClientFailureContext": {
+        "properties": {
+          "operation": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "operation",
+          "evidence"
+        ]
+      },
+      "ClientFailureDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "client_failure"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/ClientFailureContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "UnknownResponseContext": {
+        "properties": {
+          "service": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "evidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "service",
+          "operation",
+          "status",
+          "evidence"
+        ]
+      },
+      "UnknownResponseDiagnostic": {
+        "properties": {
+          "kind": {
+            "const": "unknown_response"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/components/schemas/UnknownResponseContext"
+          },
+          "next_steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "field",
+          "context",
+          "next_steps"
+        ]
+      },
+      "Action": {
+        "type": "object",
+        "description": "A typed corrective, inspective or retry step a Diagnostic offers, naming its own inputs rather than a shell command or browser route (ADR-0052). A Client binds it to a form, a flag or an API call.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/NameOperatorAction"
+          },
+          {
+            "$ref": "#/components/schemas/DeclareOrganizationAction"
+          },
+          {
+            "$ref": "#/components/schemas/DeclareProjectAction"
+          },
+          {
+            "$ref": "#/components/schemas/DeclareAgentAction"
+          },
+          {
+            "$ref": "#/components/schemas/DeclareSubscriptionProfileAction"
+          },
+          {
+            "$ref": "#/components/schemas/SetProviderCredentialAction"
+          },
+          {
+            "$ref": "#/components/schemas/InspectResourceAction"
+          },
+          {
+            "$ref": "#/components/schemas/ListResourcesAction"
+          },
+          {
+            "$ref": "#/components/schemas/StopSessionAction"
+          },
+          {
+            "$ref": "#/components/schemas/EnqueueSessionAction"
+          },
+          {
+            "$ref": "#/components/schemas/EnableIntegrationAction"
+          },
+          {
+            "$ref": "#/components/schemas/ConnectGithubAction"
+          },
+          {
+            "$ref": "#/components/schemas/ReplaceIntegrationPrivateKeyAction"
+          },
+          {
+            "$ref": "#/components/schemas/ReleaseInstanceAction"
+          },
+          {
+            "$ref": "#/components/schemas/CorrectFieldAction"
+          },
+          {
+            "$ref": "#/components/schemas/SignInAction"
+          },
+          {
+            "$ref": "#/components/schemas/InspectHarnessImageAction"
+          },
+          {
+            "$ref": "#/components/schemas/CheckConnectionAction"
+          },
+          {
+            "$ref": "#/components/schemas/RetryReadAction"
+          },
+          {
+            "$ref": "#/components/schemas/RetryRequestAction"
+          },
+          {
+            "$ref": "#/components/schemas/InspectOperationAction"
+          }
+        ]
+      },
+      "DeclareOrganizationAction": {
+        "properties": {
+          "action": {
+            "const": "declare_organization"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Which of this action's fixed inputs are not yet known, from `name`."
+          }
+        },
+        "required": [
+          "action",
+          "name",
+          "missing"
+        ]
+      },
+      "DeclareProjectAction": {
+        "properties": {
+          "action": {
+            "const": "declare_project"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repositories": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Which of this action's fixed inputs are not yet known, from `name`, `repositories`, `branch`."
+          }
+        },
+        "required": [
+          "action",
+          "organization",
+          "name",
+          "repositories",
+          "branch",
+          "missing"
+        ]
+      },
+      "DeclareAgentAction": {
+        "properties": {
+          "action": {
+            "const": "declare_agent"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "harness": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Which of this action's fixed inputs are not yet known, from `name`, `harness`."
+          }
+        },
+        "required": [
+          "action",
+          "organization",
+          "name",
+          "harness",
+          "missing"
+        ]
+      },
+      "DeclareSubscriptionProfileAction": {
+        "properties": {
+          "action": {
+            "const": "declare_subscription_profile"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Which of this action's fixed inputs are not yet known, from `name`, `owner`."
+          }
+        },
+        "required": [
+          "action",
+          "organization",
+          "name",
+          "owner",
+          "missing"
+        ]
+      },
+      "SetProviderCredentialAction": {
+        "properties": {
+          "action": {
+            "const": "set_provider_credential"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "The credential's variable. Its value is always collected privately and never serialized here."
+          }
+        },
+        "required": [
+          "action",
+          "organization",
+          "name"
+        ]
+      },
+      "InspectResourceAction": {
+        "properties": {
+          "action": {
+            "const": "inspect_resource"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/Resource"
+          },
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "organization": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "resource",
+          "reference",
+          "organization"
+        ]
+      },
+      "ListResourcesAction": {
+        "properties": {
+          "action": {
+            "const": "list_resources"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/Resource"
+          },
+          "organization": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "resource",
+          "organization"
+        ]
+      },
+      "StopSessionAction": {
+        "properties": {
+          "action": {
+            "const": "stop_session"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "consequence": {
+            "type": "string",
+            "description": "Display-only explanation of the destructive effect; wording never decides whether confirmation is required."
+          },
+          "effect": {
+            "$ref": "#/components/schemas/Consequence"
+          },
+          "requires_choice": {
+            "$ref": "#/components/schemas/ExplicitChoice"
+          }
+        },
+        "required": [
+          "action",
+          "organization",
+          "session",
+          "consequence",
+          "effect",
+          "requires_choice"
+        ]
+      },
+      "EnqueueSessionAction": {
+        "properties": {
+          "action": {
+            "const": "enqueue_session"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "action",
+          "organization",
+          "workspace",
+          "missing"
+        ]
+      },
+      "EnableIntegrationAction": {
+        "properties": {
+          "action": {
+            "const": "enable_integration"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "integration": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "organization",
+          "integration"
+        ]
+      },
+      "ConnectGithubAction": {
+        "description": "Connect a repository through a GitHub App, which is what lends a Session the authority to push.",
+        "properties": {
+          "action": {
+            "const": "connect_github"
+          },
+          "organization": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null when no Organization exists yet."
+          }
+        },
+        "required": [
+          "action",
+          "organization"
+        ]
+      },
+      "ReplaceIntegrationPrivateKeyAction": {
+        "description": "Never carries the key: a Client reads it from a file or standard input when the step is taken.",
+        "properties": {
+          "action": {
+            "const": "replace_integration_private_key"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "integration": {
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "organization",
+          "integration",
+          "retry_after_seconds"
+        ]
+      },
+      "ReleaseInstanceAction": {
+        "properties": {
+          "action": {
+            "const": "release_instance"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "workspace": {
+            "type": "string"
+          },
+          "instance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "consequence": {
+            "type": "string",
+            "description": "Display-only explanation of the destructive effect; wording never decides whether confirmation is required."
+          },
+          "effect": {
+            "$ref": "#/components/schemas/Consequence"
+          },
+          "requires_choice": {
+            "$ref": "#/components/schemas/ExplicitChoice"
+          }
+        },
+        "required": [
+          "action",
+          "organization",
+          "workspace",
+          "instance",
+          "consequence",
+          "effect",
+          "requires_choice"
+        ]
+      },
+      "CorrectFieldAction": {
+        "properties": {
+          "action": {
+            "const": "correct_field"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Resource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "field": {
+            "type": "string"
+          },
+          "constraint": {
+            "type": "string"
+          },
+          "allowed_values": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "action",
+          "operation",
+          "resource",
+          "field",
+          "constraint",
+          "allowed_values"
+        ]
+      },
+      "SignInAction": {
+        "properties": {
+          "action": {
+            "const": "sign_in"
+          },
+          "harness": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sign_in": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A safe locator for which sign-in to use, never held material."
+          }
+        },
+        "required": [
+          "action",
+          "harness",
+          "method",
+          "sign_in"
+        ]
+      },
+      "InspectHarnessImageAction": {
+        "properties": {
+          "action": {
+            "const": "inspect_harness_image"
+          },
+          "harness": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "harness",
+          "image",
+          "command"
+        ]
+      },
+      "CheckConnectionAction": {
+        "properties": {
+          "action": {
+            "const": "check_connection"
+          },
+          "service": {
+            "type": "string"
+          },
+          "compose": {
+            "type": "boolean",
+            "description": "Whether Compose-specific checks apply, known only from the selected deployment's own evidence."
+          }
+        },
+        "required": [
+          "action",
+          "service",
+          "compose"
+        ]
+      },
+      "RetryReadAction": {
+        "properties": {
+          "action": {
+            "const": "retry_read"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "resource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retry_after_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "operation",
+          "resource",
+          "retry_after_seconds"
+        ]
+      },
+      "RetryRequestAction": {
+        "description": "The write was refused before anything was saved, so sending the same request again is safe.",
+        "properties": {
+          "action": {
+            "const": "retry_request"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "resource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retry_after_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "operation",
+          "resource",
+          "retry_after_seconds"
+        ]
+      },
+      "InspectOperationAction": {
+        "properties": {
+          "action": {
+            "const": "inspect_operation"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "resource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "uncertain": {
+            "type": "boolean",
+            "description": "Whether the operation's result is unknown, used after a lost write response. Never a signal to replay the write."
+          }
+        },
+        "required": [
+          "action",
+          "operation",
+          "resource",
+          "uncertain"
+        ]
+      },
+      "RunningUnit": {
+        "description": "Work an adapter declared it runs apart from any tool call, such as a Claude background task, open until the adapter settles it. A settled unit adds no Transcript entry.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "background_task",
+              "subagent"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "started_at"
+        ]
+      },
+      "RunningTool": {
+        "type": "object",
+        "properties": {
+          "call_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tool_kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "call_id",
+          "title",
+          "tool_kind",
+          "status",
+          "started_at"
+        ]
+      },
+      "QueueReasonDependencies": {
+        "properties": {
+          "kind": {
+            "const": "dependencies"
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The blocking Sessions that have not ended successfully."
+          }
+        },
+        "required": [
+          "kind",
+          "sessions"
+        ]
+      },
+      "QueueReasonSubscriptionProfile": {
+        "properties": {
+          "kind": {
+            "const": "subscription_profile"
+          },
+          "diagnostic": {
+            "$ref": "#/components/schemas/Diagnostic"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Session holding the Profile; null when a non-Session use holds it."
+          }
+        },
+        "required": [
+          "kind",
+          "profile",
+          "session",
+          "diagnostic"
+        ]
+      },
+      "QueueReasonInstanceArchiving": {
+        "properties": {
+          "kind": {
+            "const": "instance_archiving"
+          },
+          "instance": {
+            "type": "string",
+            "description": "The idle Instance being archived, or that dispatch will archive, to make room."
+          }
+        },
+        "required": [
+          "kind",
+          "instance"
+        ]
+      },
+      "QueueReasonLiveInstanceLimit": {
+        "properties": {
+          "kind": {
+            "const": "live_instance_limit"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The Organization's live Instance limit, reached with no idle Instance known recoverable."
+          }
+        },
+        "required": [
+          "kind",
+          "limit"
+        ]
+      },
+      "QueueReasonActiveWorkSlots": {
+        "properties": {
+          "kind": {
+            "const": "active_work_slots"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The Active-Work Slot limit, every slot occupied."
+          }
+        },
+        "required": [
+          "kind",
+          "limit"
+        ]
+      },
+      "QueueReasonAhead": {
+        "properties": {
+          "kind": {
+            "const": "ahead"
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Earlier eligible slot requests in this Organization, in global dispatch order."
+          },
+          "elsewhere": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Earlier eligible slot requests in other Organizations, omitted when zero."
+          }
+        },
+        "required": [
+          "kind",
+          "sessions"
+        ]
+      },
+      "SelectedOptionValue": {
+        "type": "string"
+      },
+      "ToggleOptionValue": {
+        "type": "boolean"
+      },
+      "EventTriggerCondition": {
+        "required": [
+          "filter"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "every"
+              ]
+            },
+            {
+              "required": [
+                "cron"
+              ]
+            },
+            {
+              "required": [
+                "zone"
+              ]
+            }
+          ]
+        }
+      },
+      "IntervalTriggerCondition": {
+        "required": [
+          "every"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "filter"
+              ]
+            },
+            {
+              "required": [
+                "cron"
+              ]
+            },
+            {
+              "required": [
+                "zone"
+              ]
+            }
+          ]
+        }
+      },
+      "CronTriggerCondition": {
+        "required": [
+          "cron",
+          "zone"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "filter"
+              ]
+            },
+            {
+              "required": [
+                "every"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

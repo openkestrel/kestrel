@@ -1,7 +1,6 @@
 use crate::support;
 
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::time::Duration;
 
 use jiff::SignedDuration;
@@ -6977,7 +6976,8 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
     assert_eq!(document["openapi"], "3.1.0");
     assert_eq!(document["security"], serde_json::json!([]));
 
-    let described: Vec<(String, String)> = document["paths"]
+    // A set, because the document lists its paths in fragment order and the inventory in route order.
+    let described: std::collections::BTreeSet<(String, String)> = document["paths"]
         .as_object()
         .expect("an object of paths")
         .iter()
@@ -7090,7 +7090,7 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         served
             .iter()
             .map(|(path, method)| ((*path).to_owned(), (*method).to_owned()))
-            .collect::<Vec<_>>()
+            .collect::<std::collections::BTreeSet<_>>()
     );
 }
 
@@ -7210,10 +7210,7 @@ fn the_published_operator_document_describes_every_transcript_entry() {
 }
 
 fn published() -> Value {
-    let document = support::crate_root().join("../../openapi/operator.json");
-
-    serde_json::from_str(&fs::read_to_string(document).expect("a readable openapi document"))
-        .expect("valid json")
+    support::document::operator()
 }
 
 /// The documented answer for this status must exist, and it must agree with the boundary on

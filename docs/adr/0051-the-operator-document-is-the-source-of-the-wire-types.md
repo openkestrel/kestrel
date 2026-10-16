@@ -1,5 +1,9 @@
 # The operator document is the source of the wire types
 
+Superseded in part by [ADR-0059](0059-the-operator-document-is-fragments-and-nothing-generated-is-committed.md):
+the document is now fragments in `openapi/operator/`, and the generated types are built, not
+committed.
+
 The operator boundary's Rust type layer was hand-written in `operator.rs` — roughly 1,300 lines of
 request and response structs and their `From` impls — mirroring `openapi/operator.json`, while the
 CLI read responses as untyped values through dotted-path views and the browser Client generated

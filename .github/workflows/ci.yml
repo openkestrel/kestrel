@@ -119,15 +119,8 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
-      - name: Check generated operator types
-        env:
-          # This job installs only rust and nextest; without this, `mise run` would install every
-          # other tool in mise.toml.
-          MISE_AUTO_INSTALL: "false"
-        run: mise run generate-check
-
       - name: Lint
-        run: cargo clippy --locked --workspace --all-targets --features kestrel-operator-types/generate -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Build the binaries
         run: cargo build --locked --workspace
@@ -186,6 +179,14 @@ jobs:
 
       - name: Test the built Client against a control plane
         run: bun run e2e
+
+      - name: Keep the failed tests' traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-e2e-traces
+          path: packages/client/test-results
+          retention-days: 7
 
   # Each image is built once for the change and pushed tagged by the commit, so every job that
   # needs one pulls rather than builds it (ADR-0027). Layer caching is restored on every run and

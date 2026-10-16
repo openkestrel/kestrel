@@ -1,0 +1,229 @@
+{
+  "paths": {
+    "/operator/organizations/{organization}/events": {
+      "get": {
+        "operationId": "listEvents",
+        "summary": "List the Events recorded for an Organization.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "How many to list at most.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The most recently recorded first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EventRecord"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/events/{record}": {
+      "get": {
+        "operationId": "showEvent",
+        "summary": "Show one Event's whole envelope and payload.",
+        "parameters": [
+          {
+            "name": "record",
+            "in": "path",
+            "required": true,
+            "description": "The Event's record identifier.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Event.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventRecord"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "EventRecord": {
+        "description": "An Event as kestrel recorded it.",
+        "type": "object",
+        "properties": {
+          "record": {
+            "type": "string",
+            "format": "uuid",
+            "description": "kestrel's own identifier for the record."
+          },
+          "organization": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "integration": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The Integration that recorded it. Null for an Event kestrel minted itself."
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "event": {
+            "$ref": "#/components/schemas/CloudEvent"
+          },
+          "firings": {
+            "type": "array",
+            "description": "What each Trigger that matched it did, oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/Firing"
+            }
+          }
+        },
+        "required": [
+          "record",
+          "organization",
+          "integration",
+          "recorded_at",
+          "event",
+          "firings"
+        ]
+      },
+      "Firing": {
+        "description": "One Trigger matching the Event, and what that match did.",
+        "type": "object",
+        "properties": {
+          "trigger": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "opened",
+              "fed",
+              "ignored",
+              "failed",
+              "held",
+              "canceled"
+            ],
+            "description": "A held firing waits on the issue's readiness and is looked at again; a canceled one never started."
+          },
+          "workspace": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The Workspace it opened or fed."
+          },
+          "failure": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why a failed, held or canceled firing started nothing, such as labels choosing two Agents."
+          },
+          "worked_ahead": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who started it ahead of the issue's blockers, when a command or a dispatch did."
+          }
+        },
+        "required": [
+          "trigger",
+          "outcome",
+          "workspace",
+          "failure",
+          "worked_ahead"
+        ]
+      },
+      "CloudEvent": {
+        "description": "The Event's CloudEvents envelope and payload.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "specversion": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "data": {}
+        },
+        "required": [
+          "id",
+          "source",
+          "specversion",
+          "type",
+          "subject",
+          "time",
+          "data"
+        ]
+      }
+    }
+  }
+}
