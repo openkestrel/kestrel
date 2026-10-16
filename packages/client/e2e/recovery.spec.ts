@@ -111,20 +111,37 @@ test.describe("a queue read", () => {
 		page,
 		request,
 	}) => {
+		// The spec holds the tab's stream and answers it once: the queue change it sends is the only
+		// notice that asks for another read, since another writer's notice would restart the failed
+		// read, whose retry takes the line this test waits for off the page.
+		const change = Promise.withResolvers<string>();
+		// Never spoken, so the connection the tab holds after the change stays open and quiet.
+		const quiet = Promise.withResolvers<string>();
+		let answered = false;
+		await new Streamed({
+			notices: () => {
+				if (answered) return quiet.promise;
+				answered = true;
+				return change.promise;
+			},
+		}).install(page);
+
 		const workspace = await opened(request);
 		const queued = await sessionsTab(page, workspace);
 		await expect(queued.getByRole("button", { name: /queued Sessions/ })).toBeVisible();
+		// A read has landed, so the failure below keeps a known queue.
 		await expect(queued.getByRole("listitem").first()).toBeVisible();
 
 		const reads = await failingQueue(page);
-		// Opening another Workspace changes the queue, and its notice refetches it.
-		await opened(request);
+		// The change asks for a read, and every read fails from here: the notice says when the queue
+		// was last read once that read has retried and settled.
+		change.resolve(`event: change\ndata: ${JSON.stringify({ resource: "queue" })}\n\n`);
 
 		const refusal = queued.getByRole("alert");
 		await expect(refusal).toContainText("the queue could not be computed", { timeout: 20_000 });
 		await expect(
 			queued.getByRole("status").filter({ hasText: /Showing the queue as last read/ }),
-		).toBeVisible();
+		).toBeVisible({ timeout: 20_000 });
 		await expect(queued.getByRole("listitem").first()).toBeVisible();
 
 		reads.failing = false;
