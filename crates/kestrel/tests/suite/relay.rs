@@ -859,3 +859,40 @@ async fn device_authorization_shares_the_slot_cancellation_import_and_restart_li
         replacement["revision"]
     );
 }
+
+#[tokio::test]
+async fn an_import_before_the_pass_that_would_claim_a_relay_cancels_it_unstarted() {
+    let kestrel = Kestrel::stepped().await;
+    named(&kestrel).await;
+    let relay = started(&kestrel).await;
+
+    let (status, body) = sent(
+        reqwest::Client::new()
+            .put(format!("{}{METHOD}", kestrel.operator()))
+            .json(&json!({"value":"replacement-subscription"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    kestrel.work_pass().await;
+
+    let (_, read) = sent(reqwest::Client::new().get(address(&kestrel, &relay))).await;
+    assert_eq!(read["progress"]["state"], "cancelled", "{read}");
+
+    // A pass starts a relay it claims without waiting on it, so its run is watched for here.
+    let claimed = started(&kestrel).await;
+    kestrel.work_pass().await;
+    let ran = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let (_, read) = sent(reqwest::Client::new().get(address(&kestrel, &claimed))).await;
+            if read["progress"]["state"] != "starting" {
+                return read;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .expect("the claimed relay ran");
+    assert_eq!(ran["progress"]["state"], "failed", "{ran}");
+
+    kestrel.teardown().await;
+}

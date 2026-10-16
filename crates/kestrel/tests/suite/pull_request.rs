@@ -1275,3 +1275,34 @@ async fn a_delivery_by_webhook_and_by_poll_is_one_event_in_either_order() {
         kestrel.teardown().await;
     }
 }
+
+#[tokio::test]
+async fn a_pull_request_learned_after_its_workspace_sealed_attaches_to_nothing() {
+    let kestrel = Kestrel::stepped().await;
+    declared(&kestrel, "acme", &[BASE]).await;
+    let (github, _stub) = watching(&kestrel, "acme", BASE).await;
+    let open = kestrel
+        .open_workspace_on("acme", "kestrel", "builder", "feature")
+        .await;
+    let sealed = kestrel
+        .open_workspace_on("acme", "kestrel", "builder", "sealed-first")
+        .await;
+
+    deliver(&kestrel, &github, "d-1", &opened(7, REVISION, OPENED_AT)).await;
+    kestrel.work_pass().await;
+    assert_eq!(pull_request_entries(&kestrel, open.id).await.len(), 1);
+
+    let sealing = Delivery {
+        branch: "sealed-first",
+        ..opened(8, MOVED, MOVED_AT)
+    };
+    deliver(&kestrel, &github, "d-2", &sealing).await;
+    kestrel.seal_workspace(sealed.id).await;
+    kestrel.work_pass().await;
+    assert!(
+        pull_request_entries(&kestrel, sealed.id).await.is_empty(),
+        "a pull request learned after its workspace sealed attached to it"
+    );
+
+    kestrel.teardown().await;
+}
