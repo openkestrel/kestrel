@@ -346,6 +346,15 @@ fn step(action: &wire::Action, invocation: &Invocation, wrote: bool) -> Step {
             given(&["credential", "set", &a.name]),
             Some(a.organization.clone()),
         ),
+        A::InspectResourceAction(a) if a.resource == wire::Resource::SignInRelay => {
+            Step::said(format!(
+                "read the sign-in relay {} before repeating a write",
+                a.reference.as_deref().unwrap_or("state")
+            ))
+        }
+        A::ListResourcesAction(a) if a.resource == wire::Resource::SignInRelay => {
+            Step::said("inspect the known sign-in relay before starting another")
+        }
         A::InspectResourceAction(a) => {
             let (command, organization) = inspection(
                 &a.resource,
@@ -419,6 +428,14 @@ fn step(action: &wire::Action, invocation: &Invocation, wrote: bool) -> Step {
             )
         },
         A::CorrectFieldAction(a) => corrected(a, invocation),
+        A::ContinueSignInRelayAction(a) => Step::said(format!(
+            "continue the {} sign-in relay {} by {} in {}",
+            a.harness, a.relay, a.method, a.organization
+        )),
+        A::CancelSignInRelayAction(a) => Step::said(format!(
+            "cancel the {} sign-in relay {} by {} in {}",
+            a.harness, a.relay, a.method, a.organization
+        )),
         A::SignInAction(a) => {
             let mut says = match &a.harness {
                 Some(harness) => format!("sign in to {harness}"),
@@ -577,7 +594,7 @@ fn listing(resource: &wire::Resource, organization: Option<&str>) -> (Vec<Word>,
         R::Organization => return (given(&["organization", "list"]), None),
         R::Project => "project",
         R::Agent => "agent",
-        R::SubscriptionProfile | R::SignInTest => "profile",
+        R::SubscriptionProfile | R::SignInTest | R::SignInRelay => "profile",
         R::ProviderCredential => "credential",
         R::Integration => "integration",
         R::Trigger => "trigger",
@@ -605,6 +622,7 @@ fn noun(resource: &wire::Resource) -> &'static str {
         R::HeldMessage => "Held Message",
         R::TranscriptPayload => "Transcript payload",
         R::SignInTest => "Sign-in test",
+        R::SignInRelay => "Sign-in relay",
     }
 }
 

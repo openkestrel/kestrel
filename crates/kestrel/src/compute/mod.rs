@@ -2,6 +2,8 @@
 
 mod docker;
 mod local_exec;
+mod terminal;
+pub use terminal::Terminal;
 
 use std::fmt;
 use std::io;
@@ -22,6 +24,7 @@ pub struct IdleHint {
 /// What a driver does once it has provisioned, and the whole of it. An inbound address would
 /// split the eight deployment targets, so no driver offers one.
 pub trait Provisioned: Send {
+    fn terminal(&mut self, command: &[&str]) -> anyhow::Result<Terminal>;
     fn exec(&mut self, command: &[&str]) -> io::Result<Streaming>;
     fn read_file(&mut self, path: &str) -> io::Result<Vec<u8>>;
     fn write_file(&mut self, path: &str, contents: &[u8]) -> io::Result<()>;
@@ -116,6 +119,10 @@ impl Instance {
     /// Relative to the Instance's root, as every path either driver takes is.
     pub fn exec(&mut self, command: &[&str]) -> io::Result<Streaming> {
         self.provisioned.exec(command)
+    }
+
+    pub fn terminal(&mut self, command: &[&str]) -> anyhow::Result<Terminal> {
+        self.provisioned.terminal(command)
     }
 
     pub fn read_file(&mut self, path: &str) -> io::Result<Vec<u8>> {

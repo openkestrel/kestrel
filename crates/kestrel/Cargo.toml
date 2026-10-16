@@ -43,6 +43,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1", features = ["serde", "v7"] }
 yaml_serde = "0.10"
+vt100 = "0.16"
 
 [dev-dependencies]
 kestrel-scripted-agent = { path = "../kestrel-scripted-agent" }

@@ -8,6 +8,7 @@ pub mod profile;
 pub mod project;
 pub mod pull_request;
 pub mod queue;
+pub mod relay;
 pub mod sign_in;
 pub mod trigger;
 pub mod workspace;
@@ -46,6 +47,7 @@ pub struct Store {
     reads: SqlitePool,
     keyring: Arc<Keyring>,
     notices: Notices,
+    pub(crate) relay_inputs: crate::sign_in::relay::Inputs,
 }
 
 impl Store {
@@ -81,6 +83,7 @@ impl Store {
             reads,
             keyring: Arc::new(Keyring::beside(data_dir)?),
             notices: Notices::default(),
+            relay_inputs: Default::default(),
         })
     }
 
@@ -316,6 +319,10 @@ impl Tx<'_> {
 
     pub fn profiles(&mut self) -> Profiles<'_> {
         Profiles::over(&mut self.transaction, self.keyring)
+    }
+
+    pub fn relays(&mut self) -> relay::Relays<'_> {
+        relay::Relays::over(&mut self.transaction)
     }
 
     pub fn sign_ins(&mut self) -> sign_in::SignIns<'_> {

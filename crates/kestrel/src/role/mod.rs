@@ -64,6 +64,11 @@ impl AllInOne {
             dispatch.as_ref().map(|dispatch| &dispatch.driver),
         )
         .await?;
+        crate::sign_in::relay::recover(
+            &self.store,
+            dispatch.as_ref().map(|dispatch| &dispatch.driver),
+        )
+        .await?;
         let summaries = self.listening.live.summaries.clone();
         let listening = match &dispatch {
             Some(dispatch) => self.listening.inspecting(Images::of(&dispatch.driver)),

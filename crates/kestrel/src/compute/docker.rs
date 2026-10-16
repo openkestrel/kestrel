@@ -111,6 +111,24 @@ struct Container {
 }
 
 impl Provisioned for Container {
+    fn terminal(&mut self, argv: &[&str]) -> anyhow::Result<super::Terminal> {
+        let mut command = Command::new("docker");
+        command.args([
+            "exec",
+            "--interactive",
+            "--tty",
+            "--workdir",
+            ROOT,
+            "--env",
+            "TERM=xterm-256color",
+            "--env",
+            "BROWSER=/bin/true",
+            &self.container,
+        ]);
+        command.args(argv);
+        super::Terminal::spawn(command, None)
+    }
+
     fn exec(&mut self, command: &[&str]) -> io::Result<Streaming> {
         let mut arguments = vec!["exec", "--workdir", ROOT, &self.container];
         arguments.extend_from_slice(command);

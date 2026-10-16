@@ -365,3 +365,51 @@ async fn every_operation_in_the_contract_works_against_a_container() {
 
     kestrel.teardown().await;
 }
+
+#[tokio::test]
+#[ignore = "builds and runs the kestrel-env image"]
+async fn terminal_exec_preserves_dimensions_and_relays_hidden_input() {
+    let driver = Driver::Docker(Docker::provisioning_from(image::built()));
+    let mut instance = driver
+        .provision(format!("terminal-{}", uuid::Uuid::now_v7()))
+        .unwrap();
+    let mut terminal = instance
+        .terminal(&[
+            "sh",
+            "-c",
+            r#"
+        stty -echo
+        stty size
+        printf 'Code: '
+        IFS= read -r code
+        [ "$code" = 'private-code' ] || exit 2
+        printf '\r\naccepted\r\n'
+    "#,
+        ])
+        .unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut output = String::new();
+        let mut submitted = false;
+        while let Some(bytes) = terminal.output.recv().await {
+            output.push_str(&String::from_utf8_lossy(&bytes));
+            if output.contains("Code:") && !submitted {
+                terminal.write(b"private-code\r").unwrap();
+                submitted = true;
+            }
+        }
+        while terminal.exited().unwrap().is_none() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        output
+    })
+    .await;
+    drop(terminal);
+    instance.destroy().unwrap();
+    let output = result.expect("the container terminal finishes");
+    assert!(output.contains("40 240"), "{output}");
+    assert!(output.contains("accepted"), "{output}");
+    assert!(
+        !output.contains("private-code"),
+        "terminal input was echoed"
+    );
+}

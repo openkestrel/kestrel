@@ -19,6 +19,7 @@ use super::{Exited, IdleHint, Instance, Provisioned, Streaming, Supervising, Sup
 pub struct LocalExec {
     supervisor: PathBuf,
     lifecycle: Arc<Mutex<HashSet<String>>>,
+    path: Option<std::ffi::OsString>,
 }
 
 impl LocalExec {
@@ -30,7 +31,13 @@ impl LocalExec {
         Self {
             supervisor: supervisor.into(),
             lifecycle: Arc::new(Mutex::new(HashSet::new())),
+            path: None,
         }
+    }
+
+    pub fn with_path(mut self, path: impl Into<std::ffi::OsString>) -> Self {
+        self.path = Some(path.into());
+        self
     }
 
     pub(super) fn provision(&self, holder: &str) -> io::Result<Instance> {
@@ -76,6 +83,7 @@ impl LocalExec {
         Instance {
             provisioned: Box::new(Directory {
                 supervisor: self.supervisor.clone(),
+                path: self.path.clone(),
                 lifecycle: self.lifecycle.clone(),
                 name: name.clone(),
                 root: within(&name),
@@ -179,6 +187,7 @@ fn marker_is_locked(_: &Path) -> io::Result<bool> {
 struct Directory {
     supervisor: PathBuf,
     lifecycle: Arc<Mutex<HashSet<String>>>,
+    path: Option<std::ffi::OsString>,
     name: String,
     root: PathBuf,
     home: PathBuf,
@@ -191,6 +200,33 @@ impl Directory {
 }
 
 impl Provisioned for Directory {
+    fn terminal(&mut self, argv: &[&str]) -> anyhow::Result<super::Terminal> {
+        let (program, args) = argv
+            .split_first()
+            .ok_or_else(|| io::Error::other("nothing to run"))?;
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| io::Error::other("instance lock poisoned"))?;
+        if lifecycle.contains(&self.name) {
+            return Err(io::Error::other("instance was destroyed").into());
+        }
+        let mut command = Command::new(program);
+        command.args(args);
+        command.current_dir(&self.root);
+        command.env_clear();
+        command.env("HOME", &self.home);
+        command.env(
+            "PATH",
+            self.path
+                .clone()
+                .unwrap_or_else(|| std::env::var_os("PATH").unwrap_or_default()),
+        );
+        command.env("TERM", "xterm-256color");
+        command.env("BROWSER", "/bin/true");
+        super::Terminal::spawn(command, Some(&supervisors(&self.home)))
+    }
+
     fn exec(&mut self, command: &[&str]) -> io::Result<Streaming> {
         let (program, arguments) = command
             .split_first()

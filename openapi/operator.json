@@ -1447,6 +1447,381 @@
         }
       }
     },
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}/relay": {
+      "post": {
+        "operationId": "start_sign_in_relay",
+        "summary": "start sign in relay",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "harness",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "method",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Latest semantic relay state; inspect a known id after losing a write response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInRelay"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInRelayRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}/relay/{relay}": {
+      "get": {
+        "operationId": "read_sign_in_relay",
+        "summary": "read sign in relay",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "harness",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "method",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "relay",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Latest semantic relay state; inspect a known id after losing a write response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInRelay"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "cancel_sign_in_relay",
+        "summary": "cancel sign in relay",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "harness",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "method",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "relay",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Latest semantic relay state; inspect a known id after losing a write response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInRelay"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}/relay/{relay}/code": {
+      "post": {
+        "operationId": "submit_sign_in_relay_code",
+        "summary": "submit sign in relay code",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "harness",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "method",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "relay",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Latest semantic relay state; inspect a known id after losing a write response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInRelay"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInRelayCode"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/sign-ins/{harness}/{method}/relay/{relay}/events": {
+      "get": {
+        "operationId": "follow_sign_in_relay",
+        "summary": "follow sign in relay",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "harness",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "method",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "relay",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Latest semantic relay state; inspect a known id after losing a write response.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelayEvent"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
     "/operator/organizations/{organization}/integrations": {
       "get": {
         "operationId": "listIntegrations",
@@ -7822,7 +8197,8 @@
           "instance",
           "held_message",
           "transcript_payload",
-          "sign_in_test"
+          "sign_in_test",
+          "sign_in_relay"
         ]
       },
       "Candidate": {
@@ -8313,27 +8689,75 @@
         "type": "object",
         "description": "A typed corrective, inspective or retry step a Diagnostic offers, naming its own inputs rather than a shell command or browser route (ADR-0052). A Client binds it to a form, a flag or an API call.",
         "oneOf": [
-          { "$ref": "#/components/schemas/NameOperatorAction" },
-          { "$ref": "#/components/schemas/DeclareOrganizationAction" },
-          { "$ref": "#/components/schemas/DeclareProjectAction" },
-          { "$ref": "#/components/schemas/DeclareAgentAction" },
-          { "$ref": "#/components/schemas/DeclareSubscriptionProfileAction" },
-          { "$ref": "#/components/schemas/SetProviderCredentialAction" },
-          { "$ref": "#/components/schemas/InspectResourceAction" },
-          { "$ref": "#/components/schemas/ListResourcesAction" },
-          { "$ref": "#/components/schemas/StopSessionAction" },
-          { "$ref": "#/components/schemas/EnqueueSessionAction" },
-          { "$ref": "#/components/schemas/EnableIntegrationAction" },
-          { "$ref": "#/components/schemas/ConnectGithubAction" },
-          { "$ref": "#/components/schemas/ReplaceIntegrationPrivateKeyAction" },
-          { "$ref": "#/components/schemas/ReleaseInstanceAction" },
-          { "$ref": "#/components/schemas/CorrectFieldAction" },
-          { "$ref": "#/components/schemas/SignInAction" },
-          { "$ref": "#/components/schemas/InspectHarnessImageAction" },
-          { "$ref": "#/components/schemas/CheckConnectionAction" },
-          { "$ref": "#/components/schemas/RetryReadAction" },
-          { "$ref": "#/components/schemas/RetryRequestAction" },
-          { "$ref": "#/components/schemas/InspectOperationAction" }
+          {
+            "$ref": "#/components/schemas/NameOperatorAction"
+          },
+          {
+            "$ref": "#/components/schemas/DeclareOrganizationAction"
+          },
+          {
+            "$ref": "#/components/schemas/DeclareProjectAction"
+          },
+          {
+            "$ref": "#/components/schemas/DeclareAgentAction"
+          },
+          {
+            "$ref": "#/components/schemas/DeclareSubscriptionProfileAction"
+          },
+          {
+            "$ref": "#/components/schemas/SetProviderCredentialAction"
+          },
+          {
+            "$ref": "#/components/schemas/InspectResourceAction"
+          },
+          {
+            "$ref": "#/components/schemas/ListResourcesAction"
+          },
+          {
+            "$ref": "#/components/schemas/StopSessionAction"
+          },
+          {
+            "$ref": "#/components/schemas/EnqueueSessionAction"
+          },
+          {
+            "$ref": "#/components/schemas/EnableIntegrationAction"
+          },
+          {
+            "$ref": "#/components/schemas/ConnectGithubAction"
+          },
+          {
+            "$ref": "#/components/schemas/ReplaceIntegrationPrivateKeyAction"
+          },
+          {
+            "$ref": "#/components/schemas/ReleaseInstanceAction"
+          },
+          {
+            "$ref": "#/components/schemas/CorrectFieldAction"
+          },
+          {
+            "$ref": "#/components/schemas/SignInAction"
+          },
+          {
+            "$ref": "#/components/schemas/InspectHarnessImageAction"
+          },
+          {
+            "$ref": "#/components/schemas/CheckConnectionAction"
+          },
+          {
+            "$ref": "#/components/schemas/RetryReadAction"
+          },
+          {
+            "$ref": "#/components/schemas/RetryRequestAction"
+          },
+          {
+            "$ref": "#/components/schemas/InspectOperationAction"
+          },
+          {
+            "$ref": "#/components/schemas/ContinueSignInRelayAction"
+          },
+          {
+            "$ref": "#/components/schemas/CancelSignInRelayAction"
+          }
         ]
       },
       "DeclareOrganizationAction": {
@@ -9877,6 +10301,367 @@
             ]
           }
         },
+        "additionalProperties": false
+      },
+      "SignInRelayRequest": {
+        "type": "object",
+        "properties": {
+          "profile": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "SignInRelayCode": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false
+      },
+      "RelaySavedMaterial": {
+        "type": "object",
+        "properties": {
+          "holding": {
+            "$ref": "#/components/schemas/SignInHolding"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "holding",
+          "revision"
+        ],
+        "additionalProperties": false
+      },
+      "RelayStarting": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "starting"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "RelayAwaitingBrowser": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "awaiting_browser"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "RelayAwaitingCode": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "awaiting_code"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "state",
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "RelaySaving": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "saving"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "RelayCompleted": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "completed"
+            ]
+          },
+          "sign_in": {
+            "$ref": "#/components/schemas/SavedSignIn"
+          }
+        },
+        "required": [
+          "state",
+          "sign_in"
+        ],
+        "additionalProperties": false
+      },
+      "RelayFailed": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "failed"
+            ]
+          },
+          "diagnostic": {
+            "$ref": "#/components/schemas/Diagnostic"
+          },
+          "sign_in": {
+            "$ref": "#/components/schemas/RelaySavedMaterial"
+          }
+        },
+        "required": [
+          "state",
+          "diagnostic"
+        ],
+        "additionalProperties": false
+      },
+      "RelayExpired": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "expired"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "RelayCancelled": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "cancelled"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "SignInRelayProgress": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/RelayStarting"
+          },
+          {
+            "$ref": "#/components/schemas/RelayAwaitingBrowser"
+          },
+          {
+            "$ref": "#/components/schemas/RelayAwaitingCode"
+          },
+          {
+            "$ref": "#/components/schemas/RelaySaving"
+          },
+          {
+            "$ref": "#/components/schemas/RelayCompleted"
+          },
+          {
+            "$ref": "#/components/schemas/RelayFailed"
+          },
+          {
+            "$ref": "#/components/schemas/RelayExpired"
+          },
+          {
+            "$ref": "#/components/schemas/RelayCancelled"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "state"
+        }
+      },
+      "SignInRelay": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "destination": {
+            "$ref": "#/components/schemas/SignInHolding"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "progress": {
+            "$ref": "#/components/schemas/SignInRelayProgress"
+          }
+        },
+        "required": [
+          "id",
+          "organization",
+          "harness",
+          "method",
+          "destination",
+          "version",
+          "created_at",
+          "deadline",
+          "finished_at",
+          "progress"
+        ],
+        "additionalProperties": false
+      },
+      "RelayEnd": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "id",
+          "version"
+        ],
+        "additionalProperties": false
+      },
+      "RelayEvent": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SignInRelay",
+            "x-sse-event": "relay"
+          },
+          {
+            "$ref": "#/components/schemas/RelayEnd",
+            "x-sse-event": "end"
+          }
+        ]
+      },
+      "ContinueSignInRelayAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "continue_sign_in_relay"
+            ]
+          },
+          "organization": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "relay": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "organization",
+          "harness",
+          "method",
+          "relay"
+        ],
+        "additionalProperties": false
+      },
+      "CancelSignInRelayAction": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "cancel_sign_in_relay"
+            ]
+          },
+          "organization": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "relay": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "organization",
+          "harness",
+          "method",
+          "relay"
+        ],
         "additionalProperties": false
       }
     }

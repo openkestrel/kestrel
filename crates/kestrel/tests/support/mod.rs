@@ -368,6 +368,24 @@ impl Kestrel {
         .await
     }
 
+    pub async fn dispatching_with_programs(path: &Path) -> Self {
+        let mut paths = vec![path.to_path_buf()];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        Self::booted(Some(Provisions {
+            driver: Driver::LocalExec(
+                LocalExec::running("/usr/bin/false")
+                    .with_path(std::env::join_paths(paths).unwrap()),
+            ),
+            harnesses: Vec::new(),
+            max_active_sessions: NonZeroUsize::new(2).unwrap(),
+            interrupt_deadline: DEFAULT_INTERRUPT_DEADLINE,
+            sign_in_test_deadline: kestrel::sign_in::model_test::DEADLINE,
+        }))
+        .await
+    }
+
     pub async fn dispatching_to(supervisor: &Path, command: &str) -> Self {
         Self::dispatching_up_to(supervisor, command, 2).await
     }

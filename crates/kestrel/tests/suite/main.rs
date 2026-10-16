@@ -44,6 +44,7 @@ mod presentation;
 mod profile;
 mod pull_request;
 mod readiness;
+mod relay;
 mod replies;
 mod restart;
 mod roles;

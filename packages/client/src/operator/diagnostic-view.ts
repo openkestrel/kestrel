@@ -44,6 +44,7 @@ const RESOURCES: Record<Resource, [one: string, many: string]> = {
 	held_message: ["Held Message", "Held Messages"],
 	transcript_payload: ["Transcript payload", "Transcript payloads"],
 	sign_in_test: ["Sign-in test", "Sign-in tests"],
+	sign_in_relay: ["Sign-in relay", "Sign-in relays"],
 };
 
 export function resourceName(resource: Resource): string {
@@ -94,7 +95,7 @@ function declaration(
 	};
 }
 
-const LISTED: Record<Resource, string> = {
+const LISTED: Record<Exclude<Resource, "sign_in_relay">, string> = {
 	organization: "organization",
 	project: "project",
 	agent: "agent",
@@ -123,13 +124,17 @@ function command(words: string[], organization: string | null, origin: string): 
 	return ["kestrel", ...words, ...scope, "--control-plane", origin].map(quoted).join(" ");
 }
 
-function listing(resource: Resource, organization: string | null, origin: string): string {
+function listing(
+	resource: Exclude<Resource, "sign_in_relay">,
+	organization: string | null,
+	origin: string,
+): string {
 	if (resource === "organization") return command(["organization", "list"], null, origin);
 	return command([LISTED[resource], "list"], organization, origin);
 }
 
 function inspection(
-	resource: Resource,
+	resource: Exclude<Resource, "sign_in_relay">,
 	reference: string | null,
 	organization: string | null,
 	origin: string,
@@ -143,6 +148,12 @@ function inspection(
 export function stepOf(action: Action, origin: string): Step {
 	switch (action.action) {
 		case "inspect_resource": {
+			if (action.resource === "sign_in_relay")
+				return {
+					kind: "guidance",
+					label: "Inspect the sign-in relay",
+					detail: `Read relay ${action.reference ?? "state"} before repeating a write.`,
+				};
 			const label =
 				`Inspect the ${resourceName(action.resource)} ${action.reference ?? ""}`.trimEnd();
 			const shown = inspection(action.resource, action.reference, action.organization, origin);
@@ -150,7 +161,10 @@ export function stepOf(action: Action, origin: string): Step {
 				return {
 					kind: "link",
 					label,
-					link: { to: "/organizations/$organization", params: { organization: action.reference } },
+					link: {
+						to: "/organizations/$organization",
+						params: { organization: action.reference },
+					},
 					command: shown,
 				};
 			}
@@ -169,9 +183,18 @@ export function stepOf(action: Action, origin: string): Step {
 					command: shown,
 				};
 			}
-			return { kind: "guidance", label: `${label}${within(action.organization)}`, command: shown };
+			return {
+				kind: "guidance",
+				label: `${label}${within(action.organization)}`,
+				command: shown,
+			};
 		}
 		case "list_resources": {
+			if (action.resource === "sign_in_relay")
+				return {
+					kind: "guidance",
+					label: "Inspect the known sign-in relay before starting another",
+				};
 			const label = `List the ${RESOURCES[action.resource][1]}${within(action.organization)}`;
 			const listed = listing(action.resource, action.organization, origin);
 			if (action.resource === "organization") {
@@ -386,6 +409,18 @@ export function stepOf(action: Action, origin: string): Step {
 				label: "Connect a repository through a GitHub App",
 				detail:
 					"A GitHub App is what lets a Session push; a public repository can be declared without one.",
+			};
+		case "continue_sign_in_relay":
+			return {
+				kind: "guidance",
+				label: `Continue the ${action.harness} sign-in relay`,
+				detail: `Relay ${action.relay} uses ${action.method} in ${action.organization}.`,
+			};
+		case "cancel_sign_in_relay":
+			return {
+				kind: "guidance",
+				label: `Cancel the ${action.harness} sign-in relay`,
+				detail: `Relay ${action.relay} uses ${action.method} in ${action.organization}.`,
 			};
 		case "sign_in":
 			return {

@@ -77,6 +77,44 @@ impl<'a> Database<'a> {
         done
     }
 
+    pub async fn expire_relay(&self, id: &str) {
+        let pool = self.pool().await;
+        let past = Timestamp::now() - jiff::SignedDuration::from_secs(1);
+        sqlx::query("UPDATE sign_in_relay SET deadline = ?, snapshot = json_set(snapshot, '$.deadline', ?) WHERE id = ?")
+            .bind(past.as_second()).bind(past.to_string()).bind(id).execute(&pool).await.unwrap();
+        pool.close().await;
+    }
+
+    pub async fn age_relay_terminal_state(&self, id: &str) {
+        let pool = self.pool().await;
+        let past = Timestamp::now() - jiff::SignedDuration::from_secs(86401);
+        sqlx::query("UPDATE sign_in_relay SET finished_at = ?, snapshot = json_set(snapshot, '$.finished_at', ?) WHERE id = ?")
+            .bind(past.as_second()).bind(past.to_string()).bind(id).execute(&pool).await.unwrap();
+        pool.close().await;
+    }
+
+    pub async fn relay_cleaned(&self, id: &str) -> bool {
+        let pool = self.pool().await;
+        let cleaned: bool = sqlx::query_scalar("SELECT cleaned FROM sign_in_relay WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        cleaned
+    }
+
+    pub async fn relay_metadata(&self, id: &str) -> String {
+        let pool = self.pool().await;
+        let snapshot = sqlx::query_scalar("SELECT snapshot FROM sign_in_relay WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        snapshot
+    }
+
     pub async fn record_model_use(&self, revision: i64, harness: &str, model: &str, result: &str) {
         let pool = self.pool().await;
         sqlx::query(

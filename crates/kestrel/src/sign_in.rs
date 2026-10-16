@@ -5,6 +5,7 @@ pub mod check;
 pub mod credential_use;
 pub mod handoff;
 pub mod model_test;
+pub mod relay;
 
 use std::str::FromStr;
 
