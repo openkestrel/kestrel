@@ -117,9 +117,20 @@ pub struct Listing {
 
 /// An installation token this process has already minted, good until another request needs
 /// one closer to its real expiry than `EXPIRY_MARGIN` allows.
-struct Minted {
-    token: String,
-    expires_at: Timestamp,
+#[derive(Clone)]
+pub struct Minted {
+    pub token: String,
+    pub expires_at: Timestamp,
+}
+
+impl fmt::Debug for Minted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Minted {{ token: redacted, expires_at: {} }}",
+            self.expires_at
+        )
+    }
 }
 
 /// How much slack a cached installation token keeps before its real expiry: minted fresh
@@ -326,13 +337,22 @@ impl Github {
         Ok(())
     }
 
-    /// The installation token this Integration currently presents: the one already cached,
-    /// unless it is close enough to expiry that a request starting now might outlive it.
     async fn token(
         &self,
         integration: &Integration,
         github: &GithubConnection,
     ) -> Result<String, Refused> {
+        Ok(self.minted(integration, github).await?.token)
+    }
+
+    /// The installation token this Integration currently presents, fenced on its revision either
+    /// side of a mint: the one already cached, unless it is close enough to expiry that a request
+    /// starting now might outlive it.
+    pub async fn minted(
+        &self,
+        integration: &Integration,
+        github: &GithubConnection,
+    ) -> Result<Minted, Refused> {
         self.still_current(integration).await?;
         let fresh_enough = Timestamp::now() + SignedDuration::from_secs(EXPIRY_MARGIN);
         if let Some(minted) = self
@@ -342,25 +362,33 @@ impl Github {
             .get(&(integration.id, integration.revision))
             && minted.expires_at > fresh_enough
         {
-            return Ok(minted.token.clone());
+            return Ok(minted.clone());
         }
 
-        let minted = self.mint(&github.api, &github.credential).await?;
+        let minted = self
+            .mint(&github.api, &github.credential, Some(github.repository_id))
+            .await?;
         self.still_current(integration).await?;
-        let token = minted.token.clone();
+        let now = Timestamp::now();
         let mut tokens = self.tokens.lock().expect("the token cache is not poisoned");
-        tokens
-            .retain(|(id, revision), _| *id != integration.id || *revision == integration.revision);
-        tokens.insert((integration.id, integration.revision), minted);
+        tokens.retain(|(id, revision), cached| {
+            (*id != integration.id || *revision == integration.revision) && cached.expires_at > now
+        });
+        tokens.insert((integration.id, integration.revision), minted.clone());
         drop(tokens);
 
-        Ok(token)
+        Ok(minted)
     }
 
-    /// Exchanges a freshly signed App JWT for an installation token, scoped to exactly the
-    /// installation the Integration was registered against.
-    async fn mint(&self, api: &str, app: &App) -> Result<Minted, Refused> {
-        let response = self
+    /// Exchanges a freshly signed App JWT for an installation token, scoped to the installation
+    /// the Integration was registered against and, once it is known, to its one repository.
+    async fn mint(
+        &self,
+        api: &str,
+        app: &App,
+        repository_id: Option<i64>,
+    ) -> Result<Minted, Refused> {
+        let mut request = self
             .as_app(
                 reqwest::Method::POST,
                 app,
@@ -370,14 +398,15 @@ impl Github {
                     app.installation
                 ),
             )
-            .map_err(Refused::Failed)?
-            .send()
-            .await
-            .map_err(|error| {
-                Refused::Failed(anyhow!(
-                    "an installation token could not be minted: {error}"
-                ))
-            })?;
+            .map_err(Refused::Failed)?;
+        if let Some(repository_id) = repository_id {
+            request = request.json(&serde_json::json!({ "repository_ids": [repository_id] }));
+        }
+        let response = request.send().await.map_err(|error| {
+            Refused::Failed(anyhow!(
+                "an installation token could not be minted: {error}"
+            ))
+        })?;
 
         let minted: MintedToken = answered(response, "an installation token").await?;
         Ok(Minted {
@@ -591,7 +620,7 @@ impl Github {
         }
 
         let token = self
-            .mint(api, app)
+            .mint(api, app, None)
             .await
             .map_err(|refused| anyhow!("{refused}"))?
             .token;

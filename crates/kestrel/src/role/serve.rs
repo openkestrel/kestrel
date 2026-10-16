@@ -130,8 +130,13 @@ pub async fn run(listening: Listening, shutdown: CancellationToken) -> Result<()
         async move { unrecorded.record(&store, stop).await }
     });
     let followers = crate::presence::Followers::new(follow_lease);
-    let link_router = link::router(store.clone(), shutdown.clone(), live.clone())
-        .merge(webhook::router(store.clone(), wake));
+    let link_router = link::router(
+        store.clone(),
+        crate::integration::github::Github::dialling_out(&store)?,
+        shutdown.clone(),
+        live.clone(),
+    )
+    .merge(webhook::router(store.clone(), wake));
     let streams = crate::stream::Streams::new(follow_lease);
     let operator_router = operator::router(
         store,

@@ -436,6 +436,35 @@ async fn credentials_are_asked_for_one_session() {
 }
 
 #[tokio::test]
+async fn a_repository_the_link_lends_nothing_for_is_unbound_and_a_refusal_carries_its_reason() {
+    let unbound = Stub::answering(204, "application/json", "");
+    assert_eq!(
+        unbound
+            .link()
+            .token("a-session", None)
+            .await
+            .expect("the link should answer"),
+        link::Lent::Unbound
+    );
+    assert_eq!(
+        unbound.asked()[0].path,
+        "/link/instances/local-exec%2Fan-instance/github/token?session=a-session"
+    );
+
+    let refused = Stub::answering(409, "application/json", r#"{"message":"it is retired"}"#);
+    assert_eq!(
+        refused
+            .link()
+            .token("a-session", None)
+            .await
+            .expect("the link should answer"),
+        link::Lent::Refused {
+            message: "it is retired".to_owned()
+        }
+    );
+}
+
+#[tokio::test]
 async fn reporting_posts_to_the_instances_reports() {
     let stub = Stub::answering(202, "application/json", "");
 
@@ -560,6 +589,7 @@ fn the_client_dials_the_paths_the_published_document_describes() {
         .collect();
 
     assert!(described.contains(&&link::ANSWERS.to_owned()));
+    assert!(described.contains(&&link::GITHUB_TOKEN.to_owned()));
     assert!(described.contains(&&INSTRUCTIONS.to_owned()));
     assert!(described.contains(&&REPORTS.to_owned()));
 }

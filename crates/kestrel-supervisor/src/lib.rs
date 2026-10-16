@@ -1,3 +1,4 @@
+pub mod broker;
 pub mod changes;
 pub mod checkout;
 pub mod completer;
@@ -63,6 +64,8 @@ struct Supervising {
     summary: Option<Vec<link::WorkRepository>>,
     interrupt_deadline: Duration,
     quiet_period: Duration,
+    /// How `gh` and `git` reach the broker, for the clone and the harness alike.
+    reaching: BTreeMap<String, String>,
 }
 
 impl Supervising {
@@ -153,6 +156,23 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
     let (stderr, written) = mpsc::unbounded_channel();
     let home = set(variables, "HOME").map(PathBuf::from);
     let (heartbeat_session, carried_session) = watch::channel(None);
+    let broker = match std::env::current_exe().and_then(|helper| {
+        broker::Broker::open(
+            Arc::clone(&link),
+            carried_session.clone(),
+            &helper,
+            variables,
+        )
+    }) {
+        Ok(broker) => Some(broker),
+        Err(error) => {
+            diagnostics.info(&format!(
+                "no broker for gh and git to ask for tokens, so they reach github with none: \
+                 {error}"
+            ));
+            None
+        }
+    };
     let mut supervising = Supervising {
         cursor: set(variables, "KESTREL_INSTRUCTIONS_AFTER").map(str::to_owned),
         carrying: None,
@@ -161,6 +181,10 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
         summary: None,
         interrupt_deadline: interrupt_deadline(variables),
         quiet_period: quiet_period(variables),
+        reaching: broker
+            .as_ref()
+            .map(|broker| broker.environment().clone())
+            .unwrap_or_default(),
     };
 
     let alive = tokio::spawn(saying_it_is_alive(Arc::clone(&link), carried_session));
@@ -180,6 +204,7 @@ pub async fn run(diagnostics: &dyn Diagnostics, variables: &BTreeMap<String, Str
             .await;
     }
     alive.abort();
+    drop(broker);
     drop(stderr);
     if tokio::time::timeout(STDERR_DRAINING, &mut relaying)
         .await
@@ -808,6 +833,7 @@ async fn start_carrying(
             interrupt_deadline: supervising.interrupt_deadline,
             quiet_period: supervising.quiet_period,
             recover: true,
+            environment: supervising.reaching.clone(),
             stderr: stderr.clone(),
         },
         conversation: None,
@@ -832,7 +858,7 @@ async fn start_carrying(
         usage_due: None,
         usage_reported: None,
     };
-    match checkout::check_out(&carrying.checkout).await {
+    match checkout::check_out(&carrying.checkout, &supervising.reaching).await {
         Ok(()) => {
             if carrying.prompt.is_some() {
                 carrying.saying.push_back(Report::Started);

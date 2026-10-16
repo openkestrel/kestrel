@@ -121,6 +121,7 @@ pub async fn run(asked: &str, home: Option<&Path>, diagnostics: &dyn Diagnostics
         interrupt_deadline: crate::INTERRUPT_DEADLINE,
         quiet_period: crate::QUIET_PERIOD,
         recover: false,
+        environment: BTreeMap::new(),
         stderr,
     };
     let root = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());

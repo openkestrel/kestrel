@@ -3,15 +3,33 @@
 The base image a **Session** executes in. Its Dockerfile is here so the image is derivable rather than
 opaque ([ADR-0002](../../docs/adr/0002-two-deployables-the-environment-dials-out.md)).
 
-It carries five things: the **supervisor**, **opencode**, **git**, **Node** with the **Claude Code
-and Codex ACP adapters**, and the **`claude` and `codex` vendor executables** the subscription
-sign-in relays run. Every harness in the catalogue runs here, and the image says so in its
+It carries six things: the **supervisor**, **opencode**, **git**, **`gh`**, **Node** with the
+**Claude Code and Codex ACP adapters**, and the **`claude` and `codex` vendor executables** the
+subscription sign-in relays run. Every harness in the catalogue runs here, and the image says so in its
 `dev.kestrel.harnesses` label, which a derived image inherits and overrides when it carries a
 different set ([ADR-0048](../../docs/adr/0048-the-environment-image-carries-every-catalogued-harness.md)).
 A **Project**'s setup layers its repositories' dependencies on top; injecting the
 supervisor into a bring-your-own image is the `0.8` escape hatch, and installing an agent from the
 ACP Registry is `0.8` work under the constraints ADR-0007 records. Nothing else here downloads an
 agent.
+
+## Reaching GitHub
+
+A Session reaches GitHub as the GitHub App Integration its Workspace fixed for each repository,
+never as a person ([ADR-0028](../../docs/adr/0028-an-integration-lends-a-run-its-identity.md)).
+Nothing in the image holds a token. `/usr/local/bin/gh` is a shim: it asks the supervisor for a
+token scoped to the repository the command reaches and runs the real `gh`
+(`/usr/local/libexec/kestrel/gh`) with `GH_TOKEN` in that one process's environment. `git`, the
+supervisor's own first clone included, asks through a credential helper the supervisor configures
+with `GIT_CONFIG_*` variables, which clear every other helper first. The supervisor asks the control
+plane over the link each time, so a token that lapses mid-Session is replaced, and a disabled or
+retired Integration stops lending at once without ending the Session. A repository the Workspace
+selected no Integration for is reached with no credential at all.
+
+The token carries every permission the App was granted, and the App kestrel creates can merge pull
+requests: a token that can push the Session's branch can merge it. A human merge gate needs a
+branch rule or a reviewer identity other than the App's. Narrower permissions are Policy, which is
+`0.5` work.
 
 ## Building it
 
@@ -87,8 +105,8 @@ holds it to it.
 ## Deriving from it
 
 A derived image adds what one kind of work needs and keeps the supervisor as its entrypoint.
-[`images/kestrel-dev`](../kestrel-dev/README.md) is the one this repository ships. It adds Rust,
-`gh`, and nothing else: the adapters and vendor executables it once installed live here now, and
+[`images/kestrel-dev`](../kestrel-dev/README.md) is the one this repository ships. It adds Rust and
+nothing else: the adapters and vendor executables it once installed live here now, and
 it inherits them along with the harness label. An adapter usually
 advertises more than one way to sign in, and ACP gives a client no way to choose between them, so an
 Agent on a derived image is configured with `--agent-auth` as well.

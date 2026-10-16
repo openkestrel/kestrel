@@ -566,6 +566,23 @@ async fn play(
         say(connection, "message-1", prompted)?;
         return Ok(StopReason::EndTurn);
     }
+    if script == Script::Runs {
+        let mut command = std::process::Command::new("sh");
+        command.arg("-c").arg(prompted);
+        if let Some(directory) = located {
+            command.current_dir(directory);
+        }
+        let said = match command.output() {
+            Ok(ran) => format!(
+                "{}{}",
+                String::from_utf8_lossy(&ran.stdout),
+                String::from_utf8_lossy(&ran.stderr)
+            ),
+            Err(error) => format!("the command could not be run: {error}"),
+        };
+        say(connection, "message-1", &said)?;
+        return Ok(StopReason::EndTurn);
+    }
     if script == Script::Converses {
         say(
             connection,

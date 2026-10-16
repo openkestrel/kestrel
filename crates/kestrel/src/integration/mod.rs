@@ -11,10 +11,10 @@ use tracing::warn;
 use crate::declined::{Again, Constraint, Declined, Next, Reason, Resource, Step};
 use crate::domain::{
     Connection, Direction, Event, EventRecordId, GithubConnection, Integration, IntegrationKind,
-    IntegrationState, Occurrence,
+    IntegrationState, Occurrence, SelectedIntegration, Session, Workspace,
 };
 use crate::integration::credential::App;
-use crate::integration::github::{Github, Installed, Refused, Unproven};
+use crate::integration::github::{Github, Installed, Minted, Refused, Unproven};
 use crate::store::Store;
 use crate::store::integration::Recorded;
 
@@ -556,6 +556,150 @@ fn reading<'a>(
     Ok(connection)
 }
 
+/// What a Session's Instance is handed when its `gh` or `git` asks to reach a repository
+/// (ADR-0028).
+#[derive(Debug)]
+pub enum Lent {
+    Token(Minted),
+    /// Its Workspace fixed no Integration for the repository, and none is looked for elsewhere.
+    Unbound,
+    Refused(Reason),
+    Unavailable {
+        retry_after_seconds: Option<i64>,
+        message: String,
+    },
+}
+
+const REACH_GITHUB: &str = "reach_github";
+/// Each attempt after the first follows maintenance that landed while a token was being minted.
+const LENDING_ATTEMPTS: usize = 3;
+
+/// Lent only as the Integration the Workspace fixed when it opened, read by id and as it is now:
+/// never the Project's current binding, an Event's Integration or another that names the
+/// repository (ADR-0056).
+pub async fn lend(
+    store: &Store,
+    github: &Github,
+    session: &Session,
+    repository: Option<&str>,
+) -> Result<Lent> {
+    for _ in 0..LENDING_ATTEMPTS {
+        let (organization, integration) = {
+            let mut tx = store.read().await?;
+            let workspace = tx.workspaces().get(session.workspace).await?;
+            let selected = match selected(&workspace, repository) {
+                Ok(Some(selected)) => selected.integration,
+                Ok(None) => return Ok(Lent::Unbound),
+                Err(refused) => return Ok(Lent::Refused(*refused)),
+            };
+            (
+                workspace.organization.name,
+                tx.integrations().with_id(selected).await?,
+            )
+        };
+        let connection = match lending(&integration, &organization, REACH_GITHUB) {
+            Ok(connection) => connection,
+            Err(refused) => return refused.downcast().map(Lent::Refused),
+        };
+        let refused = match github.minted(&integration, connection).await {
+            Ok(minted) => return Ok(Lent::Token(minted)),
+            Err(refused) => refused,
+        };
+        let now = store
+            .read()
+            .await?
+            .integrations()
+            .with_id(integration.id)
+            .await?;
+        if now.revision != integration.revision || now.state != integration.state {
+            continue;
+        }
+
+        return Ok(match refused {
+            Refused::RateLimited { until } => Lent::Unavailable {
+                retry_after_seconds: Some(until.duration_since(Timestamp::now()).as_secs().max(0)),
+                message: format!(
+                    "github is rate limiting the integration {} until {until}",
+                    integration.name
+                ),
+            },
+            Refused::Failed(error) => {
+                warn!(
+                    integration = integration.name,
+                    because = %error,
+                    "a token could not be minted for a session"
+                );
+                Lent::Unavailable {
+                    retry_after_seconds: None,
+                    message: format!(
+                        "github did not mint a token for the integration {}",
+                        integration.name
+                    ),
+                }
+            }
+        });
+    }
+
+    Ok(Lent::Unavailable {
+        retry_after_seconds: Some(1),
+        message: "the integration kept changing while a token was minted for it".to_owned(),
+    })
+}
+
+/// A request naming no repository is lent the only one the Workspace selected, if it has one.
+fn selected<'a>(
+    workspace: &'a Workspace,
+    repository: Option<&str>,
+) -> Result<Option<&'a SelectedIntegration>, Box<Reason>> {
+    let Some(asked) = repository else {
+        return match workspace.integrations.as_slice() {
+            [] => Ok(None),
+            [only] => Ok(Some(only)),
+            several => Err(Box::new(Reason::InvalidField {
+                field: "repository",
+                operation: REACH_GITHUB,
+                constraint: Constraint::Offered,
+                allowed: Some(
+                    several
+                        .iter()
+                        .map(|selected| selected.repository.clone())
+                        .collect(),
+                ),
+                message: format!(
+                    "the workspace {} reaches each of its repositories as its own integration; \
+                     name the repository to reach",
+                    workspace.id
+                ),
+            })),
+        };
+    };
+
+    Ok(workspace
+        .integrations
+        .iter()
+        .find(|selected| same_repository(&selected.repository, asked)))
+}
+
+/// Only over HTTPS, so a token is never handed to a request that would send it in the clear.
+fn same_repository(selected: &str, asked: &str) -> bool {
+    if !asked.starts_with("https://") {
+        return false;
+    }
+    match (
+        github::named_repository(selected),
+        github::named_repository(asked),
+    ) {
+        (Some(selected), Some(asked)) => selected.eq_ignore_ascii_case(&asked),
+        _ => {
+            let bare = |url: &str| {
+                let url = url.trim_end_matches('/');
+                url.strip_suffix(".git").unwrap_or(url).to_ascii_lowercase()
+            };
+            bare(selected) == bare(asked)
+        }
+    }
+}
+
 pub struct Reached {
     pub watched: String,
     pub page: u32,
@@ -932,6 +1076,27 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
+
+    #[test]
+    fn a_repository_is_the_same_whichever_form_git_or_gh_names_it_in() {
+        let selected = "https://github.com/jtmthf/kestrel.git";
+
+        for asked in [
+            "https://github.com/jtmthf/kestrel.git",
+            "https://github.com/jtmthf/kestrel",
+            "https://github.com/JTMTHF/Kestrel/",
+        ] {
+            assert!(same_repository(selected, asked), "{asked}");
+        }
+        for asked in [
+            "http://github.com/jtmthf/kestrel.git",
+            "https://github.com/jtmthf/kestrel-fork.git",
+            "https://example.com/jtmthf/kestrel.git",
+            "git@github.com:jtmthf/kestrel.git",
+        ] {
+            assert!(!same_repository(selected, asked), "{asked}");
+        }
+    }
 
     #[test]
     fn a_rate_limit_defers_the_next_poll_to_the_moment_it_lifts() {

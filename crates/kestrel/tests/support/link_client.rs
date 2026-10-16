@@ -130,6 +130,25 @@ impl Link {
         request.send().await.expect("the link should answer")
     }
 
+    pub async fn github_token(
+        &self,
+        instance: &str,
+        session: SessionId,
+        repository: Option<&str>,
+        credential: &Secret,
+    ) -> Response {
+        let mut query = vec![("session", session.to_string())];
+        query.extend(repository.map(|repository| ("repository", repository.to_owned())));
+
+        self.client
+            .get(self.at(instance, "github/token"))
+            .query(&query)
+            .bearer_auth(credential.as_str())
+            .send()
+            .await
+            .expect("the link should answer")
+    }
+
     pub async fn refresh(
         &self,
         instance: &str,

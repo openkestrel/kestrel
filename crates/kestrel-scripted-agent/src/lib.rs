@@ -85,6 +85,9 @@ pub enum Script {
     Recalls,
     /// Says back exactly the prompt it was sent.
     Echoes,
+    /// Runs its prompt as a shell command in the directory its session was opened against, and
+    /// says what the command wrote, stdout then stderr.
+    Runs,
     /// Says which turn of its one session each prompt is, and every prompt that came before it
     /// there, which only a conversation that went on can know.
     Converses,
@@ -194,6 +197,7 @@ impl Script {
             Script::Refreshes => "refreshes",
             Script::Recalls => "recalls",
             Script::Echoes => "echoes",
+            Script::Runs => "runs",
             Script::Converses => "converses",
             Script::Dies => "dies",
             Script::Predates => "predates",

@@ -316,6 +316,7 @@ fn the_published_openapi_document_describes_the_link_the_control_plane_serves() 
             (link::CREDENTIALS.to_owned(), "get".to_owned()),
             (link::CREDENTIALS.to_owned(), "patch".to_owned()),
             (link::ENTRIES.to_owned(), "get".to_owned()),
+            (link::GITHUB_TOKEN.to_owned(), "get".to_owned()),
             (link::INSTRUCTIONS.to_owned(), "get".to_owned()),
             (link::REPORTS.to_owned(), "post".to_owned()),
         ]

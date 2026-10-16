@@ -245,6 +245,60 @@
         }
       }
     },
+    "/link/instances/{instance}/github/token": {
+      "get": {
+        "operationId": "githubToken",
+        "summary": "Take a token to reach one repository on GitHub, for one use.",
+        "description": "Asked each time the Session's `gh` or `git` reaches GitHub, never at the spawn, so a token that lapses mid-Session is replaced. Lent only as the Integration the Session's Workspace fixed for the repository when it opened, read by id and as it is now: its lifecycle and revision are read before a token is handed over, and the token reaches only the repository that Integration watches. The App's private key never crosses the link. Only a Session the Instance is carrying is answered for.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/instance"
+          },
+          {
+            "$ref": "#/components/parameters/session"
+          },
+          {
+            "name": "repository",
+            "in": "query",
+            "required": false,
+            "description": "The HTTPS address of the repository to reach. Omitted, the Workspace's one selected repository, when it has exactly one.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A token for the repository, good until `expires_at`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubToken"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "The Workspace fixed no Integration for the repository, so nothing is lent and nothing is looked for elsewhere."
+          },
+          "401": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "410": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
     "/link/instances/{instance}/instructions": {
       "get": {
         "operationId": "instructions",
@@ -595,6 +649,25 @@
         },
         "required": [
           "files"
+        ],
+        "additionalProperties": false
+      },
+      "GithubToken": {
+        "description": "An installation token scoped to the one repository. A 409 instead means the fixed Integration lends nothing now (disabled, retired, carrying nothing outbound) or that several repositories were selected and none named; nothing is lent in its place.",
+        "type": "object",
+        "properties": {
+          "token": {
+            "description": "Handed only to the process about to use it, never to a file, an environment the Instance keeps, a log or the Transcript.",
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "token",
+          "expires_at"
         ],
         "additionalProperties": false
       },

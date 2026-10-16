@@ -4,6 +4,7 @@
 pub mod credential;
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -21,6 +22,8 @@ use tracing::{info, warn};
 
 use crate::domain::{Checkout, Session, SessionId, SessionState, Workspace};
 use crate::fanout::Touched;
+use crate::integration::github::Github;
+use crate::integration::{self, Lent};
 use crate::link::credential::Secret;
 use crate::log::{Cursor, Unreadable, Window};
 use crate::role::serve;
@@ -41,6 +44,7 @@ pub const CREDENTIALS: &str = "/link/instances/{instance}/credentials";
 /// The Transcript of the Workspace holding the Instance. Named for what crosses the link rather
 /// than for what it is, because the supervisor is a courier and may not know (ADR-0002).
 pub const ENTRIES: &str = "/link/instances/{instance}/entries";
+pub const GITHUB_TOKEN: &str = "/link/instances/{instance}/github/token";
 pub const INSTRUCTIONS: &str = "/link/instances/{instance}/instructions";
 pub const REPORTS: &str = "/link/instances/{instance}/reports";
 
@@ -124,6 +128,7 @@ struct Carried<'a> {
 #[derive(Clone)]
 struct ControlPlane {
     store: Store,
+    github: Arc<Github>,
     shutdown: CancellationToken,
     live: crate::live::Live,
 }
@@ -136,6 +141,18 @@ struct Waiting {
 #[derive(Deserialize)]
 struct Asking {
     session: String,
+}
+
+#[derive(Deserialize)]
+struct Reaching {
+    session: String,
+    repository: Option<String>,
+}
+
+#[derive(Serialize)]
+struct Token {
+    token: String,
+    expires_at: jiff::Timestamp,
 }
 
 #[derive(Deserialize)]
@@ -176,15 +193,22 @@ struct Recorded {
     entry: serde_json::Value,
 }
 
-pub fn router(store: Store, shutdown: CancellationToken, live: crate::live::Live) -> Router {
+pub fn router(
+    store: Store,
+    github: Github,
+    shutdown: CancellationToken,
+    live: crate::live::Live,
+) -> Router {
     Router::new()
         .route(ANSWERS, post(answer))
         .route(CREDENTIALS, get(credentials).patch(refresh_credentials))
         .route(ENTRIES, get(entries))
+        .route(GITHUB_TOKEN, get(github_token))
         .route(INSTRUCTIONS, get(instructions))
         .route(REPORTS, post(report))
         .with_state(ControlPlane {
             store,
+            github: Arc::new(github),
             shutdown,
             live,
         })
@@ -375,6 +399,53 @@ async fn credentials(
         variables: handed.variables,
         files: handed.files,
     }))
+}
+
+/// Asked for each time the Session's `gh` or `git` reaches GitHub, never at the spawn, so a token
+/// that lapses mid-Session is replaced and one an Integration may no longer lend is not
+/// (ADR-0028).
+async fn github_token(
+    State(control_plane): State<ControlPlane>,
+    Path(instance): Path<String>,
+    Query(reaching): Query<Reaching>,
+    headers: HeaderMap,
+) -> Result<Response, Refused> {
+    let (linked, _) = authenticated(&control_plane, &headers, &instance).await?;
+    let session = carried(&control_plane, &linked, &reaching.session).await?;
+    let lent = integration::lend(
+        &control_plane.store,
+        &control_plane.github,
+        &session,
+        reaching.repository.as_deref(),
+    )
+    .await?;
+    let repository = reaching
+        .repository
+        .as_deref()
+        .unwrap_or("its one repository");
+
+    match lent {
+        Lent::Token(minted) => {
+            info!(session = %session.id, repository, "lent a session a github token");
+            Ok(Json(Token {
+                token: minted.token,
+                expires_at: minted.expires_at,
+            })
+            .into_response())
+        }
+        Lent::Unbound => Ok(StatusCode::NO_CONTENT.into_response()),
+        Lent::Refused(reason) => {
+            info!(session = %session.id, repository, because = %reason, "lent a session no github token");
+            Err(Refused::Conflict(reason.to_string()))
+        }
+        Lent::Unavailable {
+            retry_after_seconds,
+            message,
+        } => Err(Refused::GithubUnavailable {
+            retry_after_seconds,
+            message,
+        }),
+    }
 }
 
 async fn refresh_credentials(
@@ -676,6 +747,11 @@ enum Refused {
     Unauthorized(&'static str),
     Forbidden(&'static str),
     Gone(String),
+    Conflict(String),
+    GithubUnavailable {
+        retry_after_seconds: Option<i64>,
+        message: String,
+    },
     Unavailable(anyhow::Error),
 }
 
@@ -714,6 +790,20 @@ impl IntoResponse for Refused {
             Refused::Unauthorized(why) => (StatusCode::UNAUTHORIZED, why.to_owned()),
             Refused::Forbidden(why) => (StatusCode::FORBIDDEN, why.to_owned()),
             Refused::Gone(why) => (StatusCode::GONE, why),
+            Refused::Conflict(why) => (StatusCode::CONFLICT, why),
+            Refused::GithubUnavailable {
+                retry_after_seconds,
+                message,
+            } => {
+                let mut response =
+                    (StatusCode::SERVICE_UNAVAILABLE, Json(Refusal { message })).into_response();
+                if let Some(seconds) = retry_after_seconds
+                    && let Ok(value) = seconds.to_string().parse()
+                {
+                    response.headers_mut().insert(header::RETRY_AFTER, value);
+                }
+                return response;
+            }
             Refused::Unavailable(error) => {
                 warn!(%error, busy, "the link could not answer");
                 (
