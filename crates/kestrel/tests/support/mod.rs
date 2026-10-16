@@ -2429,6 +2429,12 @@ impl Kestrel {
         .expect("the session info should be taken");
     }
 
+    pub async fn report(&self, session: &Session, seq: i64, report: work::Report) {
+        work::report_on(&self.store, session, Some(seq), report)
+            .await
+            .expect("the report should be taken");
+    }
+
     pub async fn report_option_changed(&self, session: &Session, seq: i64, changed: work::Report) {
         work::report_on(&self.store, session, Some(seq), changed)
             .await

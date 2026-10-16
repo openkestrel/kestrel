@@ -70,9 +70,13 @@ Patterns the code relies on that no single file states. Comment style is in `COD
   `work_pass` runs one round of every sweep and one of dispatch, the same rounds the live loops
   repeat, and returns once a Session it claimed is on its supervisor; `go_live` hands the role to
   its loops. Reach for it when a test would otherwise race the work role for something it means to
-  do itself. `suite/stepped.rs` puts what a step races on each side of a pass, for the claim, the
-  lease sweep and the idle seal so far; a test that moves a race out of another step adds that
-  step's interleaving there. Stepping is opt-in until most of `suite` has moved. The
+  do itself. Each round keeps a stepped test that puts what it races on one side of a pass on
+  purpose, in `suite/stepped.rs` unless named: the lease sweep, retention, polling, firing,
+  follow-ups, the idle seal, posting, the claim, held input, a supervisor's exit and archiving, with
+  pull request learning in `pull_request.rs` and relays in `relay.rs`. Three have none: elapsing
+  waits on the manual clock, idle hints are a no-op in both drivers, and a sign-in test's only rival
+  is a restart, which interrupts it claimed or not. App setup expiry needs none, since a callback
+  expires its own flow first. Stepping is opt-in until most of `suite` has moved. The
   manual clock is not built yet: a stepped test still backdates a row for a due time, and one idle
   longer than the sweep's 10 s gap between passes reads as time the control plane was away.
 - **Ordinary tests share one binary.** `crates/kestrel/tests/suite/` holds a module per area, so the
