@@ -247,6 +247,10 @@ impl Provisioned for Directory {
         fs::read(self.at(path))
     }
 
+    fn read_home_file(&mut self, path: &str) -> io::Result<Vec<u8>> {
+        fs::read(self.home.join(path))
+    }
+
     fn write_file(&mut self, path: &str, contents: &[u8]) -> io::Result<()> {
         let path = self.at(path);
         if let Some(parent) = path.parent() {

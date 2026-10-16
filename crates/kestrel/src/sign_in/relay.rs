@@ -1,4 +1,5 @@
 mod claude;
+mod codex;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -107,12 +108,15 @@ pub async fn start(
     profile: Option<&str>,
 ) -> Result<wire::SignInRelay> {
     let offered = catalogue::sign_in_method(START, harness, method)?;
-    if offered.relay != Some(wire::SignInMethodRelay::ClaudeSetupToken) {
+    if offered.relay.is_none() {
         bail!(Reason::InvalidField {
             field: "method",
             operation: START,
             constraint: Constraint::Offered,
-            allowed: Some(vec!["claude-setup-token".to_owned()]),
+            allowed: Some(vec![
+                "claude-setup-token".to_owned(),
+                "codex-device-auth".to_owned(),
+            ]),
             message: "this Sign-in Method has no supported relay".to_owned()
         });
     }
@@ -489,12 +493,15 @@ pub async fn run(
             match &result {
                 Ok(Some(material)) => complete(&store, &id, material).await,
                 Ok(None) => Ok(()),
-                Err(_) => transition(
+                Err(error) => transition(
                     &store,
                     &id,
                     failed(
                         &attempt,
-                        "the vendor sign-in could not complete; retry or import a token instead",
+                        error.downcast_ref::<Unusable>().map_or(
+                            "the vendor sign-in could not complete; retry or import the sign-in instead",
+                            |unusable| unusable.0,
+                        ),
                     ),
                 )
                 .await,
@@ -530,13 +537,119 @@ async fn drive(
     answers: &mut mpsc::Receiver<String>,
     shutdown: &CancellationToken,
 ) -> Result<Option<String>> {
+    let relay = catalogue::sign_in_method(START, &attempt.view.harness, &attempt.view.method)?
+        .relay
+        .clone();
     let mut instance = provision(store, driver, attempt, shutdown).await?;
-    let mut terminal = instance.terminal(&["claude", "setup-token"])?;
     let remaining = remaining(attempt)?;
+    let relayed = async {
+        match relay {
+            Some(wire::SignInMethodRelay::ClaudeSetupToken) => {
+                let mut terminal = instance.terminal(&["claude", "setup-token"])?;
+                drive_terminal(store, attempt, answers, &mut terminal).await
+            }
+            Some(wire::SignInMethodRelay::CodexDeviceAuth) => {
+                authorize_device(store, attempt, &mut instance).await
+            }
+            None => bail!("this Sign-in Method has no relay"),
+        }
+    };
     tokio::select! {
-        result = tokio::time::timeout(remaining, drive_terminal(store, attempt, answers, &mut terminal)) => result?,
+        result = tokio::time::timeout(remaining, relayed) => result?,
         () = shutdown.cancelled() => bail!("sign-in interrupted"),
     }
+}
+
+/// A relay failure whose message is safe to show and names what the Operator can do instead.
+#[derive(Debug, Clone, Copy)]
+struct Unusable(&'static str);
+
+impl std::fmt::Display for Unusable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for Unusable {}
+
+const OUTPUT_LIMIT: usize = 1024 * 1024;
+
+async fn running(store: &Store, id: &str) -> Result<Option<Attempt>> {
+    let mut tx = store.begin().await?;
+    let Some(mut current) = tx.relays().get(id).await? else {
+        return Ok(None);
+    };
+    expire(&mut tx, &mut current).await?;
+    tx.commit().await?;
+    Ok((!terminal(&current.view.progress)).then_some(current))
+}
+
+/// The vendor polls for the Operator's approval itself, so nothing is ever typed into it.
+async fn authorize_device(
+    store: &Store,
+    attempt: &Attempt,
+    instance: &mut crate::compute::Instance,
+) -> Result<Option<String>> {
+    let id = &attempt.view.id;
+    let wire::SignInFill::SignInFileFill(fill) = &attempt.view.destination.fills else {
+        bail!("device authorization fills a login file");
+    };
+    let mut terminal = instance.terminal(codex::LOGIN)?;
+    let mut decoder = codex::Decoder::new();
+    let mut bytes = 0;
+    let mut output_closed = false;
+    loop {
+        let Some(current) = running(store, id).await? else {
+            return Ok(None);
+        };
+        tokio::select! {
+            output = terminal.output.recv(), if !output_closed => match output {
+                None => output_closed = true,
+                Some(output) => {
+                    bytes += output.len();
+                    if bytes > OUTPUT_LIMIT { bail!("vendor output exceeded its limit"); }
+                    if let Some(prompt) = decoder.feed(&output)
+                        && current.state() == "starting" {
+                        transition(store, id, wire::SignInRelayProgress::RelayAwaitingBrowser(wire::RelayAwaitingBrowser {
+                            state: Default::default(),
+                            url: prompt.url,
+                            code: Some(prompt.code),
+                        })).await?;
+                    }
+                }
+            },
+            () = tokio::time::sleep(POLL) => {}
+        }
+        if output_closed && let Some(success) = terminal.exited()? {
+            if !success {
+                bail!(Unusable(
+                    "the vendor device authorization did not complete; retry, or import the auth.json a Codex sign-in writes instead"
+                ));
+            }
+            break;
+        }
+    }
+    drop(terminal);
+    transition(
+        store,
+        id,
+        wire::SignInRelayProgress::RelaySaving(wire::RelaySaving {
+            state: Default::default(),
+        }),
+    )
+    .await?;
+    let unusable = Unusable(
+        "the vendor finished without a ChatGPT login file; retry, or import the auth.json a Codex sign-in writes instead",
+    );
+    let material = instance
+        .read_home_file(&fill.path)
+        .ok()
+        .filter(|material| material.len() <= OUTPUT_LIMIT)
+        .and_then(|material| String::from_utf8(material).ok())
+        .ok_or(unusable)?;
+    let method = catalogue::sign_in_method(START, &attempt.view.harness, &attempt.view.method)?;
+    super::structural(method, &material).map_err(|_| unusable)?;
+    Ok(Some(material))
 }
 
 fn remaining(attempt: &Attempt) -> Result<Duration> {
@@ -616,16 +729,9 @@ async fn drive_terminal(
     let mut bytes = 0;
     let mut output_closed = false;
     loop {
-        let mut tx = store.begin().await?;
-        let Some(mut current) = tx.relays().get(id).await? else {
+        let Some(current) = running(store, id).await? else {
             return Ok(None);
         };
-        expire(&mut tx, &mut current).await?;
-        let stopped = self::terminal(&current.view.progress);
-        tx.commit().await?;
-        if stopped {
-            return Ok(None);
-        }
         tokio::select! {
             answer = answers.recv(), if !answered => {
                 if let Some(answer) = answer {
@@ -642,7 +748,7 @@ async fn drive_terminal(
                     },
                     Some(output) => {
                         bytes += output.len();
-                        if bytes > 1024 * 1024 { bail!("vendor output exceeded its limit"); }
+                        if bytes > OUTPUT_LIMIT { bail!("vendor output exceeded its limit"); }
                         let decoded = decoder.feed(&output, answered)?;
                         if let Some(url) = decoded.url
                             && current.state() == "starting" {

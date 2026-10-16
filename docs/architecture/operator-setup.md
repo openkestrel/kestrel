@@ -191,7 +191,8 @@ found. Saving never starts one, and nothing else spends model usage on a sign-in
 
 ## Subscription sign-in relays
 
-`POST …/sign-ins/{harness}/{method}/relay` starts a Claude `setup-token` relay, after the
+`POST …/sign-ins/{harness}/{method}/relay` starts a Claude `setup-token` or Codex device-authorization relay,
+after the
 same image capability gate as a model test; optional `{profile}` selects one of the Operator's
 own Profiles, otherwise the save path resolves or declares theirs. A relay has a non-secret UUID,
 its exact destination, a monotonically increasing `version`, and an absolute ten-minute `deadline`.
@@ -214,6 +215,14 @@ intercepts the token privately and supplies continuation Enter when needed. Savi
 the captured token and a natural successful exit. No raw screen, pasted answer or token enters
 relay metadata, responses, events or logs, and no inference is performed. Completion records
 `login_completed` authentication evidence and no model-use evidence.
+
+A Codex relay runs `codex login --device-auth` with file credential storage instead. Its decoder
+publishes the first-party verification page and one-time code as `awaiting_browser`; the vendor
+polls for approval itself, so `POST …/code` answers 409 in that state. After a successful exit the
+relay commits `saving`, reads `.codex/auth.json` from the Instance's home, and saves it only if it
+is a ChatGPT login file. A missing, oversized or incompatible file, or a failed vendor exit, fails
+with a fixed message and a `sign_in` step to import the file instead; vendor output never reaches
+the diagnostic.
 
 An accepted Profile entry write cancels its active relay in the same transaction. Relay completion
 claims its terminal outcome and compares the original material revision before holding anything,
