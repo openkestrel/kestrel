@@ -19,7 +19,7 @@ const PANES = [
 	{ value: "work", label: "Work" },
 ] as const;
 
-type Pane = (typeof PANES)[number]["value"];
+export type Pane = (typeof PANES)[number]["value"];
 
 type Side = Exclude<Pane, "transcript">;
 
@@ -172,9 +172,11 @@ export function Workbench(panes: Record<Pane, ReactNode> & { initial?: Pane }) {
 											<SidebarToggle side={side} where="rail" />
 										</div>
 									)}
+									{/* A control that leaves a pane hands its focus here rather than dropping it on the document. */}
 									<section
 										id={`pane-${value}`}
 										data-pane={value}
+										tabIndex={-1}
 										aria-label={label}
 										className={cn("flex h-full min-h-0 flex-col", folded && "workbench:hidden")}
 									>
@@ -260,6 +262,10 @@ function holdsFocus(side: Side): boolean {
 		active.closest(`[data-pane="${side}"]`) !== null ||
 		active.closest(`[data-sidebar="rail"][data-side="${side}"]`) !== null
 	);
+}
+
+export function focusPane(pane: Pane): void {
+	document.querySelector<HTMLElement>(`[data-pane="${pane}"]`)?.focus();
 }
 
 function sidebarToggle(side: Side, where: "heading" | "rail"): HTMLElement | null {

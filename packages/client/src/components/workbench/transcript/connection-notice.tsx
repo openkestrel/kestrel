@@ -1,5 +1,7 @@
+import { useEffect, useRef, type FocusEvent } from "react";
 import { Refusal, RetryFallback } from "#/components/refusal";
 import { Button } from "#/components/ui/button";
+import { focusPane } from "#/components/workbench/workbench";
 import type { Connection } from "#/operator/transcript";
 import { diagnosisOf } from "#/operator/transport";
 
@@ -10,6 +12,21 @@ export function ConnectionNotice({
 	connection: Connection;
 	reconnect: () => void;
 }) {
+	// A notice can leave the page holding a keyboard user's focus, which the Transcript pane takes
+	// rather than the document.
+	const heldFocus = useRef<Element | null>(null);
+	useEffect(() => {
+		const left = heldFocus.current;
+		if (left === null || left.isConnected) return;
+		heldFocus.current = null;
+		if (document.activeElement === document.body) focusPane("transcript");
+	});
+	const focusHandlers = {
+		onFocus: (event: FocusEvent<HTMLElement>) => {
+			heldFocus.current = event.target;
+		},
+	};
+
 	switch (connection.state) {
 		case "connecting":
 		case "live":
@@ -19,6 +36,7 @@ export function ConnectionNotice({
 				<div
 					data-transcript-connection="reconnecting"
 					className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-4 py-2 text-xs"
+					{...focusHandlers}
 				>
 					<output>
 						Reconnecting to the Transcript; what is shown stays, and it resumes where it left off.
@@ -39,6 +57,7 @@ export function ConnectionNotice({
 					aria-label="Transcript unavailable"
 					data-transcript-connection="unavailable"
 					className="grid shrink-0 gap-2 border-b p-4 text-xs"
+					{...focusHandlers}
 				>
 					<p className="font-medium">The Transcript is unavailable.</p>
 					<Refusal error={connection.failure} retry={reconnect} />
