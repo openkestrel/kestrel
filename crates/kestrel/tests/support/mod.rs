@@ -601,6 +601,10 @@ impl Kestrel {
     }
 
     pub async fn boot_serving_at_github(api: &str) -> Self {
+        Self::boot_serving_with_webhook_base(api, None).await
+    }
+
+    pub async fn boot_serving_with_webhook_base(api: &str, base: Option<String>) -> Self {
         let data_dir = TempDir::new().expect("a temporary data directory");
         let store = Store::open(data_dir.path())
             .await
@@ -619,7 +623,8 @@ impl Kestrel {
         .await
         .expect("the control plane should bind its link")
         .checking_sign_ins_with(no_provider())
-        .creating_github_apps_at(api);
+        .creating_github_apps_at(api)
+        .with_webhook_base(base);
         let bound = listening.bound();
         let roles = tokio::spawn(serve::run(listening, shutdown.clone()));
 

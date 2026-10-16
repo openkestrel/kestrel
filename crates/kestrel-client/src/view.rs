@@ -53,6 +53,11 @@ pub const LOGIN: Columns<wire::SubscriptionProfileLogin> =
     Columns::Value(Column("name", |login| text(&login.name)));
 pub const GITHUB_APP_STARTED: Columns<wire::GithubAppStarted> =
     Columns::Value(Column("url", |started| text(&started.url)));
+pub const INTEGRATION_WEBHOOK: Columns<wire::IntegrationWebhook> = Columns::Detail(&[
+    Column("configured URL", |hook| text(&hook.url)),
+    Column("recent Deliveries", |hook| objects(&hook.deliveries)),
+]);
+
 pub const INTEGRATIONS: Columns<wire::Integration> = Columns::Rows(&[
     Column("id", |integration| text(integration.id)),
     Column("name", |integration| text(&integration.name)),

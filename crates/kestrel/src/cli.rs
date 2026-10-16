@@ -75,6 +75,11 @@ pub struct Cli {
     )]
     pub listen: SocketAddr,
 
+    /// Public HTTPS origin forwarding the webhook listener; polling continues either way
+    #[arg(long, env = "KESTREL_WEBHOOK_BASE", global = true, value_name = "URL",
+        value_parser = webhook_base)]
+    pub webhook_base: Option<String>,
+
     /// Where the control plane listens for Clients; it authenticates nobody, so keep it on
     /// loopback and reach a remote one through a tunnel
     #[arg(
@@ -216,6 +221,10 @@ pub enum Command {
     Serve,
     /// Claim queued Sessions and execute them
     Work,
+}
+
+fn webhook_base(value: &str) -> Result<String, String> {
+    crate::integration::hook::public_base(value).map_err(|error| error.to_string())
 }
 
 fn client_url(given: &str) -> Result<Url, String> {

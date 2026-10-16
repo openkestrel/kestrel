@@ -949,3 +949,55 @@ fn a_hostile_flow_state_cannot_inject_markup_into_the_installed_page() {
     assert!(!html.contains("<script>"));
     assert!(html.contains("?state=&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"));
 }
+
+#[tokio::test]
+async fn the_deployment_base_applies_to_new_apps_and_existing_hook_updates() {
+    let stub = GithubStub::start();
+    let kestrel = Kestrel::boot_serving_with_webhook_base(
+        &stub.base_url(),
+        Some("https://public.example.com".into()),
+    )
+    .await;
+    kestrel.declare_organization("acme").await;
+    let (client, url, _) = start(&kestrel, false).await;
+    let html = client.get(url).send().await.unwrap().text().await.unwrap();
+    assert!(
+        html.contains("https://public.example.com/webhooks/"),
+        "{html}"
+    );
+    assert!(!html.contains("unreachable.invalid"));
+    let integration = kestrel
+        .register_signed_github(
+            "acme",
+            "existing",
+            "jtmthf/kestrel",
+            &stub.base_url(),
+            "kept-secret",
+        )
+        .await;
+    stub.script_answer(
+        "PATCH",
+        "/app/hook/config",
+        ScriptedResponse::answering(200),
+    );
+    let response = client
+        .put(format!(
+            "{}/operator/organizations/acme/integrations/existing/webhook",
+            kestrel.operator()
+        ))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let patch = stub
+        .requests()
+        .into_iter()
+        .find(|r| r.method == "PATCH")
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&patch.body).unwrap(),
+        json!({"url": format!("https://public.example.com{}", integration.webhook_path())})
+    );
+    kestrel.teardown().await;
+}

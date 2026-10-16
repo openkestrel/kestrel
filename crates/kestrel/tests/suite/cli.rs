@@ -2227,3 +2227,83 @@ fn empty_cli_inspection_lists_leave_pipes_empty_and_json_unmodified() {
     assert_eq!(piped.out, ["  checkout unavailable"]);
     serving.join().expect("the stub served every read");
 }
+
+#[test]
+fn the_client_sets_a_hook_url_and_reads_safe_delivery_results() {
+    let kestrel = Kestrel::new();
+    let stub = GithubStub::start();
+    let booted = kestrel.booting("127.0.0.1:0", Script::Speaks, "trace");
+    booted.run(&["organization", "declare", "acme"]);
+    booted.run(&[
+        "integration",
+        "github",
+        "register",
+        "hub",
+        "--repository",
+        "jtmthf/kestrel",
+        "--app-id",
+        "1",
+        "--installation",
+        "2",
+        "--private-key",
+        support::PRIVATE_KEY,
+        "--webhook-secret",
+        "kept-secret",
+        "--api",
+        &stub.base_url(),
+        "--interval",
+        "1h",
+    ]);
+    stub.script_answer(
+        "PATCH",
+        "/app/hook/config",
+        ScriptedResponse::answering(200),
+    );
+    let changed = booted.record(&[
+        "integration",
+        "github",
+        "webhook",
+        "set-url",
+        "hub",
+        "--base",
+        "https://hooks.example.com",
+        "--json",
+    ]);
+    assert_eq!(changed["revision"], 2);
+    stub.script_answer(
+        "GET",
+        "/app/hook/config",
+        ScriptedResponse::ok(
+            r#"{"url":"https://hooks.example.com/webhooks/id","secret":"never-print-this"}"#,
+        ),
+    );
+    let status = booted.record(&[
+        "integration",
+        "github",
+        "webhook",
+        "status",
+        "hub",
+        "--json",
+    ]);
+    assert_eq!(
+        status,
+        json!({"url":"https://hooks.example.com/webhooks/id","deliveries":[]})
+    );
+    let refused = booted.refused_as(
+        &[
+            "integration",
+            "github",
+            "webhook",
+            "set-url",
+            "hub",
+            "--base",
+            "https://localhost",
+        ],
+        Invocation::default(),
+    );
+    assert!(refused.contains("public HTTPS origin"), "{refused}");
+    let printed = format!("{changed}{status}{refused}{}", booted.said());
+    assert!(!printed.contains("kept-secret"));
+    assert!(!printed.contains("never-print-this"));
+    booted.killed();
+}

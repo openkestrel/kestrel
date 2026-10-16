@@ -1,5 +1,6 @@
 pub mod credential;
 pub mod github;
+pub mod hook;
 pub mod manifest;
 pub mod post;
 pub mod rotation;

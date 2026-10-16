@@ -2712,6 +2712,128 @@
         }
       }
     },
+    "/operator/organizations/{organization}/integrations/{integration}/webhook": {
+      "get": {
+        "operationId": "readIntegrationWebhook",
+        "summary": "Read the App hook and recent Delivery results.",
+        "description": "Reads the configured URL and the latest page of the existing GitHub Delivery log, scoped to this installation and repository. Empty results establish no reachability. Does not poll Events or advance the cursor. Safe metadata only; no secrets or payloads.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configuration and observed Delivery results, not a reachability promise.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationWebhook"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      },
+      "put": {
+        "operationId": "setIntegrationWebhookUrl",
+        "summary": "Set only the GitHub App's webhook URL.",
+        "description": "Uses the supplied public HTTPS base or the deployment webhook base. Preserves the secret, subscriptions and polling cursor. Refuses retired or shared Apps and unfinished secret rotation. GitHub acknowledgement says configuration changed, never that a Delivery reached kestrel. An unanswered update may have landed: inspect before retrying.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationWebhookUrl"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Integration at its new revision; polling continues.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "422": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
     "/operator/organizations/{organization}/integrations/{integration}/webhook-secret-rotation": {
       "post": {
         "operationId": "rotateIntegrationWebhookSecret",
@@ -7520,6 +7642,64 @@
           "revision": {
             "type": "integer",
             "description": "The revision this change was decided against."
+          }
+        }
+      },
+      "IntegrationWebhookUrl": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "base": {
+            "type": "string",
+            "description": "Public HTTPS origin; omitted to use the deployment setting."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "IntegrationWebhook": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "url",
+          "deliveries"
+        ],
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "deliveries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookDelivery"
+            }
+          }
+        }
+      },
+      "WebhookDelivery": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "guid",
+          "delivered_at",
+          "status_code"
+        ],
+        "properties": {
+          "guid": {
+            "type": "string"
+          },
+          "delivered_at": {
+            "type": "string"
+          },
+          "status_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "HTTP result recorded by GitHub; null when unavailable."
           }
         }
       },

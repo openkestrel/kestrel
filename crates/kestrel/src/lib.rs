@@ -60,7 +60,8 @@ pub async fn run(cli: &Cli, shutdown: CancellationToken) -> anyhow::Result<()> {
                 cli.client_url().clone(),
                 cli.follow_lease(),
             )
-            .await?;
+            .await?
+            .with_webhook_base(cli.webhook_base.clone());
             let dispatch = cli.dispatch(all_in_one.bound().link)?;
             all_in_one.run(Some(dispatch), shutdown).await
         }
@@ -73,7 +74,8 @@ pub async fn run(cli: &Cli, shutdown: CancellationToken) -> anyhow::Result<()> {
                 cli.follow_lease(),
             )
             .await?
-            .inspecting(cli.images());
+            .inspecting(cli.images())
+            .with_webhook_base(cli.webhook_base.clone());
             role::serve::run(listening, shutdown).await
         }
         Some(Command::Work) => {
