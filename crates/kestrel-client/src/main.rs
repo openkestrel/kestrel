@@ -429,6 +429,26 @@ enum GithubCommand {
         #[arg(long, value_name = "REVISION")]
         revision: Option<i64>,
     },
+    /// Rotate the webhook secret of the App an Integration signs as, resuming one interrupted
+    #[command(subcommand)]
+    RotateSecret(RotateSecretCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum RotateSecretCommand {
+    /// Make a replacement secret and set it on GitHub; until GitHub acknowledges it, deliveries
+    /// signed with either secret are accepted
+    Start {
+        name: String,
+        /// Refuse the rotation if the Integration is no longer at this revision
+        #[arg(long, value_name = "REVISION")]
+        revision: Option<i64>,
+    },
+    /// Show whether a rotation is unfinished, and how to finish it
+    Status { name: String },
+    /// Set the same saved replacement on GitHub again, and finish the rotation once it is
+    /// acknowledged
+    Resume { name: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1396,6 +1416,29 @@ async fn run(
                 )
                 .await?;
             shown_integration(&presentation, invocation, replaced)?;
+        }
+        Command::Integration(IntegrationCommand::Github(GithubCommand::RotateSecret(rotating))) => {
+            let organization = scoping.resolve().await?.organization;
+            let (RotateSecretCommand::Start { name, .. }
+            | RotateSecretCommand::Status { name }
+            | RotateSecretCommand::Resume { name }) = &rotating;
+            let path = ["organizations", &organization, "integrations", name];
+            let rotation = [path.as_slice(), &["webhook-secret-rotation"]].concat();
+            let integration: wire::Integration = match rotating {
+                RotateSecretCommand::Start { revision, .. } => {
+                    api.post_as(
+                        &rotation,
+                        &wire::IntegrationWebhookSecretRotation { revision },
+                    )
+                    .await?
+                }
+                RotateSecretCommand::Status { .. } => api.get_as(&path).await?,
+                RotateSecretCommand::Resume { .. } => {
+                    api.post_as(&[rotation.as_slice(), &["resume"]].concat(), &())
+                        .await?
+                }
+            };
+            shown_rotation(&presentation, invocation, integration)?;
         }
         Command::Integration(IntegrationCommand::Register(RegisterCommand::Webhook {
             name,
@@ -2561,13 +2604,45 @@ fn shown_integration(
         || crate::output::ABSENT.to_owned(),
         |diagnostic| diagnostic::inline(diagnostic, invocation),
     );
+    let rotation = rotation(&integration, invocation);
     let shown = view::IntegrationShown {
         integration,
         canceled_posts,
         diagnostic,
+        rotation,
     };
 
     typed::show_as(presentation, &view::INTEGRATION, &shown.integration, &shown)
+}
+
+fn rotation(integration: &wire::Integration, invocation: &Invocation) -> String {
+    integration.webhook_secret_rotation.as_ref().map_or_else(
+        || crate::output::ABSENT.to_owned(),
+        |rotation| {
+            format!(
+                "unfinished since {}\n{}",
+                rotation.started_at,
+                diagnostic::inline(&rotation.diagnostic, invocation)
+            )
+        },
+    )
+}
+
+/// The whole Integration as JSON, so a script reads the rotation where every Client does.
+fn shown_rotation(
+    presentation: &Presentation,
+    invocation: &Invocation,
+    integration: wire::Integration,
+) -> Result<()> {
+    let shown = view::RotationShown {
+        rotation: match &integration.webhook_secret_rotation {
+            Some(_) => rotation(&integration, invocation),
+            None => "none under way".to_owned(),
+        },
+        integration,
+    };
+
+    typed::show_as(presentation, &view::ROTATION, &shown.integration, &shown)
 }
 
 fn direction(given: &str) -> Result<wire::Direction, String> {

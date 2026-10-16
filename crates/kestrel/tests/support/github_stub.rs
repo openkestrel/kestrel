@@ -199,6 +199,19 @@ fn default_app_record() -> ScriptedResponse {
     ScriptedResponse::ok(serde_json::json!({ "slug": "kestrel" }).to_string())
 }
 
+/// What `PATCH /app/hook/config` answers: GitHub never reads a secret back.
+fn masked_hook_config() -> ScriptedResponse {
+    ScriptedResponse::ok(
+        serde_json::json!({
+            "content_type": "json",
+            "insecure_ssl": "0",
+            "secret": "********",
+            "url": "https://kestrel.example/webhooks",
+        })
+        .to_string(),
+    )
+}
+
 /// An exhausted quota, with a reset that has already passed so a test is not held at it.
 pub fn rate_limited() -> ScriptedResponse {
     ScriptedResponse::answering(403)
@@ -424,6 +437,8 @@ fn respond(
             Some(minted_installation_token())
         } else if method == "GET" && url.ends_with("/app") {
             Some(default_app_record())
+        } else if method == "PATCH" && url == "/app/hook/config" {
+            Some(masked_hook_config())
         } else if method == "GET"
             && url
                 .strip_prefix("/repos/")

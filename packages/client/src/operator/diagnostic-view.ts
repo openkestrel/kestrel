@@ -380,6 +380,25 @@ export function stepOf(action: Action, origin: string): Step {
 					origin,
 				),
 			};
+		case "resume_integration_webhook_secret_rotation":
+			return {
+				kind: "write",
+				label: `Resume the Integration ${action.integration}'s webhook-secret rotation`,
+				destructive: false,
+				inputs: [],
+				request: () => ({
+					method: "POST",
+					path: operatorPath(
+						"organizations",
+						action.organization,
+						"integrations",
+						action.integration,
+						"webhook-secret-rotation",
+						"resume",
+					),
+					body: {},
+				}),
+			};
 		case "connect_github":
 			return {
 				kind: "guidance",

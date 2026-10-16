@@ -27,8 +27,9 @@ pub const WRAPPED: &str = "dev.kestrel.webhook.received";
 const SPECVERSION: &str = "1.0";
 
 pub enum Verifier {
-    /// GitHub's HMAC key, which kestrel has to hold to check a signature with it.
-    Signing(String),
+    /// GitHub's HMAC keys, which kestrel has to hold to check a signature with: two while a
+    /// rotation is unfinished.
+    Signing(Vec<String>),
     /// A generic sender presents the secret itself, so only its digest is kept.
     Shared { digest: String },
 }
@@ -70,8 +71,8 @@ async fn deliver(
     };
 
     let occurrence = match (&integration.connection, verifier) {
-        (Connection::Github(connection), Verifier::Signing(secret)) => {
-            if !signed(&secret, &headers, &body) {
+        (Connection::Github(connection), Verifier::Signing(secrets)) => {
+            if !secrets.iter().any(|secret| signed(secret, &headers, &body)) {
                 return Err(Refused::Unauthenticated);
             }
             let event = text(&headers, "x-github-event")
@@ -378,6 +379,7 @@ mod tests {
             deliveries_read_from: None,
             last_polled_at: None,
             last_event_refusal: None,
+            rotation: None,
         }
     }
 
