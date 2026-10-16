@@ -1,0 +1,19 @@
+name: Registry login
+description: >-
+  Signs the job in to ghcr.io with the workflow token, through the retry helper: the registry
+  answers a sign-in with a token request of its own, so a transient failure there costs a retry
+  rather than the job (docs/agents/flakes.md).
+runs:
+  using: composite
+  steps:
+    - name: Log in to ghcr.io
+      shell: bash
+      env:
+        REGISTRY: ghcr.io
+        USERNAME: ${{ github.actor }}
+        # `secrets` is not readable from a composite action, so the token comes from `github.token`,
+        # which carries the value the callers used to pass to docker/login-action.
+        PASSWORD: ${{ github.token }}
+      run: |
+        "${GITHUB_WORKSPACE}/.github/scripts/retry.sh" bash -c \
+          'printf %s "${PASSWORD}" | docker login "${REGISTRY}" --username "${USERNAME}" --password-stdin'

@@ -116,11 +116,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/registry-login
 
       - uses: ./.github/actions/docker-hub-mirror
 
@@ -148,7 +144,9 @@ jobs:
               tags+=(--tag "$ref")
             done
             docker build --file "${dockerfile}" "${tags[@]}" .
+            # A transient refusal is retried, so a hiccup at the registry does not leave a release
+            # half-published (docs/agents/flakes.md).
             for ref in "${image_refs[@]}"; do
-              docker push "$ref"
+              .github/scripts/retry.sh docker push "$ref"
             done
           done
