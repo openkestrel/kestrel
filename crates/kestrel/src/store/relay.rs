@@ -149,7 +149,9 @@ impl<'a> Relays<'a> {
 
     pub async fn forget_old_snapshots(&mut self) -> Result<()> {
         sqlx::query(
-            "UPDATE sign_in_relay SET snapshot = NULL WHERE finished_at <= ? AND cleaned = 1",
+            "UPDATE sign_in_relay SET snapshot = NULL WHERE id IN
+             (SELECT id FROM sign_in_relay WHERE finished_at <= ? AND cleaned = 1
+              AND snapshot IS NOT NULL ORDER BY finished_at LIMIT 32)",
         )
         .bind(Timestamp::now().as_second() - 86400)
         .execute(&mut *self.connection)

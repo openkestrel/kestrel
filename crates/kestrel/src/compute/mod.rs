@@ -70,6 +70,25 @@ impl Driver {
         }
     }
 
+    pub fn provision_until(
+        &self,
+        holder: &str,
+        deadline: std::time::Instant,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> io::Result<Instance> {
+        match self {
+            Driver::Docker(docker) => docker.provision_until(holder, deadline, cancel),
+            Driver::LocalExec(local) => local.provision(holder),
+        }
+    }
+
+    pub fn destroy_until(&self, instance: &str, deadline: std::time::Instant) -> io::Result<()> {
+        match self {
+            Driver::Docker(_) => docker::destroy_until(instance, deadline),
+            Driver::LocalExec(local) => local.destroy_named(instance),
+        }
+    }
+
     /// What `provision` names the Instance it makes for `holder`, which finds one whose handle is gone.
     pub fn instance_for(&self, holder: impl fmt::Display) -> String {
         format!("{}/{}", self.name(), named_after(&holder))

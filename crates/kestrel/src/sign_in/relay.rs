@@ -462,7 +462,7 @@ pub async fn maintain(store: &Store, driver: Option<&Driver>) -> Result<()> {
     tx.commit().await?;
     for id in cleaning {
         if let Some(driver) = driver {
-            driver.destroy_named(&driver.instance_for(instance(&id)))?;
+            destroy(driver, &id).await?;
         }
         let mut tx = store.begin().await?;
         tx.relays().cleaned(&id).await?;
@@ -509,9 +509,7 @@ pub async fn run(
         }
     }
     if let Some(driver) = driver
-        && driver
-            .destroy_named(&driver.instance_for(instance(&id)))
-            .is_err()
+        && destroy(&driver, &id).await.is_err()
     {
         if let Ok(mut tx) = store.begin().await {
             let _ = tx.relays().release_cleanup(&id).await;
@@ -532,9 +530,85 @@ async fn drive(
     answers: &mut mpsc::Receiver<String>,
     shutdown: &CancellationToken,
 ) -> Result<Option<String>> {
-    let id = &attempt.view.id;
-    let mut instance = driver.provision(instance(id))?;
+    let mut instance = provision(store, driver, attempt, shutdown).await?;
     let mut terminal = instance.terminal(&["claude", "setup-token"])?;
+    let remaining = remaining(attempt)?;
+    tokio::select! {
+        result = tokio::time::timeout(remaining, drive_terminal(store, attempt, answers, &mut terminal)) => result?,
+        () = shutdown.cancelled() => bail!("sign-in interrupted"),
+    }
+}
+
+fn remaining(attempt: &Attempt) -> Result<Duration> {
+    Ok(Duration::try_from(
+        attempt
+            .view
+            .deadline
+            .parse::<Timestamp>()?
+            .duration_since(Timestamp::now()),
+    )?)
+}
+
+async fn stopped(store: &Store, id: &str) -> Result<()> {
+    loop {
+        let mut tx = store.read().await?;
+        if tx
+            .relays()
+            .get(id)
+            .await?
+            .is_none_or(|attempt| terminal(&attempt.view.progress))
+        {
+            return Ok(());
+        }
+        drop(tx);
+        tokio::time::sleep(POLL).await;
+    }
+}
+
+async fn provision(
+    store: &Store,
+    driver: &Driver,
+    attempt: &Attempt,
+    shutdown: &CancellationToken,
+) -> Result<crate::compute::Instance> {
+    let remaining = remaining(attempt)?;
+    let deadline = std::time::Instant::now() + remaining;
+    let cancel = shutdown.child_token();
+    let _cancel_on_drop = cancel.clone().drop_guard();
+    let driver = driver.clone();
+    let holder = instance(&attempt.view.id);
+    let command_cancel = cancel.clone();
+    let mut provisioning = tokio::task::spawn_blocking(move || {
+        driver.provision_until(&holder, deadline, &command_cancel)
+    });
+    tokio::select! {
+        result = &mut provisioning => return Ok(result??),
+        () = shutdown.cancelled() => {},
+        () = tokio::time::sleep(remaining) => {},
+        _ = stopped(store, &attempt.view.id) => {},
+    }
+    cancel.cancel();
+    let _ = provisioning.await;
+    bail!("sign-in provisioning was interrupted")
+}
+
+async fn destroy(driver: &Driver, id: &str) -> Result<()> {
+    let driver = driver.clone();
+    let name = driver.instance_for(instance(id));
+    tokio::task::spawn_blocking(move || {
+        driver.destroy_until(&name, std::time::Instant::now() + Duration::from_secs(10))
+    })
+    .await??;
+    Ok(())
+}
+
+async fn drive_terminal(
+    store: &Store,
+    attempt: &Attempt,
+    answers: &mut mpsc::Receiver<String>,
+    terminal: &mut crate::compute::Terminal,
+) -> Result<Option<String>> {
+    let id = &attempt.view.id;
     let mut decoder = claude::Decoder::new();
     let mut token = None;
     let mut answered = false;
@@ -553,7 +627,6 @@ async fn drive(
             return Ok(None);
         }
         tokio::select! {
-            () = shutdown.cancelled() => bail!("sign-in interrupted"),
             answer = answers.recv(), if !answered => {
                 if let Some(answer) = answer {
                     terminal.write(answer.as_bytes())?;

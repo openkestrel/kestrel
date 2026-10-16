@@ -22,3 +22,9 @@ CREATE TABLE sign_in_relay (
 CREATE UNIQUE INDEX one_active_sign_in_relay_per_destination
 ON sign_in_relay (profile_id, kind, name)
 WHERE state IN ('starting', 'awaiting_browser', 'awaiting_code', 'saving');
+
+CREATE INDEX sign_in_relay_retention ON sign_in_relay (finished_at)
+WHERE cleaned = 1 AND snapshot IS NOT NULL;
+
+CREATE INDEX sign_in_relay_cleanup ON sign_in_relay (deadline)
+WHERE cleaned = 0 AND claimed = 0;

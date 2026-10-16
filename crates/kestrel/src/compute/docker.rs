@@ -1,7 +1,9 @@
 //! The Docker driver: an Instance as a container the daemon on this machine runs (ADR-0005).
 
-use std::io::{self, Write as _};
+use std::io::{self, Read as _, Write as _};
 use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+use tokio_util::sync::CancellationToken;
 
 use super::{Exited, IdleHint, Instance, Provisioned, Streaming, Supervising, Supervisor};
 
@@ -39,6 +41,25 @@ impl Docker {
     }
 
     pub(super) fn provision(&self, holder: &str) -> io::Result<Instance> {
+        self.provisioning(holder, docker)
+    }
+
+    pub(super) fn provision_until(
+        &self,
+        holder: &str,
+        deadline: Instant,
+        cancel: &CancellationToken,
+    ) -> io::Result<Instance> {
+        self.provisioning(holder, |arguments| {
+            docker_until(arguments, deadline, cancel)
+        })
+    }
+
+    fn provisioning(
+        &self,
+        holder: &str,
+        mut request: impl FnMut(&[&str]) -> io::Result<Vec<u8>>,
+    ) -> io::Result<Instance> {
         let container = super::named_after(&holder);
         let mut created = vec![
             "create".to_owned(),
@@ -69,12 +90,12 @@ impl Docker {
             ]
             .map(str::to_owned),
         );
-        docker(&created.iter().map(String::as_str).collect::<Vec<_>>())?;
+        request(&created.iter().map(String::as_str).collect::<Vec<_>>())?;
 
         // Started rather than attached, so that by the time this returns the container is
         // running and an operation on it cannot race the daemon into existence.
-        if let Err(error) = docker(&["start", &container]) {
-            let _ = removed(&container);
+        if let Err(error) = request(&["start", &container]) {
+            let _ = request(&["rm", "--force", "--volumes", &container]);
             return Err(error);
         }
 
@@ -261,6 +282,91 @@ fn removed(container: &str) -> io::Result<()> {
 
 pub(super) fn destroy_named(instance: &str) -> io::Result<()> {
     removed(named(instance)?)
+}
+
+pub(super) fn destroy_until(instance: &str, deadline: Instant) -> io::Result<()> {
+    let result = docker_until(
+        &["rm", "--force", "--volumes", named(instance)?],
+        deadline,
+        &CancellationToken::new(),
+    );
+    match result {
+        Err(error) if gone(&error) => Ok(()),
+        result => result.map(drop),
+    }
+}
+
+fn docker_until(
+    arguments: &[&str],
+    deadline: Instant,
+    cancel: &CancellationToken,
+) -> io::Result<Vec<u8>> {
+    if cancel.is_cancelled() || Instant::now() >= deadline {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "the Docker request has no time remaining",
+        ));
+    }
+    let mut command = Command::new("docker");
+    command
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+    let mut child = command.spawn()?;
+    let output = |stream: Box<dyn io::Read + Send>| {
+        std::thread::spawn(move || {
+            let mut stream = stream;
+            let mut bytes = Vec::new();
+            stream.by_ref().take(1024 * 1024).read_to_end(&mut bytes)?;
+            io::copy(&mut stream, &mut io::sink())?;
+            Ok::<_, io::Error>(bytes)
+        })
+    };
+    let stdout = output(Box::new(child.stdout.take().expect("piped stdout")));
+    let stderr = output(Box::new(child.stderr.take().expect("piped stderr")));
+    let status = loop {
+        if cancel.is_cancelled() || Instant::now() >= deadline {
+            #[cfg(unix)]
+            {
+                #[allow(unsafe_code)]
+                unsafe {
+                    libc::killpg(child.id() as i32, libc::SIGKILL);
+                }
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout.join();
+            let _ = stderr.join();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the Docker request was cancelled or exceeded its deadline",
+            ));
+        }
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let stdout = stdout
+        .join()
+        .map_err(|_| io::Error::other("Docker stdout reader failed"))??;
+    let stderr = stderr
+        .join()
+        .map_err(|_| io::Error::other("Docker stderr reader failed"))??;
+    if status.success() {
+        return Ok(stdout);
+    }
+    Err(io::Error::other(format!(
+        "`docker {}` failed: {}",
+        arguments.join(" "),
+        String::from_utf8_lossy(&stderr).trim()
+    )))
 }
 
 fn named(instance: &str) -> io::Result<&str> {

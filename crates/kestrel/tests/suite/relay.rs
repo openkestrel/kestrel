@@ -510,3 +510,130 @@ async fn generic_profile_imports_cancel_only_the_relay_whose_entry_they_replace(
     until(&kestrel, &relay, "cancelled").await;
     cleaned(&kestrel, &relay).await;
 }
+
+#[tokio::test]
+async fn closed_relay_requests_refuse_unknown_fields_without_changing_the_destination_or_echoing_code()
+ {
+    let scripts = vendor();
+    let kestrel = Kestrel::dispatching_with_programs(scripts.path()).await;
+    named(&kestrel).await;
+    let (status, refused) = sent(
+        reqwest::Client::new()
+            .post(format!("{}{METHOD}/relay", kestrel.operator()))
+            .json(&json!({"profil":"second"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    let relay = started(&kestrel).await;
+    let waiting = until(&kestrel, &relay, "awaiting_code").await;
+    let (status, refused) = sent(
+        reqwest::Client::new()
+            .post(format!("{}/code", address(&kestrel, &relay)))
+            .json(&json!({"code":CODE,"unknown":CODE})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    let (status, reread) = sent(reqwest::Client::new().get(address(&kestrel, &relay))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reread, waiting);
+}
+
+#[tokio::test]
+async fn expiry_interrupts_stalled_docker_provisioning_and_failed_cleanup_remains_retryable() {
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::time::Duration;
+    let directory = tempfile::tempdir().unwrap();
+    let stub = directory.path().join("docker");
+    std::fs::write(
+        &stub,
+        r#"#!/bin/sh
+case "$1" in
+  image) printf 'sha256:relay {"dev.kestrel.harnesses":"claude"}\n';;
+  create) touch "$RELAY_SCRIPT_ROOT/provisioning"; sleep 3;;
+  rm) [ ! -f "$RELAY_SCRIPT_ROOT/refuse-cleanup" ] || exit 1; touch "$RELAY_SCRIPT_ROOT/cleaned";;
+  *) exit 0;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(directory.path().join("refuse-cleanup"), "").unwrap();
+    let mut paths = vec![directory.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let bind = listener.local_addr().unwrap();
+    drop(listener);
+    let operator = format!("http://{bind}");
+    let mut process = tokio::process::Command::new(env!("CARGO_BIN_EXE_kestrel-control-plane"))
+        .env("PATH", std::env::join_paths(paths).unwrap())
+        .env("RELAY_SCRIPT_ROOT", directory.path())
+        .env("KESTREL_COMPUTE", "docker")
+        .env("KESTREL_IMAGE", "relay-stub")
+        .env("KESTREL_DATA_DIR", directory.path())
+        .env("KESTREL_LISTEN", "127.0.0.1:0")
+        .env("KESTREL_OPERATOR_LISTEN", bind.to_string())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if reqwest::get(format!("{operator}/operator/organizations"))
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            assert!(
+                process.try_wait().unwrap().is_none(),
+                "the control plane exited"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let (status, _) = sent(
+        reqwest::Client::new()
+            .put(format!("{operator}/operator/operator"))
+            .json(&json!({"name":"ada"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, relay) =
+        sent(reqwest::Client::new().post(format!("{operator}{METHOD}/relay"))).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{relay}");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !directory.path().join("provisioning").exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let database = crate::support::Database::at(directory.path());
+    let id = relay["id"].as_str().unwrap();
+    database.expire_relay(id).await;
+    let endpoint = format!("{operator}{METHOD}/relay/{id}");
+    let (status, expired) = sent(reqwest::Client::new().get(&endpoint)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(expired["progress"]["state"], "expired");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!database.relay_cleaned(id).await);
+    std::fs::remove_file(directory.path().join("refuse-cleanup")).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !database.relay_cleaned(id).await {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("expiry interrupts provisioning before its stalled command finishes");
+    assert!(directory.path().join("cleaned").exists());
+    let (status, retained) = sent(reqwest::Client::new().get(&endpoint)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(retained, expired);
+    process.kill().await.unwrap();
+    process.wait().await.unwrap();
+}

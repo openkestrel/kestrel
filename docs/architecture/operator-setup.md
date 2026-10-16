@@ -220,7 +220,8 @@ claims its terminal outcome and compares the original material revision before h
 so an import or cancellation wins over a late result. Cleanup belongs to a claimed worker until it
 releases the attempt; the maintenance pass retries unattended cleanup. A restart first marks
 unfinished attempts failed, then cleans up their deterministically named Instances. Local PTY
-processes keep the same inherited cleanup locks as supervisors. Daemon cleanup failure is retried
+processes keep the same inherited cleanup locks as supervisors. Provisioning is cancellable and bounded by the relay deadline; each Docker removal request has
+a ten-second budget. Daemon cleanup failure is retried
 without preventing the control plane from serving retained state.
 
 The browser polls. CLI consumers may reconnect to `GET …/events`: it sends the latest `relay`

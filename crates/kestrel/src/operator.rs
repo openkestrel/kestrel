@@ -2389,7 +2389,9 @@ async fn start_sign_in_relay(
     let request: wire::SignInRelayRequest = if body.is_empty() {
         Default::default()
     } else {
-        serde_json::from_slice(&body).map_err(|error| malformed(None, error.to_string()))?
+        let sent: serde_json::Value =
+            serde_json::from_slice(&body).map_err(|error| malformed(None, error.to_string()))?;
+        closed(&sent).map_err(|why| malformed(None, why))?
     };
     let relay = sign_in::relay::start(
         &cp.store,
@@ -2424,11 +2426,17 @@ async fn cancel_sign_in_relay(
 async fn submit_sign_in_relay_code(
     State(cp): State<ControlPlane>,
     Path((organization, harness, method, id)): Path<(String, String, String, String)>,
-    code: Result<Json<wire::SignInRelayCode>, JsonRejection>,
+    code: Result<Json<serde_json::Value>, JsonRejection>,
 ) -> Result<Json<wire::SignInRelay>, Refused> {
     let code = code
         .map_err(|_| malformed(Some("code"), "an authorization code is required".to_owned()))?
         .0;
+    let code: wire::SignInRelayCode = closed(&code).map_err(|_| {
+        malformed(
+            Some("code"),
+            "an authorization code is required without extra fields",
+        )
+    })?;
     Ok(Json(
         sign_in::relay::code(&cp.store, &organization, &harness, &method, &id, &code.code).await?,
     ))
