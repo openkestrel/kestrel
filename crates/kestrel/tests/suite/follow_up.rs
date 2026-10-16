@@ -559,6 +559,7 @@ async fn a_delivery_backlog_longer_than_a_page_loses_nothing() {
         deliveries_read_from: Some(from),
         last_polled_at: Some(from),
         last_event_refusal: None,
+        rotation: None,
     };
 
     let listing = Github::unfenced()

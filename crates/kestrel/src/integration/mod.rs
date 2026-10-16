@@ -2,7 +2,10 @@ pub mod credential;
 pub mod github;
 pub mod manifest;
 pub mod post;
+pub mod rotation;
 pub mod webhook;
+
+pub use rotation::{resume_webhook_secret_rotation, rotate_webhook_secret};
 
 use anyhow::{Context as _, Result, bail};
 use jiff::{SignedDuration, Timestamp};
@@ -500,6 +503,57 @@ fn unproven_replacement(
             )
         }
     }
+}
+
+/// Every change to an App's hook passes it, and its refusal names no other Organization's
+/// records (ADR-0056).
+pub async fn hook_maintainable<'a>(
+    store: &Store,
+    integration: &'a Integration,
+    organization: &str,
+    operation: &'static str,
+) -> Result<&'a GithubConnection> {
+    let forbidden = |constraint, message: String| Reason::Forbidden {
+        operation,
+        resource: Resource::Integration,
+        reference: integration.name.clone(),
+        organization: Some(organization.to_owned()),
+        constraint,
+        next: Next::inspect(Resource::Integration, integration.name.clone()),
+        message,
+    };
+    let Connection::Github(connection) = &integration.connection else {
+        bail!(forbidden(
+            "github_app",
+            format!(
+                "the integration {} is a generic webhook, whose sender holds its secret",
+                integration.name
+            )
+        ));
+    };
+    match integration.state {
+        IntegrationState::Enabled | IntegrationState::Disabled => {}
+        IntegrationState::Retired => bail!(out_of_use(integration, organization, operation)),
+    }
+    if store
+        .read()
+        .await?
+        .integrations()
+        .app_shared(integration)
+        .await?
+    {
+        bail!(forbidden(
+            "shared_app",
+            format!(
+                "another integration that is not retired signs as the same App as {}, perhaps in \
+                 another organization; the App's webhook is theirs too, so it is not changed \
+                 from here",
+                integration.name
+            )
+        ));
+    }
+
+    Ok(connection)
 }
 
 /// What lends a repository its authority: an enabled GitHub App that carries outbound, which is

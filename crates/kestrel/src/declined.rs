@@ -175,12 +175,16 @@ pub enum Step {
     ReplacePrivateKey {
         integration: String,
     },
+    ResumeWebhookSecretRotation {
+        integration: String,
+    },
 }
 
 /// What asking GitHub again takes, when it did not answer and nothing was saved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Again {
     ReplacePrivateKey,
+    ResumeWebhookSecretRotation,
     Read,
     Request,
 }
