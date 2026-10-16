@@ -180,6 +180,14 @@ jobs:
       - name: Test the built Client against a control plane
         run: bun run e2e
 
+      - name: Keep the failed tests' traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-e2e-traces
+          path: packages/client/test-results
+          retention-days: 7
+
   # Each image is built once for the change and pushed tagged by the commit, so every job that
   # needs one pulls rather than builds it (ADR-0027). Layer caching is restored on every run and
   # written only by a trusted push to main, which is what keeps it warm for everyone else. The
