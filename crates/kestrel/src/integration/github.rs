@@ -578,7 +578,10 @@ impl Github {
         }
         match response.status() {
             StatusCode::UNAUTHORIZED => Err(Unset::Rejected),
-            status if !status.is_success() => Err(Unset::Refused(status)),
+            status if status.is_client_error() => Err(Unset::Refused(status)),
+            status if !status.is_success() => Err(Unset::Unanswered(anyhow!(
+                "github answered {status} to reading the App hook"
+            ))),
             _ => response
                 .json()
                 .await

@@ -2771,7 +2771,7 @@
       "put": {
         "operationId": "setIntegrationWebhookUrl",
         "summary": "Set only the GitHub App's webhook URL.",
-        "description": "Uses the supplied public HTTPS base or the deployment webhook base. Preserves the secret, subscriptions and polling cursor. Refuses retired or shared Apps and unfinished secret rotation. GitHub acknowledgement says configuration changed, never that a Delivery reached kestrel. An unanswered update may have landed: inspect before retrying.",
+        "description": "Uses the supplied public HTTPS base or the deployment webhook base. Preserves the secret, subscriptions and polling cursor. Refuses retired or shared Apps and unfinished secret rotation. GitHub acknowledgement says configuration changed, never that a Delivery reached kestrel. An unanswered update may have landed: inspect before retrying. A persisted pending_url serializes conflicting URL/secret maintenance until retrying the same base is acknowledged; retirement clears it.",
         "parameters": [
           {
             "name": "organization",
@@ -7664,9 +7664,14 @@
         "additionalProperties": false,
         "required": [
           "url",
-          "deliveries"
+          "deliveries",
+          "pending_url"
         ],
         "properties": {
+          "pending_url": {
+            "type": ["string", "null"],
+            "description": "An unfinished URL update; retry set-url with the same base to finish it, including after restart."
+          },
           "url": {
             "type": "string"
           },

@@ -47,6 +47,7 @@ pub struct Store {
     reads: SqlitePool,
     keyring: Arc<Keyring>,
     notices: Notices,
+    pub(crate) hook_updates: Arc<tokio::sync::Mutex<()>>,
     pub(crate) relay_inputs: crate::sign_in::relay::Inputs,
 }
 
@@ -84,6 +85,7 @@ impl Store {
             keyring: Arc::new(Keyring::beside(data_dir)?),
             notices: Notices::default(),
             relay_inputs: Default::default(),
+            hook_updates: Default::default(),
         })
     }
 

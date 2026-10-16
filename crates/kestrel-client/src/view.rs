@@ -55,6 +55,9 @@ pub const GITHUB_APP_STARTED: Columns<wire::GithubAppStarted> =
     Columns::Value(Column("url", |started| text(&started.url)));
 pub const INTEGRATION_WEBHOOK: Columns<wire::IntegrationWebhook> = Columns::Detail(&[
     Column("configured URL", |hook| text(&hook.url)),
+    Column("unfinished URL update", |hook| {
+        or_absent(hook.pending_url.as_ref())
+    }),
     Column("recent Deliveries", |hook| objects(&hook.deliveries)),
 ]);
 

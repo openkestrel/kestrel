@@ -554,6 +554,18 @@ pub async fn hook_maintainable<'a>(
         ));
     }
 
+    if operation != hook::SET_URL
+        && store
+            .read()
+            .await?
+            .integrations()
+            .pending_hook_url(integration)
+            .await?
+            .is_some()
+    {
+        bail!(hook::unfinished(integration, organization, operation));
+    }
+
     Ok(connection)
 }
 

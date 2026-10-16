@@ -4249,6 +4249,8 @@ pub struct Agent {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct IntegrationWebhook {
     pub deliveries: Vec<WebhookDelivery>,
+    ///An unfinished URL update; retry set-url with the same base to finish it, including after restart.
+    pub pending_url: Option<String>,
     pub url: String,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -28,7 +28,20 @@ pub async fn set_url(
         allowed: None,
         message: "Supply a public HTTPS base or configure KESTREL_WEBHOOK_BASE on the control plane; polling continues without one.".into(),
     })?)?;
-    // Holding the write transaction across GitHub's request serializes App-wide maintenance with registration and retirement.
+    let _attempt = store
+        .hook_updates
+        .try_lock()
+        .map_err(|_| Reason::StateConflict {
+            operation: SET_URL,
+            resource: Resource::Integration,
+            reference: name.into(),
+            organization: Some(organization.into()),
+            state: "hook_url_update_in_flight",
+            holding_session: None,
+            next: Next::inspect(Resource::Integration, name),
+            message: "A hook URL request is still in flight; inspect the hook before retrying."
+                .into(),
+        })?;
     let mut tx = store.begin().await?;
     let org = tx.organizations().named(organization).await?;
     let read = tx.integrations().named(&org, name).await?;
@@ -41,7 +54,7 @@ pub async fn set_url(
             Next::inspect(Resource::Integration, read.name.clone())
         ));
     }
-    let connection = hook_maintainable(store, &read, organization, SET_URL).await?;
+    hook_maintainable(store, &read, organization, SET_URL).await?;
     if let Some(rotation) = &read.rotation {
         bail!(rotation::unrotated(&read, organization, SET_URL, rotation));
     }
@@ -56,17 +69,50 @@ pub async fn set_url(
             message: "This Integration holds no webhook signing secret; polling continues.".into(),
         });
     }
-    github
-        .set_hook_url(
-            &connection.api,
-            &connection.credential,
-            &format!("{base}{}", read.webhook_path()),
-        )
-        .await
-        .map_err(|error| unavailable(&read, organization, SET_URL, error))?;
-    tx.integrations().maintain(&read, &read).await?;
-    let changed = tx.integrations().with_id(read.id).await?;
+    let url = format!("{base}{}", read.webhook_path());
+    match tx.integrations().pending_hook_url(&read).await? {
+        Some(pending) if pending != url => bail!(unfinished(&read, organization, SET_URL)),
+        Some(_) => {}
+        None => {
+            tx.integrations().start_hook_url(&read, &url).await?;
+            tx.integrations().maintain(&read, &read).await?;
+        }
+    }
+    let reserved = tx.integrations().with_id(read.id).await?;
     tx.commit().await?;
+
+    let current = integration(store, organization, name).await?;
+    if current.revision != reserved.revision {
+        bail!(revised(
+            &current,
+            organization,
+            SET_URL,
+            reserved.revision,
+            Next::inspect(Resource::Integration, current.name.clone())
+        ));
+    }
+    let connection = hook_maintainable(store, &current, organization, SET_URL).await?;
+    github
+        .set_hook_url(&connection.api, &connection.credential, &url)
+        .await
+        .map_err(|error| unavailable(&current, organization, SET_URL, error))?;
+
+    let mut tx = store.begin().await?;
+    let changed = tx.integrations().with_id(read.id).await?;
+    tx.integrations().finish_hook_url(&changed).await?;
+    tx.commit().await?;
+    if changed.retired() {
+        bail!(super::out_of_use(&changed, organization, SET_URL));
+    }
+    if changed.revision != reserved.revision {
+        bail!(revised(
+            &changed,
+            organization,
+            SET_URL,
+            reserved.revision,
+            Next::inspect(Resource::Integration, changed.name.clone())
+        ));
+    }
     Ok(changed)
 }
 
@@ -75,7 +121,7 @@ pub async fn status(
     github: &Github,
     organization: &str,
     name: &str,
-) -> Result<(Hook, Vec<DeliveryResult>)> {
+) -> Result<(Hook, Vec<DeliveryResult>, Option<String>)> {
     let read = integration(store, organization, name).await?;
     let connection = read.github().map_err(|_| Reason::Forbidden {
         operation: READ,
@@ -107,6 +153,12 @@ pub async fn status(
             Next::inspect(Resource::Integration, current.name.clone())
         ));
     }
+    let pending_url = store
+        .read()
+        .await?
+        .integrations()
+        .pending_hook_url(&current)
+        .await?;
     Ok((
         hook,
         deliveries
@@ -116,6 +168,7 @@ pub async fn status(
                     && delivery.repository_id == Some(connection.repository_id)
             })
             .collect(),
+        pending_url,
     ))
 }
 
@@ -179,5 +232,18 @@ fn unavailable(
         holding_session: None,
         next,
         message: message.into(),
+    }
+}
+
+pub fn unfinished(read: &Integration, organization: &str, operation: &'static str) -> Reason {
+    Reason::StateConflict {
+        operation,
+        resource: Resource::Integration,
+        reference: read.name.clone(),
+        organization: Some(organization.into()),
+        state: "hook_url_update_pending",
+        holding_session: None,
+        next: Next::inspect(Resource::Integration, read.name.clone()),
+        message: "An App hook URL update is unfinished; read webhook status and retry set-url with the same base to finish it before changing the URL or secret.".into(),
     }
 }

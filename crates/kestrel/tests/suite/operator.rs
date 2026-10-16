@@ -8390,3 +8390,80 @@ async fn hook_reads_show_delivery_results_without_claiming_configuration_proves_
     assert!(!stub.requests().iter().any(|r| r.method == "PATCH"));
     kestrel.teardown().await;
 }
+
+#[tokio::test]
+async fn an_unconfirmed_hook_url_survives_restart_and_serializes_secret_rotation() {
+    let kestrel = Kestrel::boot_serving_alone().await;
+    let stub = GithubStub::start();
+    kestrel.declare_organization("acme").await;
+    let integration = kestrel
+        .register_signed_github(
+            "acme",
+            "hub",
+            "jtmthf/kestrel",
+            &stub.base_url(),
+            "kept-secret",
+        )
+        .await;
+    let path = "/operator/organizations/acme/integrations/hub/webhook";
+    let base = json!({"base":"https://hooks.example.com"});
+    stub.script_answer(
+        "PATCH",
+        "/app/hook/config",
+        ScriptedResponse::answering(502),
+    );
+    let (status, refused) = requested(&kestrel, reqwest::Method::PUT, path, Some(&base)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["context"]["state"], "hook_unconfirmed");
+    let kestrel = kestrel.kill_and_restart().await;
+    let rotation = "/operator/organizations/acme/integrations/hub/webhook-secret-rotation";
+    let (status, refused) =
+        requested(&kestrel, reqwest::Method::POST, rotation, Some(&json!({}))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["context"]["state"], "hook_url_update_pending");
+    let (status, refused) = requested(
+        &kestrel,
+        reqwest::Method::PUT,
+        path,
+        Some(&json!({"base":"https://different.example.com"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    stub.script_answer(
+        "GET",
+        "/app/hook/config",
+        ScriptedResponse::ok(r#"{"url":"https://unreachable.invalid/webhooks/id"}"#),
+    );
+    let (status, shown) = requested(&kestrel, reqwest::Method::GET, path, None).await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(
+        shown["pending_url"],
+        format!("https://hooks.example.com{}", integration.webhook_path())
+    );
+    stub.script_answer(
+        "PATCH",
+        "/app/hook/config",
+        ScriptedResponse::answering(200),
+    );
+    let (status, changed) = requested(&kestrel, reqwest::Method::PUT, path, Some(&base)).await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["revision"], integration.revision + 1);
+    stub.script_answer(
+        "PATCH",
+        "/app/hook/config",
+        ScriptedResponse::answering(200),
+    );
+    let (status, rotated) =
+        requested(&kestrel, reqwest::Method::POST, rotation, Some(&json!({}))).await;
+    assert_eq!(status, StatusCode::OK, "{rotated}");
+    let urls: Vec<Value> = stub
+        .requests()
+        .iter()
+        .filter(|r| r.method == "PATCH")
+        .map(|r| serde_json::from_str::<Value>(&r.body).unwrap())
+        .filter(|r| r.get("url").is_some())
+        .collect();
+    assert_eq!(urls.len(), 2);
+    assert_eq!(urls[0], urls[1]);
+    kestrel.teardown().await;
+}

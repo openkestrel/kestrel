@@ -2287,7 +2287,7 @@ fn the_client_sets_a_hook_url_and_reads_safe_delivery_results() {
     ]);
     assert_eq!(
         status,
-        json!({"url":"https://hooks.example.com/webhooks/id","deliveries":[]})
+        json!({"url":"https://hooks.example.com/webhooks/id","deliveries":[],"pending_url":null})
     );
     let refused = booted.refused_as(
         &[

@@ -2982,10 +2982,11 @@ async fn integration_webhook(
     State(cp): State<ControlPlane>,
     Path((organization, name)): Path<(String, String)>,
 ) -> Result<Json<wire::IntegrationWebhook>, Refused> {
-    let (hook, deliveries) =
+    let (hook, deliveries, pending_url) =
         integration::hook::status(&cp.store, &Github::unfenced()?, &organization, &name).await?;
     Ok(Json(wire::IntegrationWebhook {
         url: hook.url,
+        pending_url,
         deliveries: deliveries
             .into_iter()
             .map(|delivery| wire::WebhookDelivery {

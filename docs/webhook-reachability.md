@@ -28,7 +28,9 @@ GitHub acknowledged configuration. GET reads the configured URL and the latest p
 results from GitHub, scoped to the Integration's repository and installation. A `2xx` Delivery
 result is evidence of an HTTP acknowledgement at that time; an empty log or a configured URL
 proves no reachability. Read refusals are not empty logs. A timed-out update may have landed:
-inspect the hook before retrying. The endpoint never returns the signing secret or Delivery payload.
+inspect the hook before retrying. An unfinished update appears as `pending_url` and survives restart;
+retry `set-url` with the same base to finish it before changing the URL or rotating the secret.
+Retirement ends the local pending operation. The endpoint never returns the signing secret or Delivery payload.
 
 ## Public server
 
