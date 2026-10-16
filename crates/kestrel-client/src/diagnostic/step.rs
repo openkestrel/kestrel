@@ -419,6 +419,26 @@ fn step(action: &wire::Action, invocation: &Invocation, wrote: bool) -> Step {
                 Some(a.organization.clone()),
             )
         }
+        A::ResumeIntegrationWebhookSecretRotationAction(a) => {
+            let wait = match a.retry_after_seconds {
+                Some(seconds) if seconds > 0 => format!(" after {seconds}s"),
+                _ => String::new(),
+            };
+            Step::run(
+                format!(
+                    "resume the Integration {}'s webhook-secret rotation{wait}",
+                    a.integration
+                ),
+                given(&[
+                    "integration",
+                    "github",
+                    "rotate-secret",
+                    "resume",
+                    &a.integration,
+                ]),
+                Some(a.organization.clone()),
+            )
+        }
         A::ReleaseInstanceAction(a) => Step {
             consequence: Some(a.consequence.clone()),
             ..Step::run(

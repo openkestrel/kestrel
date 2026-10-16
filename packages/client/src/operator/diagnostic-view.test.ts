@@ -364,6 +364,29 @@ describe("enqueueing a Session", () => {
 			body: {},
 		});
 	});
+
+	it("resumes the webhook-secret rotation GitHub did not acknowledge", () => {
+		const step = stepOf(
+			{
+				action: "resume_integration_webhook_secret_rotation",
+				organization: "acme",
+				integration: "github",
+				retry_after_seconds: null,
+			},
+			ORIGIN,
+		);
+		if (step.kind !== "write") throw new Error("not a write");
+
+		expect(step).toMatchObject({
+			label: "Resume the Integration github's webhook-secret rotation",
+			destructive: false,
+		});
+		expect(step.request({})).toEqual({
+			method: "POST",
+			path: "/operator/organizations/acme/integrations/github/webhook-secret-rotation/resume",
+			body: {},
+		});
+	});
 });
 
 describe("a step outside the browser's screens", () => {

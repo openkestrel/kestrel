@@ -4504,6 +4504,114 @@ async fn a_client_retires_an_integration_and_still_reads_it() {
 }
 
 #[tokio::test]
+async fn a_client_starts_reads_and_resumes_a_webhook_secret_rotation_through_one_interface() {
+    let kestrel = Kestrel::boot().await;
+    let stub = GithubStub::start();
+    kestrel.declare_organization("acme").await;
+    kestrel
+        .register_signed_github(
+            "acme",
+            "hub",
+            "jtmthf/kestrel",
+            &stub.base_url(),
+            "the-first-secret",
+        )
+        .await;
+    let rotation = operator::INTEGRATION_WEBHOOK_SECRET_ROTATION
+        .replace("{organization}", "acme")
+        .replace("{integration}", "hub");
+    let resume = operator::INTEGRATION_WEBHOOK_SECRET_ROTATION_RESUME
+        .replace("{organization}", "acme")
+        .replace("{integration}", "hub");
+    let resuming = json!({
+        "action": "resume_integration_webhook_secret_rotation",
+        "organization": "acme",
+        "integration": "hub",
+        "retry_after_seconds": null,
+    });
+    let mut answers = Vec::new();
+
+    stub.script_answer(
+        "PATCH",
+        "/app/hook/config",
+        ScriptedResponse::answering(502),
+    );
+    let (status, unanswered) =
+        requested(&kestrel, reqwest::Method::POST, &rotation, Some(&json!({}))).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{unanswered}");
+    assert_eq!(unanswered["kind"], "unavailable");
+    assert_eq!(unanswered["context"]["service"], "github");
+    assert_eq!(
+        unanswered["context"]["operation"],
+        "rotate_integration_webhook_secret"
+    );
+    assert_eq!(unanswered["next_steps"], json!([resuming]));
+    answers.push(unanswered);
+
+    let (_, shown) = got(&kestrel, &integration_of("acme", "hub")).await;
+    let unfinished = &shown["webhook_secret_rotation"];
+    assert!(unfinished["started_at"].is_string(), "{shown}");
+    assert!(unfinished["attempted_at"].is_string(), "{shown}");
+    assert_eq!(unfinished["diagnostic"]["kind"], "unavailable");
+    assert_eq!(unfinished["diagnostic"]["next_steps"], json!([resuming]));
+    answers.push(shown.clone());
+
+    let (status, again) =
+        requested(&kestrel, reqwest::Method::POST, &rotation, Some(&json!({}))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{again}");
+    assert_eq!(again["context"]["state"], "rotating_webhook_secret");
+    assert_eq!(again["next_steps"][1], resuming);
+    answers.push(again);
+
+    let (status, resumed) = requested(&kestrel, reqwest::Method::POST, &resume, None).await;
+    assert_eq!(status, StatusCode::OK, "{resumed}");
+    assert_eq!(resumed["webhook_secret_rotation"], Value::Null);
+    assert_eq!(resumed["revision"], shown["revision"]);
+    answers.push(resumed);
+
+    kestrel.declare_organization("elsewhere").await;
+    kestrel
+        .register_signed_github(
+            "elsewhere",
+            "their-connection",
+            "elsewhere/plans",
+            &stub.base_url(),
+            "their-secret",
+        )
+        .await;
+    let (status, shared) =
+        requested(&kestrel, reqwest::Method::POST, &rotation, Some(&json!({}))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{shared}");
+    assert_eq!(shared["kind"], "forbidden_action");
+    assert_eq!(shared["context"]["constraint"], "shared_app");
+    assert!(!shared.to_string().contains("elsewhere"), "{shared}");
+    assert!(!shared.to_string().contains("their-connection"), "{shared}");
+    answers.push(shared);
+
+    let secrets: Vec<String> = stub
+        .requests()
+        .iter()
+        .filter(|request| request.method == "PATCH")
+        .map(|request| {
+            serde_json::from_str::<Value>(&request.body).expect("JSON")["secret"]
+                .as_str()
+                .expect("a secret")
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(secrets.len(), 2);
+    for answer in answers {
+        let answer = answer.to_string();
+        for secret in &secrets {
+            assert!(!answer.contains(secret.as_str()), "{answer}");
+        }
+        assert!(!answer.contains("the-first-secret"), "{answer}");
+    }
+
+    kestrel.teardown().await;
+}
+
+#[tokio::test]
 async fn a_client_replaces_a_private_key_and_is_told_how_to_repair_one_github_refuses() {
     let kestrel = Kestrel::boot().await;
     let stub = GithubStub::start();
@@ -7042,6 +7150,8 @@ fn the_published_operator_document_describes_the_boundary_the_control_plane_serv
         (operator::INTEGRATION_RETIRE, "post"),
         (operator::INTEGRATION_PRIVATE_KEY, "put"),
         (operator::INTEGRATION_REPOSITORIES, "get"),
+        (operator::INTEGRATION_WEBHOOK_SECRET_ROTATION, "post"),
+        (operator::INTEGRATION_WEBHOOK_SECRET_ROTATION_RESUME, "post"),
         (operator::EVENT_REFUSAL, "delete"),
         (operator::EVENTS, "get"),
         (operator::EVENT, "get"),

@@ -331,6 +331,16 @@ impl<'a> Database<'a> {
         rows
     }
 
+    pub async fn webhook_secret_rotations(&self) -> i64 {
+        let pool = self.pool().await;
+        let rows = sqlx::query_scalar("SELECT COUNT(*) FROM webhook_secret_rotation")
+            .fetch_one(&pool)
+            .await
+            .expect("the rotations should read");
+        pool.close().await;
+        rows
+    }
+
     pub async fn has_a_migration_history(&self) -> bool {
         let pool = self.pool().await;
         let tracking: Option<String> = sqlx::query_scalar(

@@ -48,6 +48,7 @@ mod relay;
 mod replies;
 mod restart;
 mod roles;
+mod rotation;
 mod scope;
 mod seal;
 mod seam;

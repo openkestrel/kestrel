@@ -2712,6 +2712,124 @@
         }
       }
     },
+    "/operator/organizations/{organization}/integrations/{integration}/webhook-secret-rotation": {
+      "post": {
+        "operationId": "rotateIntegrationWebhookSecret",
+        "summary": "Rotate the webhook secret of a GitHub Integration's App.",
+        "description": "kestrel makes the replacement and saves it sealed before GitHub is asked, so from then on a delivery signed with either the previous or the replacement secret is accepted. It then sets the replacement as the App's webhook secret and, once GitHub acknowledges that, the replacement becomes the only secret. When GitHub does not acknowledge it, the rotation stays unfinished: it is the Integration's `webhook_secret_rotation`, and the refusal offers to resume it. Polling carries on throughout. Refused, saving nothing, for a generic webhook, an Integration that holds no webhook secret, a retired one, one whose App another Integration that is not retired also signs as (in any Organization, which the refusal does not name), one decided against an older revision, or one already rotating. The secret is never returned.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationWebhookSecretRotation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Integration, its rotation finished.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
+    "/operator/organizations/{organization}/integrations/{integration}/webhook-secret-rotation/resume": {
+      "post": {
+        "operationId": "resumeIntegrationWebhookSecretRotation",
+        "summary": "Resume an unfinished webhook-secret rotation.",
+        "description": "Sets the same saved replacement as the App's webhook secret again, since GitHub masks the secret it reads back and only its acknowledgement shows the change took. Once GitHub acknowledges it, the replacement becomes the only secret. Resuming an Integration with no rotation under way changes nothing; a retired one has none, because retirement erased both secrets. Refused, leaving the rotation unfinished, when GitHub does not acknowledge the change or another Integration that is not retired now signs as the same App.",
+        "parameters": [
+          {
+            "name": "organization",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Organization the records belong to.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "integration",
+            "in": "path",
+            "required": true,
+            "description": "The name of the Integration.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Integration, its rotation finished or none under way.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integration"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "403": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "404": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "409": {
+            "$ref": "#/components/responses/Refused"
+          },
+          "503": {
+            "$ref": "#/components/responses/Refused"
+          }
+        }
+      }
+    },
     "/operator/organizations/{organization}/integrations/{integration}/event-refusal": {
       "delete": {
         "operationId": "acknowledgeEventRefusal",
@@ -7405,6 +7523,16 @@
           }
         }
       },
+      "IntegrationWebhookSecretRotation": {
+        "description": "The choice to rotate a GitHub Integration's webhook secret. kestrel makes the replacement; it is never named here.",
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "description": "The revision this rotation was decided against."
+          }
+        }
+      },
       "IntegrationPrivateKeyReplacement": {
         "description": "A replacement for the private key a GitHub Integration signs as its App with. The App, installation and repository it is checked against are the Integration's own and cannot be named.",
         "type": "object",
@@ -7519,6 +7647,17 @@
                 "type": "null"
               }
             ]
+          },
+          "webhook_secret_rotation": {
+            "description": "Its unfinished webhook-secret rotation; null when none is under way.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookSecretRotation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -7536,8 +7675,30 @@
           "polled_every",
           "webhook_path",
           "last_event_refusal",
-          "diagnostic"
+          "diagnostic",
+          "webhook_secret_rotation"
         ]
+      },
+      "WebhookSecretRotation": {
+        "description": "An unfinished webhook-secret rotation. Until it finishes, a delivery signed with either the previous or the replacement secret is accepted.",
+        "type": "object",
+        "properties": {
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the replacement was saved."
+          },
+          "attempted_at": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "When GitHub was last asked to set it; null before it is asked."
+          },
+          "diagnostic": {
+            "$ref": "#/components/schemas/Diagnostic",
+            "description": "Where it stands and how to finish it: how the last attempt failed, or that nothing said how it ended."
+          }
+        },
+        "required": ["started_at", "attempted_at", "diagnostic"]
       },
       "EventRefusal": {
         "description": "The latest Event an Integration refused rather than stored, or the Deliveries it lost to GitHub's retention, visible until acknowledged.",
@@ -8689,75 +8850,30 @@
         "type": "object",
         "description": "A typed corrective, inspective or retry step a Diagnostic offers, naming its own inputs rather than a shell command or browser route (ADR-0052). A Client binds it to a form, a flag or an API call.",
         "oneOf": [
-          {
-            "$ref": "#/components/schemas/NameOperatorAction"
-          },
-          {
-            "$ref": "#/components/schemas/DeclareOrganizationAction"
-          },
-          {
-            "$ref": "#/components/schemas/DeclareProjectAction"
-          },
-          {
-            "$ref": "#/components/schemas/DeclareAgentAction"
-          },
-          {
-            "$ref": "#/components/schemas/DeclareSubscriptionProfileAction"
-          },
-          {
-            "$ref": "#/components/schemas/SetProviderCredentialAction"
-          },
-          {
-            "$ref": "#/components/schemas/InspectResourceAction"
-          },
-          {
-            "$ref": "#/components/schemas/ListResourcesAction"
-          },
-          {
-            "$ref": "#/components/schemas/StopSessionAction"
-          },
-          {
-            "$ref": "#/components/schemas/EnqueueSessionAction"
-          },
-          {
-            "$ref": "#/components/schemas/EnableIntegrationAction"
-          },
-          {
-            "$ref": "#/components/schemas/ConnectGithubAction"
-          },
-          {
-            "$ref": "#/components/schemas/ReplaceIntegrationPrivateKeyAction"
-          },
-          {
-            "$ref": "#/components/schemas/ReleaseInstanceAction"
-          },
-          {
-            "$ref": "#/components/schemas/CorrectFieldAction"
-          },
-          {
-            "$ref": "#/components/schemas/SignInAction"
-          },
-          {
-            "$ref": "#/components/schemas/InspectHarnessImageAction"
-          },
-          {
-            "$ref": "#/components/schemas/CheckConnectionAction"
-          },
-          {
-            "$ref": "#/components/schemas/RetryReadAction"
-          },
-          {
-            "$ref": "#/components/schemas/RetryRequestAction"
-          },
-          {
-            "$ref": "#/components/schemas/InspectOperationAction"
-          },
-          {
-            "$ref": "#/components/schemas/ContinueSignInRelayAction"
-          },
-          {
-            "$ref": "#/components/schemas/CancelSignInRelayAction"
-          }
+          { "$ref": "#/components/schemas/NameOperatorAction" },
+          { "$ref": "#/components/schemas/DeclareOrganizationAction" },
+          { "$ref": "#/components/schemas/DeclareProjectAction" },
+          { "$ref": "#/components/schemas/DeclareAgentAction" },
+          { "$ref": "#/components/schemas/DeclareSubscriptionProfileAction" },
+          { "$ref": "#/components/schemas/SetProviderCredentialAction" },
+          { "$ref": "#/components/schemas/InspectResourceAction" },
+          { "$ref": "#/components/schemas/ListResourcesAction" },
+          { "$ref": "#/components/schemas/StopSessionAction" },
+          { "$ref": "#/components/schemas/EnqueueSessionAction" },
+          { "$ref": "#/components/schemas/EnableIntegrationAction" },
+          { "$ref": "#/components/schemas/ConnectGithubAction" },
+          { "$ref": "#/components/schemas/ReplaceIntegrationPrivateKeyAction" },
+          { "$ref": "#/components/schemas/ResumeIntegrationWebhookSecretRotationAction" },
+          { "$ref": "#/components/schemas/ReleaseInstanceAction" },
+          { "$ref": "#/components/schemas/CorrectFieldAction" },
+          { "$ref": "#/components/schemas/SignInAction" },
+          { "$ref": "#/components/schemas/InspectHarnessImageAction" },
+          { "$ref": "#/components/schemas/CheckConnectionAction" },
+          { "$ref": "#/components/schemas/RetryReadAction" },
+          { "$ref": "#/components/schemas/RetryRequestAction" },
+          { "$ref": "#/components/schemas/InspectOperationAction" },
+          { "$ref": "#/components/schemas/ContinueSignInRelayAction" },
+          { "$ref": "#/components/schemas/CancelSignInRelayAction" }
         ]
       },
       "DeclareOrganizationAction": {
@@ -8914,6 +9030,29 @@
         "properties": {
           "action": {
             "const": "replace_integration_private_key"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "integration": {
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "type": ["integer", "null"]
+          }
+        },
+        "required": [
+          "action",
+          "organization",
+          "integration",
+          "retry_after_seconds"
+        ]
+      },
+      "ResumeIntegrationWebhookSecretRotationAction": {
+        "description": "Sets the saved replacement as the App's webhook secret again.",
+        "properties": {
+          "action": {
+            "const": "resume_integration_webhook_secret_rotation"
           },
           "organization": {
             "type": "string"

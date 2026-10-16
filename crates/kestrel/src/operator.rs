@@ -104,6 +104,9 @@ pub const INTEGRATION_RETIRE: &str =
     "/operator/organizations/{organization}/integrations/{integration}/retire";
 pub const INTEGRATION_PRIVATE_KEY: &str =
     "/operator/organizations/{organization}/integrations/{integration}/private-key";
+pub const INTEGRATION_WEBHOOK_SECRET_ROTATION: &str =
+    "/operator/organizations/{organization}/integrations/{integration}/webhook-secret-rotation";
+pub const INTEGRATION_WEBHOOK_SECRET_ROTATION_RESUME: &str = "/operator/organizations/{organization}/integrations/{integration}/webhook-secret-rotation/resume";
 pub const INTEGRATION_REPOSITORIES: &str =
     "/operator/organizations/{organization}/integrations/{integration}/repositories";
 pub const EVENT_REFUSAL: &str =
@@ -445,6 +448,14 @@ pub fn router(
         .route(INTEGRATION_DISABLE, post(disable_integration))
         .route(INTEGRATION_ENABLE, post(enable_integration))
         .route(INTEGRATION_RETIRE, post(retire_integration))
+        .route(
+            INTEGRATION_WEBHOOK_SECRET_ROTATION,
+            post(rotate_integration_webhook_secret),
+        )
+        .route(
+            INTEGRATION_WEBHOOK_SECRET_ROTATION_RESUME,
+            post(resume_integration_webhook_secret_rotation),
+        )
         .route(INTEGRATION_REPOSITORIES, get(integration_repositories))
         .route(
             INTEGRATION_PRIVATE_KEY,
@@ -2668,6 +2679,24 @@ fn integration_record(integration: Integration, organization: &str) -> wire::Int
         )
         .1
     });
+    let webhook_secret_rotation =
+        integration
+            .rotation
+            .as_ref()
+            .map(|rotation| wire::WebhookSecretRotation {
+                started_at: rotation.started_at.to_string(),
+                attempted_at: rotation.attempted_at.map(|at| at.to_string()),
+                diagnostic: diagnosis(
+                    integration::rotation::unrotated(
+                        &integration,
+                        organization,
+                        integration::rotation::RESUME,
+                        rotation,
+                    ),
+                    None,
+                )
+                .1,
+            });
     let webhook_path = integration.webhook_path();
     let kind = match integration.kind() {
         IntegrationKind::Github => wire::IntegrationKind::Github,
@@ -2731,6 +2760,7 @@ fn integration_record(integration: Integration, organization: &str) -> wire::Int
                 observed_at: refusal.observed_at.to_string(),
             }),
         diagnostic,
+        webhook_secret_rotation,
     }
 }
 
@@ -2909,6 +2939,39 @@ async fn retire_integration(
     .await?;
 
     Ok(Json(integration_record(retired, &organization)))
+}
+
+async fn rotate_integration_webhook_secret(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, name)): Path<(String, String)>,
+    rotation: Result<Json<wire::IntegrationWebhookSecretRotation>, JsonRejection>,
+) -> Result<Json<wire::Integration>, Refused> {
+    let Json(rotation) = rotation?;
+    let rotated = integration::rotate_webhook_secret(
+        &control_plane.store,
+        &Github::unfenced()?,
+        &organization,
+        &name,
+        rotation.revision,
+    )
+    .await?;
+
+    Ok(Json(integration_record(rotated, &organization)))
+}
+
+async fn resume_integration_webhook_secret_rotation(
+    State(control_plane): State<ControlPlane>,
+    Path((organization, name)): Path<(String, String)>,
+) -> Result<Json<wire::Integration>, Refused> {
+    let rotated = integration::resume_webhook_secret_rotation(
+        &control_plane.store,
+        &Github::unfenced()?,
+        &organization,
+        &name,
+    )
+    .await?;
+
+    Ok(Json(integration_record(rotated, &organization)))
 }
 
 async fn replace_integration_private_key(
@@ -4976,6 +5039,9 @@ fn next_steps(next: declined::Next, organization: Option<&str>) -> Vec<wire::Act
         Step::ReplacePrivateKey { integration } => {
             replace_private_key(organization.to_owned(), integration, None)
         }
+        Step::ResumeWebhookSecretRotation { integration } => {
+            resume_webhook_secret_rotation(organization.to_owned(), integration, None)
+        }
         Step::ReleaseInstance {
             workspace,
             instance,
@@ -5003,6 +5069,21 @@ fn replace_private_key(
         integration,
         retry_after_seconds,
     })
+}
+
+fn resume_webhook_secret_rotation(
+    organization: String,
+    integration: String,
+    retry_after_seconds: Option<i64>,
+) -> wire::Action {
+    wire::Action::ResumeIntegrationWebhookSecretRotationAction(
+        wire::ResumeIntegrationWebhookSecretRotationAction {
+            action: serde_json::json!("resume_integration_webhook_secret_rotation"),
+            organization,
+            integration,
+            retry_after_seconds,
+        },
+    )
 }
 
 const fn explained(consequence: Consequence) -> &'static str {
@@ -5604,6 +5685,11 @@ fn diagnosis(reason: Reason, field: Option<String>) -> (StatusCode, wire::Diagno
                     Again::ReplacePrivateKey => {
                         replace_private_key(organization, integration, retry_after_seconds)
                     }
+                    Again::ResumeWebhookSecretRotation => resume_webhook_secret_rotation(
+                        organization,
+                        integration,
+                        retry_after_seconds,
+                    ),
                     Again::Read => {
                         retry_read(operation, Some(Resource::Integration), retry_after_seconds)
                     }
@@ -5966,6 +6052,10 @@ fn operation(method: &str, path: &str) -> Option<&'static str> {
         ("POST", INTEGRATION_RETIRE) => "retire_integration",
         ("GET", INTEGRATION_REPOSITORIES) => "list_integration_repositories",
         ("PUT", INTEGRATION_PRIVATE_KEY) => "replace_integration_private_key",
+        ("POST", INTEGRATION_WEBHOOK_SECRET_ROTATION) => "rotate_integration_webhook_secret",
+        ("POST", INTEGRATION_WEBHOOK_SECRET_ROTATION_RESUME) => {
+            "resume_integration_webhook_secret_rotation"
+        }
         ("POST", GITHUB_APP) => "start_github_app",
         ("GET", integration::manifest::PAGE) => "github_app_setup",
         ("GET", integration::manifest::CALLBACK) => "github_app_callback",

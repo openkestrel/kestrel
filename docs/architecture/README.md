@@ -176,8 +176,9 @@ An accepted ADR is a decision, not a description. These are decided and not yet 
 
 - **Integration maintenance** ([ADR-0056](../adr/0056-an-integration-keeps-its-identity-through-maintenance.md)):
   name, directions and interval change, disable/enable pause and resume use, a validated App
-  private key replaces the last, and retirement ends it for good, all under revision fences.
-  Webhook-secret rotation is not built. A Project selects an Integration per repository and a
+  private key replaces the last, a webhook-secret rotation survives failure and restart until
+  GitHub acknowledges it, and retirement ends it for good, all under revision fences. The browser
+  can take a rotation's resume step but has no settings screen to start one. A Project selects an Integration per repository and a
   Workspace fixes that selection at open, but nothing hands a Session a token from it yet, so no
   queued Session waits on an Integration that retirement could block.
 

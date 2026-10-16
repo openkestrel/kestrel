@@ -7,7 +7,7 @@ use crate::declined::Declined;
 use crate::domain::{
     CanceledPost, Connection, Direction, Event, EventRecordId, EventRefusal, GithubConnection,
     Integration, IntegrationId, IntegrationKind, IntegrationState, Occurrence, Organization,
-    OrganizationId, Post, Session, SessionId, Workspace,
+    OrganizationId, Post, Rotation, RotationFailure, Session, SessionId, Workspace,
 };
 use crate::integration::credential::App;
 use crate::integration::webhook::Verifier;
@@ -23,6 +23,12 @@ pub enum Recorded {
     Recorded,
     Already,
     Refused { because: String },
+}
+
+/// A rotation's replacement, and its sealed form, which fences each step of the rotation.
+pub struct Replacement {
+    pub secret: String,
+    sealed: String,
 }
 
 macro_rules! integrations_where {
@@ -43,7 +49,12 @@ macro_rules! integrations_where {
                            WHERE post.integration_id = integration.id
                              AND post.canceled_at IS NOT NULL
                            ORDER BY post.recorded_at, post.session_id, post.turn))
-                        AS canceled_posts
+                        AS canceled_posts,
+                    (SELECT json_object('started_at', started_at, 'attempted_at', attempted_at,
+                                        'failure', failure, 'retry_at', retry_at)
+                     FROM webhook_secret_rotation
+                     WHERE webhook_secret_rotation.integration_id = integration.id)
+                        AS rotation
              FROM integration
              WHERE ",
             $tail
@@ -116,6 +127,7 @@ impl<'a> Integrations<'a> {
             deliveries_read_from: polled.then_some(registered_at),
             last_polled_at: polled.then_some(registered_at),
             last_event_refusal: None,
+            rotation: None,
         };
         let github = integration.github().ok();
         let (signing_secret, shared_secret_digest) = match (&integration.connection, webhook_secret)
@@ -190,10 +202,14 @@ impl<'a> Integrations<'a> {
         Ok(integration)
     }
 
-    /// The one place a GitHub signing secret is decrypted.
+    /// The one place a GitHub signing secret is decrypted: the replacement an unfinished
+    /// rotation saved verifies beside the secret it replaces.
     pub async fn verifier(&mut self, integration: &Integration) -> Result<Option<Verifier>> {
         let row = sqlx::query(
-            "SELECT signing_secret, shared_secret_digest FROM integration WHERE id = ?",
+            "SELECT signing_secret, shared_secret_digest,
+                    (SELECT replacement_sealed FROM webhook_secret_rotation
+                     WHERE integration_id = integration.id) AS replacement_sealed
+             FROM integration WHERE id = ?",
         )
         .bind(integration.id.to_string())
         .fetch_one(&mut *self.connection)
@@ -201,16 +217,20 @@ impl<'a> Integrations<'a> {
         .with_context(|| format!("reading how integration {} is verified", integration.name))?;
 
         if let Some(sealed) = row.get::<Option<String>, _>("signing_secret") {
-            return Ok(Some(Verifier::Signing(
-                self.keyring
-                    .unseal(&bound_to(integration.id), &sealed)
-                    .with_context(|| {
-                        format!(
-                            "opening the signing secret of integration {}",
-                            integration.name
-                        )
-                    })?,
-            )));
+            let secrets = std::iter::once(sealed)
+                .chain(row.get::<Option<String>, _>("replacement_sealed"))
+                .map(|sealed| {
+                    self.keyring
+                        .unseal(&bound_to(integration.id), &sealed)
+                        .with_context(|| {
+                            format!(
+                                "opening the signing secret of integration {}",
+                                integration.name
+                            )
+                        })
+                })
+                .collect::<Result<_>>()?;
+            return Ok(Some(Verifier::Signing(secrets)));
         }
 
         Ok(row
@@ -392,6 +412,11 @@ impl<'a> Integrations<'a> {
             "the integration {} changed while it was being retired",
             read.name
         );
+        sqlx::query("DELETE FROM webhook_secret_rotation WHERE integration_id = ?")
+            .bind(read.id.to_string())
+            .execute(&mut *self.connection)
+            .await
+            .with_context(|| format!("ending the rotation of integration {}", read.name))?;
         sqlx::query(
             "UPDATE post SET due_at = NULL, canceled_at = ?, canceled_because = ?
              WHERE integration_id = ? AND posted_at IS NULL AND canceled_at IS NULL",
@@ -451,6 +476,185 @@ impl<'a> Integrations<'a> {
         .with_context(|| format!("replacing the private key of integration {}", read.name))?;
 
         Ok(replaced.rows_affected() > 0)
+    }
+
+    /// Whether a non-retired Integration other than `integration`, in any Organization, signs as
+    /// the same App: its hook belongs to all of them.
+    pub async fn app_shared(&mut self, integration: &Integration) -> Result<bool> {
+        let github = integration.github()?;
+        Ok(sqlx::query(
+            "SELECT 1 FROM integration
+             WHERE kind = 'github' AND api = ? AND app_id = ? AND id <> ? AND state <> 'retired'
+             LIMIT 1",
+        )
+        .bind(&github.api)
+        .bind(github.credential.id)
+        .bind(integration.id.to_string())
+        .fetch_optional(&mut *self.connection)
+        .await
+        .with_context(|| {
+            format!(
+                "reading who else signs as integration {}'s App",
+                integration.name
+            )
+        })?
+        .is_some())
+    }
+
+    pub async fn signs_webhooks(&mut self, integration: &Integration) -> Result<bool> {
+        Ok(
+            sqlx::query("SELECT 1 FROM integration WHERE id = ? AND signing_secret IS NOT NULL")
+                .bind(integration.id.to_string())
+                .fetch_optional(&mut *self.connection)
+                .await
+                .with_context(|| {
+                    format!(
+                        "reading whether integration {} signs webhooks",
+                        integration.name
+                    )
+                })?
+                .is_some(),
+        )
+    }
+
+    /// False, having saved nothing, when the Integration was maintained after `read` or a
+    /// rotation is already under way.
+    pub async fn start_rotation(
+        &mut self,
+        read: &Integration,
+        replacement: &str,
+        at: Timestamp,
+    ) -> Result<bool> {
+        let sealed = self.keyring.seal(&bound_to(read.id), replacement)?;
+        let started = sqlx::query(
+            "INSERT INTO webhook_secret_rotation (integration_id, replacement_sealed, started_at)
+             SELECT id, ?, ? FROM integration
+             WHERE id = ? AND revision = ? AND state <> 'retired'
+             ON CONFLICT (integration_id) DO NOTHING",
+        )
+        .bind(sealed)
+        .bind(at.to_string())
+        .bind(read.id.to_string())
+        .bind(read.revision)
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("starting the rotation of integration {}", read.name))?;
+
+        Ok(started.rows_affected() > 0)
+    }
+
+    pub async fn replacement(&mut self, integration: &Integration) -> Result<Option<Replacement>> {
+        let Some(sealed) = sqlx::query_scalar::<_, String>(
+            "SELECT replacement_sealed FROM webhook_secret_rotation WHERE integration_id = ?",
+        )
+        .bind(integration.id.to_string())
+        .fetch_optional(&mut *self.connection)
+        .await
+        .with_context(|| format!("reading the rotation of integration {}", integration.name))?
+        else {
+            return Ok(None);
+        };
+        let secret = self
+            .keyring
+            .unseal(&bound_to(integration.id), &sealed)
+            .with_context(|| {
+                format!(
+                    "opening the replacement secret of integration {}",
+                    integration.name
+                )
+            })?;
+
+        Ok(Some(Replacement { secret, sealed }))
+    }
+
+    /// Committed before GitHub is asked, and false when maintenance landed since `integration`
+    /// was read, so a failure seen with a superseded key is never recorded against the new one.
+    pub async fn attempting_rotation(
+        &mut self,
+        integration: &Integration,
+        replacement: &Replacement,
+        at: Timestamp,
+    ) -> Result<bool> {
+        self.rotation_attempted(integration, replacement, Some(at), None)
+            .await
+    }
+
+    pub async fn rotation_failed(
+        &mut self,
+        integration: &Integration,
+        replacement: &Replacement,
+        failure: RotationFailure,
+    ) -> Result<bool> {
+        self.rotation_attempted(integration, replacement, None, Some(failure))
+            .await
+    }
+
+    async fn rotation_attempted(
+        &mut self,
+        integration: &Integration,
+        replacement: &Replacement,
+        at: Option<Timestamp>,
+        failure: Option<RotationFailure>,
+    ) -> Result<bool> {
+        let retry_at = match failure {
+            Some(RotationFailure::RateLimited { until }) => Some(until.to_string()),
+            _ => None,
+        };
+        let recorded = sqlx::query(
+            "UPDATE webhook_secret_rotation
+             SET attempted_at = COALESCE(?, attempted_at), failure = ?, retry_at = ?
+             WHERE integration_id = ? AND replacement_sealed = ?
+               AND EXISTS (SELECT 1 FROM integration WHERE id = ? AND revision = ?)",
+        )
+        .bind(at.map(|at| at.to_string()))
+        .bind(failure.map(RotationFailure::as_str))
+        .bind(retry_at)
+        .bind(integration.id.to_string())
+        .bind(&replacement.sealed)
+        .bind(integration.id.to_string())
+        .bind(integration.revision)
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("recording the rotation of integration {}", integration.name))?;
+
+        Ok(recorded.rows_affected() > 0)
+    }
+
+    /// False, having changed nothing, when retirement or another resumption already ended it.
+    pub async fn rotated(
+        &mut self,
+        integration: &Integration,
+        replacement: &Replacement,
+    ) -> Result<bool> {
+        let ended = sqlx::query(
+            "DELETE FROM webhook_secret_rotation
+             WHERE integration_id = ? AND replacement_sealed = ?",
+        )
+        .bind(integration.id.to_string())
+        .bind(&replacement.sealed)
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| format!("ending the rotation of integration {}", integration.name))?;
+        if ended.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query(
+            "UPDATE integration SET signing_secret = ?, maintained_at = ?
+             WHERE id = ? AND state <> 'retired'",
+        )
+        .bind(&replacement.sealed)
+        .bind(Timestamp::now().to_string())
+        .bind(integration.id.to_string())
+        .execute(&mut *self.connection)
+        .await
+        .with_context(|| {
+            format!(
+                "replacing the webhook secret of integration {}",
+                integration.name
+            )
+        })?;
+
+        Ok(true)
     }
 
     pub async fn record_event(
@@ -989,7 +1193,34 @@ fn integration(row: &SqliteRow, keyring: &Keyring) -> Result<Integration> {
         deliveries_read_from: timestamp(row, "deliveries_read_from")?,
         last_polled_at: timestamp(row, "last_polled_at")?,
         last_event_refusal: event_refusal(row)?,
+        rotation: rotation(row)?,
     })
+}
+
+fn rotation(row: &SqliteRow) -> Result<Option<Rotation>> {
+    let Some(rotation) = row.get::<Option<String>, _>("rotation") else {
+        return Ok(None);
+    };
+    let rotation: serde_json::Value = serde_json::from_str(&rotation)?;
+    let at = |field: &str| -> Result<Option<Timestamp>> {
+        Ok(rotation[field].as_str().map(str::parse).transpose()?)
+    };
+    let failure = match rotation["failure"].as_str() {
+        None => None,
+        Some("credentials_rejected") => Some(RotationFailure::CredentialsRejected),
+        Some("refused") => Some(RotationFailure::Refused),
+        Some("rate_limited") => Some(RotationFailure::RateLimited {
+            until: at("retry_at")?.context("a rate limit names when it lifts")?,
+        }),
+        Some("unanswered") => Some(RotationFailure::Unanswered),
+        Some(other) => anyhow::bail!("{other} is not how a rotation fails"),
+    };
+
+    Ok(Some(Rotation {
+        started_at: at("started_at")?.context("a rotation has a start")?,
+        attempted_at: at("attempted_at")?,
+        failure,
+    }))
 }
 
 fn canceled_posts(row: &SqliteRow) -> Result<Vec<CanceledPost>> {

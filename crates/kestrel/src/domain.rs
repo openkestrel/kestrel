@@ -271,6 +271,35 @@ pub struct Integration {
     /// By kestrel's clock, when a poll last read every new Delivery.
     pub last_polled_at: Option<Timestamp>,
     pub last_event_refusal: Option<EventRefusal>,
+    /// An unfinished webhook-secret rotation: both secrets verify until it finishes.
+    pub rotation: Option<Rotation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rotation {
+    pub started_at: Timestamp,
+    /// When GitHub was last asked; with no `failure`, nothing came back to say how it ended.
+    pub attempted_at: Option<Timestamp>,
+    pub failure: Option<RotationFailure>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RotationFailure {
+    CredentialsRejected,
+    Refused,
+    RateLimited { until: Timestamp },
+    Unanswered,
+}
+
+impl RotationFailure {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            RotationFailure::CredentialsRejected => "credentials_rejected",
+            RotationFailure::Refused => "refused",
+            RotationFailure::RateLimited { .. } => "rate_limited",
+            RotationFailure::Unanswered => "unanswered",
+        }
+    }
 }
 
 impl Integration {

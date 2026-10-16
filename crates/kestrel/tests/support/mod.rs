@@ -965,6 +965,56 @@ impl Kestrel {
         .await
     }
 
+    pub async fn rotate_webhook_secret(
+        &self,
+        organization: &str,
+        name: &str,
+        revision: Option<i64>,
+    ) -> anyhow::Result<Integration> {
+        integration::rotate_webhook_secret(
+            &self.store,
+            &Github::unfenced()?,
+            organization,
+            name,
+            revision,
+        )
+        .await
+    }
+
+    /// Under way in the background, so a test can lose its answer by aborting it.
+    pub fn rotating_webhook_secret(
+        &self,
+        organization: &str,
+        name: &str,
+    ) -> tokio::task::JoinHandle<anyhow::Result<Integration>> {
+        let (store, organization, name) =
+            (self.store.clone(), organization.to_owned(), name.to_owned());
+        tokio::spawn(async move {
+            integration::rotate_webhook_secret(
+                &store,
+                &Github::unfenced()?,
+                &organization,
+                &name,
+                None,
+            )
+            .await
+        })
+    }
+
+    pub async fn resume_webhook_secret_rotation(
+        &self,
+        organization: &str,
+        name: &str,
+    ) -> anyhow::Result<Integration> {
+        integration::resume_webhook_secret_rotation(
+            &self.store,
+            &Github::unfenced()?,
+            organization,
+            name,
+        )
+        .await
+    }
+
     /// One client, so what it cached before a change is there to be refused after it.
     pub fn github(&self) -> Github {
         Github::dialling_out(&self.store).expect("a github client")
